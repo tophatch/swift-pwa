@@ -111,11 +111,14 @@
 
         public func load(_ content: WindowContent) {
             // Called from anywhere; webkit_web_view_load_uri must run
-            // on the GTK main thread. Schedule via MainThread.
-            let viewWidget = viewWidget
+            // on the GTK main thread. Pass the widget pointer through
+            // a `UInt` so strict concurrency lets us cross actors.
+            let raw = UInt(bitPattern: viewWidget)
             Task {
                 await MainThread.run {
-                    let webView = UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
+                    guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
+                    let webView = UnsafeMutableRawPointer(view)
+                        .assumingMemoryBound(to: WebKitWebView.self)
                     switch content {
                     case let .bundled(_, entry):
                         let url = "pwa://localhost/\(entry)"
@@ -130,9 +133,11 @@
         public func evaluateJavaScript(_ js: String) async throws -> String? {
             // Fire-and-forget for v0.1; full async result threading via
             // GAsyncResult is left for a follow-up.
-            let viewWidget = viewWidget
+            let raw = UInt(bitPattern: viewWidget)
             await MainThread.run {
-                let webView = UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
+                guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
+                let webView = UnsafeMutableRawPointer(view)
+                    .assumingMemoryBound(to: WebKitWebView.self)
                 js.withCString {
                     webkit_web_view_evaluate_javascript(
                         webView, $0, gssize(-1), nil, nil, nil, nil, nil

@@ -19,6 +19,15 @@ let swiftSettings: [SwiftSetting] = [
 /// users don't need to know which is in use.
 let useGtk4 = ProcessInfo.processInfo.environment["SWIFT_PWA_GTK4"] != nil
 
+// Echo the selection during manifest evaluation so it's obvious which
+// backend you're building. SwiftPM caches the resolved manifest by
+// hashing Package.swift, so changing this env var doesn't invalidate
+// the cache on its own — you need `swift package clean` (or
+// `rm -rf .build`) when toggling between GTK3 and GTK4.
+FileHandle.standardError.write(
+    Data("swift-pwa: Linux backend selection = \(useGtk4 ? "GTK4 + WebKitGTK 6.0" : "GTK3 + WebKitGTK 4.1")\n".utf8)
+)
+
 let gtkSystemLibraryTarget: Target = useGtk4
     ? .systemLibrary(
         name: "CGtk4Shim",

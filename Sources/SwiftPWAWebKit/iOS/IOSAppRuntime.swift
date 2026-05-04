@@ -56,6 +56,7 @@
 
         public init() {
             use(WindowPlugin())
+            use(ClipboardPlugin(SystemClipboard()))
         }
 
         @discardableResult

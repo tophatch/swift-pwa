@@ -11,9 +11,11 @@
         private var installedPlugins: Set<String> = []
 
         public init() {
-            // Install the built-in WindowPlugin eagerly so window.* JS
-            // commands work without the user having to do it manually.
+            // Install the built-in plugins eagerly so window.* and
+            // clipboard.* JS commands work without the user having to
+            // do it manually.
             use(WindowPlugin())
+            use(ClipboardPlugin(SystemClipboard()))
         }
 
         @discardableResult

@@ -50,7 +50,7 @@ struct Init: AsyncParsableCommand {
             encoding: .utf8
         )
         try Templates.mainSwift(name: name).write(
-            to: root.appendingPathComponent("Sources/\(name)/main.swift"),
+            to: root.appendingPathComponent("Sources/\(name)/App.swift"),
             atomically: true,
             encoding: .utf8
         )

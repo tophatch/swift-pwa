@@ -72,8 +72,10 @@
             // Heap-box self so the C callback can find us via user_data.
             // Released by `messageBoxDestroy` when the signal is disconnected.
             let box = Unmanaged.passRetained(MessageBox(self)).toOpaque()
-            let signal = "script-message-received::\(BridgeScript.messageHandlerName)"
-            signal.withCString { name in
+            // Connect to the bare signal (no `::detail`). We register
+            // exactly one script-message handler per content manager,
+            // so detail filtering would only add noise.
+            "script-message-received".withCString { name in
                 _ = g_signal_connect_data(
                     UnsafeMutableRawPointer(ucm),
                     name,

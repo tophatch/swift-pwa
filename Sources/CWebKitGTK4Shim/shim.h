@@ -14,25 +14,32 @@ static inline const char *swiftpwa_gobject_type_name(gpointer instance) {
 /// Extracts a JS string value from whatever the
 /// `script-message-received` signal hands us.
 ///
-/// WebKitGTK 4.1 *still* passes `WebKitJavascriptResult*` here despite
-/// the header symbol being deprecated (the JSCValue-direct variant
-/// arrived in webkit2gtk-6.0). 2.40+ also added the JSC variant for
-/// some signals. We handle both at runtime by introspecting GType.
+/// WebKitGTK 4.1 still passes `WebKitJavascriptResult*` (the
+/// JSCValue-direct variant arrived in webkit2gtk-6.0); this shim
+/// handles both at runtime via GType introspection.
 ///
 /// Returned string is freshly allocated by `jsc_value_to_string`; the
 /// caller must `g_free` it. Returns NULL on unrecognised types.
 static inline char *swiftpwa_extract_message_string(gpointer arg) {
     if (!arg) return NULL;
-    GType type = G_TYPE_FROM_INSTANCE(arg);
-    if (g_type_is_a(type, JSC_TYPE_VALUE)) {
+
+    // Use G_TYPE_CHECK_INSTANCE_TYPE (which guards against bad
+    // pointers via the standard GObject macro layer) rather than
+    // raw G_TYPE_FROM_INSTANCE comparisons.
+    if (G_TYPE_CHECK_INSTANCE_TYPE(arg, JSC_TYPE_VALUE)) {
         return jsc_value_to_string((JSCValue *)arg);
     }
-    if (type == webkit_javascript_result_get_type()) {
+    if (G_TYPE_CHECK_INSTANCE_TYPE(arg, webkit_javascript_result_get_type())) {
         JSCValue *value = webkit_javascript_result_get_js_value((WebKitJavascriptResult *)arg);
         return value ? jsc_value_to_string(value) : NULL;
     }
-    g_warning("swift-pwa: unexpected signal arg type: %s",
-              g_type_name(type) ? g_type_name(type) : "(unknown)");
+
+    // Diagnostic — include the raw GType integer and pointer so we
+    // can identify exotic boxed types.
+    GType t = G_TYPE_FROM_INSTANCE(arg);
+    const char *name = g_type_name(t);
+    g_warning("swift-pwa: unexpected script-message arg: gtype=%lu name=%s ptr=%p",
+              (unsigned long)t, name ? name : "(null)", arg);
     return NULL;
 }
 

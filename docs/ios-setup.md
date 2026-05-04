@@ -161,10 +161,15 @@ A minimal `ExportOptions.plist` for ad-hoc distribution:
   per-scene window plumbing in `IOSWindow` is the bare minimum to
   attach the first scene. iPad multi-window polish lands in a
   follow-up.
-- **`pwa.json.icon` is ignored on iOS.** Asset catalog generation
-  isn't wired through yet — the launch screen is a system-default
-  white view, and the home-screen icon falls back to the generic
-  iOS placeholder.
+- **`pwa.json.icon` only feeds the launch screen on iOS.** When
+  set, the bundler generates a minimal `LaunchScreen.storyboard`
+  with the icon centered on a black background and compiles it via
+  `ibtool` — that handles the launch frame. The home-screen icon
+  still falls back to iOS's generic placeholder; full asset-catalog
+  generation (sized App Icons, alternate-icon support, dark/tinted
+  variants) is queued for v0.2. To customize the launch screen
+  beyond "icon on black", drop your own compiled `LaunchScreen.storyboardc`
+  into `<App>.app/` after the build for now.
 
 ## Reporting issues
 

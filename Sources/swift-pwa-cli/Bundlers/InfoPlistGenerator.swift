@@ -28,7 +28,7 @@ enum InfoPlistGenerator {
         return plist
     }
 
-    static func iOS(manifest: PWAManifest) -> InfoPlist {
+    static func iOS(manifest: PWAManifest, launchStoryboardName: String? = nil) -> InfoPlist {
         var plist = InfoPlist()
         plist["CFBundleDevelopmentRegion"] = "en"
         plist["CFBundleDisplayName"] = manifest.name
@@ -60,9 +60,16 @@ enum InfoPlistGenerator {
             "UIInterfaceOrientationLandscapeLeft",
             "UIInterfaceOrientationLandscapeRight"
         ]
-        // Without UILaunchScreen, iOS runs the app in legacy compatibility
-        // mode and letterboxes the window on modern devices.
-        plist["UILaunchScreen"] = [String: Any]()
+        // Without a launch screen declaration, iOS runs the app in
+        // legacy compatibility mode and letterboxes the window on
+        // modern devices. UILaunchStoryboardName takes precedence
+        // when set; the empty UILaunchScreen is the system-default
+        // fallback for projects without an icon.
+        if let name = launchStoryboardName {
+            plist["UILaunchStoryboardName"] = name
+        } else {
+            plist["UILaunchScreen"] = [String: Any]()
+        }
         return plist
     }
 }

@@ -36,6 +36,15 @@
             gtk_main_quit()
         }
 
-        func windowDidClose(_ id: WindowID) { windows.removeValue(forKey: id) }
+        func windowDidClose(_ id: WindowID) {
+            windows.removeValue(forKey: id)
+            // Linux convention: closing the last window terminates the
+            // app (unlike Mac, where the menu bar lingers). If the host
+            // wants Mac-style "stay alive after last window", they can
+            // create a hidden placeholder window.
+            if windows.isEmpty {
+                quit(exitCode: pendingExitCode ?? 0)
+            }
+        }
     }
 #endif

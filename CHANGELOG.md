@@ -24,6 +24,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Linux `evaluateJavaScript` is no longer fire-and-forget. The GTK adapter now bridges `webkit_web_view_evaluate_javascript`'s `GAsyncResult` callback back into a Swift `CheckedContinuation` via the new `swiftpwa_evaluate_javascript` shim. The result is the JSON serialization of the JS value (`jsc_value_to_json`) — `undefined` resolves to `nil`, and WebKit-side errors throw `BridgeError(code: E_HANDLER)`.
+- Linux backend now emits `WindowEvent.didResize` / `.didMove` for user-driven window-manager resizes and moves (hooked via GTK `configure-event`), matching the Mac `NSWindowDelegate` plumbing.
+- Linux backend now wires Ctrl+Q (the GNOME HIG quit shortcut) to `GTKAppContext.quit` via a window-level `GtkAccelGroup`, hooks `delete-event` so user-clicked [X] / Alt+F4 runs the same teardown as a programmatic `close()`, and quits the GLib main loop when the last window closes — Linux convention vs Mac's "menu bar lingers". The Ctrl+Q wiring matches the existing macOS Cmd+Q path installed by the app menu.
 - iOS bundler now assembles the `.app` itself from xcodebuild's loose products. SwiftPM executable targets compile to a bare Mach-O, not a bundle, so the previous code never found the `.app` it was looking for and failed every build with `expected built binary at …`.
 - iOS `Info.plist` no longer ships `$(PRODUCT_MODULE_NAME).SwiftPWASceneDelegate` as a literal string (Xcode-only build-setting variable); resolved to `SwiftPWAWebKit.SwiftPWASceneDelegate`.
 - iOS `Info.plist` now declares `UILaunchScreen` so the app doesn't run in legacy compatibility letterbox mode on modern devices.

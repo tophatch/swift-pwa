@@ -8,9 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
-- Platform-agnostic `SwiftPWACore`: `CommandRegistry`, `Invocation` envelope, `Window` / `WebView` / `AppRuntime` protocols, `Plugin` model, built-in `WindowPlugin`.
-- Apple `SwiftPWAWebKit` backend (macOS 15+, iOS 18+) with WKWebView, `pwa://` scheme handler, full UIScene multi-window support.
-- Linux `SwiftPWAGTK` backend (GTK3 + WebKitGTK 4.1) via hand-rolled C shims.
-- `swift-pwa` CLI: `init`, `dev`, `build` (macOS `.app`, iOS `.ipa`, Linux AppImage). Windows / Android stubs.
-- `__SWIFT_PWA__.invoke()` / `subscribe()` JS runtime injected at document start.
-- Test support target (`_SwiftPWATestSupport`) with reusable `MockWindow` / `MockWebView`.
+
+- Platform-agnostic `SwiftPWACore`: `CommandRegistry`, `Invocation` envelope, `Window` / `PWAWebView` / `AppRuntime` protocols, `Plugin` model, built-in `WindowPlugin` exposing the `window.*` JS command set.
+- Apple `SwiftPWAWebKit` backend (macOS 15+, iOS 18+) with `WKWebView`, `pwa://` scheme handler, UIScene multi-window scaffolding.
+- Linux `SwiftPWAGTK` backend (GTK3 + WebKitGTK 4.1) via hand-rolled C shims (`CGtk3Shim`, `CWebKitGTK4Shim`). JS↔Swift bridge round-trip verified end-to-end on Ubuntu 24.04.
+- `MainThread.run` abstraction in core: routes "run on UI thread" through a registerable platform hook (`DispatchQueue.main` on Apple, `g_idle_add` on GTK) so the bridge runtime works under `gtk_main()`, where Swift's MainActor executor is otherwise un-pumped.
+- `swift-pwa` CLI: `init`, `dev`, `build` for macOS `.app` (with optional `--sign`), iOS `.ipa` / simulator `.app` (via `xcodebuild`), Linux `.AppImage` (via `linuxdeploy`). Windows / Android targets are stubs.
+- AppImage bundler: writes a placeholder PNG icon if `pwa.json.icon` isn't a PNG so `linuxdeploy` doesn't hang on its prompt path.
+- `__SWIFT_PWA__.invoke()` / `subscribe()` JS runtime injected at document start; uniform Tauri-style envelope (`{v, kind, id, cmd, payload}`).
+- Test support target (`_SwiftPWATestSupport`) with reusable `MockWindow` / `MockWebView` / `MockAppContext`.
+- 34-test suite (Swift Testing): envelope codec, `JSONValue`, `CommandRegistry`, `AssetProvider`, `WindowPlugin`, `BridgeRuntime` end-to-end, real-`WKWebView` integration, `PWAManifest`, `InfoPlist`.
+- GitHub Actions CI matrix: macos-15 (build + test + WKWebView integration), ios-build (xcodebuild against the iOS Simulator SDK), ubuntu-24.04 (Core + CLI), swiftformat lint. Tag-driven release workflow that ships CLI binaries.
+- [docs/linux-setup.md](docs/linux-setup.md) walkthrough for Ubuntu 24.04.
+
+### Notes
+
+- `CommandRegistry` is a class with `NSLock`-guarded state, not an actor. Registration is synchronous so user `configure` closures can run on a thread that isn't pumping Swift's MainActor executor (e.g. the main thread before `gtk_main()` enters its loop).
+- `BridgeRuntime` is *not* `@MainActor`. Backends are responsible for hopping to the platform UI thread internally.

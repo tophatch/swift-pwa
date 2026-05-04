@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** v0.1.0-dev. Window APIs only on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`). Windows/Android stubs in place; tray, notifications, biometric auth, clipboard land as plugin targets in v0.2+.
+> **Status:** v0.1.0. Window APIs only on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`). Windows/Android stubs in place; tray, notifications, biometric auth, clipboard land as plugin targets in v0.2+.
 
 ## Why
 

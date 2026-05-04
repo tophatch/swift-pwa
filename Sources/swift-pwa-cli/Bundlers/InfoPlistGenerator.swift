@@ -47,7 +47,7 @@ enum InfoPlistGenerator {
                     [
                         "UISceneConfigurationName": "swift-pwa",
                         "UISceneClassName": "UIWindowScene",
-                        "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).SwiftPWASceneDelegate"
+                        "UISceneDelegateClassName": "SwiftPWAWebKit.SwiftPWASceneDelegate"
                     ]
                 ]
             ]
@@ -57,6 +57,9 @@ enum InfoPlistGenerator {
             "UIInterfaceOrientationLandscapeLeft",
             "UIInterfaceOrientationLandscapeRight"
         ]
+        // Without UILaunchScreen, iOS runs the app in legacy compatibility
+        // mode and letterboxes the window on modern devices.
+        plist["UILaunchScreen"] = [String: Any]()
         return plist
     }
 }

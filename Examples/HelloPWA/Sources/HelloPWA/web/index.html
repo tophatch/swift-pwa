@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Hello, swift-pwa</title>
+    <style>
+        body {
+            font-family: -apple-system, system-ui, sans-serif;
+            margin: 2rem;
+            color: #222;
+        }
+        h1 { font-weight: 600; }
+        button { padding: 0.5rem 1rem; font: inherit; }
+        pre { background: #f4f4f4; padding: 0.75rem; border-radius: 6px; }
+    </style>
+</head>
+<body>
+    <h1>Hello from swift-pwa</h1>
+    <p>This window is a real <code>NSWindow</code> hosting a real <code>WKWebView</code>.</p>
+    <button id="rename">Rename window</button>
+    <button id="resize">Resize to 800×600</button>
+    <button id="now">Get server time</button>
+    <pre id="log"></pre>
+    <script>
+        const log = (m) => {
+            document.getElementById("log").textContent += m + "\n";
+        };
+        document.getElementById("rename").onclick = async () => {
+            const t = "renamed at " + new Date().toLocaleTimeString();
+            await __SWIFT_PWA__.invoke("window.setTitle", { title: t });
+            log("renamed: " + t);
+        };
+        document.getElementById("resize").onclick = async () => {
+            await __SWIFT_PWA__.invoke("window.setSize", { width: 800, height: 600 });
+            log("resized");
+        };
+        document.getElementById("now").onclick = async () => {
+            const r = await __SWIFT_PWA__.invoke("now", {});
+            log("now: " + r.iso);
+        };
+        __SWIFT_PWA__.subscribe("window.subscribe", {}, (event) => {
+            log("event: " + JSON.stringify(event));
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,6 @@
+module CWebKitGTK4Shim [system] {
+    header "shim.h"
+    link "webkit2gtk-4.1"
+    link "javascriptcoregtk-4.1"
+    export *
+}

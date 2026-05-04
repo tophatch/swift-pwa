@@ -1,0 +1,13 @@
+.DS_Store
+.build/
+.swiftpm/
+Package.resolved
+*.xcodeproj
+xcuserdata/
+DerivedData/
+*.app
+*.ipa
+*.AppImage
+*.icns
+build/
+.claude/settings.local.json

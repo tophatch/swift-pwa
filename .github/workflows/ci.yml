@@ -1,0 +1,64 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Show Swift version
+        run: swift --version
+      - name: Build
+        run: swift build -v
+      - name: Test (Core + WKWebView)
+        run: swift test -v
+
+  ios-build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build for iOS Simulator
+        run: |
+          swift build \
+            --triple arm64-apple-ios18.0-simulator \
+            --target SwiftPWAWebKit
+
+  linux:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: SwiftyLab/setup-swift@latest
+        with:
+          swift-version: "6.0"
+      - name: Install GTK + WebKitGTK + linuxdeploy
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            xvfb \
+            wget
+          wget -O /usr/local/bin/linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage || true
+          chmod +x /usr/local/bin/linuxdeploy || true
+      - name: Build (Core + CLI only — GTK backend integration left for SWIFT_PWA_LINUX_GUI)
+        run: swift build --target SwiftPWACore --target swift-pwa-cli
+      - name: Test Core
+        run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+
+  lint:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install swiftformat
+        run: brew install swiftformat
+      - name: Lint
+        run: swiftformat --lint .

@@ -1,0 +1,7 @@
+module CGtk3Shim [system] {
+    header "shim.h"
+    link "gtk-3"
+    link "gobject-2.0"
+    link "glib-2.0"
+    export *
+}

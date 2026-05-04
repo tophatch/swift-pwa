@@ -1,0 +1,11 @@
+--swiftversion 6.0
+--indent 4
+--maxwidth 120
+--wraparguments before-first
+--wrapparameters before-first
+--wrapcollections before-first
+--commas inline
+--trimwhitespace always
+--stripunusedargs closure-only
+--self remove
+--header ignore

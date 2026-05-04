@@ -2,9 +2,10 @@
   "id": "com.swiftpwa.hello",
   "name": "HelloPWA",
   "version": "0.1.0",
+  "description": "A swift-pwa demo app — a thin Swift wrapper around a WKWebView that shows the JS↔Swift bridge round-tripping invoke and subscribe calls.",
   "web": { "directory": "Sources/HelloPWA/web", "entry": "index.html" },
   "window": { "title": "Hello, swift-pwa", "width": 1024, "height": 768, "resizable": true, "fullscreen": false },
-  "macos": { "bundle_identifier": "com.swiftpwa.hello", "minimum_system_version": "15.0" },
+  "macos": { "bundle_identifier": "com.swiftpwa.hello", "minimum_system_version": "15.0", "copyright": "© 2026 swift-pwa contributors" },
   "ios": { "bundle_identifier": "com.swiftpwa.hello", "minimum_system_version": "18.0" },
   "linux": { "desktop_categories": ["Utility"] }
 }

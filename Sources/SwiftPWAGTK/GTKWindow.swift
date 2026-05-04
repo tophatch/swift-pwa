@@ -24,6 +24,13 @@
         private var titleStorage: String
         private var continuations: [UUID: AsyncStream<WindowEvent>.Continuation] = [:]
 
+        /// Last geometry seen via `configure-event`. We only emit
+        /// `.didResize` / `.didMove` when the value actually changes —
+        /// configure-event fires for every move *and* resize, sometimes
+        /// in flurries when the user drags a corner.
+        private var lastSize: Size = .zero
+        private var lastPosition: Point = .zero
+
         /// Cast our owned widget back to `GtkWindow*` for `gtk_window_*` calls.
         private var window: UnsafeMutablePointer<GtkWindow> {
             UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
@@ -62,6 +69,39 @@
 
             if config.fullscreen { gtk_window_fullscreen(windowPtr) }
             if config.visibleOnLaunch { gtk_widget_show_all(win) }
+
+            lastSize = config.size
+            connectConfigureSignal()
+        }
+
+        /// Hook GTK's `configure-event` so user-driven resizes / moves
+        /// surface as `WindowEvent.didResize` / `.didMove`, matching
+        /// the Mac `NSWindowDelegate` plumbing.
+        private func connectConfigureSignal() {
+            let box = Unmanaged.passRetained(GTKWindowBox(self)).toOpaque()
+            "configure-event".withCString { name in
+                _ = g_signal_connect_data(
+                    UnsafeMutableRawPointer(widget),
+                    name,
+                    unsafeBitCast(configureEventTrampoline, to: GCallback.self),
+                    box,
+                    gtkWindowBoxDestroy,
+                    GConnectFlags(rawValue: 0)
+                )
+            }
+        }
+
+        /// Called from the `configure-event` C trampoline (always on
+        /// the GTK main thread) with the event's geometry.
+        func handleConfigure(size: Size, position: Point) {
+            if size != lastSize {
+                lastSize = size
+                emit(.didResize(size))
+            }
+            if position != lastPosition {
+                lastPosition = position
+                emit(.didMove(position))
+            }
         }
 
         // MARK: - Window
@@ -87,8 +127,9 @@
         public func title() -> String { titleStorage }
 
         public func setSize(_ size: Size, animated _: Bool) {
+            // GTK acks the resize asynchronously — `configure-event`
+            // will fire and `handleConfigure` will emit `.didResize`.
             gtk_window_resize(window, gint(size.width), gint(size.height))
-            emit(.didResize(size))
         }
         public func size() -> Size {
             var w: gint = 0
@@ -98,8 +139,8 @@
         }
 
         public func setPosition(_ point: Point) {
+            // Same as setSize: configure-event will report the move.
             gtk_window_move(window, gint(point.x), gint(point.y))
-            emit(.didMove(point))
         }
         public func position() -> Point {
             var x: gint = 0
@@ -137,5 +178,42 @@
             bridge.stop()
             app?.windowDidClose(id)
         }
+    }
+
+    /// Heap box holding a back-reference to the window for GObject
+    /// signal callbacks. Released by `gtkWindowBoxDestroy` when the
+    /// signal is disconnected (i.e. when the GtkWindow is destroyed).
+    final class GTKWindowBox {
+        weak var window: GTKWindow?
+        init(_ window: GTKWindow) { self.window = window }
+    }
+
+    /// `@convention(c)` trampoline for `configure-event`. Fires on the
+    /// GTK main thread with the new geometry; we hop into the
+    /// MainActor-isolated `GTKWindow.handleConfigure` to emit events.
+    /// Returns `FALSE` so GTK propagates the event to default handlers.
+    let configureEventTrampoline: @convention(c) (
+        UnsafeMutablePointer<GtkWidget>?,
+        gpointer?,
+        gpointer?
+    ) -> gboolean = { _, eventPtr, userData in
+        guard let eventPtr, let userData else { return gboolean(0) }
+        let box = Unmanaged<GTKWindowBox>.fromOpaque(userData).takeUnretainedValue()
+        var x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0
+        swiftpwa_event_configure_extents(eventPtr, &x, &y, &w, &h)
+        let size = Size(width: Double(w), height: Double(h))
+        let position = Point(x: Double(x), y: Double(y))
+        MainActor.assumeIsolated {
+            box.window?.handleConfigure(size: size, position: position)
+        }
+        return gboolean(0)
+    }
+
+    /// `@convention(c)` GClosureNotify that releases the heap-boxed
+    /// `GTKWindowBox` when the signal is disconnected.
+    let gtkWindowBoxDestroy: @convention(c) (gpointer?, UnsafeMutablePointer<GClosure>?) -> Void = {
+        userData, _ in
+        guard let userData else { return }
+        Unmanaged<GTKWindowBox>.fromOpaque(userData).release()
     }
 #endif

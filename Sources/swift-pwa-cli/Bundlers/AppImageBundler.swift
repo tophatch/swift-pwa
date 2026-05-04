@@ -46,6 +46,30 @@ struct AppImageBundler {
         let installedBin = appDir.appendingPathComponent("usr/bin/\(exeName)")
         try FileManager.default.copyItem(at: binary, to: installedBin)
 
+        // Icon: linuxdeploy requires the file referenced by `Icon=` in
+        // `.desktop` to exist at `<AppDir>/<exeName>.png` (or another
+        // recognised extension). If the manifest provides a PNG we
+        // copy it; otherwise write a 1×1 transparent placeholder so
+        // linuxdeploy doesn't fail with `Could not find icon executable`
+        // and hang on its retry/prompt path.
+        let iconDst = appDir.appendingPathComponent("\(exeName).png")
+        if let icon = manifest.icon {
+            let src = projectRoot.appendingPathComponent(icon)
+            let isPNG = src.pathExtension.lowercased() == "png"
+            if isPNG, FileManager.default.fileExists(atPath: src.path) {
+                try FileManager.default.copyItem(at: src, to: iconDst)
+            } else {
+                try writePlaceholderIcon(to: iconDst)
+                if !isPNG {
+                    print(
+                        "note: pwa.json `icon` is not a PNG; using placeholder. Convert to PNG to bundle a real icon."
+                    )
+                }
+            }
+        } else {
+            try writePlaceholderIcon(to: iconDst)
+        }
+
         // .desktop
         let desktop = """
         [Desktop Entry]
@@ -75,11 +99,18 @@ struct AppImageBundler {
             try FileManager.default.copyItem(at: webSrc, to: webDst)
         }
 
-        // 3. Run linuxdeploy.
+        // 3. Run linuxdeploy. Pass icon and desktop files explicitly
+        // so linuxdeploy doesn't have to discover them (and doesn't
+        // fall through to its interactive prompt path on missing data,
+        // which can look like a hang under inherited stdio).
         let linuxdeploy = try await Self.findOrThrow("linuxdeploy")
+        let desktopPath = appDir.appendingPathComponent("usr/share/applications/\(exeName).desktop").path
+        let iconPath = iconDst.path
         try await Shell.run("/usr/bin/env", [
             linuxdeploy.lastPathComponent,
             "--appdir", appDir.path,
+            "--desktop-file", desktopPath,
+            "--icon-file", iconPath,
             "--output", "appimage"
         ], cwd: outputDir)
 
@@ -88,6 +119,26 @@ struct AppImageBundler {
         let appImage = candidates.first(where: { $0.hasSuffix(".AppImage") })
             .map { outputDir.appendingPathComponent($0) }
         return appImage ?? outputDir
+    }
+
+    /// 1×1 transparent PNG written byte-for-byte. Avoids a runtime
+    /// dependency on ImageMagick or libpng for the placeholder case.
+    private func writePlaceholderIcon(to url: URL) throws {
+        // Minimal valid PNG: signature + IHDR (1×1 RGBA) + IDAT (one
+        // transparent pixel, zlib-compressed) + IEND. Extracted from
+        // `convert -size 1x1 xc:none transparent.png`.
+        let bytes: [UInt8] = [
+            0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A,
+            0x00, 0x00, 0x00, 0x0D, 0x49, 0x48, 0x44, 0x52,
+            0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+            0x08, 0x06, 0x00, 0x00, 0x00, 0x1F, 0x15, 0xC4,
+            0x89, 0x00, 0x00, 0x00, 0x0D, 0x49, 0x44, 0x41,
+            0x54, 0x78, 0x9C, 0x63, 0x00, 0x01, 0x00, 0x00,
+            0x05, 0x00, 0x01, 0x0D, 0x0A, 0x2D, 0xB4, 0x00,
+            0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE,
+            0x42, 0x60, 0x82
+        ]
+        try Data(bytes).write(to: url)
     }
 
     private static func findOrThrow(_ name: String) async throws -> URL {

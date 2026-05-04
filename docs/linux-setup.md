@@ -56,7 +56,7 @@ sudo chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-appim
 ## 4. Clone and build
 
 ```bash
-git clone https://github.com/<you>/swift-pwa
+git clone https://github.com/tophatch/swift-pwa
 cd swift-pwa
 
 # Build everything — Core, GTK backend, CLI, examples.

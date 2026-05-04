@@ -266,14 +266,14 @@
         });
 
         __SWIFT_PWA__.subscribe("window.subscribe", {}, (event) => {
-            // Pretty-print the event tag + payload separately so the
-            // events column stays scannable even after lots of resizes.
-            if (typeof event === "object" && event !== null) {
-                const [tag] = Object.keys(event);
-                const payload = event[tag];
-                evt(tag + (payload === null || payload === undefined ? "" : "  " + JSON.stringify(payload)));
+            // WindowEvent is encoded as { type: "didResize", size: {...} }
+            // — render the type first and the rest of the payload alongside.
+            if (event && typeof event === "object" && typeof event.type === "string") {
+                const { type, ...rest } = event;
+                const payload = Object.keys(rest).length === 0 ? "" : "  " + JSON.stringify(rest);
+                evt(type + payload);
             } else {
-                evt(String(event));
+                evt(JSON.stringify(event));
             }
         });
 

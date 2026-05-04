@@ -67,7 +67,8 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
     "macos": {
         "bundle_identifier": "com.example.myapp",
         "category": "public.app-category.productivity",
-        "minimum_system_version": "15.0"
+        "minimum_system_version": "15.0",
+        "copyright": "© 2026 Acme Corp."
     },
     "ios": {
         "bundle_identifier": "com.example.myapp",
@@ -79,7 +80,7 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
 }
 ```
 
-Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `linux` sections are optional — omit any platform you don't ship to. `icon` should be a 1024×1024 PNG; on macOS it's converted to `.icns`, on Linux it's embedded in the AppImage. `category` on macOS is the `LSApplicationCategoryType` UTI shown in the App Store / Finder.
+Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `linux` sections are optional — omit any platform you don't ship to. `icon` should be a 1024×1024 PNG; on macOS it's converted to `.icns`, on Linux it's embedded in the AppImage. `category` on macOS is the `LSApplicationCategoryType` UTI shown in the App Store / Finder. `description` and `macos.copyright` populate the **About** panel (the description becomes the body text, the copyright shows under the version).
 
 ### Build and run
 

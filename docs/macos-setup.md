@@ -62,10 +62,29 @@ The bundler:
 1. Runs `swift build -c release`.
 2. Lays out `MyApp.app/Contents/{MacOS,Resources}` from the manifest.
 3. Writes `Info.plist` from `pwa.json` (bundle ID, version, minimum
-   system version).
+   system version, `LSApplicationCategoryType`, `NSHumanReadableCopyright`).
 4. Copies the `web/` directory into `Contents/Resources/web`.
 5. If `pwa.json.icon` points at a PNG, converts it to `AppIcon.icns`
    via `sips` + `iconutil`.
+6. If `pwa.json.description` is set, writes a `Credits.html` so the
+   description shows up as the body of the standard About panel.
+
+### About panel
+
+The bundler wires the standard About panel up automatically from
+`pwa.json` — no runtime code required. It pulls:
+
+- **App name** from `name` (via `CFBundleName`).
+- **Version** from `version` (via `CFBundleShortVersionString`).
+- **Icon** from `icon` (via `CFBundleIconFile` → `AppIcon.icns`).
+- **Copyright line** under the version from `macos.copyright` (via
+  `NSHumanReadableCopyright`).
+- **Body text** from `description`, written into a `Credits.html`
+  resource that AppKit picks up automatically.
+
+For a richer About panel (formatted text, links), drop your own
+`Resources/Credits.html` or `Credits.rtf` into the `.app` after the
+build — the bundler-generated one is just plain `description` text.
 
 ## 5. Codesigning
 

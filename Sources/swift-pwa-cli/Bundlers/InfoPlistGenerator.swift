@@ -17,6 +17,9 @@ enum InfoPlistGenerator {
         if let cat = manifest.macos?.category {
             plist["LSApplicationCategoryType"] = cat
         }
+        if let copyright = manifest.macos?.copyright {
+            plist["NSHumanReadableCopyright"] = copyright
+        }
         plist["NSHighResolutionCapable"] = true
         plist["NSPrincipalClass"] = "NSApplication"
         if manifest.icon != nil {

@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** v0.1.0-dev. Window APIs only on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1). Windows/Android stubs in place; tray, notifications, biometric auth, clipboard land as plugin targets in v0.2+.
+> **Status:** v0.1.0-dev. Window APIs only on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`). Windows/Android stubs in place; tray, notifications, biometric auth, clipboard land as plugin targets in v0.2+.
 
 ## Why
 
@@ -93,13 +93,13 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 
 ## Supported platforms (v0.1)
 
-| Platform | Webview          | Status                |
-|---------:|------------------|-----------------------|
-| macOS 15 | WKWebView        | First class           |
-| iOS 18   | WKWebView        | First class (UIScene) |
-| Linux    | WebKitGTK 4.1    | First class (GTK3)    |
-| Windows  | WebView2         | Stub (planned v0.2)   |
-| Android  | android.webkit   | Stub (planned v0.3)   |
+| Platform | Webview             | Status                                                  |
+|---------:|---------------------|---------------------------------------------------------|
+| macOS 15 | WKWebView           | First class                                             |
+| iOS 18   | WKWebView           | First class (UIScene)                                   |
+| Linux    | WebKitGTK 4.1 / 6.0 | First class (GTK3 default; GTK4 via `SWIFT_PWA_GTK4=1`) |
+| Windows  | WebView2            | Stub (planned v0.2)                                     |
+| Android  | android.webkit      | Stub (planned v0.3)                                     |
 
 ## JS API
 
@@ -162,13 +162,13 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ### Known limitations in v0.1
 
-- **GTK4 / WebKitGTK 6.0 not supported yet.** The C shim assumes the 4.1 ABI (`WebKitJavascriptResult` boxed type on the script-message callback). Adding 6.0 means a sibling shim target with the JSCValue-direct callback.
+- **`Window.position()` / `setPosition` are no-ops on the GTK4 backend.** Wayland refuses to give apps their own position, and CSD makes the concept ambiguous; GTK4 dropped the position APIs entirely. `position()` returns `.zero`, `setPosition` silently no-ops, and `.didMove` events are never emitted on GTK4. The GTK3 backend still supports all three.
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows / Android bundlers print "not implemented".** Targets are scaffolded but the actual build paths land in v0.2/v0.3.
 
 ### Planned
 
-- **v0.2** — Windows (WebView2 + swift-winrt), GTK4/WebKitGTK 6.0, notifications plugin, tray plugin, clipboard plugin.
+- **v0.2** — Windows (WebView2 + swift-winrt), notifications plugin, tray plugin, clipboard plugin.
 - **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin.
 - **v0.4+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
 
@@ -178,7 +178,7 @@ Per-platform walkthroughs (toolchain, build, codesign, device install, known cav
 
 - **macOS** — [docs/macos-setup.md](docs/macos-setup.md): Xcode 26+, `.app` bundling, Developer ID signing, notarization.
 - **iOS** — [docs/ios-setup.md](docs/ios-setup.md): Simulator runtime install, `.app` install via `simctl`, device run via Xcode.
-- **Linux** — [docs/linux-setup.md](docs/linux-setup.md): Ubuntu 24.04 + Swift 6.0, GTK3 + WebKitGTK 4.1, AppImage builds.
+- **Linux** — [docs/linux-setup.md](docs/linux-setup.md): Ubuntu 24.04+ + Swift 6.0, GTK3 + WebKitGTK 4.1 by default or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`, AppImage builds.
 
 ## Contributing
 

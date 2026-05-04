@@ -18,7 +18,13 @@ public protocol Window: AnyObject, Sendable {
     func setSize(_ size: Size, animated: Bool)
     func size() -> Size
 
+    /// Move the window. **Best-effort** — backends running on display
+    /// servers that own positioning (Wayland, GTK4) may silently
+    /// no-op. Use `position()` to read back the actual location.
     func setPosition(_ point: Point)
+
+    /// Current window position. Returns `.zero` on backends that don't
+    /// expose position (Wayland, GTK4).
     func position() -> Point
 
     func focus()

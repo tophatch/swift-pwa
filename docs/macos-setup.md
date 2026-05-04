@@ -26,7 +26,7 @@ sudo xcode-select -s /Applications/Xcode.app/Contents/Developer
 ## 2. Clone and build
 
 ```bash
-git clone https://github.com/<you>/swift-pwa
+git clone https://github.com/tophatch/swift-pwa
 cd swift-pwa
 
 swift build                                    # Core, WebKit backend, CLI, examples

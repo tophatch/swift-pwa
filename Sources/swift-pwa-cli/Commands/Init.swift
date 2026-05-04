@@ -80,7 +80,7 @@ enum Templates {
             name: "\(name)",
             platforms: [.macOS(.v15), .iOS(.v18)],
             dependencies: [
-                .package(url: "https://github.com/<you>/swift-pwa", from: "0.1.0"),
+                .package(url: "https://github.com/tophatch/swift-pwa", from: "0.1.0"),
             ],
             targets: [
                 .executableTarget(
@@ -127,7 +127,7 @@ enum Templates {
         </style></head>
         <body>
         <h1>Hello, \(name)</h1>
-        <p>Powered by <a href="https://github.com/<you>/swift-pwa">swift-pwa</a>.</p>
+        <p>Powered by <a href="https://github.com/tophatch/swift-pwa">swift-pwa</a>.</p>
         <button id="rename">Rename window</button>
         <pre id="log"></pre>
         <script>

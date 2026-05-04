@@ -20,7 +20,7 @@ If you write Swift and want to ship a small, single-codebase desktop/mobile app 
 # Add the package
 swift package init --type executable
 # In Package.swift, add:
-#   .package(url: "https://github.com/<you>/swift-pwa", from: "0.1.0")
+#   .package(url: "https://github.com/tophatch/swift-pwa", from: "0.1.0")
 # and depend on the "SwiftPWA" product.
 
 swift run swift-pwa init MyApp

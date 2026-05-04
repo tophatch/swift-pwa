@@ -1,8 +1,11 @@
 // swift-tools-version:6.0
 import PackageDescription
 
+// swift-tools-version:6.0 already enables strict concurrency by default;
+// only opt in to features that aren't yet baseline. The Linux toolchain
+// treats `enableUpcomingFeature("StrictConcurrency")` under Swift 6 as
+// an error rather than a warning, which broke `swift build` on Ubuntu.
 let swiftSettings: [SwiftSetting] = [
-    .enableUpcomingFeature("StrictConcurrency"),
     .enableUpcomingFeature("ExistentialAny")
 ]
 

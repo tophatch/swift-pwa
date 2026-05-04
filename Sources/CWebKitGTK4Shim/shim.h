@@ -11,36 +11,25 @@ static inline const char *swiftpwa_gobject_type_name(gpointer instance) {
     return g_type_name(G_TYPE_FROM_INSTANCE(instance));
 }
 
-/// Extracts a JS string value from whatever the
-/// `script-message-received` signal hands us.
+/// Extracts the JS string from the `script-message-received` signal's
+/// value argument.
 ///
-/// WebKitGTK 4.1 still passes `WebKitJavascriptResult*` (the
-/// JSCValue-direct variant arrived in webkit2gtk-6.0); this shim
-/// handles both at runtime via GType introspection.
+/// On webkit2gtk-4.1 the value is a `WebKitJavascriptResult*` — a
+/// `G_DEFINE_BOXED_TYPE` (i.e. *not* a GObject, so
+/// `G_TYPE_FROM_INSTANCE` reads garbage off its first field).
+/// On webkit2gtk-6.0 it's a `JSCValue*` (a real GObject).
 ///
-/// Returned string is freshly allocated by `jsc_value_to_string`; the
-/// caller must `g_free` it. Returns NULL on unrecognised types.
+/// We can't safely runtime-detect between the two with a type check
+/// because boxed pointers aren't GTypeInstances. Instead we trust the
+/// compile-time ABI: when built against webkit2gtk-4.1 we treat the
+/// arg as a WebKitJavascriptResult and unwrap. (When/if we add
+/// webkit2gtk-6.0 support this shim ships in a separate target.)
+///
+/// Returned string is freshly allocated; caller must `g_free` it.
 static inline char *swiftpwa_extract_message_string(gpointer arg) {
     if (!arg) return NULL;
-
-    // Use G_TYPE_CHECK_INSTANCE_TYPE (which guards against bad
-    // pointers via the standard GObject macro layer) rather than
-    // raw G_TYPE_FROM_INSTANCE comparisons.
-    if (G_TYPE_CHECK_INSTANCE_TYPE(arg, JSC_TYPE_VALUE)) {
-        return jsc_value_to_string((JSCValue *)arg);
-    }
-    if (G_TYPE_CHECK_INSTANCE_TYPE(arg, webkit_javascript_result_get_type())) {
-        JSCValue *value = webkit_javascript_result_get_js_value((WebKitJavascriptResult *)arg);
-        return value ? jsc_value_to_string(value) : NULL;
-    }
-
-    // Diagnostic — include the raw GType integer and pointer so we
-    // can identify exotic boxed types.
-    GType t = G_TYPE_FROM_INSTANCE(arg);
-    const char *name = g_type_name(t);
-    g_warning("swift-pwa: unexpected script-message arg: gtype=%lu name=%s ptr=%p",
-              (unsigned long)t, name ? name : "(null)", arg);
-    return NULL;
+    JSCValue *value = webkit_javascript_result_get_js_value((WebKitJavascriptResult *)arg);
+    return value ? jsc_value_to_string(value) : NULL;
 }
 
 #endif

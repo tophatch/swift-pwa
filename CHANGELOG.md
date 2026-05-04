@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Clipboard plugin.** `ClipboardPlugin` is now auto-installed on every backend's `AppContext` alongside `WindowPlugin`, exposing `clipboard.readText`, `clipboard.writeText`, and `clipboard.clear` to JS. Backends provide a `SystemClipboard`: `NSPasteboard.general` on macOS, `UIPasteboard.general` on iOS, `GtkClipboard` on the GTK3 backend, and `GdkClipboard` on the GTK4 backend — the GTK4 implementation bridges `gdk_clipboard_read_text_async` into a Swift `CheckedContinuation` through a new `swiftpwa_clipboard_*` shim so the `Clipboard` protocol stays uniform across backends. `clear()` semantics differ by platform (Apple wipes the system clipboard; X11 / Wayland only relinquish local ownership) — documented on the protocol.
+- `_SwiftPWATestSupport.MockClipboard` for plugin-level unit tests.
+
 ## [0.1.0] - 2026-05-04
 
 ### Added

@@ -75,4 +75,36 @@ static inline void swiftpwa_accel_connect_quit(
     );
 }
 
+// ---------------------------------------------------------------------
+// Clipboard helpers (GTK3 / GtkClipboard).
+//
+// `GDK_SELECTION_CLIPBOARD` is a macro that expands to a non-constant
+// expression Swift's clang importer doesn't always pick up, so the
+// default-clipboard accessor lives in C. The rest of the wrappers exist
+// to give the GTK4 backend a matching call surface (the GTK4 side has
+// to wrap async APIs anyway).
+// ---------------------------------------------------------------------
+
+static inline GtkClipboard *swiftpwa_clipboard_default(void) {
+    return gtk_clipboard_get(GDK_SELECTION_CLIPBOARD);
+}
+
+static inline void swiftpwa_clipboard_set_text(GtkClipboard *cb, const char *text) {
+    gtk_clipboard_set_text(cb, text, -1);
+}
+
+/// Synchronously read clipboard text. Returns a freshly allocated
+/// string (caller must `g_free`) or NULL when the clipboard does not
+/// hold text. Internally spins a nested main loop.
+static inline char *swiftpwa_clipboard_wait_for_text(GtkClipboard *cb) {
+    return gtk_clipboard_wait_for_text(cb);
+}
+
+/// Relinquish our ownership of the clipboard. As on most X11 / Wayland
+/// stacks this only clears the local owner; another app's content (if
+/// any) remains the system-wide value of the selection.
+static inline void swiftpwa_clipboard_clear(GtkClipboard *cb) {
+    gtk_clipboard_clear(cb);
+}
+
 #endif

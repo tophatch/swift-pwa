@@ -111,7 +111,18 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
     console.log('window event:', event);
 });
 // later: unsub();
+
+// Built-in clipboard plugin (auto-installed on every backend).
+await __SWIFT_PWA__.invoke('clipboard.writeText', { text: 'copied!' });
+const { text } = await __SWIFT_PWA__.invoke('clipboard.readText');
 ```
+
+### Built-in plugins
+
+Both ship enabled out of the box; no `ctx.use(...)` needed.
+
+- **`WindowPlugin`** — `window.id`, `window.list`, `window.setTitle` / `title`, `window.setSize` / `size`, `window.setPosition` / `position`, `window.focus`, `window.minimize` / `maximize`, `window.setFullscreen` / `isFullscreen`, `window.close`, `window.subscribe`.
+- **`ClipboardPlugin`** — `clipboard.readText`, `clipboard.writeText`, `clipboard.clear`. `clear()` wipes the system clipboard on Apple; on X11 / Wayland it only relinquishes local ownership of the selection.
 
 ## Swift API
 

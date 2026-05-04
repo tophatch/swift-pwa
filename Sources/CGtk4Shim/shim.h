@@ -71,4 +71,77 @@ static inline void swiftpwa_gtk_init(void) {
     gtk_init();
 }
 
+// ---------------------------------------------------------------------
+// Clipboard helpers (GTK4 / GdkClipboard).
+//
+// GTK4 dropped GtkClipboard in favour of GdkClipboard, whose only read
+// API is async (`gdk_clipboard_read_text_async`). We expose the same
+// `swiftpwa_clipboard_*` shape as the GTK3 shim so the Swift backend's
+// SystemClipboard implementations stay symmetric, with the read
+// surface bridging the GAsyncResult callback into a Swift continuation.
+// ---------------------------------------------------------------------
+
+static inline GdkClipboard *swiftpwa_clipboard_default(void) {
+    GdkDisplay *d = gdk_display_get_default();
+    if (!d) return NULL;
+    return gdk_display_get_clipboard(d);
+}
+
+static inline void swiftpwa_clipboard_set_text(GdkClipboard *cb, const char *text) {
+    gdk_clipboard_set_text(cb, text);
+}
+
+/// Async-read callback. Exactly one of `text` / `err` will be non-NULL
+/// (or both NULL when the clipboard does not hold text). Whichever is
+/// non-NULL is heap-allocated; the callee owns it and must `g_free`.
+typedef void (*swiftpwa_clipboard_text_callback)(char *text, char *err, void *user_data);
+
+typedef struct {
+    swiftpwa_clipboard_text_callback cb;
+    void *user_data;
+} swiftpwa_clipboard_text_box;
+
+static inline void swiftpwa_clipboard_text_finish(
+    GObject *source,
+    GAsyncResult *result,
+    gpointer user_data
+) {
+    swiftpwa_clipboard_text_box *box = (swiftpwa_clipboard_text_box *)user_data;
+    swiftpwa_clipboard_text_callback cb = box->cb;
+    void *swift_ud = box->user_data;
+    g_free(box);
+
+    GError *error = NULL;
+    char *text = gdk_clipboard_read_text_finish(
+        GDK_CLIPBOARD(source), result, &error
+    );
+    char *err_msg = NULL;
+    if (error) {
+        err_msg = g_strdup(error->message);
+        g_error_free(error);
+    }
+    cb(text, err_msg, swift_ud);
+}
+
+/// Async-read clipboard text. The callback fires on the GMainContext
+/// active when the call is made (i.e. the GTK main thread, since the
+/// Swift backend hops there via `MainThread.run` before invoking this).
+static inline void swiftpwa_clipboard_read_text(
+    GdkClipboard *cb,
+    swiftpwa_clipboard_text_callback callback,
+    void *user_data
+) {
+    swiftpwa_clipboard_text_box *box =
+        (swiftpwa_clipboard_text_box *)g_malloc0(sizeof(swiftpwa_clipboard_text_box));
+    box->cb = callback;
+    box->user_data = user_data;
+    gdk_clipboard_read_text_async(cb, NULL, swiftpwa_clipboard_text_finish, box);
+}
+
+/// GTK4 has no `gdk_clipboard_clear`; the documented way to relinquish
+/// ownership is to set a NULL content provider.
+static inline void swiftpwa_clipboard_clear(GdkClipboard *cb) {
+    gdk_clipboard_set_content(cb, NULL);
+}
+
 #endif

@@ -25,6 +25,13 @@ struct HelloPWAApp {
             ]))
             ctx.use(TrayPlugin(tray))
 
+            // Notifications plugin — auth + send. On Apple this needs
+            // a bundled app to actually surface banners; under
+            // `swift run` the JS-side `notifications.send` will return
+            // an "not allowed" error, which is the demo's own
+            // way of showing the bundling distinction.
+            ctx.use(NotificationsPlugin(SystemNotifications()))
+
             // Drive a couple of menu items from Swift directly so users
             // can see backend-side reactions to tray events. JS also
             // subscribes via `tray.subscribe` and logs every event.

@@ -2,16 +2,19 @@ import Foundation
 
 /// Thread-safe registry of named JS-callable command handlers.
 ///
-/// Handlers are async, sendable closures keyed by command name.
-/// Use `register(_:_:)` for the raw `Data`-in / `Data`-out form, or
-/// `register(_:typed:)` to get automatic JSON encode/decode.
+/// Handlers are stored in a lock-guarded dictionary. Registration is
+/// synchronous so the user's `configure` closure can run on a thread
+/// that may not be pumping Swift's main-actor executor (e.g. before
+/// `gtk_main()` starts on Linux). Handlers themselves are still async
+/// closures, so `dispatch` stays async.
 ///
 /// The registry is the single fan-in point for the JS↔Swift bridge:
 /// each backend's webview adapter funnels every inbound `invoke` /
-/// `subscribe` frame through `dispatch(_:context:)`.
-public actor CommandRegistry {
+/// `subscribe` frame through `dispatch(_:)`.
+public final class CommandRegistry: @unchecked Sendable {
     public typealias Handler = @Sendable (CommandContext) async -> InvocationResult
 
+    private let lock = NSLock()
     private var handlers: [String: Handler] = [:]
 
     public init() {}
@@ -20,6 +23,8 @@ public actor CommandRegistry {
 
     /// Register a raw handler. Caller is responsible for decoding/encoding payloads.
     public func register(_ name: String, _ handler: @escaping Handler) {
+        lock.lock()
+        defer { lock.unlock() }
         handlers[name] = handler
     }
 
@@ -91,15 +96,21 @@ public actor CommandRegistry {
     }
 
     public func unregister(_ name: String) {
+        lock.lock()
+        defer { lock.unlock() }
         handlers.removeValue(forKey: name)
     }
 
     public func has(_ name: String) -> Bool {
-        handlers[name] != nil
+        lock.lock()
+        defer { lock.unlock() }
+        return handlers[name] != nil
     }
 
     public func names() -> [String] {
-        Array(handlers.keys)
+        lock.lock()
+        defer { lock.unlock() }
+        return Array(handlers.keys)
     }
 
     // MARK: - Dispatch
@@ -107,7 +118,12 @@ public actor CommandRegistry {
     /// Look up and invoke the handler for `context.invocation.command`.
     /// Returns `.failure(.notFound)` if no handler is registered.
     public func dispatch(_ context: CommandContext) async -> InvocationResult {
-        guard let handler = handlers[context.invocation.command] else {
+        let handler: Handler? = {
+            lock.lock()
+            defer { lock.unlock() }
+            return handlers[context.invocation.command]
+        }()
+        guard let handler else {
             return .failure(BridgeError(
                 code: BridgeError.notFound,
                 message: "no command registered for \"\(context.invocation.command)\""

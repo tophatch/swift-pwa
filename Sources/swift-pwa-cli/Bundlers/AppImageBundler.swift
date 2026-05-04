@@ -9,10 +9,15 @@ struct AppImageBundler {
     let outputDir: URL
 
     func build() async throws -> URL {
-        // 1. swift build -c release with static stdlib (Linux flag).
+        // 1. swift build -c release.
+        // Note: `--static-swift-stdlib` was dropped — recent Swift
+        // toolchains (6.0+) ship without a bundled static stdlib on
+        // Linux, and the flag silently extends build time without an
+        // effect. linuxdeploy bundles the dynamic Swift runtime libs
+        // alongside the binary, which is what we actually want.
         try await Shell.run(
             "/usr/bin/env",
-            ["swift", "build", "-c", "release", "--static-swift-stdlib"],
+            ["swift", "build", "-c", "release"],
             cwd: projectRoot
         )
         let binary = projectRoot
@@ -71,7 +76,7 @@ struct AppImageBundler {
         }
 
         // 3. Run linuxdeploy.
-        let linuxdeploy = try Self.findOrThrow("linuxdeploy")
+        let linuxdeploy = try await Self.findOrThrow("linuxdeploy")
         try await Shell.run("/usr/bin/env", [
             linuxdeploy.lastPathComponent,
             "--appdir", appDir.path,
@@ -85,18 +90,9 @@ struct AppImageBundler {
         return appImage ?? outputDir
     }
 
-    private static func findOrThrow(_ name: String) throws -> URL {
-        let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        task.arguments = ["which", name]
-        let pipe = Pipe()
-        task.standardOutput = pipe
-        try task.run()
-        task.waitUntilExit()
-        let path = String(
-            data: pipe.fileHandleForReading.readDataToEndOfFile(),
-            encoding: .utf8
-        )?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    private static func findOrThrow(_ name: String) async throws -> URL {
+        let path = await (try? Shell.capture("/usr/bin/env", ["which", name]))?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         guard !path.isEmpty else {
             throw ValidationError("""
             Required tool not found: \(name).

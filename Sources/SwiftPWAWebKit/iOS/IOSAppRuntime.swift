@@ -17,12 +17,12 @@
         public let context = IOSAppContext()
 
         /// Configure block stashed until the first scene is ready.
-        public var pendingConfigure: ((any AppContext) async throws -> Void)?
+        public var pendingConfigure: ((any AppContext) throws -> Void)?
 
         private init() {}
 
         public func bootstrap(
-            configure: @escaping @MainActor @Sendable (any AppContext) async throws -> Void
+            configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) {
             pendingConfigure = configure
         }
@@ -46,7 +46,7 @@
         private var installedPlugins: Set<String> = []
 
         public init() {
-            Task { @MainActor [self] in await use(WindowPlugin()) }
+            use(WindowPlugin())
         }
 
         @discardableResult
@@ -59,10 +59,10 @@
             return win
         }
 
-        public func use(_ plugin: any Plugin) async {
+        public func use(_ plugin: any Plugin) {
             let name = type(of: plugin).pluginName
             guard installedPlugins.insert(name).inserted else { return }
-            await plugin.register(into: registry, app: self)
+            plugin.register(into: registry, app: self)
         }
 
         public func window(_ id: WindowID) -> (any Window)? { windows[id] }

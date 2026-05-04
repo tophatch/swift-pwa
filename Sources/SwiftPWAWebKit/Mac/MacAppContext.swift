@@ -13,7 +13,7 @@
         public init() {
             // Install the built-in WindowPlugin eagerly so window.* JS
             // commands work without the user having to do it manually.
-            Task { @MainActor [self] in await use(WindowPlugin()) }
+            use(WindowPlugin())
         }
 
         @discardableResult
@@ -23,10 +23,10 @@
             return win
         }
 
-        public func use(_ plugin: any Plugin) async {
+        public func use(_ plugin: any Plugin) {
             let name = type(of: plugin).pluginName
             guard installedPlugins.insert(name).inserted else { return }
-            await plugin.register(into: registry, app: self)
+            plugin.register(into: registry, app: self)
         }
 
         public func window(_ id: WindowID) -> (any Window)? {

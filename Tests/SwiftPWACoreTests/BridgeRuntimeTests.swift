@@ -8,7 +8,7 @@ import Testing
 struct BridgeRuntimeTests {
     private func setUp() async -> (MockAppContext, MockWindow, MockWebView, BridgeRuntime) {
         let app = MockAppContext()
-        await app.use(WindowPlugin())
+        app.use(WindowPlugin())
         let webView = MockWebView()
         let win = MockWindow(webView: webView)
         // Manually insert into the app's window map so command resolution

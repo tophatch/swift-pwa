@@ -162,7 +162,6 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ### Known limitations in v0.1
 
-- **`evaluateJavaScript` is fire-and-forget on Linux.** Outbound frames from Swift to JS work because `__deliver` is one-way, but `webView.evaluateJavaScript(_:)` always returns `nil` to Swift on the GTK backend. Apple side is fine. Threading the `GAsyncResult` callback chain back into a Swift continuation is queued.
 - **GTK4 / WebKitGTK 6.0 not supported yet.** The C shim assumes the 4.1 ABI (`WebKitJavascriptResult` boxed type on the script-message callback). Adding 6.0 means a sibling shim target with the JSCValue-direct callback.
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows / Android bundlers print "not implemented".** Targets are scaffolded but the actual build paths land in v0.2/v0.3.

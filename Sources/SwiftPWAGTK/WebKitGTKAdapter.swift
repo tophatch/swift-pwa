@@ -11,7 +11,10 @@
     /// main thread regardless of which executor the calling Task is on.
     /// `_ingest(jsonString:)` is invoked from the C signal handler
     /// trampoline (which fires on the main thread); the continuation
-    /// it writes to is intrinsically thread-safe.
+    /// it writes to is intrinsically thread-safe. `evaluateJavaScript`
+    /// schedules the async-ready callback on the same GMainContext, so
+    /// resuming the caller's Swift continuation also happens on the
+    /// main thread.
     public final class WebKitGTKAdapter: PWAWebView, @unchecked Sendable {
         /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
         private let viewWidget: UnsafeMutablePointer<GtkWidget>
@@ -131,20 +134,44 @@
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            // Fire-and-forget for v0.1; full async result threading via
-            // GAsyncResult is left for a follow-up.
-            let raw = UInt(bitPattern: viewWidget)
-            await MainThread.run {
-                guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
-                let webView = UnsafeMutableRawPointer(view)
-                    .assumingMemoryBound(to: WebKitWebView.self)
-                js.withCString {
-                    webkit_web_view_evaluate_javascript(
-                        webView, $0, gssize(-1), nil, nil, nil, nil, nil
-                    )
+            // The C wrapper schedules `evaluateJavaScriptCallback` once
+            // the page returns. We heap-box the continuation, retain it
+            // across the C boundary, and resume it from the trampoline.
+            // `swiftpwa_evaluate_javascript` must be invoked on the GTK
+            // main thread; the GAsyncReadyCallback fires there too, so
+            // the continuation resume happens on the main thread.
+            //
+            // Pointers are laundered through `UInt` because raw pointers
+            // aren't `Sendable` under Swift 6 strict concurrency.
+            let viewRaw = UInt(bitPattern: viewWidget)
+            return try await withCheckedThrowingContinuation {
+                (cont: CheckedContinuation<String?, any Error>) in
+                let boxRaw = UInt(bitPattern: Unmanaged.passRetained(
+                    EvalBox(continuation: cont)
+                ).toOpaque())
+                let snippet = js
+                Task {
+                    await MainThread.run {
+                        guard let boxPtr = UnsafeMutableRawPointer(bitPattern: boxRaw) else {
+                            return
+                        }
+                        guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: viewRaw) else {
+                            // View deallocated before we got here — release
+                            // the box and resume with nil.
+                            Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
+                                .continuation.resume(returning: nil)
+                            return
+                        }
+                        let webView = UnsafeMutableRawPointer(view)
+                            .assumingMemoryBound(to: WebKitWebView.self)
+                        snippet.withCString { cstr in
+                            swiftpwa_evaluate_javascript(
+                                webView, cstr, evaluateJavaScriptCallback, boxPtr
+                            )
+                        }
+                    }
                 }
             }
-            return nil
         }
 
         public func deliver(_ frame: OutboundFrame) async throws {
@@ -188,6 +215,44 @@
     final class MessageBox {
         weak var adapter: WebKitGTKAdapter?
         init(_ adapter: WebKitGTKAdapter) { self.adapter = adapter }
+    }
+
+    /// Heap box carrying a `CheckedContinuation` across the C boundary
+    /// for `swiftpwa_evaluate_javascript`. Marked `@unchecked Sendable`
+    /// because the continuation is itself sendable and the box is
+    /// owned by exactly one party at a time (Swift hands it to C, C
+    /// hands it back via `evaluateJavaScriptCallback`).
+    final class EvalBox: @unchecked Sendable {
+        let continuation: CheckedContinuation<String?, any Error>
+        init(continuation: CheckedContinuation<String?, any Error>) {
+            self.continuation = continuation
+        }
+    }
+
+    /// `@convention(c)` callback for `swiftpwa_evaluate_javascript`.
+    /// Fires on the GTK main thread once the JS engine returns.
+    let evaluateJavaScriptCallback: @convention(c) (
+        UnsafeMutablePointer<CChar>?,
+        UnsafeMutablePointer<CChar>?,
+        UnsafeMutableRawPointer?
+    ) -> Void = { jsonPtr, errorPtr, userData in
+        guard let userData else { return }
+        let box = Unmanaged<EvalBox>.fromOpaque(userData).takeRetainedValue()
+        if let errorPtr {
+            let msg = String(cString: errorPtr)
+            g_free(UnsafeMutableRawPointer(errorPtr))
+            box.continuation.resume(throwing: BridgeError(
+                code: BridgeError.handler, message: msg
+            ))
+            return
+        }
+        if let jsonPtr {
+            let json = String(cString: jsonPtr)
+            g_free(UnsafeMutableRawPointer(jsonPtr))
+            box.continuation.resume(returning: json)
+        } else {
+            box.continuation.resume(returning: nil)
+        }
     }
 
     /// `@convention(c)` trampoline for `script-message-received`.

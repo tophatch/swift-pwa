@@ -58,5 +58,18 @@ struct InfoPlistTests {
         let configs = scenes?["UISceneConfigurations"] as? [String: Any]
         let app = configs?["UIWindowSceneSessionRoleApplication"] as? [[String: Any]]
         #expect(app?.first?["UISceneDelegateClassName"] as? String == "SwiftPWAWebKit.SwiftPWASceneDelegate")
+        // No storyboard name → fall back to the empty UILaunchScreen dict.
+        #expect(parsed["UILaunchStoryboardName"] == nil)
+        #expect(parsed["UILaunchScreen"] is [String: Any])
+    }
+
+    @Test("iOS plist switches to UILaunchStoryboardName when a storyboard is supplied")
+    func iosLaunchStoryboard() throws {
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: manifest, launchStoryboardName: "LaunchScreen").encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(parsed["UILaunchStoryboardName"] as? String == "LaunchScreen")
+        #expect(parsed["UILaunchScreen"] == nil)
     }
 }

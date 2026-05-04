@@ -60,7 +60,7 @@ struct IPABundler {
             throw BundlerError.binaryMissing(binary)
         }
 
-        let app = try assembleApp(binary: binary, productsDir: productsDir)
+        let app = try await assembleApp(binary: binary, productsDir: productsDir)
 
         if simulator {
             // Adhoc-sign so the simulator will accept it.
@@ -101,7 +101,7 @@ struct IPABundler {
     /// the SwiftPM resource bundles (e.g. `bridge.js`), the project's `web/`
     /// directory, and write `Info.plist`. iOS bundles are flat — no
     /// `Contents/MacOS` wrapper.
-    private func assembleApp(binary: URL, productsDir: URL) throws -> URL {
+    private func assembleApp(binary: URL, productsDir: URL) async throws -> URL {
         let fm = FileManager.default
         let app = outputDir.appendingPathComponent("\(manifest.name).app")
         if fm.fileExists(atPath: app.path) {
@@ -110,7 +110,12 @@ struct IPABundler {
         try fm.createDirectory(at: app, withIntermediateDirectories: true)
         try fm.copyItem(at: binary, to: app.appendingPathComponent(manifest.name))
 
-        try InfoPlistGenerator.iOS(manifest: manifest)
+        // Launch screen: if the manifest has a PNG icon, compile a
+        // storyboard that centers it on a black background. Otherwise
+        // fall back to the system-default empty UILaunchScreen.
+        let storyboardName = await compileLaunchScreen(into: app)
+
+        try InfoPlistGenerator.iOS(manifest: manifest, launchStoryboardName: storyboardName)
             .write(to: app.appendingPathComponent("Info.plist"))
 
         // SwiftPM resource bundles (e.g. swift-pwa_SwiftPWACore.bundle holding bridge.js).
@@ -130,4 +135,92 @@ struct IPABundler {
         }
         return app
     }
+
+    /// Best-effort: build a launch storyboard from `manifest.icon` if it's a
+    /// PNG. Drops `LaunchIcon.png` into the bundle root so the storyboard's
+    /// `image="LaunchIcon"` reference resolves via `UIImage(named:)` without
+    /// needing a compiled asset catalog. Returns the storyboard name to
+    /// write into `UILaunchStoryboardName`, or `nil` to fall back to the
+    /// system-default launch screen.
+    private func compileLaunchScreen(into app: URL) async -> String? {
+        guard let iconPath = manifest.icon else { return nil }
+        let iconURL = projectRoot.appendingPathComponent(iconPath)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: iconURL.path),
+              iconURL.pathExtension.lowercased() == "png"
+        else { return nil }
+
+        let bundledIcon = app.appendingPathComponent("LaunchIcon.png")
+        do {
+            try fm.copyItem(at: iconURL, to: bundledIcon)
+
+            let tmp = fm.temporaryDirectory
+                .appendingPathComponent("swift-pwa-storyboard-\(UUID().uuidString)")
+            try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            defer { try? fm.removeItem(at: tmp) }
+
+            let sbInput = tmp.appendingPathComponent("LaunchScreen.storyboard")
+            try Self.launchStoryboardXML.write(to: sbInput, atomically: true, encoding: .utf8)
+            let sbOutput = app.appendingPathComponent("LaunchScreen.storyboardc")
+
+            try await Shell.run(
+                "/usr/bin/env",
+                ["xcrun", "ibtool", "--compile", sbOutput.path, sbInput.path]
+            )
+            return "LaunchScreen"
+        } catch {
+            try? fm.removeItem(at: bundledIcon)
+            print("note: launch screen build failed (\(error)); using system default.")
+            return nil
+        }
+    }
+
+    /// Black background, centered `UIImageView` referencing the loose
+    /// `LaunchIcon.png` we drop next to the bundle. Sized to 40 % of the
+    /// view's width, with a 1:1 aspect ratio. The format is the standard
+    /// IB launch-screen XML — Xcode emits something near-identical.
+    private static let launchStoryboardXML = """
+    <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+    <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" \
+    toolsVersion="22689" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" \
+    useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" \
+    colorMatched="YES" initialViewController="VC1">
+        <dependencies>
+            <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22689"/>
+            <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+        </dependencies>
+        <scenes>
+            <scene sceneID="SC1">
+                <objects>
+                    <viewController id="VC1" sceneMemberID="viewController">
+                        <view key="view" contentMode="scaleToFill" id="V1">
+                            <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
+                            <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                            <subviews>
+                                <imageView clipsSubviews="YES" userInteractionEnabled="NO" \
+    contentMode="scaleAspectFit" image="LaunchIcon" \
+    translatesAutoresizingMaskIntoConstraints="NO" id="ICON1"/>
+                            </subviews>
+                            <viewLayoutGuide key="safeArea" id="SA1"/>
+                            <color key="backgroundColor" red="0.0" green="0.0" blue="0.0" alpha="1" \
+    colorSpace="custom" customColorSpace="sRGB"/>
+                            <constraints>
+                                <constraint firstItem="ICON1" firstAttribute="centerX" \
+    secondItem="V1" secondAttribute="centerX" id="cx"/>
+                                <constraint firstItem="ICON1" firstAttribute="centerY" \
+    secondItem="V1" secondAttribute="centerY" id="cy"/>
+                                <constraint firstItem="ICON1" firstAttribute="width" \
+    secondItem="V1" secondAttribute="width" multiplier="0.4" id="w"/>
+                                <constraint firstItem="ICON1" firstAttribute="height" \
+    secondItem="ICON1" secondAttribute="width" id="h"/>
+                            </constraints>
+                        </view>
+                    </viewController>
+                    <placeholder placeholderIdentifier="IBFirstResponder" id="FR1" \
+    userLabel="First Responder" sceneMemberID="firstResponder"/>
+                </objects>
+            </scene>
+        </scenes>
+    </document>
+    """
 }

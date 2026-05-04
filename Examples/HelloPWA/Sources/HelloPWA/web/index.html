@@ -75,7 +75,47 @@
             white-space: pre-wrap;
             word-break: break-word;
             margin: 0;
-            min-height: 8rem;
+            min-height: 6rem;
+        }
+        .panes {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: .75rem;
+            margin-top: .25rem;
+        }
+        .pane h2 {
+            font-size: .8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--muted);
+            margin: 0 0 .35rem;
+        }
+        @media (max-width: 540px) {
+            .panes { grid-template-columns: 1fr; }
+        }
+        .shortcuts {
+            margin: 0 0 1rem;
+            padding: .65rem .8rem;
+            background: var(--surface);
+            border-radius: 8px;
+            font-size: .85rem;
+            line-height: 1.6;
+            color: var(--muted);
+        }
+        .shortcuts strong { color: var(--fg); font-weight: 600; }
+        kbd {
+            font: inherit;
+            font-size: .8em;
+            padding: 1px 6px;
+            border-radius: 4px;
+            border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent);
+            background: var(--bg);
+            color: var(--fg);
+        }
+        /* Touch-only: hide the shortcuts panel; nothing to bind to. */
+        @media (hover: none) and (pointer: coarse) {
+            .shortcuts { display: none; }
         }
         footer {
             margin-top: 2.5rem;
@@ -113,35 +153,128 @@
         <button id="resize" class="resize-only">Resize 800×600</button>
         <button id="reset" class="resize-only">Reset 1024×768</button>
         <button id="now">Server time</button>
+        <button id="copy-title">Copy title</button>
+        <button id="paste">Paste from clipboard</button>
     </div>
-    <pre id="log"></pre>
+    <p class="shortcuts" id="shortcuts">
+        <strong>Shortcuts:</strong>
+        <kbd id="k-rename">⌘R</kbd> rename ·
+        <kbd id="k-1">⌘1</kbd> 800×600 ·
+        <kbd id="k-2">⌘2</kbd> 1024×768 ·
+        <kbd id="k-now">⌘T</kbd> server time ·
+        <kbd id="k-copy">⇧⌘C</kbd> copy title ·
+        <kbd id="k-paste">⇧⌘V</kbd> paste ·
+        <kbd id="k-clear">⌘K</kbd> clear log
+    </p>
+    <div class="panes">
+        <div class="pane">
+            <h2>Actions</h2>
+            <pre id="log"></pre>
+        </div>
+        <div class="pane">
+            <h2>Window events</h2>
+            <pre id="events"></pre>
+        </div>
+    </div>
     <footer>
         <div class="bird" id="bird" role="button" tabindex="0" aria-label="give the bird a gentle tap">🐦</div>
         <p id="motto">chirp — you've reached the end of the page</p>
     </footer>
     <script>
-        const log = (m) => {
-            document.getElementById("log").textContent += m + "\n";
+        // Two log streams: actions you triggered, and window events the
+        // backend pushed up via `window.subscribe`. Keeping them apart
+        // makes it obvious which side initiated each line.
+        const append = (id, msg) => {
+            const el = document.getElementById(id);
+            const line = new Date().toLocaleTimeString() + "  " + msg + "\n";
+            el.textContent += line;
+            el.scrollTop = el.scrollHeight;
         };
-        document.getElementById("rename").onclick = async () => {
-            const t = "renamed at " + new Date().toLocaleTimeString();
-            await __SWIFT_PWA__.invoke("window.setTitle", { title: t });
-            log("renamed: " + t);
+        const log = (m) => append("log", m);
+        const evt = (m) => append("events", m);
+        const clearLog = () => { document.getElementById("log").textContent = ""; };
+
+        // Bridge actions, named so shortcuts can re-use them.
+        const actions = {
+            rename: async () => {
+                const t = "renamed at " + new Date().toLocaleTimeString();
+                await __SWIFT_PWA__.invoke("window.setTitle", { title: t });
+                log("renamed → " + t);
+            },
+            resize800: async () => {
+                await __SWIFT_PWA__.invoke("window.setSize", { width: 800, height: 600 });
+                log("resized → 800×600");
+            },
+            resize1024: async () => {
+                await __SWIFT_PWA__.invoke("window.setSize", { width: 1024, height: 768 });
+                log("resized → 1024×768");
+            },
+            now: async () => {
+                const r = await __SWIFT_PWA__.invoke("now", {});
+                log("now: " + r.iso);
+            },
+            copyTitle: async () => {
+                const { value: title } = await __SWIFT_PWA__.invoke("window.title", {});
+                await __SWIFT_PWA__.invoke("clipboard.writeText", { text: title });
+                log("clipboard ← \"" + title + "\"");
+            },
+            paste: async () => {
+                const { text } = await __SWIFT_PWA__.invoke("clipboard.readText");
+                log(text == null ? "clipboard is empty" : "clipboard → \"" + text + "\"");
+            },
+            clear: () => { clearLog(); log("cleared"); },
         };
-        document.getElementById("resize").onclick = async () => {
-            await __SWIFT_PWA__.invoke("window.setSize", { width: 800, height: 600 });
-            log("resized → 800×600");
-        };
-        document.getElementById("reset").onclick = async () => {
-            await __SWIFT_PWA__.invoke("window.setSize", { width: 1024, height: 768 });
-            log("resized → 1024×768");
-        };
-        document.getElementById("now").onclick = async () => {
-            const r = await __SWIFT_PWA__.invoke("now", {});
-            log("now: " + r.iso);
-        };
+
+        document.getElementById("rename").onclick = actions.rename;
+        document.getElementById("resize").onclick = actions.resize800;
+        document.getElementById("reset").onclick  = actions.resize1024;
+        document.getElementById("now").onclick    = actions.now;
+        document.getElementById("copy-title").onclick = actions.copyTitle;
+        document.getElementById("paste").onclick      = actions.paste;
+
+        // Render shortcuts using the platform's accelerator key. Mac uses
+        // ⌘ + the letter; everywhere else (Linux, future Windows) it's
+        // Ctrl + the letter. The keydown handler honours either.
+        const isMac = /Mac|iPhone|iPad/i.test(navigator.platform || navigator.userAgent);
+        const accel = (combo) => isMac ? combo : combo.replace(/⌘/g, "Ctrl+").replace(/⇧/g, "Shift+");
+        const labels = { "k-rename": "⌘R", "k-1": "⌘1", "k-2": "⌘2", "k-now": "⌘T",
+                         "k-copy": "⇧⌘C", "k-paste": "⇧⌘V", "k-clear": "⌘K" };
+        for (const [id, combo] of Object.entries(labels)) {
+            document.getElementById(id).textContent = accel(combo);
+        }
+
+        document.addEventListener("keydown", (e) => {
+            const accelHeld = isMac ? e.metaKey : e.ctrlKey;
+            if (!accelHeld) return;
+            const k = e.key.toLowerCase();
+            const shift = e.shiftKey;
+            // Only intercept the combos we own; let everything else
+            // (including text-input ⌘C / ⌘V on real selections) pass through.
+            const handlers = {
+                "r":   { shift: false, run: actions.rename },
+                "1":   { shift: false, run: actions.resize800 },
+                "2":   { shift: false, run: actions.resize1024 },
+                "t":   { shift: false, run: actions.now },
+                "c":   { shift: true,  run: actions.copyTitle },
+                "v":   { shift: true,  run: actions.paste },
+                "k":   { shift: false, run: actions.clear },
+            };
+            const h = handlers[k];
+            if (!h || h.shift !== shift) return;
+            e.preventDefault();
+            h.run();
+        });
+
         __SWIFT_PWA__.subscribe("window.subscribe", {}, (event) => {
-            log("event: " + JSON.stringify(event));
+            // Pretty-print the event tag + payload separately so the
+            // events column stays scannable even after lots of resizes.
+            if (typeof event === "object" && event !== null) {
+                const [tag] = Object.keys(event);
+                const payload = event[tag];
+                evt(tag + (payload === null || payload === undefined ? "" : "  " + JSON.stringify(payload)));
+            } else {
+                evt(String(event));
+            }
         });
 
         const mottos = [

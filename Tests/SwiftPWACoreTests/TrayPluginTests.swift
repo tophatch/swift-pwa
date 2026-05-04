@@ -103,11 +103,17 @@ struct TrayPluginTests {
         let click = TrayEvent.click
         let menuClick = TrayEvent.menuItemClicked(id: "open")
 
-        let clickJSON = try JSONEncoder().encode(click)
-        let menuJSON = try JSONEncoder().encode(menuClick)
+        // Sort keys so the wire shape comparison is deterministic —
+        // Swift's JSONEncoder iterates a hash-randomized dictionary
+        // otherwise.
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .sortedKeys
+
+        let clickJSON = try encoder.encode(click)
+        let menuJSON = try encoder.encode(menuClick)
 
         #expect(String(data: clickJSON, encoding: .utf8) == #"{"type":"click"}"#)
-        #expect(String(data: menuJSON, encoding: .utf8) == #"{"type":"menuItemClicked","id":"open"}"#)
+        #expect(String(data: menuJSON, encoding: .utf8) == #"{"id":"open","type":"menuItemClicked"}"#)
 
         #expect(try JSONDecoder().decode(TrayEvent.self, from: clickJSON) == click)
         #expect(try JSONDecoder().decode(TrayEvent.self, from: menuJSON) == menuClick)

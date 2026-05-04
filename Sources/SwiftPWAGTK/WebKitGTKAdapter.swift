@@ -189,10 +189,14 @@
         guard let cstr = jsc_value_to_string(value) else { return }
         let json = String(cString: cstr)
         g_free(cstr)
-        let box = Unmanaged<MessageBox>.fromOpaque(userData).takeUnretainedValue()
+        // Pull the (Sendable, MainActor-isolated) adapter reference
+        // out of the box before crossing into the MainActor closure.
+        // Capturing the box itself trips strict-concurrency because
+        // `MessageBox` is not Sendable.
+        let adapter = Unmanaged<MessageBox>.fromOpaque(userData).takeUnretainedValue().adapter
         // Signals fire on the GTK main thread, which is also Swift's
         // main thread; jump to MainActor isolation without an async hop.
-        MainActor.assumeIsolated { box.adapter?._ingest(jsonString: json) }
+        MainActor.assumeIsolated { adapter?._ingest(jsonString: json) }
     }
 
     /// `@convention(c)` GClosureNotify that releases the heap-boxed

@@ -158,6 +158,7 @@
         <button id="paste">Paste from clipboard</button>
         <button id="cycle-tray">Cycle tray menu</button>
         <button id="toggle-tray">Hide tray</button>
+        <button id="notify">Send notification</button>
     </div>
     <p class="shortcuts" id="shortcuts">
         <strong>Shortcuts:</strong>
@@ -244,6 +245,23 @@
                     trayVisible ? "Hide tray" : "Show tray";
                 log("tray " + (trayVisible ? "shown" : "hidden"));
             },
+            notify: async () => {
+                try {
+                    const auth = await __SWIFT_PWA__.invoke("notifications.requestAuthorization");
+                    if (!auth.granted) { log("notifications: not authorized"); return; }
+                    const r = await __SWIFT_PWA__.invoke("notifications.send", {
+                        title: "Hello from swift-pwa",
+                        body:  "Posted at " + new Date().toLocaleTimeString(),
+                        sound: false,
+                    });
+                    log("notification → id=" + r.id);
+                } catch (e) {
+                    // Apple `swift run` returns an error here because the
+                    // process has no bundle identity; that's expected and
+                    // worth showing rather than swallowing.
+                    log("notification failed: " + e.message);
+                }
+            },
         };
 
         // Two menu shapes that the cycle button swaps between, so users
@@ -274,6 +292,7 @@
         document.getElementById("paste").onclick      = actions.paste;
         document.getElementById("cycle-tray").onclick = actions.cycleTray;
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
+        document.getElementById("notify").onclick = actions.notify;
 
         // React to tray clicks / menu-item activations from the JS side.
         // Some items (e.g. "rename") map directly onto existing actions;

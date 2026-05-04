@@ -61,6 +61,12 @@
             -webkit-tap-highlight-color: transparent;
         }
         button:active { opacity: 0.7; }
+        /* Touch-only devices (iPhone, iPad without pointer) fill the
+           scene — window.setSize is a no-op there, so hide the resize
+           controls rather than show buttons that visually do nothing. */
+        @media (hover: none) and (pointer: coarse) {
+            .resize-only { display: none; }
+        }
         pre {
             background: var(--surface);
             padding: .75rem;
@@ -104,8 +110,8 @@
     <p>A system <code>WKWebView</code> driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
     <div class="actions">
         <button id="rename">Rename window</button>
-        <button id="resize">Resize 800×600</button>
-        <button id="reset">Reset 1024×768</button>
+        <button id="resize" class="resize-only">Resize 800×600</button>
+        <button id="reset" class="resize-only">Reset 1024×768</button>
         <button id="now">Server time</button>
     </div>
     <pre id="log"></pre>

@@ -114,9 +114,11 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ## Platform setup
 
-- **macOS**: `swift test` works out of the box on Xcode 26+.
-- **iOS Simulator**: requires the matching iOS Simulator runtime installed via *Xcode → Settings → Platforms*. Then `swift-pwa build --target ios --simulator` produces an `.app` you can install with `xcrun simctl install booted`.
-- **Linux**: see [docs/linux-setup.md](docs/linux-setup.md) for Ubuntu 24.04 instructions (Swift 6.0, GTK3 + WebKitGTK 4.1, optional `linuxdeploy` for AppImage builds).
+Per-platform walkthroughs (toolchain, build, codesign, device install, known caveats):
+
+- **macOS** — [docs/macos-setup.md](docs/macos-setup.md): Xcode 26+, `.app` bundling, Developer ID signing, notarization.
+- **iOS** — [docs/ios-setup.md](docs/ios-setup.md): Simulator runtime install, `.app` install via `simctl`, device run via Xcode.
+- **Linux** — [docs/linux-setup.md](docs/linux-setup.md): Ubuntu 24.04 + Swift 6.0, GTK3 + WebKitGTK 4.1, AppImage builds.
 
 ## Contributing
 

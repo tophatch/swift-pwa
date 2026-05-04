@@ -117,12 +117,19 @@ enum BundlerError: Error, CustomStringConvertible {
     case binaryMissing(URL)
     case toolMissing(String)
     case shell(Int32, String)
+    case iosSimulatorRuntimeMissing
 
     var description: String {
         switch self {
         case let .binaryMissing(url): "expected built binary at \(url.path)"
         case let .toolMissing(name): "required tool not on PATH: \(name)"
         case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
+        case .iosSimulatorRuntimeMissing:
+            """
+            no iOS Simulator runtime installed.
+            Install one with: xcodebuild -downloadPlatform iOS
+            or via: Xcode → Settings → Platforms → iOS → +
+            """
         }
     }
 }

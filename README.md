@@ -164,7 +164,6 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 - **`evaluateJavaScript` is fire-and-forget on Linux.** Outbound frames from Swift to JS work because `__deliver` is one-way, but `webView.evaluateJavaScript(_:)` always returns `nil` to Swift on the GTK backend. Apple side is fine. Threading the `GAsyncResult` callback chain back into a Swift continuation is queued.
 - **GTK4 / WebKitGTK 6.0 not supported yet.** The C shim assumes the 4.1 ABI (`WebKitJavascriptResult` boxed type on the script-message callback). Adding 6.0 means a sibling shim target with the JSCValue-direct callback.
-- **iOS Simulator builds need a runtime install.** `xcodebuild` won't accept iOS Simulator destinations unless the matching iOS platform runtime is installed via *Xcode → Settings → Platforms*. `swift-pwa build --target ios --simulator` works once that's done.
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows / Android bundlers print "not implemented".** Targets are scaffolded but the actual build paths land in v0.2/v0.3.
 

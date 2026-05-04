@@ -168,25 +168,25 @@
         init(_ adapter: WebKitGTKAdapter) { self.adapter = adapter }
     }
 
-    /// `@convention(c)` trampoline matching the GObject callback shape
-    /// for `WebKitUserContentManager::script-message-received` in
-    /// WebKitGTK 2.40+ (4.1 ABI):
-    /// `void (*)(WebKitUserContentManager*, JSCValue*, gpointer)`.
+    /// `@convention(c)` trampoline for the GObject callback
+    /// `WebKitUserContentManager::script-message-received`.
     ///
-    /// (The older API took a `WebKitJavascriptResult*`, which was
-    /// removed in 2.40 in favour of passing `JSCValue*` directly.)
+    /// The signal's second argument is *either* `WebKitJavascriptResult*`
+    /// (webkit2gtk-4.1, deprecated but still in use) *or* `JSCValue*`
+    /// (webkit2gtk-6.0). We declare the slot as `gpointer` and let the
+    /// `swiftpwa_extract_message_string` shim introspect the GType at
+    /// runtime, so the same Swift binary works against both ABIs.
     ///
     /// Bridge.js always sends string payloads (it `JSON.stringify`s
-    /// the envelope before posting), so we extract the value as UTF-8,
-    /// free the C buffer, and dispatch to the Swift adapter on the
-    /// main actor.
+    /// the envelope before posting). We dispatch the resulting UTF-8
+    /// JSON onto the main actor.
     private let messageReceivedTrampoline: @convention(c) (
         UnsafeMutablePointer<WebKitUserContentManager>?,
-        UnsafeMutablePointer<JSCValue>?,
+        gpointer?,
         gpointer?
-    ) -> Void = { _, value, userData in
-        guard let value, let userData else { return }
-        guard let cstr = jsc_value_to_string(value) else { return }
+    ) -> Void = { _, valueArg, userData in
+        guard let valueArg, let userData else { return }
+        guard let cstr = swiftpwa_extract_message_string(valueArg) else { return }
         let json = String(cString: cstr)
         g_free(cstr)
         // Pull the (Sendable, MainActor-isolated) adapter reference

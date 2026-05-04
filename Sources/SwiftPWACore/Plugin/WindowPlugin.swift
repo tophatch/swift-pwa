@@ -25,7 +25,7 @@ public struct WindowPlugin: Plugin {
         })
 
         registry.register("window.list", typed: { (_: EmptyArgs, _) async -> WindowListResult in
-            let ids = await MainActor.run { app.windows.keys.map(\.raw) }
+            let ids = await MainThread.run { app.windows.keys.map(\.raw) }
             return WindowListResult(ids: ids)
         })
 
@@ -100,16 +100,26 @@ public struct WindowPlugin: Plugin {
             "window.subscribe",
             typed: { (args: TargetOnlyArgs, ctx) -> AsyncThrowingStream<WindowEvent, any Error> in
                 AsyncThrowingStream { continuation in
-                    let task = Task { @MainActor in
+                    let task = Task {
+                        // Resolve the target window on the UI thread.
                         let target: WindowID? = args.id.map(WindowID.init(raw:)) ?? ctx.originWindow
-                        guard let target, let win = app.window(target) else {
+                        guard let target else {
                             continuation.finish(throwing: BridgeError(
                                 code: BridgeError.notFound,
                                 message: "no such window"
                             ))
                             return
                         }
-                        let stream = win.eventStream()
+                        let stream: AsyncStream<WindowEvent>? = await MainThread.run {
+                            app.window(target)?.eventStream()
+                        }
+                        guard let stream else {
+                            continuation.finish(throwing: BridgeError(
+                                code: BridgeError.notFound,
+                                message: "no such window"
+                            ))
+                            return
+                        }
                         for await event in stream {
                             if Task.isCancelled { break }
                             continuation.yield(event)
@@ -182,15 +192,21 @@ private func resolveWindow(_ id: String?, ctx: CommandContext, app: any AppConte
     return app.window(target)
 }
 
-/// Hop to MainActor and run `body` against the resolved window. Throws
-/// `.notFound` if the id (or implicit origin) doesn't match any window.
+/// Hop to the UI thread (via `MainThread`) and run `body` against the
+/// resolved window. Throws `.notFound` if the id (or implicit origin)
+/// doesn't match any window.
+///
+/// We use `MainThread.run` rather than `MainActor.run` because Swift's
+/// MainActor executor isn't pumped by `gtk_main()` on Linux; the GTK
+/// backend installs a `g_idle_add`-based dispatch hook so this works
+/// uniformly on all platforms.
 private func onWindow<T: Sendable>(
     _ id: String?,
     ctx: CommandContext,
     app: any AppContext,
-    _ body: @MainActor @Sendable (any Window) throws -> T
+    _ body: @escaping @MainActor @Sendable (any Window) throws -> T
 ) async throws -> T {
-    try await MainActor.run {
+    try await MainThread.run {
         guard let win = resolveWindow(id, ctx: ctx, app: app) else {
             throw BridgeError(code: BridgeError.notFound, message: "no such window")
         }

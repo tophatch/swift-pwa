@@ -6,7 +6,13 @@ import Foundation
 ///   - a way to send `OutboundFrame`s to JS (typically via injected JS
 ///     that calls a global resolver table)
 ///   - script evaluation / loading primitives.
-@MainActor
+/// Cross-platform webview contract.
+///
+/// Methods are *not* `@MainActor` — backends are responsible for
+/// hopping to their platform's UI thread internally (typically via
+/// `MainThread.run`). This is what lets `BridgeRuntime` pump frames
+/// from the cooperative pool without deadlocking on Linux, where
+/// Swift's MainActor executor isn't pumped by `gtk_main()`.
 public protocol PWAWebView: AnyObject, Sendable {
     /// Load (or reload) the configured content into this webview.
     func load(_ content: WindowContent)

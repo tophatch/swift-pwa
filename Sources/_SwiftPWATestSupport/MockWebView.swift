@@ -1,20 +1,36 @@
 import Foundation
 import SwiftPWACore
 
-/// In-memory `WebView` for unit testing the bridge layer end-to-end
+/// In-memory `PWAWebView` for unit testing the bridge layer end-to-end
 /// without spinning up a real `WKWebView` / `WebKitWebView`.
-@MainActor
-public final class MockWebView: PWAWebView {
+///
+/// Not `@MainActor` (the real backends aren't either). State is
+/// guarded by an internal lock since tests may push frames while the
+/// bridge runtime pumps from a cooperative-pool task.
+public final class MockWebView: PWAWebView, @unchecked Sendable {
+    private let lock = NSLock()
     private var content: WindowContent?
+    private var _deliveredFrames: [OutboundFrame] = []
+    private var _evaluatedScripts: [String] = []
+    private var _evaluationResults: [String?] = []
 
     /// Frames the webview has been asked to deliver to JS. Tests assert
     /// against this array.
-    public private(set) var deliveredFrames: [OutboundFrame] = []
+    public var deliveredFrames: [OutboundFrame] {
+        lock.withLock { _deliveredFrames }
+    }
 
-    /// JS snippets passed to `evaluateJavaScript`. The first matching
-    /// entry in `evaluationResults` (if any) is consumed and returned.
-    public private(set) var evaluatedScripts: [String] = []
-    public var evaluationResults: [String?] = []
+    /// JS snippets passed to `evaluateJavaScript`.
+    public var evaluatedScripts: [String] {
+        lock.withLock { _evaluatedScripts }
+    }
+
+    /// Tests can preload return values for `evaluateJavaScript`. Each
+    /// `evaluateJavaScript` call consumes one entry, in order.
+    public var evaluationResults: [String?] {
+        get { lock.withLock { _evaluationResults } }
+        set { lock.withLock { _evaluationResults = newValue } }
+    }
 
     private var inboundContinuation: AsyncStream<InboundFrame>.Continuation?
     private lazy var inboundStream: AsyncStream<InboundFrame> = AsyncStream { continuation in
@@ -42,20 +58,21 @@ public final class MockWebView: PWAWebView {
 
     public func endInbound() { inboundContinuation?.finish() }
 
-    // MARK: - WebView
+    // MARK: - PWAWebView
 
     public func load(_ content: WindowContent) {
-        self.content = content
+        lock.withLock { self.content = content }
     }
 
     public func evaluateJavaScript(_ js: String) async throws -> String? {
-        evaluatedScripts.append(js)
-        guard !evaluationResults.isEmpty else { return nil }
-        return evaluationResults.removeFirst()
+        lock.withLock {
+            _evaluatedScripts.append(js)
+            return _evaluationResults.isEmpty ? nil : _evaluationResults.removeFirst()
+        }
     }
 
     public func deliver(_ frame: OutboundFrame) async throws {
-        deliveredFrames.append(frame)
+        lock.withLock { _deliveredFrames.append(frame) }
     }
 
     public func inboundFrames() -> AsyncStream<InboundFrame> {

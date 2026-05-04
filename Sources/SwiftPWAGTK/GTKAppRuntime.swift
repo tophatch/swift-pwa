@@ -4,15 +4,18 @@
     import Foundation
     import SwiftPWACore
 
-    /// Linux-side runtime. Drives `gtk_main()`. The configure closure
-    /// runs synchronously *before* `gtk_main()` enters its event loop,
-    /// so any windows it creates are realized and shown by the time
-    /// the loop starts servicing events.
+    /// Linux-side runtime. Drives `gtk_main()`.
     ///
-    /// We deliberately avoid `Task { @MainActor in await configure(...) }`
-    /// here: Swift's main-actor executor on Linux is libdispatch's main
-    /// queue, which `gtk_main()` does not pump. Scheduling configure
-    /// onto MainActor and waiting for it would deadlock.
+    /// Two important pieces of plumbing happen before `gtk_main()`:
+    ///
+    /// 1. **MainThread dispatch hook** — wires `MainThread.run` to
+    ///    `g_idle_add` so that any code awaiting "run on the UI thread"
+    ///    is actually scheduled into GTK's main loop. Without this,
+    ///    `BridgeRuntime` and `WindowPlugin` would hang waiting on
+    ///    Swift's MainActor executor (which isn't being pumped while
+    ///    `gtk_main()` owns the main thread).
+    /// 2. **`configure` closure** runs synchronously so any windows
+    ///    are realized before the loop starts.
     public final class GTKAppRuntime: AppRuntime {
         public init() {}
 
@@ -22,6 +25,7 @@
         ) throws -> Never {
             var argc: Int32 = 0
             gtk_init(&argc, nil)
+            installMainThreadHook()
             let context = GTKAppContext.shared
             do {
                 try configure(context)
@@ -33,5 +37,31 @@
             gtk_main()
             exit(context.pendingExitCode ?? 0)
         }
+
+        /// Route `MainThread.run` through `g_idle_add`, which schedules
+        /// a callback to fire on the GTK main thread the next time the
+        /// event loop is idle.
+        private func installMainThreadHook() {
+            MainThread.setHook { body in
+                let box = Unmanaged.passRetained(GTKMainThreadJob(body)).toOpaque()
+                g_idle_add(gtkMainThreadTrampoline, box)
+            }
+        }
+    }
+
+    /// Heap-boxed `() -> Void` closure ferried across the C boundary.
+    final class GTKMainThreadJob {
+        let body: @Sendable () -> Void
+        init(_ body: @escaping @Sendable () -> Void) { self.body = body }
+    }
+
+    /// `@convention(c)` GSourceFunc trampoline — invoked by GLib on the
+    /// main thread. Returns `G_SOURCE_REMOVE` (0) so the callback fires
+    /// exactly once per scheduled job.
+    let gtkMainThreadTrampoline: @convention(c) (gpointer?) -> gboolean = { userData in
+        guard let userData else { return gboolean(0) }
+        let job = Unmanaged<GTKMainThreadJob>.fromOpaque(userData).takeRetainedValue()
+        job.body()
+        return gboolean(0) // G_SOURCE_REMOVE
     }
 #endif

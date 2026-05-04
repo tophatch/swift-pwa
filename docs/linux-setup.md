@@ -16,13 +16,23 @@ end-to-end against `Examples/HelloPWA` on both.
 
 ## 1. Install Swift 6.0+
 
+The recommended path is Swiftly, the official toolchain manager.
+Per [swift.org/install/linux](https://www.swift.org/install/linux/) the
+current install flow is:
+
 ```bash
-# Quickest path — Swiftly (the official toolchain manager).
-curl -L https://swiftlang.github.io/swiftly/swiftly-install.sh | bash
-. "$HOME/.local/share/swiftly/env.sh"
-swiftly install latest
-swift --version       # expect 6.0+
+curl -O https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz && \
+    tar zxf swiftly-$(uname -m).tar.gz && \
+    ./swiftly init --quiet-shell-followup && \
+    . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh" && \
+    hash -r
+
+swiftly install latest    # or pin a version, e.g. `swiftly install 6.0.3`
+swift --version           # expect 6.0+
 ```
+
+(The older `curl … swiftly-install.sh | bash` flow is deprecated — that
+URL no longer serves the current installer.)
 
 Or grab a tarball directly from <https://swift.org/download/>.
 

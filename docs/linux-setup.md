@@ -1,6 +1,8 @@
 # swift-pwa on Linux (GTK3 + WebKitGTK 4.1)
 
-Tested target: Ubuntu 24.04 LTS. Should also work on 22.04 (the
+Tested target: Ubuntu 24.04 LTS with Swift 6.0.3 (via [Swiftly](https://swiftlang.github.io/swiftly/)).
+JS↔Swift bridge round-trip verified end-to-end against `Examples/HelloPWA`
+on this configuration. Should also work on 22.04 (the
 `libwebkit2gtk-4.1-dev` package is the gating piece).
 
 ## 1. Install Swift 6.0+
@@ -96,24 +98,31 @@ cd Examples/HelloPWA
 ./build/HelloPWA-x86_64.AppImage
 ```
 
-## Known issues to expect on first Linux run
+## Known limitations on Linux
 
-The Linux backend in v0.1 is hand-rolled against the WebKitGTK 4.1 C
-API. The Swift portion compiles cleanly, but **two GTK details aren't
-wired end-to-end yet** because they need a Linux box to debug:
+The Linux backend is hand-rolled against the WebKitGTK 4.1 C API.
+End-to-end functionality is in place — JS `__SWIFT_PWA__.invoke()` /
+`subscribe()` round-trip through the bridge — but a few rough edges
+remain:
 
-1. **`script-message-received` signal handler.** The Apple side gets JS→Swift
-   messages via `WKScriptMessageHandler`. On GTK the analogue is a GObject
-   signal that needs a C trampoline to call back into Swift. The
-   placeholder is [`WebKitGTKAdapter._ingest(jsonString:)`](../Sources/SwiftPWAGTK/WebKitGTKAdapter.swift)
-   — wire it up via `g_signal_connect_data` to receive JS messages.
-2. **`evaluateJavaScript` async result.** Currently fire-and-forget; the
-   GAsyncResult callback chain isn't threaded through. Outbound frames
-   work (`__deliver` is fire-and-forget too), but `evaluate(js:)` returning
-   a value to Swift waits on this.
+- **`evaluateJavaScript` is fire-and-forget on Linux.** Outbound frames
+  work because `__deliver` is also one-way, but `evaluate(js:)` always
+  returns `nil` to Swift. Threading the `GAsyncResult` callback chain
+  back into a Swift continuation is queued for a follow-up.
+- **WebKitGTK 6.0 (GTK4) isn't supported yet** — only the 4.1 ABI.
+  The C shim assumes `WebKitJavascriptResult` (boxed type) on the
+  signal callback; the 6.0 ABI swapped that for `JSCValue` direct.
+  Adding 6.0 means a sibling shim target.
+- **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
+  absent or non-PNG, the bundler embeds a 1×1 transparent placeholder
+  so `linuxdeploy` doesn't hang on its prompt path.
+- **Swiftly's bundled toolchain prints noisy warnings** on Ubuntu
+  (`libxml2.so.2: no version information available`, `prohibited
+  flag(s): -pthread`). Cosmetic; ignore.
 
-If you hit linker errors around `webkit_*` symbols, the most common cause
-is `pkg-config --libs webkit2gtk-4.1` returning empty — confirm with:
+If you hit linker errors around `webkit_*` symbols, the most common
+cause is `pkg-config --libs webkit2gtk-4.1` returning empty — confirm
+with:
 
 ```bash
 pkg-config --libs webkit2gtk-4.1
@@ -121,6 +130,18 @@ pkg-config --libs webkit2gtk-4.1
 
 If the output is empty, your `libwebkit2gtk-4.1-dev` install is broken.
 Reinstall.
+
+## Threading model on Linux
+
+Worth knowing if you read the source: Swift's `MainActor` executor on
+Linux is libdispatch's main queue, which `gtk_main()` does not pump.
+That means `await MainActor.run { … }` from a cooperative-pool task
+hangs forever once `gtk_main()` is running. swift-pwa works around
+this with a [`MainThread.run`](../Sources/SwiftPWACore/MainThread.swift)
+abstraction whose hook the GTK runtime points at `g_idle_add`. If you
+write your own commands that need to touch GTK from a non-main thread,
+use `MainThread.run` rather than `MainActor.run` and you'll avoid the
+deadlock.
 
 ## Reporting issues
 

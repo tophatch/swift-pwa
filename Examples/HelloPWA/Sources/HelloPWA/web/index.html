@@ -83,6 +83,7 @@
             gap: .75rem;
             margin-top: .25rem;
         }
+        .pane.full { grid-column: 1 / -1; }
         .pane h2 {
             font-size: .8rem;
             font-weight: 600;
@@ -155,6 +156,8 @@
         <button id="now">Server time</button>
         <button id="copy-title">Copy title</button>
         <button id="paste">Paste from clipboard</button>
+        <button id="cycle-tray">Cycle tray menu</button>
+        <button id="toggle-tray">Hide tray</button>
     </div>
     <p class="shortcuts" id="shortcuts">
         <strong>Shortcuts:</strong>
@@ -175,6 +178,10 @@
             <h2>Window events</h2>
             <pre id="events"></pre>
         </div>
+        <div class="pane full">
+            <h2>Tray events <span style="font-weight: 400; text-transform: none; letter-spacing: 0">— click the menu-bar icon, or pick a menu item</span></h2>
+            <pre id="tray-events"></pre>
+        </div>
     </div>
     <footer>
         <div class="bird" id="bird" role="button" tabindex="0" aria-label="give the bird a gentle tap">🐦</div>
@@ -192,6 +199,7 @@
         };
         const log = (m) => append("log", m);
         const evt = (m) => append("events", m);
+        const trayEvt = (m) => append("tray-events", m);
         const clearLog = () => { document.getElementById("log").textContent = ""; };
 
         // Bridge actions, named so shortcuts can re-use them.
@@ -223,7 +231,40 @@
                 log(text == null ? "clipboard is empty" : "clipboard → \"" + text + "\"");
             },
             clear: () => { clearLog(); log("cleared"); },
+            cycleTray: async () => {
+                trayMenuVariant = (trayMenuVariant + 1) % trayMenus.length;
+                const menu = trayMenus[trayMenuVariant];
+                await __SWIFT_PWA__.invoke("tray.setMenu", menu);
+                log("tray menu → variant " + (trayMenuVariant + 1) + "/" + trayMenus.length);
+            },
+            toggleTray: async () => {
+                trayVisible = !trayVisible;
+                await __SWIFT_PWA__.invoke("tray.setVisible", { visible: trayVisible });
+                document.getElementById("toggle-tray").textContent =
+                    trayVisible ? "Hide tray" : "Show tray";
+                log("tray " + (trayVisible ? "shown" : "hidden"));
+            },
         };
+
+        // Two menu shapes that the cycle button swaps between, so users
+        // can see `tray.setMenu` actually change what's in the menu bar.
+        let trayMenuVariant = 0;
+        let trayVisible = true;
+        const trayMenus = [
+            { items: [
+                { id: "ping", label: "Server ping", enabled: true, separator: false },
+                { id: "rename", label: "Rename window", enabled: true, separator: false },
+                { id: "", label: "", enabled: false, separator: true },
+                { id: "quit", label: "Quit HelloPWA", enabled: true, separator: false },
+            ]},
+            { items: [
+                { id: "open", label: "Show window", enabled: true, separator: false },
+                { id: "now", label: "Log server time", enabled: true, separator: false },
+                { id: "disabled", label: "(disabled)", enabled: false, separator: false },
+                { id: "", label: "", enabled: false, separator: true },
+                { id: "quit", label: "Quit HelloPWA", enabled: true, separator: false },
+            ]},
+        ];
 
         document.getElementById("rename").onclick = actions.rename;
         document.getElementById("resize").onclick = actions.resize800;
@@ -231,6 +272,32 @@
         document.getElementById("now").onclick    = actions.now;
         document.getElementById("copy-title").onclick = actions.copyTitle;
         document.getElementById("paste").onclick      = actions.paste;
+        document.getElementById("cycle-tray").onclick = actions.cycleTray;
+        document.getElementById("toggle-tray").onclick = actions.toggleTray;
+
+        // React to tray clicks / menu-item activations from the JS side.
+        // Some items (e.g. "rename") map directly onto existing actions;
+        // "quit" is handled Swift-side so the app exits even if no tab
+        // is subscribed here. JS-side "ping" and "now" let users wire up
+        // tray menu items to bridge invokes without leaving the page.
+        __SWIFT_PWA__.subscribe("tray.subscribe", {}, async (event) => {
+            if (!event || typeof event !== "object") { trayEvt(JSON.stringify(event)); return; }
+            if (event.type === "click") {
+                trayEvt("click");
+            } else if (event.type === "menuItemClicked") {
+                const id = event.id;
+                trayEvt("menuItemClicked  id=" + JSON.stringify(id));
+                switch (id) {
+                    case "rename": actions.rename(); break;
+                    case "open":   await __SWIFT_PWA__.invoke("window.focus", {}); break;
+                    case "ping":   log("pong (tray)"); break;
+                    case "now":    actions.now(); break;
+                    // "quit" is handled by the Swift side via `ctx.quit`.
+                }
+            } else {
+                trayEvt(JSON.stringify(event));
+            }
+        });
 
         // Render shortcuts using the platform's accelerator key. Mac uses
         // ⌘ + the letter; everywhere else (Linux, future Windows) it's

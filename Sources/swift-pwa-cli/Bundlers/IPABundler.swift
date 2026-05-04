@@ -33,12 +33,12 @@ struct IPABundler {
             "-workspace", projectRoot.path,
             "-destination", destination,
             "-configuration", configuration,
-            "-derivedDataPath", derived.path,
+            "-derivedDataPath", derived.path
         ]
         if simulator {
             args.append(contentsOf: [
                 "CODE_SIGNING_REQUIRED=NO",
-                "CODE_SIGNING_ALLOWED=NO",
+                "CODE_SIGNING_ALLOWED=NO"
             ])
         } else if let identity = signIdentity {
             args.append("CODE_SIGN_IDENTITY=\(identity)")

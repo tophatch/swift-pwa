@@ -29,24 +29,24 @@
             guard let win = gtk_window_new(GTK_WINDOW_TOPLEVEL) else {
                 throw BridgeError(code: BridgeError.handler, message: "gtk_window_new failed")
             }
-            self.gtkWindow = OpaquePointer(win)
+            gtkWindow = OpaquePointer(win)
 
             config.title.withCString { gtk_window_set_title(self.gtkWindow, $0) }
             gtk_window_set_default_size(
-                self.gtkWindow,
+                gtkWindow,
                 gint(config.size.width),
                 gint(config.size.height)
             )
-            gtk_window_set_resizable(self.gtkWindow, config.resizable ? gboolean(1) : gboolean(0))
+            gtk_window_set_resizable(gtkWindow, config.resizable ? gboolean(1) : gboolean(0))
 
-            self.titleStorage = config.title
+            titleStorage = config.title
 
-            let adapter = try WebKitGTKAdapter(parent: self.gtkWindow, content: config.content)
+            let adapter = try WebKitGTKAdapter(parent: gtkWindow, content: config.content)
             self.adapter = adapter
-            self.webView = adapter
+            webView = adapter
             self.app = app
 
-            self.bridge = BridgeRuntime(
+            bridge = BridgeRuntime(
                 webView: adapter,
                 registry: app.registry,
                 windowID: id,
@@ -55,8 +55,8 @@
             bridge.start()
             adapter.load(config.content)
 
-            if config.fullscreen { gtk_window_fullscreen(self.gtkWindow) }
-            if config.visibleOnLaunch { gtk_widget_show_all(UnsafeMutablePointer(self.gtkWindow)) }
+            if config.fullscreen { gtk_window_fullscreen(gtkWindow) }
+            if config.visibleOnLaunch { gtk_widget_show_all(UnsafeMutablePointer(gtkWindow)) }
         }
 
         // MARK: - Window

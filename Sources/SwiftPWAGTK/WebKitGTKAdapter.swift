@@ -22,7 +22,7 @@
             guard let ucm = webkit_user_content_manager_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_user_content_manager_new failed")
             }
-            self.userContent = OpaquePointer(ucm)
+            userContent = OpaquePointer(ucm)
             let bridgeSource = try BridgeScript.source()
             bridgeSource.withCString { src in
                 if let script = webkit_user_script_new(
@@ -45,13 +45,13 @@
             guard let view = webkit_web_view_new_with_user_content_manager(ucm) else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_web_view_new failed")
             }
-            self.webViewPtr = OpaquePointer(view)
+            webViewPtr = OpaquePointer(view)
             gtk_container_add(UnsafeMutablePointer(parent), UnsafeMutablePointer(view))
 
             // Wire scheme handler if bundled content was specified.
-            if case .bundled(let directory, _) = content {
+            if case let .bundled(directory, _) = content {
                 let provider = AssetProvider(root: directory)
-                self.assetProvider = provider
+                assetProvider = provider
                 registerScheme(provider: provider)
             }
         }
@@ -78,10 +78,10 @@
 
         public func load(_ content: WindowContent) {
             switch content {
-            case .bundled(_, let entry):
+            case let .bundled(_, entry):
                 let url = "pwa://localhost/\(entry)"
                 url.withCString { webkit_web_view_load_uri(webViewPtr, $0) }
-            case .remote(let url):
+            case let .remote(url):
                 url.absoluteString.withCString { webkit_web_view_load_uri(webViewPtr, $0) }
             }
         }
@@ -112,8 +112,8 @@
             return stream
         }
 
-        // Called by the C-side signal handler trampoline (set up by the user via
-        // g_signal_connect; left as a follow-up, since it requires a C trampoline).
+        /// Called by the C-side signal handler trampoline (set up by the user via
+        /// g_signal_connect; left as a follow-up, since it requires a C trampoline).
         public func _ingest(jsonString: String) {
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
@@ -139,7 +139,7 @@
             guard let urlCStr = webkit_uri_scheme_request_get_uri(request) else {
                 webkit_uri_scheme_request_finish_error(
                     request,
-                    nil   // GError* — left null for v0.1
+                    nil // GError* — left null for v0.1
                 )
                 return
             }

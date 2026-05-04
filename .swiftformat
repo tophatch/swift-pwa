@@ -9,3 +9,5 @@
 --stripunusedargs closure-only
 --self remove
 --header ignore
+--exclude .build,build,Examples
+--disable wrapFunctionBodies,wrapLoopBodies,blankLinesBetweenScopes

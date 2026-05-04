@@ -5,9 +5,11 @@ public struct WindowID: Sendable, Hashable, Codable, CustomStringConvertible {
     public let raw: String
 
     public init(raw: String) { self.raw = raw }
-    public init() { self.raw = UUID().uuidString }
+    public init() { raw = UUID().uuidString }
 
-    public var description: String { raw }
+    public var description: String {
+        raw
+    }
 }
 
 /// What a window's webview should load on creation.

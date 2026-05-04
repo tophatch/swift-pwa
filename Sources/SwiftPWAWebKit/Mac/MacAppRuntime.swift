@@ -20,7 +20,7 @@
         ) {
             guard !didStartConfigure else { return }
             didStartConfigure = true
-            let ctx = self.context
+            let ctx = context
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
 

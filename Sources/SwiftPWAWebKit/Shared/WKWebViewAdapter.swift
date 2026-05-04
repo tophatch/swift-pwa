@@ -27,7 +27,7 @@
                 forMainFrameOnly: false
             )
             cfg.userContentController.addUserScript(userScript)
-            self.webView = WKWebView(frame: .zero, configuration: cfg)
+            webView = WKWebView(frame: .zero, configuration: cfg)
             super.init()
             cfg.userContentController.add(self, name: BridgeScript.messageHandlerName)
             #if os(macOS)
@@ -50,18 +50,18 @@
         }
 
         public func attachAssetProvider(_ provider: AssetProvider) {
-            self.assetProvider = provider
+            assetProvider = provider
         }
 
         // MARK: - WebView
 
         public func load(_ content: WindowContent) {
             switch content {
-            case .bundled(let directory, let entry):
+            case let .bundled(directory, entry):
                 attachAssetProvider(AssetProvider(root: directory))
                 let url = URL(string: "pwa://localhost/\(entry)")!
                 webView.load(URLRequest(url: url))
-            case .remote(let url):
+            case let .remote(url):
                 webView.load(URLRequest(url: url))
             }
         }
@@ -88,7 +88,7 @@
         }
 
         public func inboundFrames() -> AsyncStream<InboundFrame> {
-            _ = stream  // ensure continuation is captured
+            _ = stream // ensure continuation is captured
             return stream
         }
 

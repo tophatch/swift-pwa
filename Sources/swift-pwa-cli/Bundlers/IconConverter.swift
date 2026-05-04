@@ -15,12 +15,12 @@ enum IconConverter {
         for size in sizes {
             let dest = tmp.appendingPathComponent("icon_\(size)x\(size).png")
             try await Shell.run("/usr/bin/env", [
-                "sips", "-z", "\(size)", "\(size)", png.path, "--out", dest.path,
+                "sips", "-z", "\(size)", "\(size)", png.path, "--out", dest.path
             ])
             if size <= 512 {
                 let dest2x = tmp.appendingPathComponent("icon_\(size)x\(size)@2x.png")
                 try await Shell.run("/usr/bin/env", [
-                    "sips", "-z", "\(size * 2)", "\(size * 2)", png.path, "--out", dest2x.path,
+                    "sips", "-z", "\(size * 2)", "\(size * 2)", png.path, "--out", dest2x.path
                 ])
             }
         }

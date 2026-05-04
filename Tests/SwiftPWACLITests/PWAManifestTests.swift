@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import swift_pwa_cli
+import Testing
 
 @Suite("PWAManifest round-trip")
 struct PWAManifestTests {

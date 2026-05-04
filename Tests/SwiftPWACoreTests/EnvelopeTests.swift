@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import SwiftPWACore
+import Testing
 
 @Suite("Envelope codec")
 struct EnvelopeTests {
@@ -15,7 +15,7 @@ struct EnvelopeTests {
     func decodeInvokeNull() throws {
         let json = #"{"v":1,"kind":"invoke","id":7,"cmd":"window.id","payload":null}"#
         let frame = try Envelope.decode(Data(json.utf8))
-        guard case .invoke(let id, let cmd, let payload) = frame else {
+        guard case let .invoke(id, cmd, payload) = frame else {
             Issue.record("expected .invoke"); return
         }
         #expect(id == 7)
@@ -25,8 +25,9 @@ struct EnvelopeTests {
 
     @Test("subscribe and unsubscribe frames decode correctly")
     func subscribeUnsubscribe() throws {
-        let sub = try Envelope.decode(Data(#"{"v":1,"kind":"subscribe","id":3,"cmd":"window.subscribe","payload":{}}"#.utf8))
-        guard case .subscribe(let id, let cmd, _) = sub else {
+        let sub = try Envelope
+            .decode(Data(#"{"v":1,"kind":"subscribe","id":3,"cmd":"window.subscribe","payload":{}}"#.utf8))
+        guard case let .subscribe(id, cmd, _) = sub else {
             Issue.record("expected .subscribe"); return
         }
         #expect(id == 3 && cmd == "window.subscribe")

@@ -28,8 +28,8 @@ public enum WindowEvent: Sendable, Equatable, Codable {
         switch tag {
         case .willClose: self = .willClose
         case .didClose: self = .didClose
-        case .didResize: self = .didResize(try c.decode(Size.self, forKey: .size))
-        case .didMove: self = .didMove(try c.decode(Point.self, forKey: .point))
+        case .didResize: self = try .didResize(c.decode(Size.self, forKey: .size))
+        case .didMove: self = try .didMove(c.decode(Point.self, forKey: .point))
         case .didFocus: self = .didFocus
         case .didBlur: self = .didBlur
         case .didEnterFullscreen: self = .didEnterFullscreen
@@ -44,10 +44,10 @@ public enum WindowEvent: Sendable, Equatable, Codable {
         switch self {
         case .willClose: try c.encode(Tag.willClose, forKey: .type)
         case .didClose: try c.encode(Tag.didClose, forKey: .type)
-        case .didResize(let size):
+        case let .didResize(size):
             try c.encode(Tag.didResize, forKey: .type)
             try c.encode(size, forKey: .size)
-        case .didMove(let point):
+        case let .didMove(point):
             try c.encode(Tag.didMove, forKey: .type)
             try c.encode(point, forKey: .point)
         case .didFocus: try c.encode(Tag.didFocus, forKey: .type)

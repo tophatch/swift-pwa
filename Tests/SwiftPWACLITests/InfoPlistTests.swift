@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import swift_pwa_cli
+import Testing
 
 @Suite("InfoPlist generators")
 struct InfoPlistTests {
@@ -21,9 +21,9 @@ struct InfoPlistTests {
     func mac() throws {
         let plist = InfoPlistGenerator.macOS(manifest: manifest)
         let data = try plist.encode()
-        let parsed = try PropertyListSerialization.propertyList(
+        let parsed = try #require(PropertyListSerialization.propertyList(
             from: data, options: [], format: nil
-        ) as! [String: Any]
+        ) as? [String: Any])
         #expect(parsed["CFBundleIdentifier"] as? String == "com.example.hi")
         #expect(parsed["CFBundleShortVersionString"] as? String == "1.2.3")
         #expect(parsed["LSMinimumSystemVersion"] as? String == "15.0")
@@ -35,9 +35,9 @@ struct InfoPlistTests {
     @Test("iOS plist declares a UIScene configuration")
     func ios() throws {
         let plist = InfoPlistGenerator.iOS(manifest: manifest)
-        let parsed = try PropertyListSerialization.propertyList(
-            from: try plist.encode(), options: [], format: nil
-        ) as! [String: Any]
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: plist.encode(), options: [], format: nil
+        ) as? [String: Any])
         #expect(parsed["CFBundleIdentifier"] as? String == "com.example.hi.ios")
         #expect(parsed["MinimumOSVersion"] as? String == "18.0")
         let scenes = parsed["UIApplicationSceneManifest"] as? [String: Any]

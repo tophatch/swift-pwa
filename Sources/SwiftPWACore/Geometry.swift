@@ -32,12 +32,16 @@ public struct Point: Sendable, Hashable, Codable {
     import CoreGraphics
 
     public extension Size {
-        var cgSize: CGSize { CGSize(width: width, height: height) }
+        var cgSize: CGSize {
+            CGSize(width: width, height: height)
+        }
         init(_ cg: CGSize) { self.init(width: Double(cg.width), height: Double(cg.height)) }
     }
 
     public extension Point {
-        var cgPoint: CGPoint { CGPoint(x: x, y: y) }
+        var cgPoint: CGPoint {
+            CGPoint(x: x, y: y)
+        }
         init(_ cg: CGPoint) { self.init(x: Double(cg.x), y: Double(cg.y)) }
     }
 #endif

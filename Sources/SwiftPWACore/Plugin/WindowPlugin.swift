@@ -25,7 +25,7 @@ public struct WindowPlugin: Plugin {
         })
 
         await registry.register("window.list", typed: { (_: EmptyArgs, _) async -> WindowListResult in
-            let ids = await MainActor.run { app.windows.keys.map { $0.raw } }
+            let ids = await MainActor.run { app.windows.keys.map(\.raw) }
             return WindowListResult(ids: ids)
         })
 
@@ -49,10 +49,13 @@ public struct WindowPlugin: Plugin {
             try await onWindow(args.id, ctx: ctx, app: app) { $0.size() }
         })
 
-        await registry.register("window.setPosition", typed: { (args: SetPositionArgs, ctx) async throws -> EmptyResult in
-            try await onWindow(args.id, ctx: ctx, app: app) { $0.setPosition(Point(x: args.x, y: args.y)) }
-            return EmptyResult()
-        })
+        await registry.register(
+            "window.setPosition",
+            typed: { (args: SetPositionArgs, ctx) async throws -> EmptyResult in
+                try await onWindow(args.id, ctx: ctx, app: app) { $0.setPosition(Point(x: args.x, y: args.y)) }
+                return EmptyResult()
+            }
+        )
 
         await registry.register("window.position", typed: { (args: TargetOnlyArgs, ctx) async throws -> Point in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.position() }
@@ -73,41 +76,50 @@ public struct WindowPlugin: Plugin {
             return EmptyResult()
         })
 
-        await registry.register("window.setFullscreen", typed: { (args: SetFullscreenArgs, ctx) async throws -> EmptyResult in
-            try await onWindow(args.id, ctx: ctx, app: app) { $0.setFullscreen(args.on) }
-            return EmptyResult()
-        })
+        await registry.register(
+            "window.setFullscreen",
+            typed: { (args: SetFullscreenArgs, ctx) async throws -> EmptyResult in
+                try await onWindow(args.id, ctx: ctx, app: app) { $0.setFullscreen(args.on) }
+                return EmptyResult()
+            }
+        )
 
-        await registry.register("window.isFullscreen", typed: { (args: TargetOnlyArgs, ctx) async throws -> BoolResult in
-            try await onWindow(args.id, ctx: ctx, app: app) { BoolResult(value: $0.isFullscreen()) }
-        })
+        await registry.register(
+            "window.isFullscreen",
+            typed: { (args: TargetOnlyArgs, ctx) async throws -> BoolResult in
+                try await onWindow(args.id, ctx: ctx, app: app) { BoolResult(value: $0.isFullscreen()) }
+            }
+        )
 
         await registry.register("window.close", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.close() }
             return EmptyResult()
         })
 
-        await registry.registerStream("window.subscribe", typed: { (args: TargetOnlyArgs, ctx) -> AsyncThrowingStream<WindowEvent, any Error> in
-            AsyncThrowingStream { continuation in
-                let task = Task { @MainActor in
-                    let target: WindowID? = args.id.map(WindowID.init(raw:)) ?? ctx.originWindow
-                    guard let target, let win = app.window(target) else {
-                        continuation.finish(throwing: BridgeError(
-                            code: BridgeError.notFound,
-                            message: "no such window"
-                        ))
-                        return
+        await registry.registerStream(
+            "window.subscribe",
+            typed: { (args: TargetOnlyArgs, ctx) -> AsyncThrowingStream<WindowEvent, any Error> in
+                AsyncThrowingStream { continuation in
+                    let task = Task { @MainActor in
+                        let target: WindowID? = args.id.map(WindowID.init(raw:)) ?? ctx.originWindow
+                        guard let target, let win = app.window(target) else {
+                            continuation.finish(throwing: BridgeError(
+                                code: BridgeError.notFound,
+                                message: "no such window"
+                            ))
+                            return
+                        }
+                        let stream = win.eventStream()
+                        for await event in stream {
+                            if Task.isCancelled { break }
+                            continuation.yield(event)
+                        }
+                        continuation.finish()
                     }
-                    let stream = win.eventStream()
-                    for await event in stream {
-                        if Task.isCancelled { break }
-                        continuation.yield(event)
-                    }
-                    continuation.finish()
+                    continuation.onTermination = { _ in task.cancel() }
                 }
-                continuation.onTermination = { _ in task.cancel() }
             }
-        })
+        )
     }
 }
 

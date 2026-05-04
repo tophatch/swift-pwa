@@ -85,19 +85,19 @@ public enum Envelope {
     public static func encode(_ frame: OutboundFrame) throws -> Data {
         var dict: [String: Any] = ["v": version]
         switch frame {
-        case .reply(let id, let ok):
+        case let .reply(id, ok):
             dict["kind"] = "reply"
             dict["id"] = NSNumber(value: id)
             dict["ok"] = try jsonObject(from: ok)
-        case .replyError(let id, let error):
+        case let .replyError(id, error):
             dict["kind"] = "reply"
             dict["id"] = NSNumber(value: id)
             dict["err"] = ["code": error.code, "message": error.message]
-        case .event(let id, let chunk):
+        case let .event(id, chunk):
             dict["kind"] = "event"
             dict["id"] = NSNumber(value: id)
             dict["chunk"] = try jsonObject(from: chunk)
-        case .end(let id):
+        case let .end(id):
             dict["kind"] = "end"
             dict["id"] = NSNumber(value: id)
         }

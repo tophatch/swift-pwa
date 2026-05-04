@@ -1,10 +1,10 @@
 #if canImport(WebKit) && (os(macOS) || os(iOS))
-    import Foundation
-    import Testing
-    import WebKit
     import _SwiftPWATestSupport
+    import Foundation
     @testable import SwiftPWACore
     @testable import SwiftPWAWebKit
+    import Testing
+    import WebKit
 
     @Suite("WKWebView ↔ Swift round-trip")
     @MainActor
@@ -53,7 +53,7 @@
         }
     }
 
-    private struct EchoArgs: Codable, Sendable, Equatable {
+    private struct EchoArgs: Codable, Equatable {
         let value: String
     }
 

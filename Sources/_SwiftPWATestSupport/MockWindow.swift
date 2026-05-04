@@ -38,9 +38,9 @@ public final class MockWindow: Window {
     ) {
         self.id = id
         self.webView = webView ?? MockWebView()
-        self.currentTitle = title
-        self.currentSize = size
-        self.currentPosition = position
+        currentTitle = title
+        currentSize = size
+        currentPosition = position
     }
 
     public func eventStream() -> AsyncStream<WindowEvent> {

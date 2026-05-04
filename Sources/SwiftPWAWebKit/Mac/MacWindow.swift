@@ -24,13 +24,13 @@
             // need it. We set up the handler before creating the
             // adapter so it gets baked into the configuration.
             let cfg = WKWebViewConfiguration()
-            if case .bundled(let directory, _) = config.content {
+            if case let .bundled(directory, _) = config.content {
                 let provider = AssetProvider(root: directory)
                 WKWebViewAdapter.registerScheme("pwa", on: cfg, assetProvider: provider)
             }
             let adapter = try WKWebViewAdapter(configuration: cfg)
             self.adapter = adapter
-            self.webView = adapter
+            webView = adapter
 
             let style: NSWindow.StyleMask = config.resizable
                 ? [.titled, .closable, .miniaturizable, .resizable]
@@ -52,10 +52,10 @@
             window.center()
             window.contentView = adapter.webView
 
-            self.nsWindow = window
+            nsWindow = window
             self.app = app
 
-            self.bridge = BridgeRuntime(
+            bridge = BridgeRuntime(
                 webView: adapter,
                 registry: app.registry,
                 windowID: id,
@@ -127,11 +127,11 @@
             // so observers see willClose before didClose.
             Task { @MainActor [weak self] in
                 guard let self else { return }
-                self.emit(.didClose)
-                for c in self.continuations.values { c.finish() }
-                self.continuations.removeAll()
-                self.bridge.stop()
-                self.app?.windowDidClose(self.id)
+                emit(.didClose)
+                for c in continuations.values { c.finish() }
+                continuations.removeAll()
+                bridge.stop()
+                app?.windowDidClose(id)
             }
         }
 

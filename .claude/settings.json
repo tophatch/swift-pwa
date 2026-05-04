@@ -6,7 +6,9 @@
       "Bash(swift test *)",
       "Bash(swift package *)",
       "Bash(xcrun simctl *)",
-      "Bash(xcodebuild -scheme SwiftPWA -destination 'generic/platform=iOS Simulator' -configuration Release -derivedDataPath /tmp/swift-pwa-iosbuild build)"
+      "Bash(xcodebuild -scheme SwiftPWA -destination 'generic/platform=iOS Simulator' -configuration Release -derivedDataPath /tmp/swift-pwa-iosbuild build)",
+      "Bash(swiftformat .)",
+      "Bash(swiftformat --lint .)"
     ]
   }
 }

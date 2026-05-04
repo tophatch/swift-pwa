@@ -2,5 +2,6 @@
 #define SWIFT_PWA_WEBKITGTK_SHIM_H
 
 #include <webkit2/webkit2.h>
+#include <jsc/jsc.h>
 
 #endif

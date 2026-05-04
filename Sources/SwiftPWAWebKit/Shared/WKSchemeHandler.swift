@@ -38,7 +38,7 @@
                     headerFields: [
                         "Content-Type": resolved.mimeType,
                         "Content-Length": String(data.count),
-                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Allow-Origin": "*"
                     ]
                 )!
                 urlSchemeTask.didReceive(response)

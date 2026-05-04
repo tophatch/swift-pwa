@@ -34,7 +34,7 @@ public final class BridgeRuntime {
         pumpTask = Task { [weak self] in
             for await frame in stream {
                 guard let self else { return }
-                await self.handle(frame)
+                await handle(frame)
             }
         }
     }
@@ -63,11 +63,11 @@ public final class BridgeRuntime {
 
     private func handle(_ frame: InboundFrame) async {
         switch frame {
-        case .invoke(let id, let command, let payload):
+        case let .invoke(id, command, payload):
             await dispatchInvoke(id: id, command: command, payload: payload)
-        case .subscribe(let id, let command, let payload):
+        case let .subscribe(id, command, payload):
             await dispatchSubscribe(id: id, command: command, payload: payload)
-        case .unsubscribe(let id):
+        case let .unsubscribe(id):
             subscriptions[id]?.cancel()
             subscriptions.removeValue(forKey: id)
         }
@@ -87,30 +87,30 @@ public final class BridgeRuntime {
         let context = CommandContext(invocation: inv, originWindow: windowID, appContext: app)
         let result = await registry.dispatch(context)
         switch result {
-        case .ok(let data):
+        case let .ok(data):
             // Single-shot result on a "subscribe" call: emit one event then end.
             try? await webView.deliver(.event(id: id, chunk: data))
             try? await webView.deliver(.end(id: id))
-        case .failure(let err):
+        case let .failure(err):
             try? await webView.deliver(.replyError(id: id, error: err))
-        case .stream(let stream):
+        case let .stream(stream):
             let task = Task { [weak self] in
                 guard let self else { return }
                 do {
                     for try await chunk in stream {
                         if Task.isCancelled { break }
-                        try await self.webView.deliver(.event(id: id, chunk: chunk))
+                        try await webView.deliver(.event(id: id, chunk: chunk))
                     }
-                    try? await self.webView.deliver(.end(id: id))
+                    try? await webView.deliver(.end(id: id))
                 } catch let err as BridgeError {
                     try? await self.webView.deliver(.replyError(id: id, error: err))
                 } catch {
-                    try? await self.webView.deliver(.replyError(
+                    try? await webView.deliver(.replyError(
                         id: id,
                         error: BridgeError(code: BridgeError.handler, message: "\(error)")
                     ))
                 }
-                self.subscriptions.removeValue(forKey: id)
+                subscriptions.removeValue(forKey: id)
             }
             subscriptions[id] = task
         }
@@ -118,9 +118,9 @@ public final class BridgeRuntime {
 
     private func deliver(_ result: InvocationResult, id: UInt64) async {
         switch result {
-        case .ok(let data):
+        case let .ok(data):
             try? await webView.deliver(.reply(id: id, ok: data))
-        case .failure(let err):
+        case let .failure(err):
             try? await webView.deliver(.replyError(id: id, error: err))
         case .stream:
             // `invoke` is unary by contract; treat a stream result as an error.

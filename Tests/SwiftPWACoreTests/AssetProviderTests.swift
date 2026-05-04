@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import SwiftPWACore
+import Testing
 
 @Suite("AssetProvider")
 struct AssetProviderTests {
@@ -19,7 +19,7 @@ struct AssetProviderTests {
         let dir = try tempBundle()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = AssetProvider(root: dir)
-        let resolved = provider.resolve(URL(string: "pwa://localhost/")!)
+        let resolved = try provider.resolve(#require(URL(string: "pwa://localhost/")))
         #expect(resolved?.fileURL.lastPathComponent == "index.html")
         #expect(resolved?.mimeType == "text/html; charset=utf-8")
     }
@@ -29,7 +29,7 @@ struct AssetProviderTests {
         let dir = try tempBundle()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = AssetProvider(root: dir)
-        let resolved = provider.resolve(URL(string: "pwa://localhost/style.css")!)
+        let resolved = try provider.resolve(#require(URL(string: "pwa://localhost/style.css")))
         #expect(resolved?.mimeType == "text/css; charset=utf-8")
     }
 
@@ -38,7 +38,7 @@ struct AssetProviderTests {
         let dir = try tempBundle()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = AssetProvider(root: dir)
-        #expect(provider.resolve(URL(string: "pwa://localhost/../etc/passwd")!) == nil)
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/../etc/passwd"))) == nil)
     }
 
     @Test("rejects wrong scheme and host")
@@ -46,8 +46,8 @@ struct AssetProviderTests {
         let dir = try tempBundle()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = AssetProvider(root: dir)
-        #expect(provider.resolve(URL(string: "https://localhost/index.html")!) == nil)
-        #expect(provider.resolve(URL(string: "pwa://evil/index.html")!) == nil)
+        #expect(try provider.resolve(#require(URL(string: "https://localhost/index.html"))) == nil)
+        #expect(try provider.resolve(#require(URL(string: "pwa://evil/index.html"))) == nil)
     }
 
     @Test("returns nil for missing files")
@@ -55,6 +55,6 @@ struct AssetProviderTests {
         let dir = try tempBundle()
         defer { try? FileManager.default.removeItem(at: dir) }
         let provider = AssetProvider(root: dir)
-        #expect(provider.resolve(URL(string: "pwa://localhost/missing.html")!) == nil)
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/missing.html"))) == nil)
     }
 }

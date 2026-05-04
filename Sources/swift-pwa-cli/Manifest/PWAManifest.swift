@@ -4,11 +4,11 @@ import Foundation
 /// platform-specific manifests (Info.plist, .desktop, AndroidManifest)
 /// are *generated* from this file.
 public struct PWAManifest: Codable, Sendable, Equatable {
-    public var id: String                  // reverse-DNS, e.g. "com.example.hello"
-    public var name: String                // human-readable name
-    public var version: String             // e.g. "1.0.0"
+    public var id: String // reverse-DNS, e.g. "com.example.hello"
+    public var name: String // human-readable name
+    public var version: String // e.g. "1.0.0"
     public var description: String?
-    public var icon: String?               // path to a 1024x1024 PNG, optional
+    public var icon: String? // path to a 1024x1024 PNG, optional
     public var web: WebSection
     public var window: WindowSection
     public var macos: MacOSSection?
@@ -16,8 +16,8 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var linux: LinuxSection?
 
     public struct WebSection: Codable, Sendable, Equatable {
-        public var directory: String       // path relative to project root
-        public var entry: String           // default "index.html"
+        public var directory: String // path relative to project root
+        public var entry: String // default "index.html"
         public init(directory: String, entry: String = "index.html") {
             self.directory = directory
             self.entry = entry
@@ -46,19 +46,19 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     }
 
     public struct MacOSSection: Codable, Sendable, Equatable {
-        public var bundleIdentifier: String?       // defaults to top-level `id`
-        public var category: String?               // LSApplicationCategoryType
-        public var minimumSystemVersion: String?   // e.g. "15.0"
+        public var bundleIdentifier: String? // defaults to top-level `id`
+        public var category: String? // LSApplicationCategoryType
+        public var minimumSystemVersion: String? // e.g. "15.0"
     }
 
     public struct IOSSection: Codable, Sendable, Equatable {
         public var bundleIdentifier: String?
-        public var minimumSystemVersion: String?   // e.g. "18.0"
+        public var minimumSystemVersion: String? // e.g. "18.0"
     }
 
     public struct LinuxSection: Codable, Sendable, Equatable {
-        public var desktopCategories: [String]?    // e.g. ["Utility"]
-        public var executableName: String?         // defaults to top-level `id` last component
+        public var desktopCategories: [String]? // e.g. ["Utility"]
+        public var executableName: String? // defaults to top-level `id` last component
     }
 
     public static func load(from url: URL) throws -> PWAManifest {

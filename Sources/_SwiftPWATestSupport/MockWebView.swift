@@ -25,17 +25,17 @@ public final class MockWebView: PWAWebView {
 
     /// Inject a frame as if it had arrived from the JS side.
     public func send(_ frame: InboundFrame) {
-        _ = inboundStream  // ensure continuation has been captured
+        _ = inboundStream // ensure continuation has been captured
         inboundContinuation?.yield(frame)
     }
 
     /// Convenience: build and send an `invoke` frame from a typed payload.
-    public func sendInvoke<T: Encodable>(id: UInt64, command: String, payload: T) throws {
+    public func sendInvoke(id: UInt64, command: String, payload: some Encodable) throws {
         let data = try JSONEncoder().encode(payload)
         send(.invoke(id: id, command: command, payload: data))
     }
 
-    public func sendSubscribe<T: Encodable>(id: UInt64, command: String, payload: T) throws {
+    public func sendSubscribe(id: UInt64, command: String, payload: some Encodable) throws {
         let data = try JSONEncoder().encode(payload)
         send(.subscribe(id: id, command: command, payload: data))
     }

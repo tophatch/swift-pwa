@@ -47,15 +47,15 @@ enum InfoPlistGenerator {
                     [
                         "UISceneConfigurationName": "swift-pwa",
                         "UISceneClassName": "UIWindowScene",
-                        "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).SwiftPWASceneDelegate",
-                    ],
-                ],
-            ],
+                        "UISceneDelegateClassName": "$(PRODUCT_MODULE_NAME).SwiftPWASceneDelegate"
+                    ]
+                ]
+            ]
         ]
         plist["UISupportedInterfaceOrientations"] = [
             "UIInterfaceOrientationPortrait",
             "UIInterfaceOrientationLandscapeLeft",
-            "UIInterfaceOrientationLandscapeRight",
+            "UIInterfaceOrientationLandscapeRight"
         ]
         return plist
     }

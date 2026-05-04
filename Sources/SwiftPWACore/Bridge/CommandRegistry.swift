@@ -25,10 +25,10 @@ public actor CommandRegistry {
 
     /// Register a typed unary handler. JSON decode/encode is handled for you.
     /// Errors thrown by `body` become `BridgeError(code: .handler, ...)`.
-    public func register<Args, Out>(
+    public func register<Args: Decodable & Sendable>(
         _ name: String,
-        typed body: @escaping @Sendable (Args, CommandContext) async throws -> Out
-    ) where Args: Decodable & Sendable, Out: Encodable & Sendable {
+        typed body: @escaping @Sendable (Args, CommandContext) async throws -> some Encodable & Sendable
+    ) {
         register(name) { context in
             let args: Args
             do {
@@ -57,10 +57,10 @@ public actor CommandRegistry {
     /// Register a typed streaming handler. Each non-throwing yield from
     /// `body` is forwarded as a JSON-encoded `event` frame; the stream's
     /// completion produces an `end` frame.
-    public func registerStream<Args, Chunk>(
+    public func registerStream<Args: Decodable & Sendable, Chunk: Encodable & Sendable>(
         _ name: String,
         typed body: @escaping @Sendable (Args, CommandContext) -> AsyncThrowingStream<Chunk, any Error>
-    ) where Args: Decodable & Sendable, Chunk: Encodable & Sendable {
+    ) {
         register(name) { context in
             let args: Args
             do {

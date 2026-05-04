@@ -16,7 +16,7 @@
         public static let shared = IOSAppRuntime()
         public let context = IOSAppContext()
 
-        // Configure block stashed until the first scene is ready.
+        /// Configure block stashed until the first scene is ready.
         public var pendingConfigure: ((any AppContext) async throws -> Void)?
 
         private init() {}
@@ -24,7 +24,7 @@
         public func bootstrap(
             configure: @escaping @MainActor @Sendable (any AppContext) async throws -> Void
         ) {
-            self.pendingConfigure = configure
+            pendingConfigure = configure
         }
 
         public func runForever() -> Never {

@@ -15,7 +15,7 @@
         public let id = WindowID()
         public let webView: any PWAWebView
 
-        var uiWindow: UIWindow?  // attached lazily by SceneDelegate
+        var uiWindow: UIWindow? // attached lazily by SceneDelegate
         let viewController: UIViewController
         let adapter: WKWebViewAdapter
         private let bridge: BridgeRuntime
@@ -25,22 +25,22 @@
 
         public init(config: WindowConfig, app: IOSAppContext) throws {
             let cfg = WKWebViewConfiguration()
-            if case .bundled(let directory, _) = config.content {
+            if case let .bundled(directory, _) = config.content {
                 let provider = AssetProvider(root: directory)
                 WKWebViewAdapter.registerScheme("pwa", on: cfg, assetProvider: provider)
             }
             let adapter = try WKWebViewAdapter(configuration: cfg)
             self.adapter = adapter
-            self.webView = adapter
+            webView = adapter
 
             let vc = UIViewController()
             vc.view = adapter.webView
-            self.viewController = vc
-            self.titleStorage = config.title
+            viewController = vc
+            titleStorage = config.title
             vc.title = config.title
 
             self.app = app
-            self.bridge = BridgeRuntime(
+            bridge = BridgeRuntime(
                 webView: adapter,
                 registry: app.registry,
                 windowID: id,

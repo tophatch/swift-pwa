@@ -3,9 +3,9 @@ import Foundation
 /// Resolves `pwa://localhost/...` URLs to file URLs / mime types for the
 /// custom URL scheme handlers in each backend.
 public struct AssetProvider: Sendable {
-    public let scheme: String   // "pwa"
-    public let host: String     // "localhost"
-    public let root: URL        // directory containing the web bundle
+    public let scheme: String // "pwa"
+    public let host: String // "localhost"
+    public let root: URL // directory containing the web bundle
 
     public init(scheme: String = "pwa", host: String = "localhost", root: URL) {
         self.scheme = scheme
@@ -39,24 +39,24 @@ public struct AssetProvider: Sendable {
 
     public static func mimeType(for url: URL) -> String {
         switch url.pathExtension.lowercased() {
-        case "html", "htm": return "text/html; charset=utf-8"
-        case "js", "mjs": return "application/javascript; charset=utf-8"
-        case "css": return "text/css; charset=utf-8"
-        case "json": return "application/json; charset=utf-8"
-        case "svg": return "image/svg+xml"
-        case "png": return "image/png"
-        case "jpg", "jpeg": return "image/jpeg"
-        case "webp": return "image/webp"
-        case "gif": return "image/gif"
-        case "ico": return "image/x-icon"
-        case "wasm": return "application/wasm"
-        case "woff": return "font/woff"
-        case "woff2": return "font/woff2"
-        case "ttf": return "font/ttf"
-        case "otf": return "font/otf"
-        case "txt": return "text/plain; charset=utf-8"
-        case "map": return "application/json; charset=utf-8"
-        default: return "application/octet-stream"
+        case "html", "htm": "text/html; charset=utf-8"
+        case "js", "mjs": "application/javascript; charset=utf-8"
+        case "css": "text/css; charset=utf-8"
+        case "json": "application/json; charset=utf-8"
+        case "svg": "image/svg+xml"
+        case "png": "image/png"
+        case "jpg", "jpeg": "image/jpeg"
+        case "webp": "image/webp"
+        case "gif": "image/gif"
+        case "ico": "image/x-icon"
+        case "wasm": "application/wasm"
+        case "woff": "font/woff"
+        case "woff2": "font/woff2"
+        case "ttf": "font/ttf"
+        case "otf": "font/otf"
+        case "txt": "text/plain; charset=utf-8"
+        case "map": "application/json; charset=utf-8"
+        default: "application/octet-stream"
         }
     }
 }

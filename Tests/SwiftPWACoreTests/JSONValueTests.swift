@@ -1,6 +1,6 @@
 import Foundation
-import Testing
 @testable import SwiftPWACore
+import Testing
 
 @Suite("JSONValue")
 struct JSONValueTests {
@@ -12,7 +12,7 @@ struct JSONValueTests {
             "b": .bool(true),
             "x": .null,
             "a": .array([.number(1), .number(2)]),
-            "nested": .object(["k": .string("v")]),
+            "nested": .object(["k": .string("v")])
         ])
         let data = try value.encoded()
         let decoded = try JSONValue.decode(data)

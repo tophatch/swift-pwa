@@ -75,7 +75,7 @@ struct AppImageBundler {
         try await Shell.run("/usr/bin/env", [
             linuxdeploy.lastPathComponent,
             "--appdir", appDir.path,
-            "--output", "appimage",
+            "--output", "appimage"
         ], cwd: outputDir)
 
         // linuxdeploy emits <Name>-<arch>.AppImage in cwd.

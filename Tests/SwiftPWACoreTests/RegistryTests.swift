@@ -1,7 +1,7 @@
-import Foundation
-import Testing
 import _SwiftPWATestSupport
+import Foundation
 @testable import SwiftPWACore
+import Testing
 
 @Suite("CommandRegistry")
 struct RegistryTests {
@@ -12,7 +12,7 @@ struct RegistryTests {
         let inv = Invocation(id: 1, command: "missing", payload: Data("null".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await registry.dispatch(ctx)
-        guard case .failure(let err) = result else { Issue.record("expected failure"); return }
+        guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.notFound)
     }
 
@@ -27,14 +27,14 @@ struct RegistryTests {
         })
 
         let app = await MainActor.run { MockAppContext(registry: registry) }
-        let inv = Invocation(
+        let inv = try Invocation(
             id: 1,
             command: "double",
-            payload: try JSONEncoder().encode(Args(n: 21))
+            payload: JSONEncoder().encode(Args(n: 21))
         )
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await registry.dispatch(ctx)
-        guard case .ok(let data) = result else { Issue.record("expected ok"); return }
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(Out.self, from: data)
         #expect(out == Out(doubled: 42))
     }
@@ -48,7 +48,7 @@ struct RegistryTests {
         let inv = Invocation(id: 1, command: "strict", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await registry.dispatch(ctx)
-        guard case .failure(let err) = result else { Issue.record("expected failure"); return }
+        guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.decode)
     }
 
@@ -62,7 +62,7 @@ struct RegistryTests {
         let inv = Invocation(id: 1, command: "bang", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await registry.dispatch(ctx)
-        guard case .failure(let err) = result else { Issue.record("expected failure"); return }
+        guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == "E_CUSTOM")
         #expect(err.message == "boom")
     }
@@ -83,10 +83,10 @@ struct RegistryTests {
         let inv = Invocation(id: 1, command: "count", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await registry.dispatch(ctx)
-        guard case .stream(let stream) = result else { Issue.record("expected stream"); return }
+        guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
         var received: [Int] = []
         for try await chunk in stream {
-            received.append(try JSONDecoder().decode(Int.self, from: chunk))
+            try received.append(JSONDecoder().decode(Int.self, from: chunk))
         }
         #expect(received == [1, 2, 3])
     }
@@ -98,7 +98,7 @@ struct RegistryTests {
         await registry.register("b") { _ in .ok(Data("null".utf8)) }
         #expect(await registry.has("a"))
         #expect(await registry.has("b"))
-        #expect(!(await registry.has("c")))
+        #expect(await !(registry.has("c")))
         let names = await registry.names().sorted()
         #expect(names == ["a", "b"])
     }

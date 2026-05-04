@@ -94,9 +94,9 @@ enum BundlerError: Error, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .binaryMissing(let url): return "expected built binary at \(url.path)"
-        case .toolMissing(let name): return "required tool not on PATH: \(name)"
-        case .shell(let code, let cmd): return "command failed (\(code)): \(cmd)"
+        case let .binaryMissing(url): "expected built binary at \(url.path)"
+        case let .toolMissing(name): "required tool not on PATH: \(name)"
+        case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
         }
     }
 }

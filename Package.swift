@@ -3,30 +3,31 @@ import PackageDescription
 
 let swiftSettings: [SwiftSetting] = [
     .enableUpcomingFeature("StrictConcurrency"),
-    .enableUpcomingFeature("ExistentialAny"),
+    .enableUpcomingFeature("ExistentialAny")
 ]
 
 let package = Package(
     name: "swift-pwa",
     platforms: [
         .macOS(.v15),
-        .iOS(.v18),
+        .iOS(.v18)
     ],
     products: [
         .library(name: "SwiftPWA", targets: ["SwiftPWA"]),
         .library(name: "SwiftPWACore", targets: ["SwiftPWACore"]),
         .library(name: "SwiftPWATestSupport", targets: ["_SwiftPWATestSupport"]),
-        .executable(name: "swift-pwa", targets: ["swift-pwa-cli"]),
+        .executable(name: "swift-pwa", targets: ["swift-pwa-cli"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0")
     ],
     targets: [
         // MARK: - Platform-agnostic core
+
         .target(
             name: "SwiftPWACore",
             resources: [
-                .copy("Resources/bridge.js"),
+                .copy("Resources/bridge.js")
             ],
             swiftSettings: swiftSettings
         ),
@@ -38,6 +39,7 @@ let package = Package(
         ),
 
         // MARK: - Apple backend (macOS + iOS)
+
         .target(
             name: "SwiftPWAWebKit",
             dependencies: ["SwiftPWACore"],
@@ -45,13 +47,14 @@ let package = Package(
         ),
 
         // MARK: - Linux backend
+
         .systemLibrary(
             name: "CGtk3Shim",
             path: "Sources/CGtk3Shim",
             pkgConfig: "gtk+-3.0",
             providers: [
                 .apt(["libgtk-3-dev"]),
-                .brew(["gtk+3"]),
+                .brew(["gtk+3"])
             ]
         ),
         .systemLibrary(
@@ -59,7 +62,7 @@ let package = Package(
             path: "Sources/CWebKitGTK4Shim",
             pkgConfig: "webkit2gtk-4.1",
             providers: [
-                .apt(["libwebkit2gtk-4.1-dev"]),
+                .apt(["libwebkit2gtk-4.1-dev"])
             ]
         ),
         .target(
@@ -67,32 +70,35 @@ let package = Package(
             dependencies: [
                 "SwiftPWACore",
                 .target(name: "CGtk3Shim", condition: .when(platforms: [.linux])),
-                .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux])),
+                .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux]))
             ],
             swiftSettings: swiftSettings
         ),
 
         // MARK: - Umbrella
+
         .target(
             name: "SwiftPWA",
             dependencies: [
                 "SwiftPWACore",
                 .target(name: "SwiftPWAWebKit", condition: .when(platforms: [.macOS, .iOS])),
-                .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
+                .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux]))
             ],
             swiftSettings: swiftSettings
         ),
 
         // MARK: - CLI
+
         .executableTarget(
             name: "swift-pwa-cli",
             dependencies: [
-                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
             ],
             swiftSettings: swiftSettings
         ),
 
         // MARK: - Tests
+
         .testTarget(
             name: "SwiftPWACoreTests",
             dependencies: ["SwiftPWACore", "_SwiftPWATestSupport"],
@@ -102,7 +108,7 @@ let package = Package(
             name: "SwiftPWAWebKitTests",
             dependencies: [
                 .target(name: "SwiftPWAWebKit", condition: .when(platforms: [.macOS, .iOS])),
-                "_SwiftPWATestSupport",
+                "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings
         ),
@@ -110,7 +116,7 @@ let package = Package(
             name: "SwiftPWAGTKTests",
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
-                "_SwiftPWATestSupport",
+                "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings
         ),
@@ -118,9 +124,9 @@ let package = Package(
             name: "SwiftPWACLITests",
             dependencies: ["swift-pwa-cli"],
             resources: [
-                .copy("Fixtures"),
+                .copy("Fixtures")
             ],
             swiftSettings: swiftSettings
-        ),
+        )
     ]
 )

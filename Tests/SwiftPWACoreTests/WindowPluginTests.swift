@@ -1,7 +1,7 @@
-import Foundation
-import Testing
 import _SwiftPWATestSupport
+import Foundation
 @testable import SwiftPWACore
+import Testing
 
 @Suite("WindowPlugin")
 @MainActor
@@ -46,12 +46,12 @@ struct WindowPluginTests {
     }
 
     @Test("window.id without origin returns notFound")
-    func windowIDNoOrigin() async throws {
+    func windowIDNoOrigin() async {
         let (app, _) = await makeApp()
         let inv = Invocation(id: 1, command: "window.id", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await app.registry.dispatch(ctx)
-        guard case .failure(let err) = result else { Issue.record("expected failure"); return }
+        guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.notFound)
     }
 
@@ -61,17 +61,17 @@ struct WindowPluginTests {
         let inv = Invocation(id: 1, command: "window.subscribe", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: win.id, appContext: app)
         let result = await app.registry.dispatch(ctx)
-        guard case .stream(let stream) = result else { Issue.record("expected stream"); return }
+        guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
 
         var iterator = stream.makeAsyncIterator()
         await MainActor.run { win.emit(.didFocus) }
         let chunk = try await iterator.next()
-        let event = try JSONDecoder().decode(WindowEvent.self, from: chunk!)
+        let event = try JSONDecoder().decode(WindowEvent.self, from: #require(chunk))
         #expect(event == .didFocus)
 
         await MainActor.run { win.emit(.didBlur) }
         let chunk2 = try await iterator.next()
-        let event2 = try JSONDecoder().decode(WindowEvent.self, from: chunk2!)
+        let event2 = try JSONDecoder().decode(WindowEvent.self, from: #require(chunk2))
         #expect(event2 == .didBlur)
     }
 
@@ -81,12 +81,12 @@ struct WindowPluginTests {
         let win2 = try app.createWindow(WindowConfig(
             title: "T2",
             size: Size(width: 100, height: 100),
-            content: .remote(URL(string: "about:blank")!)
+            content: .remote(#require(URL(string: "about:blank")))
         ))
         let inv = Invocation(id: 1, command: "window.list", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: win.id, appContext: app)
         let result = await app.registry.dispatch(ctx)
-        guard case .ok(let data) = result else { Issue.record("expected ok"); return }
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(WindowListResult.self, from: data)
         #expect(Set(out.ids) == [win.id.raw, win2.id.raw])
     }

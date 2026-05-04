@@ -169,25 +169,27 @@
     }
 
     /// `@convention(c)` trampoline matching the GObject callback shape
-    /// for `WebKitUserContentManager::script-message-received`:
-    /// `void (*)(WebKitUserContentManager*, WebKitJavascriptResult*, gpointer)`.
+    /// for `WebKitUserContentManager::script-message-received` in
+    /// WebKitGTK 2.40+ (4.1 ABI):
+    /// `void (*)(WebKitUserContentManager*, JSCValue*, gpointer)`.
     ///
-    /// Bridge.js always sends string payloads (it `JSON.stringify`s the
-    /// envelope before posting), so we extract the JSC value as a UTF-8
-    /// string, free the C buffer, and dispatch to the Swift adapter on
-    /// the main actor.
+    /// (The older API took a `WebKitJavascriptResult*`, which was
+    /// removed in 2.40 in favour of passing `JSCValue*` directly.)
+    ///
+    /// Bridge.js always sends string payloads (it `JSON.stringify`s
+    /// the envelope before posting), so we extract the value as UTF-8,
+    /// free the C buffer, and dispatch to the Swift adapter on the
+    /// main actor.
     private let messageReceivedTrampoline: @convention(c) (
         UnsafeMutablePointer<WebKitUserContentManager>?,
-        UnsafeMutablePointer<WebKitJavascriptResult>?,
+        UnsafeMutablePointer<JSCValue>?,
         gpointer?
-    ) -> Void = { _, jsResult, userData in
-        guard let jsResult, let userData else { return }
-        guard let value = webkit_javascript_result_get_js_value(jsResult) else { return }
+    ) -> Void = { _, value, userData in
+        guard let value, let userData else { return }
         guard let cstr = jsc_value_to_string(value) else { return }
         let json = String(cString: cstr)
         g_free(cstr)
-        let unmanaged = Unmanaged<MessageBox>.fromOpaque(userData)
-        let box = unmanaged.takeUnretainedValue()
+        let box = Unmanaged<MessageBox>.fromOpaque(userData).takeUnretainedValue()
         // Signals fire on the GTK main thread, which is also Swift's
         // main thread; jump to MainActor isolation without an async hop.
         MainActor.assumeIsolated { box.adapter?._ingest(jsonString: json) }

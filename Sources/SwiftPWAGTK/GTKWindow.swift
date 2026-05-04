@@ -198,12 +198,19 @@
         gpointer?
     ) -> gboolean = { _, eventPtr, userData in
         guard let eventPtr, let userData else { return gboolean(0) }
-        let box = Unmanaged<GTKWindowBox>.fromOpaque(userData).takeUnretainedValue()
         var x: Int32 = 0, y: Int32 = 0, w: Int32 = 0, h: Int32 = 0
         swiftpwa_event_configure_extents(eventPtr, &x, &y, &w, &h)
         let size = Size(width: Double(w), height: Double(h))
         let position = Point(x: Double(x), y: Double(y))
+        // Launder the box pointer through `UInt` — the trampoline is
+        // task-isolated, so capturing the raw `GTKWindowBox` reference
+        // across into the MainActor closure trips Swift 6's
+        // sending-risk diagnostic. Reconstituting the box *inside* the
+        // MainActor isolation keeps the unsafe pointer crossing local.
+        let userDataRaw = UInt(bitPattern: userData)
         MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let box = Unmanaged<GTKWindowBox>.fromOpaque(opaque).takeUnretainedValue()
             box.window?.handleConfigure(size: size, position: position)
         }
         return gboolean(0)

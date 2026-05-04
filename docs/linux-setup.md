@@ -109,6 +109,15 @@ remain:
   The C shim assumes `WebKitJavascriptResult` (boxed type) on the
   signal callback; the 6.0 ABI swapped that for `JSCValue` direct.
   Adding 6.0 means a sibling shim target.
+- **WM-driven focus / minimize / fullscreen events aren't observed.**
+  `WindowEvent.didFocus` / `.didBlur` / `.didMinimize` / `.didDeminiaturize`
+  / `.didEnterFullscreen` / `.didExitFullscreen` are only emitted when
+  the corresponding `Window.focus()` / `minimize()` / `setFullscreen()`
+  method is called programmatically. User-driven state changes (alt-tab,
+  click another window, double-click titlebar to maximize) don't reach
+  subscribers. The fix is to wire up GTK's `focus-in-event` /
+  `focus-out-event` / `window-state-event` signals the same way
+  `configure-event` is hooked for resize.
 - **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
   absent or non-PNG, the bundler embeds a 1×1 transparent placeholder
   so `linuxdeploy` doesn't hang on its prompt path.

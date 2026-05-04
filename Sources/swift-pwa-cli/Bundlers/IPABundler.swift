@@ -21,6 +21,9 @@ struct IPABundler {
     let simulator: Bool
 
     func build() async throws -> URL {
+        if simulator {
+            try await Self.ensureSimulatorRuntimeInstalled()
+        }
         let derived = outputDir.appendingPathComponent("ios-derived")
         let destination = simulator
             ? "generic/platform=iOS Simulator"
@@ -134,6 +137,33 @@ struct IPABundler {
             try fm.copyItem(at: webSrc, to: app.appendingPathComponent("web"))
         }
         return app
+    }
+
+    /// Fail fast (with a useful error message) if the user hasn't installed
+    /// any iOS Simulator runtime. Otherwise xcodebuild errors out deep in
+    /// its log with an opaque "Unable to find a destination" message. We
+    /// can't install the runtime ourselves — Apple gates it behind Xcode
+    /// Settings → Platforms or `xcodebuild -downloadPlatform`.
+    private static func ensureSimulatorRuntimeInstalled() async throws {
+        let json: String
+        do {
+            json = try await Shell.capture(
+                "/usr/bin/env",
+                ["xcrun", "simctl", "list", "runtimes", "-j"]
+            )
+        } catch {
+            // simctl missing entirely → xcrun's own error is informative; rethrow.
+            throw error
+        }
+        let runtimes = (try? JSONSerialization.jsonObject(with: Data(json.utf8)))
+            .flatMap { $0 as? [String: Any] }?["runtimes"] as? [[String: Any]]
+        let hasIOS = runtimes?.contains { runtime in
+            (runtime["isAvailable"] as? Bool == true) &&
+                ((runtime["name"] as? String)?.hasPrefix("iOS ") == true)
+        } ?? false
+        if !hasIOS {
+            throw BundlerError.iosSimulatorRuntimeMissing
+        }
     }
 
     /// Best-effort: build a launch storyboard from `manifest.icon` if it's a

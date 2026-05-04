@@ -124,6 +124,7 @@ const { text } = await __SWIFT_PWA__.invoke('clipboard.readText');
 - **`WindowPlugin`** — `window.id`, `window.list`, `window.setTitle` / `title`, `window.setSize` / `size`, `window.setPosition` / `position`, `window.focus`, `window.minimize` / `maximize`, `window.setFullscreen` / `isFullscreen`, `window.close`, `window.subscribe`.
 - **`ClipboardPlugin`** — `clipboard.readText`, `clipboard.writeText`, `clipboard.clear`. `clear()` wipes the system clipboard on Apple; on X11 / Wayland it only relinquishes local ownership of the selection.
 - **`TrayPlugin`** (opt-in) — `tray.setIcon`, `tray.setTooltip`, `tray.setMenu`, `tray.setVisible`, `tray.subscribe`. Add via `ctx.use(TrayPlugin(SystemTray()))`. Full implementation on macOS (`NSStatusItem`) and the GTK3 backend (`GtkStatusIcon`); on iOS and the GTK4 backend `SystemTray()` returns a no-op stub so the same call site works portably — the tray just isn't displayed.
+- **`NotificationsPlugin`** (opt-in) — `notifications.requestAuthorization`, `notifications.send` (`{title, body?, sound?}` → notification id). Add via `ctx.use(NotificationsPlugin(SystemNotifications()))`. macOS / iOS use `UNUserNotificationCenter` (which requires a bundled, signed app — `swift run` returns "not allowed"); Linux calls `org.freedesktop.Notifications` over D-Bus through GIO, no `libnotify` dep needed.
 
 ## Swift API
 

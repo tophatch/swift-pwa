@@ -2,6 +2,7 @@
 #define SWIFT_PWA_GTK4_SHIM_H
 
 #include <gtk/gtk.h>
+#include <gio/gio.h>
 
 /// Swift-side quit-shortcut callback. Invoked on the GTK main thread
 /// when the user presses Ctrl+Q.
@@ -142,6 +143,85 @@ static inline void swiftpwa_clipboard_read_text(
 /// ownership is to set a NULL content provider.
 static inline void swiftpwa_clipboard_clear(GdkClipboard *cb) {
     gdk_clipboard_set_content(cb, NULL);
+}
+
+// ---------------------------------------------------------------------
+// Notifications (org.freedesktop.Notifications via D-Bus).
+//
+// Identical to the GTK3 shim — the freedesktop notification spec is
+// independent of GTK version, and using GIO's D-Bus directly avoids a
+// libnotify / libayatana-appindicator runtime dependency.
+// ---------------------------------------------------------------------
+
+static inline int swiftpwa_notify_send(
+    const char *app_name,
+    const char *title,
+    const char *body,
+    int play_sound,
+    char **id_out,
+    char **err_out
+) {
+    GError *err = NULL;
+    GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
+    if (!bus) {
+        if (err_out) {
+            *err_out = err ? g_strdup(err->message) : g_strdup("g_bus_get_sync failed");
+        }
+        if (err) g_error_free(err);
+        return -1;
+    }
+
+    GVariant *actions_v = g_variant_new_strv(NULL, 0);
+
+    GVariantBuilder hints;
+    g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
+    if (play_sound) {
+        g_variant_builder_add(
+            &hints, "{sv}",
+            "sound-name", g_variant_new_string("message-new-instant")
+        );
+    }
+    GVariant *hints_v = g_variant_builder_end(&hints);
+
+    GVariant *params = g_variant_new(
+        "(susss@as@a{sv}i)",
+        app_name ? app_name : "",
+        (guint32)0,
+        "",
+        title ? title : "",
+        body ? body : "",
+        actions_v,
+        hints_v,
+        (gint32)-1
+    );
+
+    GVariant *result = g_dbus_connection_call_sync(
+        bus,
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "Notify",
+        params,
+        G_VARIANT_TYPE("(u)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        5000,
+        NULL,
+        &err
+    );
+    g_object_unref(bus);
+
+    if (!result) {
+        if (err_out) {
+            *err_out = err ? g_strdup(err->message) : g_strdup("Notify call failed");
+        }
+        if (err) g_error_free(err);
+        return -1;
+    }
+    guint32 id = 0;
+    g_variant_get(result, "(u)", &id);
+    g_variant_unref(result);
+    if (id_out) *id_out = g_strdup_printf("%u", id);
+    return 0;
 }
 
 #endif

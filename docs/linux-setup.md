@@ -105,10 +105,6 @@ End-to-end functionality is in place — JS `__SWIFT_PWA__.invoke()` /
 `subscribe()` round-trip through the bridge — but a few rough edges
 remain:
 
-- **`evaluateJavaScript` is fire-and-forget on Linux.** Outbound frames
-  work because `__deliver` is also one-way, but `evaluate(js:)` always
-  returns `nil` to Swift. Threading the `GAsyncResult` callback chain
-  back into a Swift continuation is queued for a follow-up.
 - **WebKitGTK 6.0 (GTK4) isn't supported yet** — only the 4.1 ABI.
   The C shim assumes `WebKitJavascriptResult` (boxed type) on the
   signal callback; the 6.0 ABI swapped that for `JSCValue` direct.

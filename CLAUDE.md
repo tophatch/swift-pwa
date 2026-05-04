@@ -50,7 +50,7 @@ This is the trickiest part of the codebase and the source of past bugs:
 ### Linux backend caveats
 
 - The C shim assumes the **WebKitGTK 4.1 ABI** specifically — `WebKitJavascriptResult` is a boxed type (not a GObject) on the script-message callback. GTK4 / WebKitGTK 6.0 would need a sibling shim target.
-- **`webView.evaluateJavaScript(_:)` is fire-and-forget on Linux** in v0.1 — outbound `__deliver` works, but threading the `GAsyncResult` callback chain back into a Swift continuation isn't done yet.
+- **`webView.evaluateJavaScript(_:)` bridges the `GAsyncResult` callback chain back into a Swift `CheckedContinuation`** via the `swiftpwa_evaluate_javascript` shim. The result string is the JSON serialization of the JS value (or `nil` for `undefined`). Errors are surfaced as `BridgeError(code: E_HANDLER)`.
 - `GtkWidget*` is laundered through `UInt` for strict-concurrency compliance (see commit 3da4f03).
 
 ## Conventions

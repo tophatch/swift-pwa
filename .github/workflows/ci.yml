@@ -39,7 +39,7 @@ jobs:
             -derivedDataPath build/ios-sim \
             build
 
-  linux:
+  linux-gtk3:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -49,7 +49,7 @@ jobs:
           swift-version: "6.0"
       - name: Show Swift version
         run: swift --version
-      - name: Install GTK + WebKitGTK
+      - name: Install GTK3 + WebKitGTK 4.1
         # Required so SwiftPM's package graph resolution doesn't fail
         # on the pkgConfig declarations for the GTK system-library targets,
         # even when SwiftPWAGTK itself isn't built into the test executable.
@@ -63,6 +63,33 @@ jobs:
         # GTK backend builds are scaffolded but require additional
         # debugging on a real Linux box (see docs/linux-setup.md);
         # we don't gate CI on them yet.
+        run: swift build --target SwiftPWACore --target swift-pwa-cli
+      - name: Test Core + CLI
+        run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+
+  linux-gtk4:
+    runs-on: ubuntu-24.04
+    env:
+      SWIFT_PWA_GTK4: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Swift 6.0
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+      - name: Show Swift version
+        run: swift --version
+      - name: Install GTK4 + WebKitGTK 6.0
+        # `SWIFT_PWA_GTK4=1` swaps the package graph to use the GTK4 /
+        # WebKitGTK 6.0 system-library targets; pkgConfig resolution
+        # needs the matching dev packages installed.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-4-dev \
+            libwebkitgtk-6.0-dev \
+            xvfb
+      - name: Build Core + CLI
         run: swift build --target SwiftPWACore --target swift-pwa-cli
       - name: Test Core + CLI
         run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests

@@ -30,7 +30,10 @@ The package is layered as **core → backend → umbrella**:
 
 - **`SwiftPWACore`** (platform-agnostic) — defines `AppRuntime`, `AppContext`, `Window`, `PWAWebView` protocols; the `BridgeRuntime`, `CommandRegistry`, `Invocation` envelope, `Plugin` model, and the built-in `WindowPlugin` exposing `window.*` JS commands. Also ships `Resources/bridge.js`, the JS-side runtime injected at document-start.
 - **`SwiftPWAWebKit`** ([Sources/SwiftPWAWebKit/](Sources/SwiftPWAWebKit/)) — Apple backend (macOS 15+, iOS 18+) wrapping `WKWebView` with a `pwa://` scheme handler and UIScene multi-window scaffolding. Conditionally compiled `.when(platforms: [.macOS, .iOS])`.
-- **`SwiftPWAGTK`** ([Sources/SwiftPWAGTK/](Sources/SwiftPWAGTK/)) — Linux backend (GTK3 + WebKitGTK 4.1) built on hand-rolled C shims [Sources/CGtk3Shim/](Sources/CGtk3Shim/) and [Sources/CWebKitGTK4Shim/](Sources/CWebKitGTK4Shim/). Conditionally compiled `.when(platforms: [.linux])`.
+- **`SwiftPWAGTK`** — Linux backend, hand-rolled C shims. Two parallel implementations selected at build time via the `SWIFT_PWA_GTK4` environment variable read in [Package.swift](Package.swift):
+  - **Default** (GTK3 + WebKitGTK 4.1): sources in [Sources/SwiftPWAGTK/](Sources/SwiftPWAGTK/) + [Sources/CGtk3Shim/](Sources/CGtk3Shim/) + [Sources/CWebKitGTK4Shim/](Sources/CWebKitGTK4Shim/).
+  - **`SWIFT_PWA_GTK4=1`** (GTK4 + WebKitGTK 6.0): sources in [Sources/SwiftPWAGTK4/](Sources/SwiftPWAGTK4/) + [Sources/CGtk4Shim/](Sources/CGtk4Shim/) + [Sources/CWebKitGTK6Shim/](Sources/CWebKitGTK6Shim/).
+  - Both export the same `SwiftPWAGTK` Swift module name (Package.swift swaps `path`), so the umbrella and downstream code don't change. Conditionally compiled `.when(platforms: [.linux])`.
 - **`SwiftPWA`** (umbrella) — the only module users import. `@_exported`s core + the platform backend, exposes `SwiftPWA.runtime()` which returns the platform-appropriate `AppRuntime`.
 - **`swift-pwa-cli`** — `init`, `dev`, `build` subcommands; bundlers for `.app` (Mac), `.ipa` (iOS via `xcodebuild`), `.AppImage` (Linux via `linuxdeploy`); `pwa.json` is the source of truth for `Info.plist`/`.desktop`/icon generation.
 - **`_SwiftPWATestSupport`** — reusable `MockWindow` / `MockWebView` / `MockAppContext` consumed by all test targets.
@@ -49,7 +52,9 @@ This is the trickiest part of the codebase and the source of past bugs:
 
 ### Linux backend caveats
 
-- The C shim assumes the **WebKitGTK 4.1 ABI** specifically — `WebKitJavascriptResult` is a boxed type (not a GObject) on the script-message callback. GTK4 / WebKitGTK 6.0 would need a sibling shim target.
+- **Two parallel backends, picked at build time.** `SWIFT_PWA_GTK4=1` swaps which directory contributes the Swift sources for the `SwiftPWAGTK` target and which C shims it depends on. Both expose the same Swift class names (`GTKWindow`, `GTKAppContext`, `GTKAppRuntime`, `WebKitGTKAdapter`) so the umbrella and tests don't branch. Don't try to import both at once — only one is in the package graph per build.
+- **`Window.position()` / `setPosition` / `.didMove` are no-ops on the GTK4 backend.** GTK4 dropped the position API; Wayland refuses to give apps their own position. The cross-platform `Window` protocol documents this as best-effort.
+- The GTK3 C shim assumes the **WebKitGTK 4.1 ABI** specifically — `WebKitJavascriptResult` is a boxed type (not a GObject) on the script-message callback. The GTK4 shim handles the 6.0 ABI where the same callback receives a `JSCValue*` directly.
 - **`webView.evaluateJavaScript(_:)` bridges the `GAsyncResult` callback chain back into a Swift `CheckedContinuation`** via the `swiftpwa_evaluate_javascript` shim. The result string is the JSON serialization of the JS value (or `nil` for `undefined`). Errors are surfaced as `BridgeError(code: E_HANDLER)`.
 - `GtkWidget*` is laundered through `UInt` for strict-concurrency compliance (see commit 3da4f03).
 

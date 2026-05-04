@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Platform-agnostic `SwiftPWACore`: `CommandRegistry`, `Invocation` envelope, `Window` / `PWAWebView` / `AppRuntime` protocols, `Plugin` model, built-in `WindowPlugin` exposing the `window.*` JS command set.
-- Apple `SwiftPWAWebKit` backend (macOS 15+, iOS 18+) with `WKWebView`, `pwa://` scheme handler, UIScene multi-window scaffolding.
+- Apple `SwiftPWAWebKit` backend (macOS 15+, iOS 18+) with `WKWebView`, `pwa://` scheme handler, UIScene multi-window scaffolding. JS↔Swift bridge round-trip verified end-to-end on the iOS 26 Simulator.
 - Linux `SwiftPWAGTK` backend (GTK3 + WebKitGTK 4.1) via hand-rolled C shims (`CGtk3Shim`, `CWebKitGTK4Shim`). JS↔Swift bridge round-trip verified end-to-end on Ubuntu 24.04.
 - `MainThread.run` abstraction in core: routes "run on UI thread" through a registerable platform hook (`DispatchQueue.main` on Apple, `g_idle_add` on GTK) so the bridge runtime works under `gtk_main()`, where Swift's MainActor executor is otherwise un-pumped.
 - `swift-pwa` CLI: `init`, `dev`, `build` for macOS `.app` (with optional `--sign`), iOS `.ipa` / simulator `.app` (via `xcodebuild`), Linux `.AppImage` (via `linuxdeploy`). Windows / Android targets are stubs.
@@ -20,6 +20,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - 34-test suite (Swift Testing): envelope codec, `JSONValue`, `CommandRegistry`, `AssetProvider`, `WindowPlugin`, `BridgeRuntime` end-to-end, real-`WKWebView` integration, `PWAManifest`, `InfoPlist`.
 - GitHub Actions CI matrix: macos-15 (build + test + WKWebView integration), ios-build (xcodebuild against the iOS Simulator SDK), ubuntu-24.04 (Core + CLI), swiftformat lint. Tag-driven release workflow that ships CLI binaries.
 - [docs/linux-setup.md](docs/linux-setup.md) walkthrough for Ubuntu 24.04.
+
+### Fixed
+
+- iOS bundler now assembles the `.app` itself from xcodebuild's loose products. SwiftPM executable targets compile to a bare Mach-O, not a bundle, so the previous code never found the `.app` it was looking for and failed every build with `expected built binary at …`.
+- iOS `Info.plist` no longer ships `$(PRODUCT_MODULE_NAME).SwiftPWASceneDelegate` as a literal string (Xcode-only build-setting variable); resolved to `SwiftPWAWebKit.SwiftPWASceneDelegate`.
+- iOS `Info.plist` now declares `UILaunchScreen` so the app doesn't run in legacy compatibility letterbox mode on modern devices.
+- `swift-pwa init` scaffolds `Sources/<Name>/App.swift` instead of `main.swift`, so the templated `@main` struct compiles (the `main.swift` filename forces top-level-script mode).
 
 ### Notes
 

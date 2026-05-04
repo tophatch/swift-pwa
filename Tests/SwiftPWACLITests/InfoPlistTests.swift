@@ -44,6 +44,6 @@ struct InfoPlistTests {
         #expect(scenes?["UIApplicationSupportsMultipleScenes"] as? Bool == true)
         let configs = scenes?["UISceneConfigurations"] as? [String: Any]
         let app = configs?["UIWindowSceneSessionRoleApplication"] as? [[String: Any]]
-        #expect(app?.first?["UISceneDelegateClassName"] as? String == "$(PRODUCT_MODULE_NAME).SwiftPWASceneDelegate")
+        #expect(app?.first?["UISceneDelegateClassName"] as? String == "SwiftPWAWebKit.SwiftPWASceneDelegate")
     }
 }

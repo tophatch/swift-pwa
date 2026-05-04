@@ -72,6 +72,8 @@
 
             lastSize = config.size
             connectConfigureSignal()
+            connectDeleteEvent()
+            connectQuitAccelerator(on: windowPtr)
         }
 
         /// Hook GTK's `configure-event` so user-driven resizes / moves
@@ -102,6 +104,52 @@
                 lastPosition = position
                 emit(.didMove(position))
             }
+        }
+
+        /// Hook `delete-event` so a user-driven [X] / Alt+F4 / WM-close
+        /// runs the same cleanup as a programmatic `close()`. We return
+        /// FALSE from the trampoline to let GTK's default handler do
+        /// the actual `gtk_widget_destroy`.
+        private func connectDeleteEvent() {
+            let box = Unmanaged.passRetained(GTKWindowBox(self)).toOpaque()
+            "delete-event".withCString { name in
+                _ = g_signal_connect_data(
+                    UnsafeMutableRawPointer(widget),
+                    name,
+                    unsafeBitCast(deleteEventTrampoline, to: GCallback.self),
+                    box,
+                    gtkWindowBoxDestroy,
+                    GConnectFlags(rawValue: 0)
+                )
+            }
+        }
+
+        /// Install Ctrl+Q on this window. GTK accelerator groups are
+        /// dispatched before focus-based event delivery, so the binding
+        /// fires even when the WebKit page has a focused text input.
+        private func connectQuitAccelerator(on windowPtr: UnsafeMutablePointer<GtkWindow>) {
+            guard let group = gtk_accel_group_new() else { return }
+            gtk_window_add_accel_group(windowPtr, group)
+            swiftpwa_accel_connect_quit(group, quitAcceleratorCallback, nil)
+            // The window now holds the only ref we care about; release
+            // the floating one returned by `_new`.
+            g_object_unref(UnsafeMutableRawPointer(group))
+        }
+
+        /// Called from the `delete-event` trampoline when the user
+        /// closes via the WM. GTK is about to destroy the widget; we
+        /// run the same teardown as `close()` minus the destroy call.
+        func handleDeleteEvent() {
+            emit(.willClose)
+            emit(.didClose)
+            cleanupAfterClose()
+        }
+
+        private func cleanupAfterClose() {
+            for c in continuations.values { c.finish() }
+            continuations.removeAll()
+            bridge.stop()
+            app?.windowDidClose(id)
         }
 
         // MARK: - Window
@@ -173,10 +221,7 @@
             emit(.willClose)
             gtk_widget_destroy(widget)
             emit(.didClose)
-            for c in continuations.values { c.finish() }
-            continuations.removeAll()
-            bridge.stop()
-            app?.windowDidClose(id)
+            cleanupAfterClose()
         }
     }
 
@@ -222,5 +267,31 @@
         userData, _ in
         guard let userData else { return }
         Unmanaged<GTKWindowBox>.fromOpaque(userData).release()
+    }
+
+    /// `@convention(c)` trampoline for `delete-event`. Returns FALSE so
+    /// GTK's default handler proceeds with `gtk_widget_destroy`.
+    let deleteEventTrampoline: @convention(c) (
+        UnsafeMutablePointer<GtkWidget>?,
+        gpointer?,
+        gpointer?
+    ) -> gboolean = { _, _, userData in
+        guard let userData else { return gboolean(0) }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let box = Unmanaged<GTKWindowBox>.fromOpaque(opaque).takeUnretainedValue()
+            box.window?.handleDeleteEvent()
+        }
+        return gboolean(0)
+    }
+
+    /// `@convention(c)` callback wired to Ctrl+Q via the accel group.
+    /// Fires on the GTK main thread; quits the shared `GTKAppContext`,
+    /// which calls `gtk_main_quit()`.
+    let quitAcceleratorCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in
+        MainActor.assumeIsolated {
+            GTKAppContext.shared.quit(exitCode: 0)
+        }
     }
 #endif

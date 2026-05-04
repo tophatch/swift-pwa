@@ -2,6 +2,7 @@
 #define SWIFT_PWA_GTK3_SHIM_H
 
 #include <gtk/gtk.h>
+#include <gio/gio.h>
 
 /// Extract the geometry from a `configure-event` `GdkEvent`. We accept
 /// `gpointer` because Swift's clang importer treats `GdkEvent` (a
@@ -251,5 +252,95 @@ static inline void swiftpwa_tray_menu_commit(swiftpwa_tray *t) {
 }
 
 #pragma GCC diagnostic pop
+
+// ---------------------------------------------------------------------
+// Notifications (org.freedesktop.Notifications via D-Bus).
+//
+// We hit the freedesktop.org notification spec directly through GIO
+// rather than depending on libnotify or libayatana-appindicator. Every
+// modern Linux desktop ships a notification daemon listening on the
+// session bus, so this works on GNOME / KDE / Sway / etc. without any
+// extra system-side install.
+// ---------------------------------------------------------------------
+
+/// Send a desktop notification synchronously. Returns 0 and writes a
+/// freshly-allocated notification id (the daemon's `uint32`, stringified)
+/// to `*id_out` on success. Returns -1 and writes a freshly-allocated
+/// error message to `*err_out` on failure. Either out-pointer may be
+/// NULL if the caller doesn't need it. The strings the callee writes
+/// are owned by the caller and must be `g_free`d.
+static inline int swiftpwa_notify_send(
+    const char *app_name,
+    const char *title,
+    const char *body,
+    int play_sound,
+    char **id_out,
+    char **err_out
+) {
+    GError *err = NULL;
+    GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &err);
+    if (!bus) {
+        if (err_out) {
+            *err_out = err ? g_strdup(err->message) : g_strdup("g_bus_get_sync failed");
+        }
+        if (err) g_error_free(err);
+        return -1;
+    }
+
+    // Empty actions list — actions / replies are out of scope for v0.2.
+    GVariant *actions_v = g_variant_new_strv(NULL, 0);
+
+    // Hints. Only `sound-name` is set when the caller asked for it;
+    // the daemon falls back to a default chime for that hint.
+    GVariantBuilder hints;
+    g_variant_builder_init(&hints, G_VARIANT_TYPE("a{sv}"));
+    if (play_sound) {
+        g_variant_builder_add(
+            &hints, "{sv}",
+            "sound-name", g_variant_new_string("message-new-instant")
+        );
+    }
+    GVariant *hints_v = g_variant_builder_end(&hints);
+
+    GVariant *params = g_variant_new(
+        "(susss@as@a{sv}i)",
+        app_name ? app_name : "",
+        (guint32)0,    // replaces_id (0 = new notification)
+        "",            // app_icon
+        title ? title : "",
+        body ? body : "",
+        actions_v,
+        hints_v,
+        (gint32)-1     // expire_timeout (-1 = daemon default)
+    );
+
+    GVariant *result = g_dbus_connection_call_sync(
+        bus,
+        "org.freedesktop.Notifications",
+        "/org/freedesktop/Notifications",
+        "org.freedesktop.Notifications",
+        "Notify",
+        params,
+        G_VARIANT_TYPE("(u)"),
+        G_DBUS_CALL_FLAGS_NONE,
+        5000,
+        NULL,
+        &err
+    );
+    g_object_unref(bus);
+
+    if (!result) {
+        if (err_out) {
+            *err_out = err ? g_strdup(err->message) : g_strdup("Notify call failed");
+        }
+        if (err) g_error_free(err);
+        return -1;
+    }
+    guint32 id = 0;
+    g_variant_get(result, "(u)", &id);
+    g_variant_unref(result);
+    if (id_out) *id_out = g_strdup_printf("%u", id);
+    return 0;
+}
 
 #endif

@@ -6,42 +6,47 @@
 
     /// GTK3 + WebKitGTK 4.1 implementation of `Window`.
     ///
-    /// This file is intentionally a thin Swift wrapper around the C
-    /// API exposed by `CGtk3Shim` / `CWebKitGTK4Shim`. We hand-roll
-    /// the bindings rather than pulling in a community Swift-GTK
-    /// wrapper to keep the dependency surface tiny and decouple our
-    /// release cadence from theirs.
+    /// Hand-rolled bindings: GTK widgets share an inheritance chain
+    /// (`GtkWidget` → `GtkWindow`) backed by the same memory layout via
+    /// GObject. Swift's Clang importer types each typedef as a distinct
+    /// `UnsafeMutablePointer<_GtkXxx>` though, so we store the widget
+    /// pointer once and rebind to the concrete type at each call site.
     @MainActor
     public final class GTKWindow: Window {
         public let id = WindowID()
         public let webView: any PWAWebView
 
-        // Owned C handles. The `OpaquePointer`s are GtkWindow / WebKitWebView.
-        private let gtkWindow: OpaquePointer
+        /// The owned `GtkWidget*` (concretely a top-level `GtkWindow`).
+        private let widget: UnsafeMutablePointer<GtkWidget>
         private let adapter: WebKitGTKAdapter
         private let bridge: BridgeRuntime
         private weak var app: GTKAppContext?
         private var titleStorage: String
         private var continuations: [UUID: AsyncStream<WindowEvent>.Continuation] = [:]
 
+        /// Cast our owned widget back to `GtkWindow*` for `gtk_window_*` calls.
+        private var window: UnsafeMutablePointer<GtkWindow> {
+            UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
+        }
+
         public init(config: WindowConfig, app: GTKAppContext) throws {
-            // gtk_window_new(GTK_WINDOW_TOPLEVEL == 0)
             guard let win = gtk_window_new(GTK_WINDOW_TOPLEVEL) else {
                 throw BridgeError(code: BridgeError.handler, message: "gtk_window_new failed")
             }
-            gtkWindow = OpaquePointer(win)
+            widget = win
 
-            config.title.withCString { gtk_window_set_title(self.gtkWindow, $0) }
+            let windowPtr = UnsafeMutableRawPointer(win).assumingMemoryBound(to: GtkWindow.self)
+            config.title.withCString { gtk_window_set_title(windowPtr, $0) }
             gtk_window_set_default_size(
-                gtkWindow,
+                windowPtr,
                 gint(config.size.width),
                 gint(config.size.height)
             )
-            gtk_window_set_resizable(gtkWindow, config.resizable ? gboolean(1) : gboolean(0))
+            gtk_window_set_resizable(windowPtr, config.resizable ? gboolean(1) : gboolean(0))
 
             titleStorage = config.title
 
-            let adapter = try WebKitGTKAdapter(parent: gtkWindow, content: config.content)
+            let adapter = try WebKitGTKAdapter(parent: win, content: config.content)
             self.adapter = adapter
             webView = adapter
             self.app = app
@@ -55,8 +60,8 @@
             bridge.start()
             adapter.load(config.content)
 
-            if config.fullscreen { gtk_window_fullscreen(gtkWindow) }
-            if config.visibleOnLaunch { gtk_widget_show_all(UnsafeMutablePointer(gtkWindow)) }
+            if config.fullscreen { gtk_window_fullscreen(windowPtr) }
+            if config.visibleOnLaunch { gtk_widget_show_all(win) }
         }
 
         // MARK: - Window
@@ -77,55 +82,55 @@
 
         public func setTitle(_ title: String) {
             titleStorage = title
-            title.withCString { gtk_window_set_title(gtkWindow, $0) }
+            title.withCString { gtk_window_set_title(window, $0) }
         }
         public func title() -> String { titleStorage }
 
         public func setSize(_ size: Size, animated _: Bool) {
-            gtk_window_resize(gtkWindow, gint(size.width), gint(size.height))
+            gtk_window_resize(window, gint(size.width), gint(size.height))
             emit(.didResize(size))
         }
         public func size() -> Size {
             var w: gint = 0
             var h: gint = 0
-            gtk_window_get_size(gtkWindow, &w, &h)
+            gtk_window_get_size(window, &w, &h)
             return Size(width: Double(w), height: Double(h))
         }
 
         public func setPosition(_ point: Point) {
-            gtk_window_move(gtkWindow, gint(point.x), gint(point.y))
+            gtk_window_move(window, gint(point.x), gint(point.y))
             emit(.didMove(point))
         }
         public func position() -> Point {
             var x: gint = 0
             var y: gint = 0
-            gtk_window_get_position(gtkWindow, &x, &y)
+            gtk_window_get_position(window, &x, &y)
             return Point(x: Double(x), y: Double(y))
         }
 
         public func focus() {
-            gtk_window_present(gtkWindow)
+            gtk_window_present(window)
             emit(.didFocus)
         }
         public func minimize() {
-            gtk_window_iconify(gtkWindow)
+            gtk_window_iconify(window)
             emit(.didMinimize)
         }
         public func maximize() {
-            gtk_window_maximize(gtkWindow)
+            gtk_window_maximize(window)
         }
         public func setFullscreen(_ on: Bool) {
-            if on { gtk_window_fullscreen(gtkWindow) } else { gtk_window_unfullscreen(gtkWindow) }
+            if on { gtk_window_fullscreen(window) } else { gtk_window_unfullscreen(window) }
             emit(on ? .didEnterFullscreen : .didExitFullscreen)
         }
         public func isFullscreen() -> Bool {
-            // We don't observe state changes here; track at higher level if needed.
+            // We don't observe state changes here; track at a higher level if needed.
             false
         }
 
         public func close() {
             emit(.willClose)
-            gtk_widget_destroy(UnsafeMutablePointer(gtkWindow))
+            gtk_widget_destroy(widget)
             emit(.didClose)
             for c in continuations.values { c.finish() }
             continuations.removeAll()

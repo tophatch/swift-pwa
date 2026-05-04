@@ -13,7 +13,7 @@
 
         @MainActor
         public func run(
-            _ configure: @MainActor @Sendable (any AppContext) async throws -> Void
+            _ configure: @escaping @MainActor @Sendable (any AppContext) async throws -> Void
         ) throws -> Never {
             var argc: Int32 = 0
             gtk_init(&argc, nil)

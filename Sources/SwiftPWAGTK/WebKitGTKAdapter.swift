@@ -6,23 +6,28 @@
 
     /// `WebView` implementation backed by WebKitGTK 4.1.
     ///
-    /// Bridges the WebKit message handler signal (`script-message-received::__SwiftPWA__post`)
-    /// to our `InboundFrame` stream and uses `webkit_web_view_evaluate_javascript`
-    /// to push outbound frames back to JS.
+    /// `webkit_web_view_new_*` returns `GtkWidget*` (the WebView is a
+    /// GtkWidget by GObject inheritance). We store the widget pointer
+    /// once and rebind to `WebKitWebView*` at each WebKit call site.
     @MainActor
     public final class WebKitGTKAdapter: PWAWebView {
-        private let webViewPtr: OpaquePointer
-        private let userContent: OpaquePointer
+        /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
+        private let viewWidget: UnsafeMutablePointer<GtkWidget>
+        private let userContent: UnsafeMutablePointer<WebKitUserContentManager>
         private var continuation: AsyncStream<InboundFrame>.Continuation?
         private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }
         private var assetProvider: AssetProvider?
 
-        init(parent: OpaquePointer, content: WindowContent) throws {
+        private var webView: UnsafeMutablePointer<WebKitWebView> {
+            UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
+        }
+
+        init(parent: UnsafeMutablePointer<GtkWidget>, content: WindowContent) throws {
             // Create the user content manager and inject bridge.js as a user script.
             guard let ucm = webkit_user_content_manager_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_user_content_manager_new failed")
             }
-            userContent = OpaquePointer(ucm)
+            userContent = ucm
             let bridgeSource = try BridgeScript.source()
             bridgeSource.withCString { src in
                 if let script = webkit_user_script_new(
@@ -45,8 +50,11 @@
             guard let view = webkit_web_view_new_with_user_content_manager(ucm) else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_web_view_new failed")
             }
-            webViewPtr = OpaquePointer(view)
-            gtk_container_add(UnsafeMutablePointer(parent), UnsafeMutablePointer(view))
+            viewWidget = view
+
+            // Place the web view inside the parent container.
+            let container = UnsafeMutableRawPointer(parent).assumingMemoryBound(to: GtkContainer.self)
+            gtk_container_add(container, view)
 
             // Wire scheme handler if bundled content was specified.
             if case let .bundled(directory, _) = content {
@@ -57,7 +65,7 @@
         }
 
         private func registerScheme(provider: AssetProvider) {
-            guard let context = webkit_web_view_get_context(webViewPtr) else { return }
+            guard let context = webkit_web_view_get_context(webView) else { return }
             let payload = Unmanaged.passRetained(SchemeBox(provider: provider)).toOpaque()
             provider.scheme.withCString { scheme in
                 webkit_web_context_register_uri_scheme(
@@ -74,15 +82,15 @@
             }
         }
 
-        // MARK: - WebView
+        // MARK: - PWAWebView
 
         public func load(_ content: WindowContent) {
             switch content {
             case let .bundled(_, entry):
                 let url = "pwa://localhost/\(entry)"
-                url.withCString { webkit_web_view_load_uri(webViewPtr, $0) }
+                url.withCString { webkit_web_view_load_uri(webView, $0) }
             case let .remote(url):
-                url.absoluteString.withCString { webkit_web_view_load_uri(webViewPtr, $0) }
+                url.absoluteString.withCString { webkit_web_view_load_uri(webView, $0) }
             }
         }
 
@@ -91,7 +99,7 @@
             // GAsyncResult is left for a follow-up.
             js.withCString {
                 webkit_web_view_evaluate_javascript(
-                    webViewPtr, $0, gssize(-1), nil, nil, nil, nil, nil
+                    webView, $0, gssize(-1), nil, nil, nil, nil, nil
                 )
             }
             return nil
@@ -135,12 +143,9 @@
         let provider: AssetProvider
         init(provider: AssetProvider) { self.provider = provider }
 
-        func handle(request: OpaquePointer) {
+        func handle(request: UnsafeMutablePointer<WebKitURISchemeRequest>) {
             guard let urlCStr = webkit_uri_scheme_request_get_uri(request) else {
-                webkit_uri_scheme_request_finish_error(
-                    request,
-                    nil // GError* — left null for v0.1
-                )
+                webkit_uri_scheme_request_finish_error(request, nil)
                 return
             }
             let urlString = String(cString: urlCStr)

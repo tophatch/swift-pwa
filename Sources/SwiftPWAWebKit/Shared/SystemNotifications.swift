@@ -6,17 +6,21 @@
     /// `Notifications` backed by `UNUserNotificationCenter`. Works on
     /// both macOS and iOS — the framework API is unified across them.
     ///
-    /// The Apple framework requires the host process to have a real
-    /// bundle identity and notification entitlement. From a `swift run`
-    /// invocation that's not satisfied, and `requestAuthorization`
-    /// returns an error such as "Notifications are not allowed for
-    /// this application". We surface that as a thrown
-    /// `BridgeError(code: .handler)` so the JS caller sees an explicit
-    /// failure rather than a silent `false`.
+    /// **Bundling caveat.** `UNUserNotificationCenter` requires the host
+    /// process to be a real `.app` with a `CFBundleIdentifier`. Calling
+    /// `current()` / `requestAuthorization` from a bare `swift run`
+    /// process (where `Bundle.main.bundleURL` points at
+    /// `.build/.../debug/`) raises an *Objective-C* exception
+    /// (`bundleProxyForCurrentProcess is nil`) that Swift's `do/catch`
+    /// can't catch — it crashes the app. We pre-flight by checking
+    /// `Bundle.main.bundleIdentifier` and throw a clean
+    /// `BridgeError(code: .handler)` in that case so the JS caller
+    /// sees an actionable failure with bundling instructions.
     public final class SystemNotifications: Notifications, @unchecked Sendable {
         public init() {}
 
         public func requestAuthorization() async throws -> Bool {
+            try ensureBundled()
             let center = UNUserNotificationCenter.current()
             do {
                 return try await center.requestAuthorization(options: [.alert, .sound, .badge])
@@ -29,6 +33,7 @@
         }
 
         public func send(_ request: NotificationRequest) async throws -> String {
+            try ensureBundled()
             let content = UNMutableNotificationContent()
             content.title = request.title
             if let body = request.body { content.body = body }
@@ -45,6 +50,20 @@
                 )
             }
             return id
+        }
+
+        private func ensureBundled() throws {
+            guard Bundle.main.bundleIdentifier != nil else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: """
+                    notifications require a bundled app — `UNUserNotificationCenter` raises an \
+                    uncatchable NSException when the host process has no bundle identity. Bundle \
+                    with `swift run swift-pwa build --target macos` and launch the resulting \
+                    `.app` instead of `swift run`.
+                    """
+                )
+            }
         }
     }
 #endif

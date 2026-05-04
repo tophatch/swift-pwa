@@ -2,25 +2,116 @@
 <html>
 <head>
     <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Hello, swift-pwa</title>
     <style>
+        :root {
+            --bg: #ffffff;
+            --fg: #1c1c1e;
+            --muted: #6e6e73;
+            --surface: #f4f4f7;
+            --accent: #0a84ff;
+        }
+        @media (prefers-color-scheme: dark) {
+            :root {
+                --bg: #1c1c1e;
+                --fg: #f2f2f7;
+                --muted: #98989d;
+                --surface: #2c2c2e;
+                --accent: #0a84ff;
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; background: var(--bg); color: var(--fg); }
         body {
             font-family: -apple-system, system-ui, sans-serif;
-            margin: 2rem;
-            color: #222;
+            line-height: 1.4;
+            padding:
+                max(1rem, env(safe-area-inset-top))
+                max(1.25rem, env(safe-area-inset-right))
+                max(1rem, env(safe-area-inset-bottom))
+                max(1.25rem, env(safe-area-inset-left));
+            max-width: 720px;
+            margin: 0 auto;
         }
-        h1 { font-weight: 600; }
-        button { padding: 0.5rem 1rem; font: inherit; }
-        pre { background: #f4f4f4; padding: 0.75rem; border-radius: 6px; }
+        h1 { font-weight: 600; font-size: 1.6rem; margin: 0 0 .5rem; }
+        p { color: var(--muted); margin: 0 0 1.25rem; }
+        code {
+            font-size: .9em;
+            background: var(--surface);
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .5rem;
+            margin-bottom: 1rem;
+        }
+        button {
+            font: inherit;
+            font-weight: 500;
+            padding: .65rem 1rem;
+            min-height: 44px;
+            border: 0;
+            border-radius: 10px;
+            background: var(--accent);
+            color: white;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        button:active { opacity: 0.7; }
+        pre {
+            background: var(--surface);
+            padding: .75rem;
+            border-radius: 8px;
+            font-size: .85rem;
+            white-space: pre-wrap;
+            word-break: break-word;
+            margin: 0;
+            min-height: 8rem;
+        }
+        footer {
+            margin-top: 2.5rem;
+            text-align: center;
+            color: var(--muted);
+            font-size: .85rem;
+            user-select: none;
+        }
+        .bird {
+            display: inline-block;
+            font-size: 2rem;
+            cursor: pointer;
+            animation: bob 3.2s ease-in-out infinite;
+            transform-origin: 50% 80%;
+        }
+        .bird.flapping { animation: flap .5s ease-out; }
+        @keyframes bob {
+            0%, 100% { transform: translateY(0) rotate(-4deg); }
+            50%      { transform: translateY(-6px) rotate(4deg); }
+        }
+        @keyframes flap {
+            0%   { transform: scale(1) rotate(0deg); }
+            30%  { transform: scale(1.35) rotate(-25deg); }
+            60%  { transform: scale(1.2)  rotate(20deg); }
+            100% { transform: scale(1) rotate(0deg); }
+        }
+        footer p { margin: .35rem 0 0; }
     </style>
 </head>
 <body>
     <h1>Hello from swift-pwa</h1>
-    <p>This window is a real <code>NSWindow</code> hosting a real <code>WKWebView</code>.</p>
-    <button id="rename">Rename window</button>
-    <button id="resize">Resize to 800×600</button>
-    <button id="now">Get server time</button>
+    <p>A system <code>WKWebView</code> driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
+    <div class="actions">
+        <button id="rename">Rename window</button>
+        <button id="resize">Resize 800×600</button>
+        <button id="now">Server time</button>
+    </div>
     <pre id="log"></pre>
+    <footer>
+        <div class="bird" id="bird" role="button" tabindex="0" aria-label="give the bird a gentle tap">🐦</div>
+        <p id="motto">chirp — you've reached the end of the page</p>
+    </footer>
     <script>
         const log = (m) => {
             document.getElementById("log").textContent += m + "\n";
@@ -40,6 +131,28 @@
         };
         __SWIFT_PWA__.subscribe("window.subscribe", {}, (event) => {
             log("event: " + JSON.stringify(event));
+        });
+
+        const mottos = [
+            "chirp — you've reached the end of the page",
+            "this whole thing is ~5 MB on disk. wild, right?",
+            "secretly running on AppKit / UIKit / GTK underneath",
+            "every byte you see came from Swift",
+            "the bridge handled that subscribe in ~1 ms",
+        ];
+        const bird = document.getElementById("bird");
+        const motto = document.getElementById("motto");
+        let mottoIndex = 0;
+        const flap = () => {
+            bird.classList.remove("flapping");
+            void bird.offsetWidth; // restart the keyframes
+            bird.classList.add("flapping");
+            mottoIndex = (mottoIndex + 1) % mottos.length;
+            motto.textContent = mottos[mottoIndex];
+        };
+        bird.addEventListener("click", flap);
+        bird.addEventListener("keydown", (e) => {
+            if (e.key === "Enter" || e.key === " ") { e.preventDefault(); flap(); }
         });
     </script>
 </body>

@@ -1,16 +1,23 @@
 import Foundation
 
-/// Glues a `WebView`'s inbound frame stream to the `CommandRegistry` and
-/// pushes results back out via `webView.deliver`.
+/// Glues a `WebView`'s inbound frame stream to the `CommandRegistry`
+/// and pushes results back out via `webView.deliver`.
 ///
-/// Each window owns one `BridgeRuntime` instance, kept alive as long as
-/// the window is alive.
-@MainActor
-public final class BridgeRuntime {
+/// Each window owns one `BridgeRuntime` instance, kept alive as long
+/// as the window is alive.
+///
+/// **Threading**: this class is *not* `@MainActor`. The pump task
+/// runs on the cooperative pool and dispatches command handlers
+/// (which are non-isolated). Backend `PWAWebView.deliver` is
+/// responsible for hopping to the platform UI thread internally.
+/// (The previous `@MainActor` design hung on Linux because Swift's
+/// MainActor executor isn't pumped by `gtk_main()`.)
+public final class BridgeRuntime: @unchecked Sendable {
     private let webView: any PWAWebView
     private let registry: CommandRegistry
     private let windowID: WindowID
     private weak var app: AnyObject?
+    private let lock = NSLock()
     private var pumpTask: Task<Void, Never>?
     private var subscriptions: [UInt64: Task<Void, Never>] = [:]
 
@@ -29,34 +36,42 @@ public final class BridgeRuntime {
     /// Begin pumping inbound frames from the webview into the registry.
     /// Idempotent — calling twice is a no-op.
     public func start() {
-        guard pumpTask == nil else { return }
         let stream = webView.inboundFrames()
-        pumpTask = Task { [weak self] in
-            for await frame in stream {
-                guard let self else { return }
-                await handle(frame)
+        lock.withLock {
+            guard pumpTask == nil else { return }
+            pumpTask = Task { [weak self] in
+                for await frame in stream {
+                    guard let self else { return }
+                    await handle(frame)
+                }
             }
         }
     }
 
     public func stop() {
-        pumpTask?.cancel()
-        pumpTask = nil
-        for (_, task) in subscriptions { task.cancel() }
-        subscriptions.removeAll()
+        let (oldPump, oldSubs) = lock.withLock {
+            let p = pumpTask
+            let s = subscriptions
+            pumpTask = nil
+            subscriptions.removeAll()
+            return (p, s)
+        }
+        oldPump?.cancel()
+        for (_, task) in oldSubs { task.cancel() }
     }
 
     /// Test hook: returns whether a streaming subscription is currently
-    /// active for the given correlation id. Used by integration tests
-    /// to deterministically wait until the bridge is ready before
-    /// emitting events upstream.
+    /// active for the given correlation id.
     public func hasActiveSubscription(id: UInt64) -> Bool {
-        subscriptions[id] != nil
+        lock.withLock { subscriptions[id] != nil }
     }
 
     deinit {
-        pumpTask?.cancel()
-        for (_, task) in subscriptions { task.cancel() }
+        let (oldPump, oldSubs) = lock.withLock {
+            (pumpTask, subscriptions)
+        }
+        oldPump?.cancel()
+        for (_, task) in oldSubs { task.cancel() }
     }
 
     // MARK: - private
@@ -68,8 +83,7 @@ public final class BridgeRuntime {
         case let .subscribe(id, command, payload):
             await dispatchSubscribe(id: id, command: command, payload: payload)
         case let .unsubscribe(id):
-            subscriptions[id]?.cancel()
-            subscriptions.removeValue(forKey: id)
+            removeSubscription(id)
         }
     }
 
@@ -88,7 +102,6 @@ public final class BridgeRuntime {
         let result = await registry.dispatch(context)
         switch result {
         case let .ok(data):
-            // Single-shot result on a "subscribe" call: emit one event then end.
             try? await webView.deliver(.event(id: id, chunk: data))
             try? await webView.deliver(.end(id: id))
         case let .failure(err):
@@ -110,9 +123,9 @@ public final class BridgeRuntime {
                         error: BridgeError(code: BridgeError.handler, message: "\(error)")
                     ))
                 }
-                subscriptions.removeValue(forKey: id)
+                removeSubscription(id)
             }
-            subscriptions[id] = task
+            setSubscription(id, task)
         }
     }
 
@@ -132,5 +145,18 @@ public final class BridgeRuntime {
                 )
             ))
         }
+    }
+
+    private func setSubscription(_ id: UInt64, _ task: Task<Void, Never>) {
+        lock.withLock { subscriptions[id] = task }
+    }
+
+    private func removeSubscription(_ id: UInt64) {
+        let task = lock.withLock {
+            let t = subscriptions[id]
+            subscriptions.removeValue(forKey: id)
+            return t
+        }
+        task?.cancel()
     }
 }

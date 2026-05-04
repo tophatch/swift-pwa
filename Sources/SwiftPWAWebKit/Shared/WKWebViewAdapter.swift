@@ -5,17 +5,19 @@
 
     /// Bridges a `WKWebView` to the cross-platform `WebView` protocol.
     ///
-    /// Owns:
-    ///   - the `WKWebView` itself,
-    ///   - a `WKScriptMessageHandler` registered as `__SwiftPWA__post`,
-    ///   - the inbound frame `AsyncStream` consumed by `BridgeRuntime`,
-    ///   - injection of `bridge.js` at document start.
-    @MainActor
-    public final class WKWebViewAdapter: NSObject, PWAWebView, WKScriptMessageHandler {
-        public let webView: WKWebView
-        private var assetProvider: AssetProvider?
-        private var continuation: AsyncStream<InboundFrame>.Continuation?
-        private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }
+    /// **Threading**: not `@MainActor`. WKWebView calls are routed
+    /// through `MainThread.run` so the same code paths work whether
+    /// the caller is on the main actor or a cooperative-pool task.
+    /// `WKScriptMessageHandler.userContentController(_:didReceive:)`
+    /// is invoked on the main thread by WebKit; the continuation it
+    /// writes to is intrinsically thread-safe.
+    public final class WKWebViewAdapter: NSObject, PWAWebView, WKScriptMessageHandler, @unchecked Sendable {
+        public nonisolated let webView: WKWebView
+        private nonisolated(unsafe) var assetProvider: AssetProvider?
+        private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
+        private nonisolated(unsafe) lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in
+            self.continuation = c
+        }
 
         public init(configuration: WKWebViewConfiguration? = nil) throws {
             let cfg = configuration ?? WKWebViewConfiguration()
@@ -53,41 +55,53 @@
             assetProvider = provider
         }
 
-        // MARK: - WebView
+        // MARK: - PWAWebView
 
-        public func load(_ content: WindowContent) {
-            switch content {
-            case let .bundled(directory, entry):
+        // Marked `nonisolated` because the protocol requirements are
+        // nonisolated; `NSObject` + `WKScriptMessageHandler` would
+        // otherwise infer @MainActor.
+
+        public nonisolated func load(_ content: WindowContent) {
+            // Hop to MainActor: WKWebView APIs are MainActor-isolated.
+            let webView = webView
+            Task { @MainActor in
+                switch content {
+                case let .bundled(_, entry):
+                    let url = URL(string: "pwa://localhost/\(entry)")!
+                    webView.load(URLRequest(url: url))
+                case let .remote(url):
+                    webView.load(URLRequest(url: url))
+                }
+            }
+            if case let .bundled(directory, _) = content {
                 attachAssetProvider(AssetProvider(root: directory))
-                let url = URL(string: "pwa://localhost/\(entry)")!
-                webView.load(URLRequest(url: url))
-            case let .remote(url):
-                webView.load(URLRequest(url: url))
             }
         }
 
-        public func evaluateJavaScript(_ js: String) async throws -> String? {
-            try await withCheckedThrowingContinuation { cont in
-                webView.evaluateJavaScript(js) { value, error in
-                    if let error { cont.resume(throwing: error); return }
-                    if let value { cont.resume(returning: String(describing: value)) }
-                    else { cont.resume(returning: nil) }
+        public nonisolated func evaluateJavaScript(_ js: String) async throws -> String? {
+            let webView = webView
+            return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String?, any Error>) in
+                Task { @MainActor in
+                    webView.evaluateJavaScript(js) { value, error in
+                        if let error { cont.resume(throwing: error); return }
+                        if let value { cont.resume(returning: String(describing: value)) }
+                        else { cont.resume(returning: nil) }
+                    }
                 }
             }
         }
 
-        public func deliver(_ frame: OutboundFrame) async throws {
+        public nonisolated func deliver(_ frame: OutboundFrame) async throws {
             let data = try Envelope.encode(frame)
             guard let json = String(data: data, encoding: .utf8) else {
                 throw BridgeError(code: BridgeError.encode, message: "frame is not valid UTF-8")
             }
-            // Use String literal escaping via JSONSerialization to be safe.
             let escaped = try jsString(json)
             let snippet = "globalThis.\(BridgeScript.globalName)?.__deliver(\(escaped));"
             _ = try await evaluateJavaScript(snippet)
         }
 
-        public func inboundFrames() -> AsyncStream<InboundFrame> {
+        public nonisolated func inboundFrames() -> AsyncStream<InboundFrame> {
             _ = stream // ensure continuation is captured
             return stream
         }
@@ -99,8 +113,6 @@
             didReceive message: WKScriptMessage
         ) {
             guard message.name == BridgeScript.messageHandlerName else { return }
-            // Frames arrive as JSON strings (we deliberately don't trust
-            // arbitrary JS objects; the JS side stringifies before posting).
             guard let body = message.body as? String else { return }
             guard let data = body.data(using: .utf8) else { return }
             do {
@@ -108,7 +120,6 @@
                 _ = stream
                 continuation?.yield(frame)
             } catch {
-                // Drop malformed frames silently — they cannot be replied to.
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")
                 #endif

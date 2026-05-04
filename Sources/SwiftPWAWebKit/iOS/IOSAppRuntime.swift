@@ -24,6 +24,15 @@
         public func bootstrap(
             configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) {
+            // Install MainThread hook eagerly so anything scheduled
+            // before the first scene connects still hops correctly.
+            MainThread.setHook { body in
+                if Thread.isMainThread {
+                    body()
+                } else {
+                    DispatchQueue.main.async { body() }
+                }
+            }
             pendingConfigure = configure
         }
 

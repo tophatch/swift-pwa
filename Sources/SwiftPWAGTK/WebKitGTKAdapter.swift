@@ -6,11 +6,13 @@
 
     /// `WebView` implementation backed by WebKitGTK 4.1.
     ///
-    /// `webkit_web_view_new_*` returns `GtkWidget*` (the WebView is a
-    /// GtkWidget by GObject inheritance). We store the widget pointer
-    /// once and rebind to `WebKitWebView*` at each WebKit call site.
-    @MainActor
-    public final class WebKitGTKAdapter: PWAWebView {
+    /// **Threading**: not `@MainActor`. WebKit calls (`webkit_web_view_*`)
+    /// are routed through `MainThread.run` so they execute on GTK's
+    /// main thread regardless of which executor the calling Task is on.
+    /// `_ingest(jsonString:)` is invoked from the C signal handler
+    /// trampoline (which fires on the main thread); the continuation
+    /// it writes to is intrinsically thread-safe.
+    public final class WebKitGTKAdapter: PWAWebView, @unchecked Sendable {
         /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
         private let viewWidget: UnsafeMutablePointer<GtkWidget>
         private let userContent: UnsafeMutablePointer<WebKitUserContentManager>
@@ -63,8 +65,8 @@
                 registerScheme(provider: provider)
             }
 
-            // Connect `script-message-received::__SwiftPWA__post` so JS
-            // calls to `mh.postMessage(json)` make it back into Swift.
+            // Connect `script-message-received` so JS calls to
+            // `mh.postMessage(json)` make it back into Swift.
             connectMessageHandler(ucm: ucm)
         }
 
@@ -108,22 +110,34 @@
         // MARK: - PWAWebView
 
         public func load(_ content: WindowContent) {
-            switch content {
-            case let .bundled(_, entry):
-                let url = "pwa://localhost/\(entry)"
-                url.withCString { webkit_web_view_load_uri(webView, $0) }
-            case let .remote(url):
-                url.absoluteString.withCString { webkit_web_view_load_uri(webView, $0) }
+            // Called from anywhere; webkit_web_view_load_uri must run
+            // on the GTK main thread. Schedule via MainThread.
+            let viewWidget = viewWidget
+            Task {
+                await MainThread.run {
+                    let webView = UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
+                    switch content {
+                    case let .bundled(_, entry):
+                        let url = "pwa://localhost/\(entry)"
+                        url.withCString { webkit_web_view_load_uri(webView, $0) }
+                    case let .remote(url):
+                        url.absoluteString.withCString { webkit_web_view_load_uri(webView, $0) }
+                    }
+                }
             }
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            // Fire-and-forget for v0.1; full async-result threading via
+            // Fire-and-forget for v0.1; full async result threading via
             // GAsyncResult is left for a follow-up.
-            js.withCString {
-                webkit_web_view_evaluate_javascript(
-                    webView, $0, gssize(-1), nil, nil, nil, nil, nil
-                )
+            let viewWidget = viewWidget
+            await MainThread.run {
+                let webView = UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
+                js.withCString {
+                    webkit_web_view_evaluate_javascript(
+                        webView, $0, gssize(-1), nil, nil, nil, nil, nil
+                    )
+                }
             }
             return nil
         }
@@ -144,7 +158,9 @@
         }
 
         /// Called by the C-side signal handler trampoline whenever JS
-        /// posts a frame via `mh.postMessage(...)`.
+        /// posts a frame via `mh.postMessage(...)`. Always invoked on
+        /// the GTK main thread, but the continuation is thread-safe so
+        /// it doesn't matter.
         public func _ingest(jsonString: String) {
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
@@ -163,26 +179,17 @@
 
     /// Heap box holding a back-reference to the adapter for the GObject
     /// signal callback. Released by `messageBoxDestroy` when the signal
-    /// is disconnected (which happens automatically when the
-    /// WebKitUserContentManager is finalized).
-    private final class MessageBox {
+    /// is disconnected.
+    final class MessageBox {
         weak var adapter: WebKitGTKAdapter?
         init(_ adapter: WebKitGTKAdapter) { self.adapter = adapter }
     }
 
-    /// `@convention(c)` trampoline for the GObject callback
-    /// `WebKitUserContentManager::script-message-received`.
-    ///
-    /// The signal's second argument is *either* `WebKitJavascriptResult*`
-    /// (webkit2gtk-4.1, deprecated but still in use) *or* `JSCValue*`
-    /// (webkit2gtk-6.0). We declare the slot as `gpointer` and let the
-    /// `swiftpwa_extract_message_string` shim introspect the GType at
-    /// runtime, so the same Swift binary works against both ABIs.
-    ///
-    /// Bridge.js always sends string payloads (it `JSON.stringify`s
-    /// the envelope before posting). We dispatch the resulting UTF-8
-    /// JSON onto the main actor.
-    private let messageReceivedTrampoline: @convention(c) (
+    /// `@convention(c)` trampoline for `script-message-received`.
+    /// (See `swiftpwa_extract_message_string` in the C shim for why
+    /// the value arg is typed as `gpointer` — it's a boxed type, not
+    /// a GTypeInstance.)
+    let messageReceivedTrampoline: @convention(c) (
         UnsafeMutablePointer<WebKitUserContentManager>?,
         gpointer?,
         gpointer?
@@ -191,20 +198,15 @@
         guard let cstr = swiftpwa_extract_message_string(valueArg) else { return }
         let json = String(cString: cstr)
         g_free(cstr)
-        // Pull the (Sendable, MainActor-isolated) adapter reference
-        // out of the box before crossing into the MainActor closure.
-        // Capturing the box itself trips strict-concurrency because
-        // `MessageBox` is not Sendable.
         let adapter = Unmanaged<MessageBox>.fromOpaque(userData).takeUnretainedValue().adapter
-        // Signals fire on the GTK main thread, which is also Swift's
-        // main thread; jump to MainActor isolation without an async hop.
-        MainActor.assumeIsolated { adapter?._ingest(jsonString: json) }
+        // We're already on the GTK main thread (signals fire there);
+        // call directly without a hop.
+        adapter?._ingest(jsonString: json)
     }
 
     /// `@convention(c)` GClosureNotify that releases the heap-boxed
-    /// `MessageBox` when the signal is disconnected (e.g. when the
-    /// user content manager finalizes).
-    private let messageBoxDestroy: @convention(c) (gpointer?, UnsafeMutablePointer<GClosure>?) -> Void = {
+    /// `MessageBox` when the signal is disconnected.
+    let messageBoxDestroy: @convention(c) (gpointer?, UnsafeMutablePointer<GClosure>?) -> Void = {
         userData, _ in
         guard let userData else { return }
         Unmanaged<MessageBox>.fromOpaque(userData).release()

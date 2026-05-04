@@ -23,6 +23,17 @@
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
 
+            // Route MainThread.run through DispatchQueue.main so the
+            // bridge runtime can hop to the UI thread uniformly across
+            // platforms. (The GTK side does the same with g_idle_add.)
+            MainThread.setHook { body in
+                if Thread.isMainThread {
+                    body()
+                } else {
+                    DispatchQueue.main.async { body() }
+                }
+            }
+
             do {
                 try configure(context)
             } catch {

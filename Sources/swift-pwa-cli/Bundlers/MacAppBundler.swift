@@ -102,26 +102,41 @@ enum BundlerError: Error, CustomStringConvertible {
 }
 
 enum Shell {
-    @discardableResult
-    static func run(_ executable: String, _ arguments: [String], cwd: URL? = nil) async throws -> String {
+    /// Run a long-lived command with stdio inherited from the parent.
+    /// Used for `swift build`, `xcodebuild`, `linuxdeploy`, etc. so the
+    /// user sees compile progress as it happens (otherwise a long
+    /// release build looks like the CLI has hung).
+    static func run(_ executable: String, _ arguments: [String], cwd: URL? = nil) async throws {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: executable)
         task.arguments = arguments
         if let cwd { task.currentDirectoryURL = cwd }
+        // Inherit stdout/stderr — pass through to the user.
+        try task.run()
+        task.waitUntilExit()
+        if task.terminationStatus != 0 {
+            throw BundlerError.shell(
+                task.terminationStatus,
+                ([executable] + arguments).joined(separator: " ")
+            )
+        }
+    }
+
+    /// Run a short command and capture its stdout. Used for `which`.
+    static func capture(_ executable: String, _ arguments: [String]) async throws -> String {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: executable)
+        task.arguments = arguments
         let stdout = Pipe()
-        let stderr = Pipe()
         task.standardOutput = stdout
-        task.standardError = stderr
+        task.standardError = FileHandle.standardError // surface errors
         try task.run()
         task.waitUntilExit()
         let outData = stdout.fileHandleForReading.readDataToEndOfFile()
         if task.terminationStatus != 0 {
-            let errData = stderr.fileHandleForReading.readDataToEndOfFile()
-            let combined = (String(data: outData, encoding: .utf8) ?? "")
-                + (String(data: errData, encoding: .utf8) ?? "")
             throw BundlerError.shell(
                 task.terminationStatus,
-                ([executable] + arguments).joined(separator: " ") + "\n" + combined
+                ([executable] + arguments).joined(separator: " ")
             )
         }
         return String(data: outData, encoding: .utf8) ?? ""

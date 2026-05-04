@@ -15,7 +15,7 @@
         @Test("invoke echo round-trips through a real WKWebView")
         func echoRoundTrip() async throws {
             let app = MockAppContext()
-            await app.registry.register("echo", typed: { (args: EchoArgs, _) -> EchoArgs in args })
+            app.registry.register("echo", typed: { (args: EchoArgs, _) -> EchoArgs in args })
 
             let adapter = try WKWebViewAdapter(configuration: WKWebViewConfiguration())
             let win = MockWindow(webView: adapter)

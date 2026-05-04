@@ -8,7 +8,7 @@ import Testing
 struct WindowPluginTests {
     private func makeApp() async -> (MockAppContext, MockWindow) {
         let app = MockAppContext()
-        await app.use(WindowPlugin())
+        app.use(WindowPlugin())
         let win = try! app.createWindow(WindowConfig(
             title: "T",
             size: Size(width: 200, height: 100),

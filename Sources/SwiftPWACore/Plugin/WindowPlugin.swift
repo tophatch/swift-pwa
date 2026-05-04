@@ -11,45 +11,45 @@ public struct WindowPlugin: Plugin {
     public static let pluginName = "window"
     public init() {}
 
-    public func register(into registry: CommandRegistry, app: any AppContext) async {
+    public func register(into registry: CommandRegistry, app: any AppContext) {
         // Capture as a weak-ish escape: AppContext is @MainActor, an
         // AnyObject existential, so closures hold a strong ref. The
         // plugin is intended to live for the full app lifetime.
         let app = app
 
-        await registry.register("window.id", typed: { (_: EmptyArgs, ctx) -> WindowIDResult in
+        registry.register("window.id", typed: { (_: EmptyArgs, ctx) -> WindowIDResult in
             guard let id = ctx.originWindow else {
                 throw BridgeError(code: BridgeError.notFound, message: "no origin window")
             }
             return WindowIDResult(id: id.raw)
         })
 
-        await registry.register("window.list", typed: { (_: EmptyArgs, _) async -> WindowListResult in
+        registry.register("window.list", typed: { (_: EmptyArgs, _) async -> WindowListResult in
             let ids = await MainActor.run { app.windows.keys.map(\.raw) }
             return WindowListResult(ids: ids)
         })
 
-        await registry.register("window.setTitle", typed: { (args: SetTitleArgs, ctx) async throws -> EmptyResult in
+        registry.register("window.setTitle", typed: { (args: SetTitleArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.setTitle(args.title) }
             return EmptyResult()
         })
 
-        await registry.register("window.title", typed: { (args: TargetOnlyArgs, ctx) async throws -> StringResult in
+        registry.register("window.title", typed: { (args: TargetOnlyArgs, ctx) async throws -> StringResult in
             try await onWindow(args.id, ctx: ctx, app: app) { StringResult(value: $0.title()) }
         })
 
-        await registry.register("window.setSize", typed: { (args: SetSizeArgs, ctx) async throws -> EmptyResult in
+        registry.register("window.setSize", typed: { (args: SetSizeArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) {
                 $0.setSize(Size(width: args.width, height: args.height), animated: args.animated ?? false)
             }
             return EmptyResult()
         })
 
-        await registry.register("window.size", typed: { (args: TargetOnlyArgs, ctx) async throws -> Size in
+        registry.register("window.size", typed: { (args: TargetOnlyArgs, ctx) async throws -> Size in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.size() }
         })
 
-        await registry.register(
+        registry.register(
             "window.setPosition",
             typed: { (args: SetPositionArgs, ctx) async throws -> EmptyResult in
                 try await onWindow(args.id, ctx: ctx, app: app) { $0.setPosition(Point(x: args.x, y: args.y)) }
@@ -57,26 +57,26 @@ public struct WindowPlugin: Plugin {
             }
         )
 
-        await registry.register("window.position", typed: { (args: TargetOnlyArgs, ctx) async throws -> Point in
+        registry.register("window.position", typed: { (args: TargetOnlyArgs, ctx) async throws -> Point in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.position() }
         })
 
-        await registry.register("window.focus", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
+        registry.register("window.focus", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.focus() }
             return EmptyResult()
         })
 
-        await registry.register("window.minimize", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
+        registry.register("window.minimize", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.minimize() }
             return EmptyResult()
         })
 
-        await registry.register("window.maximize", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
+        registry.register("window.maximize", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.maximize() }
             return EmptyResult()
         })
 
-        await registry.register(
+        registry.register(
             "window.setFullscreen",
             typed: { (args: SetFullscreenArgs, ctx) async throws -> EmptyResult in
                 try await onWindow(args.id, ctx: ctx, app: app) { $0.setFullscreen(args.on) }
@@ -84,19 +84,19 @@ public struct WindowPlugin: Plugin {
             }
         )
 
-        await registry.register(
+        registry.register(
             "window.isFullscreen",
             typed: { (args: TargetOnlyArgs, ctx) async throws -> BoolResult in
                 try await onWindow(args.id, ctx: ctx, app: app) { BoolResult(value: $0.isFullscreen()) }
             }
         )
 
-        await registry.register("window.close", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
+        registry.register("window.close", typed: { (args: TargetOnlyArgs, ctx) async throws -> EmptyResult in
             try await onWindow(args.id, ctx: ctx, app: app) { $0.close() }
             return EmptyResult()
         })
 
-        await registry.registerStream(
+        registry.registerStream(
             "window.subscribe",
             typed: { (args: TargetOnlyArgs, ctx) -> AsyncThrowingStream<WindowEvent, any Error> in
                 AsyncThrowingStream { continuation in

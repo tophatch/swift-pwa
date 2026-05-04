@@ -32,9 +32,9 @@ public final class MockAppContext: AppContext {
         return win
     }
 
-    public func use(_ plugin: any Plugin) async {
+    public func use(_ plugin: any Plugin) {
         installedPlugins.append(type(of: plugin).pluginName)
-        await plugin.register(into: registry, app: self)
+        plugin.register(into: registry, app: self)
     }
 
     public func window(_ id: WindowID) -> (any Window)? {

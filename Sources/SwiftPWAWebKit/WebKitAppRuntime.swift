@@ -9,7 +9,7 @@
         public init() {}
 
         public func run(
-            _ configure: @escaping @MainActor @Sendable (any AppContext) async throws -> Void
+            _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) throws -> Never {
             #if os(macOS)
                 MainActor.assumeIsolated { MacAppRuntime.shared.bootstrap(configure: configure) }

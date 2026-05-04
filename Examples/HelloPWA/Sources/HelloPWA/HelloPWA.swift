@@ -7,7 +7,7 @@ struct HelloPWAApp {
         let runtime = try SwiftPWA.runtime()
         try runtime.run { ctx in
             // Register a custom command that returns the current time.
-            await ctx.registry.register("now", typed: { (_: EmptyArgs, _) -> NowResult in
+            ctx.registry.register("now", typed: { (_: EmptyArgs, _) -> NowResult in
                 NowResult(iso: ISO8601DateFormatter().string(from: Date()))
             })
 

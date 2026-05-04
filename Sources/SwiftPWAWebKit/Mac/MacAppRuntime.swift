@@ -4,9 +4,9 @@
     import SwiftPWACore
 
     /// macOS-side runtime. Owns the singleton `MacAppContext` and drives
-    /// `NSApplication.run()`. The `configure` closure is scheduled as a
-    /// `Task @MainActor` and runs once the AppKit run loop is live, so
-    /// it's safe to create windows from inside it.
+    /// `NSApplication.run()`. The `configure` closure runs synchronously
+    /// before `NSApp.run()` enters the AppKit event loop — windows it
+    /// creates are visible from the moment the loop starts.
     @MainActor
     public final class MacAppRuntime {
         public static let shared = MacAppRuntime()
@@ -16,25 +16,21 @@
         private init() {}
 
         public func bootstrap(
-            configure: @escaping @MainActor @Sendable (any AppContext) async throws -> Void
+            configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) {
             guard !didStartConfigure else { return }
             didStartConfigure = true
-            let ctx = context
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
 
-            // Configure runs once the run loop is live.
-            Task { @MainActor in
-                do {
-                    try await configure(ctx)
-                } catch {
-                    FileHandle.standardError.write(
-                        Data("swift-pwa: configure threw: \(error)\n".utf8)
-                    )
-                }
-                NSApp.activate(ignoringOtherApps: true)
+            do {
+                try configure(context)
+            } catch {
+                FileHandle.standardError.write(
+                    Data("swift-pwa: configure threw: \(error)\n".utf8)
+                )
             }
+            NSApp.activate(ignoringOtherApps: true)
         }
 
         public func runForever() -> Never {

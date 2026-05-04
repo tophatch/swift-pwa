@@ -23,13 +23,9 @@
             // First-scene boot: run the user's configure closure.
             if let configure = runtime.pendingConfigure {
                 runtime.pendingConfigure = nil
-                Task { @MainActor in
-                    try? await configure(context)
-                    self.attachNextPendingWindow(to: windowScene)
-                }
-            } else {
-                attachNextPendingWindow(to: windowScene)
+                try? configure(context)
             }
+            attachNextPendingWindow(to: windowScene)
         }
 
         private func attachNextPendingWindow(to windowScene: UIWindowScene) {

@@ -8,7 +8,7 @@ public protocol AppRuntime: AnyObject, Sendable {
     /// return until the app exits.
     @MainActor
     func run(
-        _ configure: @escaping @MainActor @Sendable (any AppContext) async throws -> Void
+        _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
     ) throws -> Never
 }
 
@@ -26,7 +26,7 @@ public protocol AppContext: AnyObject, Sendable {
     func createWindow(_ config: WindowConfig) throws -> any Window
 
     /// Install a plugin (registers its commands into the registry).
-    func use(_ plugin: any Plugin) async
+    func use(_ plugin: any Plugin)
 
     /// Look up a window by id. `O(1)`.
     func window(_ id: WindowID) -> (any Window)?

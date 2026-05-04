@@ -9,7 +9,9 @@ public protocol Plugin: Sendable {
     static var pluginName: String { get }
 
     /// Register handlers into the registry. Called once, on the main
-    /// actor, when the plugin is `use`d.
+    /// actor, when the plugin is `use`d. Synchronous: handlers are async
+    /// but the registry now stores them via a lock, not actor isolation,
+    /// so registration doesn't need to suspend.
     @MainActor
-    func register(into registry: CommandRegistry, app: any AppContext) async
+    func register(into registry: CommandRegistry, app: any AppContext)
 }

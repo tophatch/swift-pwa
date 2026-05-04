@@ -22,7 +22,7 @@ struct RegistryTests {
         struct Out: Codable, Sendable, Equatable { let doubled: Int }
 
         let registry = CommandRegistry()
-        await registry.register("double", typed: { (args: Args, _) -> Out in
+        registry.register("double", typed: { (args: Args, _) -> Out in
             Out(doubled: args.n * 2)
         })
 
@@ -43,7 +43,7 @@ struct RegistryTests {
     func decodeFailure() async {
         struct Args: Codable, Sendable { let n: Int }
         let registry = CommandRegistry()
-        await registry.register("strict", typed: { (_: Args, _) -> Int in 0 })
+        registry.register("strict", typed: { (_: Args, _) -> Int in 0 })
         let app = await MainActor.run { MockAppContext(registry: registry) }
         let inv = Invocation(id: 1, command: "strict", payload: Data("{}".utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
@@ -55,7 +55,7 @@ struct RegistryTests {
     @Test("thrown BridgeError surfaces verbatim")
     func bridgeErrorPropagates() async {
         let registry = CommandRegistry()
-        await registry.register("bang", typed: { (_: EmptyArgs, _) -> EmptyResult in
+        registry.register("bang", typed: { (_: EmptyArgs, _) -> EmptyResult in
             throw BridgeError(code: "E_CUSTOM", message: "boom")
         })
         let app = await MainActor.run { MockAppContext(registry: registry) }
@@ -70,7 +70,7 @@ struct RegistryTests {
     @Test("streaming handler yields chunks then ends")
     func streamingHandler() async throws {
         let registry = CommandRegistry()
-        await registry.registerStream("count", typed: { (_: EmptyArgs, _) -> AsyncThrowingStream<Int, any Error> in
+        registry.registerStream("count", typed: { (_: EmptyArgs, _) -> AsyncThrowingStream<Int, any Error> in
             AsyncThrowingStream { continuation in
                 continuation.yield(1)
                 continuation.yield(2)
@@ -92,14 +92,14 @@ struct RegistryTests {
     }
 
     @Test("has and names report registered commands")
-    func introspection() async {
+    func introspection() {
         let registry = CommandRegistry()
-        await registry.register("a") { _ in .ok(Data("null".utf8)) }
-        await registry.register("b") { _ in .ok(Data("null".utf8)) }
-        #expect(await registry.has("a"))
-        #expect(await registry.has("b"))
-        #expect(await !(registry.has("c")))
-        let names = await registry.names().sorted()
+        registry.register("a") { _ in .ok(Data("null".utf8)) }
+        registry.register("b") { _ in .ok(Data("null".utf8)) }
+        #expect(registry.has("a"))
+        #expect(registry.has("b"))
+        #expect(!registry.has("c"))
+        let names = registry.names().sorted()
         #expect(names == ["a", "b"])
     }
 }

@@ -47,44 +47,46 @@ struct IPABundler {
 
         try await Shell.run("/usr/bin/env", args)
 
-        // xcodebuild deposits the .app at:
-        //   <derived>/Build/Products/<Configuration>-iphonesimulator/<Name>.app
-        // or for device:
-        //   <derived>/Build/Products/<Configuration>-iphoneos/<Name>.app
+        // SwiftPM executable targets compile to a bare Mach-O, not an .app —
+        // xcodebuild puts it (plus any SwiftPM resource bundles) in:
+        //   <derived>/Build/Products/<Configuration>-iphonesimulator/
+        // We assemble the .app ourselves from those pieces.
         let suffix = simulator ? "iphonesimulator" : "iphoneos"
-        let producedApp = derived
+        let productsDir = derived
             .appendingPathComponent("Build/Products")
             .appendingPathComponent("\(configuration)-\(suffix)")
-            .appendingPathComponent("\(manifest.name).app")
-        guard FileManager.default.fileExists(atPath: producedApp.path) else {
-            throw BundlerError.binaryMissing(producedApp)
+        let binary = productsDir.appendingPathComponent(manifest.name)
+        guard FileManager.default.fileExists(atPath: binary.path) else {
+            throw BundlerError.binaryMissing(binary)
         }
 
+        let app = try assembleApp(binary: binary, productsDir: productsDir)
+
         if simulator {
-            // Copy alongside the macOS .app for consistent output paths,
-            // and emit a one-liner the user can copy/paste to install.
-            let dst = outputDir.appendingPathComponent("\(manifest.name).app")
-            if FileManager.default.fileExists(atPath: dst.path) {
-                try FileManager.default.removeItem(at: dst)
-            }
-            try FileManager.default.copyItem(at: producedApp, to: dst)
+            // Adhoc-sign so the simulator will accept it.
+            try await Shell.run("/usr/bin/env", ["codesign", "--force", "--sign", "-", app.path])
             print("""
             note: install + launch with:
               xcrun simctl boot "iPhone 16" 2>/dev/null || true
-              xcrun simctl install booted "\(dst.path)"
+              xcrun simctl install booted "\(app.path)"
               xcrun simctl launch booted \(manifest.ios?.bundleIdentifier ?? manifest.id)
             """)
-            return dst
+            return app
         }
 
-        // Device: assemble Payload/ → .ipa.
+        // Device build: codesign, then assemble Payload/ → .ipa.
+        if let identity = signIdentity {
+            try await Shell.run("/usr/bin/env", ["codesign", "--force", "--sign", identity, app.path])
+        } else {
+            print("note: not signed. Pass --sign <identity> for an installable build.")
+        }
         let payload = outputDir.appendingPathComponent("Payload")
         if FileManager.default.fileExists(atPath: payload.path) {
             try FileManager.default.removeItem(at: payload)
         }
         try FileManager.default.createDirectory(at: payload, withIntermediateDirectories: true)
         try FileManager.default.copyItem(
-            at: producedApp,
+            at: app,
             to: payload.appendingPathComponent("\(manifest.name).app")
         )
         let ipa = outputDir.appendingPathComponent("\(manifest.name).ipa")
@@ -93,5 +95,39 @@ struct IPABundler {
         }
         try await Shell.run("/usr/bin/env", ["zip", "-r", ipa.path, "Payload"], cwd: outputDir)
         return ipa
+    }
+
+    /// Lay out the `.app` from xcodebuild's loose products: copy the binary,
+    /// the SwiftPM resource bundles (e.g. `bridge.js`), the project's `web/`
+    /// directory, and write `Info.plist`. iOS bundles are flat — no
+    /// `Contents/MacOS` wrapper.
+    private func assembleApp(binary: URL, productsDir: URL) throws -> URL {
+        let fm = FileManager.default
+        let app = outputDir.appendingPathComponent("\(manifest.name).app")
+        if fm.fileExists(atPath: app.path) {
+            try fm.removeItem(at: app)
+        }
+        try fm.createDirectory(at: app, withIntermediateDirectories: true)
+        try fm.copyItem(at: binary, to: app.appendingPathComponent(manifest.name))
+
+        try InfoPlistGenerator.iOS(manifest: manifest)
+            .write(to: app.appendingPathComponent("Info.plist"))
+
+        // SwiftPM resource bundles (e.g. swift-pwa_SwiftPWACore.bundle holding bridge.js).
+        for entry in (try? fm.contentsOfDirectory(atPath: productsDir.path)) ?? []
+            where entry.hasSuffix(".bundle")
+        {
+            try fm.copyItem(
+                at: productsDir.appendingPathComponent(entry),
+                to: app.appendingPathComponent(entry)
+            )
+        }
+
+        // Project's web/ directory.
+        let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)
+        if fm.fileExists(atPath: webSrc.path) {
+            try fm.copyItem(at: webSrc, to: app.appendingPathComponent("web"))
+        }
+        return app
     }
 }

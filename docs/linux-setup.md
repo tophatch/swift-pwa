@@ -100,11 +100,40 @@ swift test --filter SwiftPWACoreTests
 swift test --filter SwiftPWACLITests
 ```
 
+Each build prints which backend it selected, e.g.:
+
+```text
+swift-pwa: Linux backend selection = GTK4 + WebKitGTK 6.0
+```
+
+If that line says GTK3 when you wanted GTK4 (or vice versa), it's
+almost always SwiftPM's manifest cache. The env var is read during
+manifest evaluation, but SwiftPM hashes `Package.swift` to decide
+whether to re-evaluate — env-var-only changes don't invalidate the
+cache. **Run `swift package clean` (or `rm -rf .build`) before
+toggling between backends.**
+
 The `SWIFT_PWA_GTK4` env var swaps which system-library targets are in
 the SwiftPM package graph, so `pkg-config` only resolves the deps for
 the backend you're actually building. The Apple `WKWebViewTests` target
 won't build on Linux (gated by `#if canImport(WebKit)`), so SwiftPM
 skips it.
+
+### Ubuntu 26.04: libxml2 SONAME mismatch
+
+Ubuntu 26.04 ships `libxml2.so.16`, but Swiftly's bundled toolchain
+(at least through 6.0.x) was built against `libxml2.so.2` and refuses
+to start until it can find that SONAME. Symlink the new library to
+the old name:
+
+```bash
+sudo ln -s /usr/lib/x86_64-linux-gnu/libxml2.so.16 \
+           /usr/lib/x86_64-linux-gnu/libxml2.so.2
+```
+
+Cosmetic on 24.04 (a `libxml2.so.2: no version information available`
+warning was the original symptom of this drift); on 26.04 the toolchain
+won't run at all without the symlink.
 
 ## 5. Run the example
 

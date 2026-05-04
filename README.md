@@ -16,18 +16,79 @@ If you write Swift and want to ship a small, single-codebase desktop/mobile app 
 
 ## Quickstart
 
-```bash
-# Add the package
-swift package init --type executable
-# In Package.swift, add:
-#   .package(url: "https://github.com/tophatch/swift-pwa", from: "0.1.0")
-# and depend on the "SwiftPWA" product.
+Scaffold a project from a swift-pwa checkout:
 
-swift run swift-pwa init MyApp
+```bash
+git clone https://github.com/tophatch/swift-pwa
+swift run --package-path swift-pwa swift-pwa init MyApp
 cd MyApp
+```
+
+You get a self-contained SwiftPM project:
+
+```text
+MyApp/
+├── Package.swift              # depends on SwiftPWA
+├── pwa.json                   # source of truth — generates Info.plist / .desktop / bundle metadata
+├── Sources/MyApp/App.swift    # @main entry point; creates a window pointing at web/
+└── web/
+    └── index.html             # your frontend's entry point
+```
+
+### Where the web source goes
+
+Anything in `web/` is your PWA frontend — plain HTML/CSS/JS, or the build output of React/Vue/Svelte/whatever. The bundler copies the directory verbatim into the app and serves it through a custom `pwa://localhost/` scheme so relative URLs resolve cleanly without needing a local dev server.
+
+To point at a different directory (e.g. `dist/` from a Vite build), edit the `web` section of `pwa.json`:
+
+```json
+"web": { "directory": "dist", "entry": "index.html" }
+```
+
+### Configuring `pwa.json`
+
+`pwa.json` is the single source of truth. `Info.plist`, `.desktop`, bundle identifiers, window dimensions, and icon assets are all generated from it.
+
+```json
+{
+    "id": "com.example.myapp",
+    "name": "MyApp",
+    "version": "0.1.0",
+    "description": "An optional one-liner.",
+    "icon": "icon.png",
+    "web": { "directory": "web", "entry": "index.html" },
+    "window": {
+        "title": "MyApp",
+        "width": 1024,
+        "height": 768,
+        "resizable": true,
+        "fullscreen": false
+    },
+    "macos": {
+        "bundle_identifier": "com.example.myapp",
+        "category": "public.app-category.productivity",
+        "minimum_system_version": "15.0"
+    },
+    "ios": {
+        "bundle_identifier": "com.example.myapp",
+        "minimum_system_version": "18.0"
+    },
+    "linux": {
+        "desktop_categories": ["Utility"]
+    }
+}
+```
+
+Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `linux` sections are optional — omit any platform you don't ship to. `icon` should be a 1024×1024 PNG; on macOS it's converted to `.icns`, on Linux it's embedded in the AppImage. `category` on macOS is the `LSApplicationCategoryType` UTI shown in the App Store / Finder.
+
+### Build and run
+
+```bash
 swift run swift-pwa build --target macos
 open ./build/MyApp.app
 ```
+
+For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 
 ## Supported platforms (v0.1)
 

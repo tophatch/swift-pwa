@@ -119,10 +119,11 @@ const { text } = await __SWIFT_PWA__.invoke('clipboard.readText');
 
 ### Built-in plugins
 
-Both ship enabled out of the box; no `ctx.use(...)` needed.
+`WindowPlugin` and `ClipboardPlugin` are auto-installed on every backend; `TrayPlugin` is opt-in (creating a tray puts a visible icon up — most apps want to do that conditionally).
 
 - **`WindowPlugin`** — `window.id`, `window.list`, `window.setTitle` / `title`, `window.setSize` / `size`, `window.setPosition` / `position`, `window.focus`, `window.minimize` / `maximize`, `window.setFullscreen` / `isFullscreen`, `window.close`, `window.subscribe`.
 - **`ClipboardPlugin`** — `clipboard.readText`, `clipboard.writeText`, `clipboard.clear`. `clear()` wipes the system clipboard on Apple; on X11 / Wayland it only relinquishes local ownership of the selection.
+- **`TrayPlugin`** (opt-in) — `tray.setIcon`, `tray.setTooltip`, `tray.setMenu`, `tray.setVisible`, `tray.subscribe`. Add via `ctx.use(TrayPlugin(SystemTray()))`. Full implementation on macOS (`NSStatusItem`) and the GTK3 backend (`GtkStatusIcon`); on iOS and the GTK4 backend `SystemTray()` returns a no-op stub so the same call site works portably — the tray just isn't displayed.
 
 ## Swift API
 
@@ -174,6 +175,7 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 ### Known limitations in v0.1
 
 - **`Window.position()` / `setPosition` are no-ops on the GTK4 backend.** Wayland refuses to give apps their own position, and CSD makes the concept ambiguous; GTK4 dropped the position APIs entirely. `position()` returns `.zero`, `setPosition` silently no-ops, and `.didMove` events are never emitted on GTK4. The GTK3 backend still supports all three.
+- **`TrayPlugin` is a no-op on iOS and on the GTK4 backend.** iOS has no system tray. GTK4 removed `GtkStatusIcon`; the modern replacement (StatusNotifierItem via libayatana-appindicator) lands once we add the dependency. On both platforms `SystemTray()` returns a stub that logs a one-shot warning so cross-platform code stays portable.
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows / Android bundlers print "not implemented".** Targets are scaffolded but the actual build paths land in v0.2/v0.3.
 

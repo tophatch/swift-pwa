@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Tray plugin.** New opt-in `TrayPlugin` exposes `tray.setIcon`, `tray.setTooltip`, `tray.setMenu`, `tray.setVisible`, and `tray.subscribe` (streaming `.click` / `.menuItemClicked` events). Full implementation on macOS via `NSStatusItem` + `NSMenu`, and on the GTK3 Linux backend via `GtkStatusIcon` + `GtkMenu` (entire state machine encapsulated in the `swiftpwa_tray_*` C shim with `-Wdeprecated-declarations` localised there, so the GtkStatusIcon deprecation stays out of Swift). On iOS and the GTK4 backend `SystemTray()` returns a no-op stub that logs a one-shot warning — iOS has no system tray and GTK4 removed `GtkStatusIcon`; AppIndicator support is on the v0.3 roadmap. `TrayEvent` uses the same `{type: "...", ...}` JSON discriminator as `WindowEvent`.
+- `_SwiftPWATestSupport.MockTray` for plugin-level unit tests.
 - **Clipboard plugin.** `ClipboardPlugin` is now auto-installed on every backend's `AppContext` alongside `WindowPlugin`, exposing `clipboard.readText`, `clipboard.writeText`, and `clipboard.clear` to JS. Backends provide a `SystemClipboard`: `NSPasteboard.general` on macOS, `UIPasteboard.general` on iOS, `GtkClipboard` on the GTK3 backend, and `GdkClipboard` on the GTK4 backend — the GTK4 implementation bridges `gdk_clipboard_read_text_async` into a Swift `CheckedContinuation` through a new `swiftpwa_clipboard_*` shim so the `Clipboard` protocol stays uniform across backends. `clear()` semantics differ by platform (Apple wipes the system clipboard; X11 / Wayland only relinquish local ownership) — documented on the protocol.
 - `_SwiftPWATestSupport.MockClipboard` for plugin-level unit tests.
 

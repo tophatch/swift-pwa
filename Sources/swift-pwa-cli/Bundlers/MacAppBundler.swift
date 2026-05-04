@@ -70,7 +70,17 @@ struct MacAppBundler {
             }
         }
 
-        // 6. Codesign
+        // 6. Credits.html for the standard About panel — shown below
+        // the version + copyright. AppKit picks this up automatically.
+        if let description = manifest.description, !description.isEmpty {
+            try Self.creditsHTML(description: description).write(
+                to: resourcesDir.appendingPathComponent("Credits.html"),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        // 7. Codesign
         if let identity = signIdentity {
             var args = ["codesign", "--force", "--sign", identity]
             if let ent = entitlements {
@@ -84,6 +94,22 @@ struct MacAppBundler {
         }
 
         return app
+    }
+
+    private static func creditsHTML(description: String) -> String {
+        // Tiny, no external CSS — the About panel renders this in a
+        // small fixed-size text view so we just need the body text
+        // with HTML-escaped content and minimal styling.
+        let escaped = description
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+        return """
+        <!doctype html>
+        <html><head><meta charset="utf-8" /><style>
+        body { font: -apple-system-body; color: -apple-system-text; margin: 8px; }
+        </style></head><body>\(escaped)</body></html>
+        """
     }
 }
 

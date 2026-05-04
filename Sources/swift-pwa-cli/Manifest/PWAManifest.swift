@@ -49,6 +49,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var bundleIdentifier: String? // defaults to top-level `id`
         public var category: String? // LSApplicationCategoryType
         public var minimumSystemVersion: String? // e.g. "15.0"
+        public var copyright: String? // NSHumanReadableCopyright; shown under the version in the About panel
     }
 
     public struct IOSSection: Codable, Sendable, Equatable {

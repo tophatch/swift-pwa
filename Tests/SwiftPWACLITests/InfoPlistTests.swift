@@ -30,6 +30,19 @@ struct InfoPlistTests {
         #expect(parsed["LSApplicationCategoryType"] as? String == "public.app-category.utilities")
         #expect(parsed["CFBundleIconFile"] as? String == "AppIcon.icns")
         #expect(parsed["NSPrincipalClass"] as? String == "NSApplication")
+        // No copyright on the base manifest — make sure we don't emit one.
+        #expect(parsed["NSHumanReadableCopyright"] == nil)
+    }
+
+    @Test("macOS plist surfaces copyright when provided")
+    func macCopyright() throws {
+        var withCopyright = manifest
+        withCopyright.macos?.copyright = "© 2026 Acme Corp."
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.macOS(manifest: withCopyright).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(parsed["NSHumanReadableCopyright"] as? String == "© 2026 Acme Corp.")
     }
 
     @Test("iOS plist declares a UIScene configuration")

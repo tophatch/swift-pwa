@@ -62,6 +62,27 @@
                 assetProvider = provider
                 registerScheme(provider: provider)
             }
+
+            // Connect `script-message-received::__SwiftPWA__post` so JS
+            // calls to `mh.postMessage(json)` make it back into Swift.
+            connectMessageHandler(ucm: ucm)
+        }
+
+        private func connectMessageHandler(ucm: UnsafeMutablePointer<WebKitUserContentManager>) {
+            // Heap-box self so the C callback can find us via user_data.
+            // Released by `messageBoxDestroy` when the signal is disconnected.
+            let box = Unmanaged.passRetained(MessageBox(self)).toOpaque()
+            let signal = "script-message-received::\(BridgeScript.messageHandlerName)"
+            signal.withCString { name in
+                _ = g_signal_connect_data(
+                    UnsafeMutableRawPointer(ucm),
+                    name,
+                    unsafeBitCast(messageReceivedTrampoline, to: GCallback.self),
+                    box,
+                    messageBoxDestroy,
+                    GConnectFlags(rawValue: 0)
+                )
+            }
         }
 
         private func registerScheme(provider: AssetProvider) {
@@ -120,8 +141,8 @@
             return stream
         }
 
-        /// Called by the C-side signal handler trampoline (set up by the user via
-        /// g_signal_connect; left as a follow-up, since it requires a C trampoline).
+        /// Called by the C-side signal handler trampoline whenever JS
+        /// posts a frame via `mh.postMessage(...)`.
         public func _ingest(jsonString: String) {
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
@@ -136,6 +157,49 @@
         }
 
         deinit { continuation?.finish() }
+    }
+
+    /// Heap box holding a back-reference to the adapter for the GObject
+    /// signal callback. Released by `messageBoxDestroy` when the signal
+    /// is disconnected (which happens automatically when the
+    /// WebKitUserContentManager is finalized).
+    private final class MessageBox {
+        weak var adapter: WebKitGTKAdapter?
+        init(_ adapter: WebKitGTKAdapter) { self.adapter = adapter }
+    }
+
+    /// `@convention(c)` trampoline matching the GObject callback shape
+    /// for `WebKitUserContentManager::script-message-received`:
+    /// `void (*)(WebKitUserContentManager*, WebKitJavascriptResult*, gpointer)`.
+    ///
+    /// Bridge.js always sends string payloads (it `JSON.stringify`s the
+    /// envelope before posting), so we extract the JSC value as a UTF-8
+    /// string, free the C buffer, and dispatch to the Swift adapter on
+    /// the main actor.
+    private let messageReceivedTrampoline: @convention(c) (
+        UnsafeMutablePointer<WebKitUserContentManager>?,
+        UnsafeMutablePointer<WebKitJavascriptResult>?,
+        gpointer?
+    ) -> Void = { _, jsResult, userData in
+        guard let jsResult, let userData else { return }
+        guard let value = webkit_javascript_result_get_js_value(jsResult) else { return }
+        guard let cstr = jsc_value_to_string(value) else { return }
+        let json = String(cString: cstr)
+        g_free(cstr)
+        let unmanaged = Unmanaged<MessageBox>.fromOpaque(userData)
+        let box = unmanaged.takeUnretainedValue()
+        // Signals fire on the GTK main thread, which is also Swift's
+        // main thread; jump to MainActor isolation without an async hop.
+        MainActor.assumeIsolated { box.adapter?._ingest(jsonString: json) }
+    }
+
+    /// `@convention(c)` GClosureNotify that releases the heap-boxed
+    /// `MessageBox` when the signal is disconnected (e.g. when the
+    /// user content manager finalizes).
+    private let messageBoxDestroy: @convention(c) (gpointer?, UnsafeMutablePointer<GClosure>?) -> Void = {
+        userData, _ in
+        guard let userData else { return }
+        Unmanaged<MessageBox>.fromOpaque(userData).release()
     }
 
     /// Heap box holding the scheme handler context across the C boundary.

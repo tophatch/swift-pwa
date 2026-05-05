@@ -103,7 +103,18 @@
         /// heap-boxed closure pointer; its WndProc unboxes and fires.
         private func installMainThreadHook() {
             let hwnd = MainThreadDispatcher.create()
+            // Launder the HWND through `UInt` so the captured value is
+            // `Sendable` under Swift 6 strict concurrency. The
+            // dispatcher window lives for the lifetime of the process
+            // (no early release path), so reconstituting the pointer
+            // inside the hook is always safe.
+            let raw = UInt(bitPattern: hwnd)
             MainThread.setHook { body in
+                // HWND is `HANDLE` is `UnsafeMutableRawPointer?`, so
+                // round-tripping through `UInt(bitPattern:)` →
+                // `UnsafeMutableRawPointer(bitPattern:)` is exactly
+                // the typealias chain.
+                let hwnd: HWND = UnsafeMutableRawPointer(bitPattern: raw)
                 MainThreadDispatcher.post(to: hwnd, body: body)
             }
         }

@@ -69,7 +69,7 @@
             // re-trigger the balloon via NIM_MODIFY. NotificationHost
             // tracks whether we've added it yet.
             let op: DWORD = NotificationHost.shared.installed ? DWORD(NIM_MODIFY) : DWORD(NIM_ADD)
-            if !Shell_NotifyIconW(op, &nid) {
+            if Shell_NotifyIconW(op, &nid) == 0 {
                 throw BridgeError(
                     code: BridgeError.handler,
                     message: "Shell_NotifyIconW failed (\(GetLastError()))"
@@ -87,18 +87,22 @@
     // MARK: - Notification host
     //
     // Hidden HWND owning the lifetime of the shared tray icon used as
-    // the toast source. Recreated only when needed (no init cost on
-    // apps that never call notifications.send).
-    @MainActor
-    final class NotificationHost {
+    // the toast source. Lazily created on first send.
+    //
+    // Not `@MainActor` — the surrounding `SystemNotifications` is
+    // `@unchecked Sendable` and accesses the host only from inside
+    // `MainThread.run` closures, so the "UI thread only" invariant is
+    // upheld externally. `installed` is `nonisolated(unsafe)` for
+    // the same reason.
+    final class NotificationHost: @unchecked Sendable {
         static let shared = NotificationHost()
         static let iconId: UINT = 2 // distinct from SystemTray.uID = 1
         let hwnd: HWND
-        var installed = false
+        nonisolated(unsafe) var installed = false
 
         private static let className: [WCHAR] =
             "SwiftPWANotifyHost".utf16.map { WCHAR($0) } + [0]
-        private static var classAtom: ATOM = 0
+        nonisolated(unsafe) private static var classAtom: ATOM = 0
 
         private init() {
             Self.registerClassIfNeeded()

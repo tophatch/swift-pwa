@@ -32,7 +32,9 @@
         static let callbackMessage: UINT = UINT(WM_APP) + 1
 
         // Owner window class name. Registered lazily.
-        private static var classAtom: ATOM = 0
+        // `nonisolated(unsafe)` — only mutated on the UI thread under
+        // the same invariant that guards the other class atoms.
+        nonisolated(unsafe) private static var classAtom: ATOM = 0
         private static let className: [WCHAR] = "SwiftPWATrayOwner".utf16.map { WCHAR($0) } + [0]
 
         public init() {

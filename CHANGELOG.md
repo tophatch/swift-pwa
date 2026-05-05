@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-05-05
+
 ### Added
 
 - **Windows backend.** New `SwiftPWAWindows` Swift target plus `CWebView2Shim` C++ COM shim wraps Microsoft Edge WebView2 behind the same `AppRuntime` / `Window` / `PWAWebView` protocols as the Apple and Linux backends. JS↔Swift bridge round-trips verified end-to-end on Windows 11 ARM64 (Swift 6.3.1, Visual Studio 2026, WebView2 SDK 1.0.3912.50, WIL 1.0.260126.7) against `Examples/HelloPWA`. Window lifecycle, clipboard (Win32 Clipboard API), tray (`Shell_NotifyIconW` + `TrackPopupMenu` via a thin C shim because the Swift WinSDK overlay imports `TrackPopupMenu` as `Bool` and drops the chosen-command id), and balloon-style notifications (`NIF_INFO`) all work; richer toast XML waits on the swift-winrt rollout in v0.3. The CLI's `swift-pwa build --target windows` ships a portable folder bundle (`MyApp\MyApp.exe` + `web/` + `pwa.json`) that runs on any Windows 10 21H2+ / Windows 11 box with the WebView2 Runtime installed; the static loader (`WebView2LoaderStatic.lib`) is linked in so apps don't need a sidecar `WebView2Loader.dll`. Bundled content uses `SetVirtualHostNameToFolderMapping` (`https://swift-pwa.local/...`) rather than a custom scheme to keep ESM and `fetch` happy without fighting WebView2's same-origin checks. Architecture-clean for both x64 and ARM64; builds natively on either host (cross-compile on Swift-for-Windows is still rough).

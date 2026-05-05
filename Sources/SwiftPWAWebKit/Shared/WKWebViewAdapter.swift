@@ -15,16 +15,20 @@
         public nonisolated let webView: WKWebView
         private nonisolated(unsafe) var assetProvider: AssetProvider?
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        /// Swift 6.0 (Xcode 16.4) refuses `nonisolated` on `lazy`
-        /// properties — diagnostic was "warning" on Xcode 26+. The
-        /// class itself is `@unchecked Sendable`, so the lazy's
-        /// implicit isolation doesn't bite us at runtime; we just
-        /// can't say so.
-        private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in
-            self.continuation = c
-        }
+        // Eager `let` rather than a lazy var — Swift 6.0 (Xcode 16.4)
+        // refuses `nonisolated` on `lazy` properties, and dropping
+        // the modifier promotes `stream` to MainActor isolation
+        // (because the class participates in `WKScriptMessageHandler`),
+        // which then breaks `nonisolated func inboundFrames()`.
+        // `AsyncStream`'s initializer invokes the captured-continuation
+        // closure synchronously, so we can lift `continuation` out of
+        // it during init and assign it after `super.init`.
+        private nonisolated(unsafe) let stream: AsyncStream<InboundFrame>
 
         public init(configuration: WKWebViewConfiguration? = nil) throws {
+            var captured: AsyncStream<InboundFrame>.Continuation?
+            stream = AsyncStream { captured = $0 }
+
             let cfg = configuration ?? WKWebViewConfiguration()
             // Inject bridge.js at document start.
             let bridge = try BridgeScript.source()
@@ -36,6 +40,7 @@
             cfg.userContentController.addUserScript(userScript)
             webView = WKWebView(frame: .zero, configuration: cfg)
             super.init()
+            continuation = captured
             cfg.userContentController.add(self, name: BridgeScript.messageHandlerName)
             #if os(macOS)
                 if #available(macOS 13.3, *) { webView.isInspectable = true }

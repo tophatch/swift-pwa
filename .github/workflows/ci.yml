@@ -119,8 +119,12 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          branch: swift-6.0.3-release
-          tag: 6.0.3-RELEASE
+          # Swift 6.0.x trips a `ucrt -> _Builtin_intrinsics -> ucrt`
+          # cyclic-module-import error against the Windows SDK shipped
+          # on `windows-latest` — fixed in 6.1+. Stay on the latest
+          # 6.1 stable for now; bump as new releases land.
+          branch: swift-6.1.2-release
+          tag: 6.1.2-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         shell: pwsh

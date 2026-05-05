@@ -19,7 +19,14 @@
         /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
         /// Read by `GTKWindow.init` to attach via `gtk_window_set_child`.
         let viewWidget: UnsafeMutablePointer<GtkWidget>
-        private let userContent: UnsafeMutablePointer<WebKitUserContentManager>
+        // `WebKitUserContentManager` is declared by `G_DECLARE_FINAL_TYPE`
+        // inside webkitgtk-6.0's umbrella header, but Swift's clang
+        // importer doesn't expose that typedef as a Swift type — only
+        // function signatures referencing it survive the import (with
+        // their parameters reduced to `OpaquePointer`). Using
+        // `OpaquePointer` here mirrors the imported function shape and
+        // sidesteps the "cannot find type" error at the use site.
+        private let userContent: OpaquePointer
         private var continuation: AsyncStream<InboundFrame>.Continuation?
         private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }
         private var assetProvider: AssetProvider?
@@ -70,7 +77,7 @@
             connectMessageHandler(ucm: ucm)
         }
 
-        private func connectMessageHandler(ucm: UnsafeMutablePointer<WebKitUserContentManager>) {
+        private func connectMessageHandler(ucm: OpaquePointer) {
             let box = Unmanaged.passRetained(MessageBox(self)).toOpaque()
             "script-message-received".withCString { name in
                 _ = g_signal_connect_data(
@@ -206,7 +213,7 @@
     /// `WebKitJavascriptResult*` boxing). The shim's
     /// `swiftpwa_extract_message_string` papers over the difference.
     let messageReceivedTrampoline: @convention(c) (
-        UnsafeMutablePointer<WebKitUserContentManager>?,
+        OpaquePointer?,
         gpointer?,
         gpointer?
     ) -> Void = { _, valueArg, userData in
@@ -231,7 +238,7 @@
         let provider: AssetProvider
         init(provider: AssetProvider) { self.provider = provider }
 
-        func handle(request: UnsafeMutablePointer<WebKitURISchemeRequest>) {
+        func handle(request: OpaquePointer) {
             guard let urlCStr = webkit_uri_scheme_request_get_uri(request) else {
                 webkit_uri_scheme_request_finish_error(request, nil)
                 return

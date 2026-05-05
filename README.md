@@ -6,13 +6,21 @@ A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails f
 
 ## Why
 
-If you write Swift and want to ship a small, single-codebase desktop/mobile app that's mostly a webview wrapping a PWA, your options today are:
+If you write Swift, today's options for shipping a thin-client app are uncomfortable:
 
-- **Electron / Tauri** — fine, but you're not writing Swift.
-- **Hand-rolled WKWebView** — locks you to Apple platforms.
-- **SwiftUI WebView** — single platform, no JS↔Swift bridge, no bundling story.
+- **Electron** ships an 80 MB Chromium with every download, in JavaScript.
+- **Tauri / Wails** are small and fast — if Rust or Go is your language. Neither targets iOS.
+- **Hand-rolled WKWebView** locks you to Apple, and you're rebuilding the JS↔Swift bridge, the bundler, and the multi-window plumbing yourself.
+- **SwiftUI WebView** is single-platform and ships no bridge or bundling story.
 
-`swift-pwa` gives you one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), and one CLI that produces `.app`, `.ipa`, `.AppImage`, and a portable Windows folder (`.exe` + assets) from the same source.
+`swift-pwa` is the missing option: one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), one CLI. The same source produces `.app`, `.ipa`, `.AppImage`, portable Windows `.exe`, and MSIX — and iOS is a swift-pwa exclusive, since Tauri, Wails, and Electron don't ship an iOS target at all.
+
+|                  | **swift-pwa** | Tauri    | Wails    | Electron |
+|------------------|---------------|----------|----------|----------|
+| Host language    | Swift         | Rust     | Go       | Node.js  |
+| Webview          | System        | System   | System   | Bundled  |
+| Bundle size      | ~5-15 MB      | ~5-15 MB | ~5-15 MB | ~80+ MB  |
+| iOS              | Yes           | No       | No       | No       |
 
 ## Quickstart
 
@@ -180,15 +188,6 @@ swift run swift-pwa build --target windows --bootstrap-webview2  # bundle the We
 ```
 
 The `pwa.json` manifest in your project root is the source of truth — `Info.plist`, `.desktop`, and icon assets are all generated from it.
-
-## Comparison
-
-|                  | swift-pwa | Tauri    | Wails    | Electron |
-|------------------|-----------|----------|----------|----------|
-| Host language    | Swift     | Rust     | Go       | Node.js  |
-| Webview          | System    | System   | System   | Bundled  |
-| Bundle size      | ~5-15 MB  | ~5-15 MB | ~5-15 MB | ~80+ MB  |
-| iOS              | Yes       | No       | No       | No       |
 
 ## Roadmap
 

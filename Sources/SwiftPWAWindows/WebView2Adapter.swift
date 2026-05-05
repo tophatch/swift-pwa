@@ -16,12 +16,22 @@
         private let environment: OpaquePointer
         private let parent: HWND
 
-        private var controller: OpaquePointer?
-        private var view: OpaquePointer?
-        private var ready = false
-        private var continuation: AsyncStream<InboundFrame>.Continuation?
-        private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }
-        private var assetProvider: AssetProvider?
+        // Mutable pointer fields are `nonisolated(unsafe)` because
+        // they're read from `MainThread.run` closures (which Swift
+        // 6.1 sees as `@MainActor`-isolated when they capture this
+        // class's state). Without the annotation, capturing `self`
+        // and reading `self.view` / `self.controller` trips the
+        // sending-risk diagnostic. The actual mutation happens only
+        // on the UI thread (`_onControllerReady`, `detach`); the
+        // unannotated reads are immutable-by-convention.
+        private nonisolated(unsafe) var controller: OpaquePointer?
+        private nonisolated(unsafe) var view: OpaquePointer?
+        private nonisolated(unsafe) var ready = false
+        private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
+        private nonisolated(unsafe) lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in
+            self.continuation = c
+        }
+        private nonisolated(unsafe) var assetProvider: AssetProvider?
 
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache
         // the most recently issued one so `respond` can find its way
@@ -179,36 +189,31 @@
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            // `nonisolated(unsafe)` on the view handle for the same
-            // reason as `load(...)` — `OpaquePointer?` isn't Sendable
-            // under strict mode, but the underlying view is only ever
-            // dereferenced on the UI thread.
-            //
             // We use `MainThread.run` (the dispatcher-window hook)
             // rather than `Task { @MainActor in }` because Swift's
             // MainActor executor isn't drained by our `GetMessageW`
             // pump on Windows.
             //
-            // The `EvalBox` is captured directly as a class reference
-            // (it's `@unchecked Sendable`); we only convert to a raw
-            // opaque pointer at the C-call boundary inside the
-            // closure, which keeps Swift 6.1's sending-risk check
-            // happy — no raw pointer crosses isolation domains.
-            nonisolated(unsafe) let viewLocal = view
+            // No local binding for `view` — reading `self.view`
+            // directly inside the closure works because the property
+            // is `nonisolated(unsafe)`. Carrying the `EvalBox` as a
+            // class ref (Sendable) and only converting to an opaque
+            // pointer inside the closure keeps Swift 6.1 happy —
+            // raw pointers don't cross isolation boundaries.
             let snippet = js
             return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in
                 let evalBox = EvalBox(continuation: cont)
-                Task {
+                Task { [self] in
                     await MainThread.run {
-                        guard let viewLocal else {
+                        guard let v = self.view else {
                             evalBox.continuation.resume(returning: nil)
                             return
                         }
                         let boxPtr = Unmanaged.passRetained(evalBox).toOpaque()
                         snippet.withCString(encodedAs: UTF16.self) { wcs in
                             swiftpwa_w2_view_execute_script(
-                                viewLocal, wcs, evalCompleteTrampoline, boxPtr
+                                v, wcs, evalCompleteTrampoline, boxPtr
                             )
                         }
                     }
@@ -232,13 +237,14 @@
             // `MainThread.run` (dispatcher window) instead of
             // `MainActor.run`: see `load(...)` for why a MainActor
             // hop on Windows under our `GetMessageW` pump never
-            // fires. `nonisolated(unsafe)` to satisfy the sending
-            // check on the closure capture.
-            nonisolated(unsafe) let viewLocal = view
-            await MainThread.run {
-                guard let viewLocal else { return }
+            // fires. `self.view` is `nonisolated(unsafe)`, so we
+            // read it inside the closure rather than binding a
+            // local — Swift 6.1 flags `nonisolated(unsafe) let`
+            // crossings into a `@MainActor` closure.
+            await MainThread.run { [self] in
+                guard let v = view else { return }
                 json.withCString(encodedAs: UTF16.self) { wcs in
-                    swiftpwa_w2_view_post_web_message_string(viewLocal, wcs)
+                    swiftpwa_w2_view_post_web_message_string(v, wcs)
                 }
             }
         }

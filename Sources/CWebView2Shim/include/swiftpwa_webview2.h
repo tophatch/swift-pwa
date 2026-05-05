@@ -145,6 +145,11 @@ void swiftpwa_w2_view_map_virtual_host(
     const wchar_t *folder_path,
     int access_kind);
 
+// Pop WebView2's built-in DevTools window in a separate top-level
+// window. Useful as a "is the runtime even alive" diagnostic; safe
+// to wire to a debug-only key handler in production code.
+void swiftpwa_w2_view_open_devtools(swiftpwa_w2_view *view);
+
 // Subscribe to WebResourceRequested for a URL filter (e.g. `"pwa://*"`).
 // The Swift side answers each request via `swiftpwa_w2_resource_respond`.
 //

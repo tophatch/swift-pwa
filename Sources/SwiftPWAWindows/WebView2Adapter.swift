@@ -76,6 +76,12 @@
             controller = ctrl
             view = swiftpwa_w2_controller_view(ctrl)
 
+            // Force `IsVisible = TRUE` even though it's the documented
+            // default. Cheap and rules out a "controller exists but is
+            // hidden" failure mode in case the runtime drops the
+            // default in some build.
+            swiftpwa_w2_controller_set_visible(ctrl, 1)
+
             // Inject bridge.js at document-start. WebView2's API for
             // this is "AddScriptToExecuteOnDocumentCreated" — fires
             // before any page script in every navigation.
@@ -88,6 +94,16 @@
             }
 
             ready = true
+        }
+
+        /// Pop the WebView2 DevTools window. Useful as a proof-of-life
+        /// signal: if DevTools comes up but the main window is blank,
+        /// the runtime is fine and the issue is in window painting /
+        /// composition. If DevTools doesn't come up either, the
+        /// controller is wedged.
+        func openDevTools() {
+            guard let view else { return }
+            swiftpwa_w2_view_open_devtools(view)
         }
 
         /// Resize the WebView2 host to fill `client` (in pixel coords
@@ -159,6 +175,12 @@
                 }
                 urlString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
+                }
+                // Diagnostic: pop DevTools so we have a proof-of-life
+                // signal independent of the parent HWND's compositing.
+                // Removed once Windows runtime is verified end-to-end.
+                if ProcessInfo.processInfo.environment["SWIFT_PWA_OPEN_DEVTOOLS"] != nil {
+                    swiftpwa_w2_view_open_devtools(view)
                 }
                 assetProvider = AssetProvider(root: directory)
             case let .remote(url):

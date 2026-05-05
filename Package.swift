@@ -206,6 +206,7 @@ let package = Package(
         ),
 
         // MARK: - CLI
+
         //
         // Split into a library (`SwiftPWACLISupport`, holds the
         // bundlers, command structs, manifest decoder) and a thin

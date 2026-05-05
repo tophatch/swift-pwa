@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.2.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.2.0) is the current release. macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64) are first-class. Built-in plugins: window, clipboard, tray, notifications. `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools on every backend. Android, biometric auth / dialog / fs plugins, richer Windows toasts via swift-winrt, and MSIX packaging are queued for v0.3.
+> **Status:** [`v0.2.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.2.0) is the current release; v0.3 is in flight on `main` with Windows WinRT toasts, Per-Monitor V2 DPI, MSIX packaging, an opt-in WebView2 Evergreen Bootstrapper, and a Windows binary in the release matrix. macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64) are first-class. Built-in plugins: window, clipboard, tray, notifications. `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools on every backend. Android and biometric auth / dialog / fs plugins are queued for v0.4.
 
 ## Why
 
@@ -30,7 +30,7 @@ swift-pwa init MyApp
 cd MyApp
 ```
 
-Other available assets: `swift-pwa-macos-x86_64`, `swift-pwa-linux-x86_64`. Windows users build from source until the v0.3 release matrix gains a Windows artifact — see [docs/windows-setup.md](docs/windows-setup.md).
+Other available assets: `swift-pwa-macos-x86_64`, `swift-pwa-linux-x86_64`, `swift-pwa-windows-x86_64.exe` (added to the release matrix in v0.3). See [docs/windows-setup.md](docs/windows-setup.md) for the Windows toolchain.
 
 Or build the CLI from source (works on every platform, including Windows):
 
@@ -175,6 +175,8 @@ swift run swift-pwa build --target macos --sign "Developer ID Application: Acme"
 swift run swift-pwa build --target ios --simulator       # → unsigned .app for sim
 swift run swift-pwa build --target linux                 # → MyApp-x86_64.AppImage
 swift run swift-pwa build --target windows               # → build\MyApp\MyApp.exe (+ web/, pwa.json)
+swift run swift-pwa build --target windows --package-format msix --sign <thumbprint>
+swift run swift-pwa build --target windows --bootstrap-webview2  # bundle the WebView2 Evergreen Bootstrapper
 ```
 
 The `pwa.json` manifest in your project root is the source of truth — `Info.plist`, `.desktop`, and icon assets are all generated from it.
@@ -197,13 +199,14 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 - **`TrayEvent.click` is macOS-only.** The freedesktop StatusNotifierItem spec gives the desktop panel ownership of click semantics on Linux; apps only see menu activations there.
 - **`NotificationsPlugin` requires a bundled, signed `.app` on Apple.** `UNUserNotificationCenter` raises an `NSException` when called from a process without a `CFBundleIdentifier`; the plugin pre-flights and throws a clean `BridgeError` instead of crashing, but actual banners only appear after `swift run swift-pwa build --target macos` (or via Xcode).
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
-- **Windows notifications use the legacy `Shell_NotifyIconW` balloon path.** Banners surface as toasts on Windows 10 / 11, but persistence in Action Center requires a registered AppUserModelID (or a packaged app) — unsigned `swift run` invocations show a transient balloon and nothing in history. Richer toast XML (replace-by-id, action buttons) waits on the swift-winrt dependency planned for v0.3.
+- **Windows toast persistence in Action Center requires a Start-menu shortcut.** The runtime sets a stable AppUserModelID (`SwiftPWA.<exe-stem>`) at process start which is enough for toasts to show, but Windows only keeps them in Action Center across reboots when the AUMID also matches a registered Start-menu `.lnk`. The MSIX bundler path takes care of this; portable bundles shipped outside an installer don't get persistence.
 - **Android bundler prints "not implemented".** Targets are scaffolded but the actual build path lands in v0.3.
 
 ### Planned
 
-- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging, opt-in WebView2 Runtime bootstrapper, Windows DPI awareness, Windows binary in the release matrix.
-- **v0.4+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
+- **v0.3** — Windows WinRT toast notifications (`Windows.UI.Notifications.ToastNotificationManager` via a C++/WinRT shim, balloon-tip fallback when WinRT is unavailable), Per-Monitor V2 DPI awareness, MSIX packaging in the bundler (`--package-format msix`, optional `signtool` integration), opt-in WebView2 Evergreen Bootstrapper (`--bootstrap-webview2`), Windows binary in the release matrix.
+- **v0.4** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged).
+- **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown of what's already shipped.
 

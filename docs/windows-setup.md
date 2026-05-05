@@ -8,11 +8,12 @@ Windows handles the rest via `import WinSDK`.
 > **Status:** verified end-to-end against `Examples/HelloPWA` on
 > Windows 11 ARM64 (Swift 6.3.1, Visual Studio 2026, WebView2 SDK
 > 1.0.3912.50, WIL 1.0.260126.7); x64 builds clean on every commit
-> via the `windows-latest` CI runner. Window lifecycle, JS↔Swift
-> bridge, clipboard, tray, balloon notifications, and the
-> `Ctrl+Alt+J` DevTools shortcut are all in scope. Richer toast XML
-> (replace-by-id, action buttons), MSIX packaging, and DPI awareness
-> wait on the swift-winrt rollout in v0.3.
+> via the `windows-2022` CI runner. Window lifecycle, JS↔Swift
+> bridge, clipboard, tray, WinRT toast notifications, Per-Monitor V2
+> DPI scaling, and the `Ctrl+Alt+J` DevTools shortcut are all in scope.
+> MSIX packaging and the opt-in Evergreen Bootstrapper land in the
+> CLI bundler. Richer toast XML (action buttons, scheduled toasts)
+> waits on a follow-up.
 
 ## 1. Toolchain
 
@@ -158,24 +159,55 @@ swift run swift-pwa build --target windows             # → build\MyApp\MyApp.e
 
 The bundler produces a portable folder. Drop it on any Windows 10 21H2+
 or Windows 11 box that has the WebView2 Runtime, and double-click
-`MyApp.exe`. There's no MSIX / Appx packaging in v0.2 — that lands in
-v0.3 alongside swift-winrt and toast notifications.
+`MyApp.exe`.
+
+For an MSIX/Appx package instead of a portable folder:
+
+```powershell
+swift run swift-pwa build --target windows --package-format msix
+swift run swift-pwa build --target windows --package-format msix --sign <thumbprint-or-pfx>
+```
+
+The bundler stages the EXE, web bundle, a generated `AppxManifest.xml`,
+and a `Square150x150Logo.png` (taken from `pwa.json`'s `icon` if
+provided, otherwise a 1×1 placeholder), then drives `makeappx.exe pack`
+and — if `--sign` is supplied — `signtool.exe sign`. Both binaries
+ship with the Windows SDK; no extra install needed once you've launched
+the VS Developer Shell. The signed MSIX installs on any Windows 10
+1809+ box; an unsigned MSIX is sideloadable on developer-mode boxes
+only.
+
+To embed the WebView2 Evergreen Bootstrapper (~1.7 MB) in either the
+portable bundle or the MSIX so the app can self-install the runtime:
+
+```powershell
+swift run swift-pwa build --target windows --bootstrap-webview2
+```
+
+`WindowsAppRuntime` detects a missing runtime at startup, finds
+`MicrosoftEdgeWebview2Setup.exe` next to the EXE, and prompts the user
+via a MessageBox before `ShellExecuteEx`-ing it with elevation.
 
 ## 4. Architecture sketch
 
 ```
 +-----------------------------+        +---------------------------+
 | WindowsAppRuntime           |        | CWebView2Shim (C++)       |
-|  - OleInitialize            |        |  - CreateCoreWebView2Env  |
-|  - install MainThread hook  |  --->  |  - CreateController       |
-|  - GetMessageW / Dispatch   |        |  - WebMessageReceived     |
-+-------------+---------------+        |  - ExecuteScript          |
-              |                        |  - WebResourceRequested   |
-              v                        +---------------------------+
+|  - SetProcessDpiAwareness   |        |  - CreateCoreWebView2Env  |
+|  - SetCurrent..AppUserModel |        |  - CreateController       |
+|  - swiftpwa_toast_init(..)  |        |  - WebMessageReceived     |
+|  - OleInitialize            |  --->  |  - ExecuteScript          |
+|  - install MainThread hook  |        |  - WebResourceRequested   |
+|  - GetMessageW / Dispatch   |        |  - swiftpwa_toast_send    |
++-------------+---------------+        |    (C++/WinRT, ToastMgr)  |
+              |                        +---------------------------+
+              v
 +-----------------------------+
 | Win32Window                 |  + SystemClipboard (Win32 CB API)
 |  - CreateWindowExW          |  + SystemTray (Shell_NotifyIconW)
-|  - WM_SIZE → fitTo(client)  |  + SystemNotifications (NIF_INFO)
+|  - WM_SIZE → fitTo(client)  |  + SystemNotifications (WinRT toast,
+|  - WM_DPICHANGED → resize   |    Shell_NotifyIcon balloon fallback)
+|  - DIP ↔ physical px        |
 |  - WebView2Adapter          |
 +-----------------------------+
 ```
@@ -195,12 +227,17 @@ A few load-bearing details:
   also exposes `WebResourceRequested`-style interception for callers
   who really want a custom scheme; `WebView2Adapter` doesn't use it
   but the surface is there.
-- **Notifications piggy-back on the tray icon.** `Shell_NotifyIconW`
-  with `NIF_INFO` shows up as a toast on Windows 10 / 11. This is
-  intentionally a shortcut — it avoids depending on swift-winrt and
-  `Windows.UI.Notifications.ToastNotificationManager` for v0.2. The
-  tradeoff is no replace-by-id, no action buttons, no Action Center
-  persistence without an AppUserModelID. v0.3 swaps in the WinRT path.
+- **Notifications go through `Windows.UI.Notifications.ToastNotificationManager`.**
+  The C++/WinRT shim (`swiftpwa_toast.cpp`) constructs a
+  `ToastGeneric` XML payload and `Show()`s it through a notifier
+  bound to the process's AUMID. We didn't take a `swift-winrt`
+  dependency for this — the WinRT surface area is one notifier, one
+  XML payload, one event, so a flat C ABI over the same handful of
+  WinRT calls is the simpler path (same rationale as keeping
+  WebView2's COM behind `swiftpwa_webview2.cpp`). When the WinRT
+  path fails (Server Core without the Desktop Experience, missing
+  AUMID, etc.) `SystemNotifications` falls back to a
+  `Shell_NotifyIconW` balloon tip so something still shows.
 - **Tray uses `Shell_NotifyIconW`, not the StatusNotifierItem spec.**
   Windows has no SNI; Microsoft has not migrated the notification
   area to a modern API. Right-click pops a `TrackPopupMenu`; left-click
@@ -220,16 +257,19 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 
 ## Known limitations (Windows-specific)
 
-- **WebView2 Runtime install is on the user.** We don't bundle the
-  Evergreen Bootstrapper. `WindowsAppRuntime` detects a missing
-  runtime via `GetAvailableCoreWebView2BrowserVersionString` and
-  prints the download URL, then exits. v0.3 will add an opt-in
-  bootstrapper download to the bundler.
-- **Notification ids are synthesized UUIDs.** `Shell_NotifyIconW`
-  doesn't return identifiers for balloon tips, so callers using
-  `notifications.send(...)` get a generated UUID for log correlation
-  only. The v0.3 WinRT path returns real WinRT notification ids.
-- **`Window.position()` returns physical pixels, not DIPs.** We don't
-  do any DPI-awareness mapping yet; on a 200% display the values are
-  raw pixel coords. v0.3 will add a `SetProcessDpiAwarenessContext`
-  call at startup and convert to DIPs at the API boundary.
+- **Action Center persistence requires a Start-menu shortcut.** The
+  runtime sets a stable AppUserModelID at process start
+  (`SwiftPWA.<exe-stem>`) which is enough for toasts to *show*, but
+  Windows only keeps them in Action Center across reboots when the
+  AUMID also matches a Start-menu `.lnk` registered with the same id.
+  The MSIX path takes care of this automatically; portable bundles
+  shipping outside an installer don't get persistence.
+- **Notification ids are synthesized UUIDs.** The cross-platform
+  `Notifications` protocol doesn't currently expose a caller-supplied
+  tag, so `swift-pwa` synthesizes a UUID per send. The shim itself
+  (`swiftpwa_toast_send`) takes a tag; surfacing it requires a
+  protocol-level addition.
+- **MSIX builds are x64-only by default.** The generated
+  `AppxManifest.xml` declares `ProcessorArchitecture="x64"`. To ship
+  ARM64 packages, build on an ARM64 host and edit the manifest (or
+  wait for the bundler's `--arch` flag).

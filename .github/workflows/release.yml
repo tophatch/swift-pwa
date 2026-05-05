@@ -38,8 +38,53 @@ jobs:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
 
+  cli-binary-windows:
+    # Windows is its own job because the build steps don't fit the
+    # POSIX matrix shape — we need MSVC + Swift-for-Windows + the
+    # WebView2 / WIL NuGet packages on INCLUDE/LIB before swift build
+    # will resolve `CWebView2Shim`. (The `swift-pwa` CLI itself
+    # doesn't *call* into the Windows backend, but SwiftPM compiles
+    # every target in the package graph — so the C++ shims have to
+    # build for the CLI link step to succeed.)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up MSVC environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Set up Swift for Windows
+        uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-6.1.2-release
+          tag: 6.1.2-RELEASE
+      - name: Install WebView2 SDK + WIL (NuGet)
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+          nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
+      - name: Add WebView2 / WIL to INCLUDE / LIB
+        shell: pwsh
+        run: |
+          $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
+          $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
+          $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
+      - name: Build CLI
+        run: swift build -c release --product swift-pwa
+      - name: Stage binary
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item -Path .build\release\swift-pwa.exe -Destination dist\swift-pwa-windows-x86_64.exe
+      - uses: actions/upload-artifact@v5
+        with:
+          name: swift-pwa-windows-x86_64
+          path: dist/swift-pwa-windows-x86_64.exe
+
   release:
-    needs: cli-binaries
+    needs: [cli-binaries, cli-binary-windows]
     runs-on: ubuntu-24.04
     permissions:
       contents: write

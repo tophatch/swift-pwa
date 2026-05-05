@@ -66,6 +66,21 @@ let webkitSystemLibraryTarget: Target = useGtk4
         ]
     )
 
+/// `libayatana-appindicator3` is GTK3-only (a single process can't link
+/// both GTK3 and GTK4), so the AppIndicator shim is part of the GTK3
+/// backend dep set only. The GTK4 backend's `SystemTray` stays a no-op
+/// stub until `libayatana-appindicator-gtk4` becomes broadly packaged.
+let appIndicatorSystemLibraryTarget: Target? = useGtk4
+    ? nil
+    : .systemLibrary(
+        name: "CAyatanaAppIndicator3Shim",
+        path: "Sources/CAyatanaAppIndicator3Shim",
+        pkgConfig: "ayatana-appindicator3-0.1",
+        providers: [
+            .apt(["libayatana-appindicator3-dev"])
+        ]
+    )
+
 let gtkBackendTarget: Target = useGtk4
     ? .target(
         name: "SwiftPWAGTK",
@@ -82,7 +97,8 @@ let gtkBackendTarget: Target = useGtk4
         dependencies: [
             "SwiftPWACore",
             .target(name: "CGtk3Shim", condition: .when(platforms: [.linux])),
-            .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux]))
+            .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux])),
+            .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK",
         swiftSettings: swiftSettings
@@ -132,8 +148,8 @@ let package = Package(
 
         gtkSystemLibraryTarget,
         webkitSystemLibraryTarget,
-        gtkBackendTarget,
-
+        gtkBackendTarget
+    ] + (appIndicatorSystemLibraryTarget.map { [$0] } ?? []) + [
         // MARK: - Umbrella
 
         .target(

@@ -66,9 +66,12 @@ public struct TrayMenuItem: Sendable, Codable, Equatable {
 // MARK: - Events
 
 public enum TrayEvent: Sendable, Equatable {
-    /// Left / primary click on the tray icon. Only emitted when no
-    /// menu is currently set — when a menu is set, the platform shows
-    /// the menu instead of dispatching a click.
+    /// Left / primary click on the tray icon. Only emitted on macOS
+    /// when no menu is currently set — when a menu is set, AppKit
+    /// shows the menu instead of dispatching a click. Never emitted
+    /// on Linux: the StatusNotifierItem spec gives the desktop panel
+    /// ownership of click semantics, so apps only see menu
+    /// activations there.
     case click
     /// A non-separator menu item was activated. `id` is the item's
     /// stable identifier from `TrayMenuItem.id`.

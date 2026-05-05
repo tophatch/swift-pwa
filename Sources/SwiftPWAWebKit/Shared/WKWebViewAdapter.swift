@@ -15,14 +15,14 @@
         public nonisolated let webView: WKWebView
         private nonisolated(unsafe) var assetProvider: AssetProvider?
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        // Eager `let` rather than a lazy var — Swift 6.0 (Xcode 16.4)
-        // refuses `nonisolated` on `lazy` properties, and dropping
-        // the modifier promotes `stream` to MainActor isolation
-        // (because the class participates in `WKScriptMessageHandler`),
-        // which then breaks `nonisolated func inboundFrames()`.
-        // `AsyncStream`'s initializer invokes the captured-continuation
-        // closure synchronously, so we can lift `continuation` out of
-        // it during init and assign it after `super.init`.
+        /// Eager `let` rather than a lazy var — Swift 6.0 (Xcode 16.4)
+        /// refuses `nonisolated` on `lazy` properties, and dropping
+        /// the modifier promotes `stream` to MainActor isolation
+        /// (because the class participates in `WKScriptMessageHandler`),
+        /// which then breaks `nonisolated func inboundFrames()`.
+        /// `AsyncStream`'s initializer invokes the captured-continuation
+        /// closure synchronously, so we can lift `continuation` out of
+        /// it during init and assign it after `super.init`.
         private nonisolated(unsafe) let stream: AsyncStream<InboundFrame>
 
         public init(configuration: WKWebViewConfiguration? = nil) throws {

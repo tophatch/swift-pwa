@@ -8,19 +8,24 @@ A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails f
 
 If you write Swift, today's options for shipping a thin-client app are uncomfortable:
 
-- **Electron** ships an 80 MB Chromium with every download, in JavaScript.
-- **Tauri / Wails** are small and fast — if Rust or Go is your language. Neither targets iOS.
+- **Electron** ships an 80 MB Chromium with every download, in JavaScript. Desktop only.
+- **Tauri** is small, fast, and reaches mobile — but you're writing Rust.
+- **Wails** is small and fast in Go — but desktop only.
 - **Hand-rolled WKWebView** locks you to Apple, and you're rebuilding the JS↔Swift bridge, the bundler, and the multi-window plumbing yourself.
 - **SwiftUI WebView** is single-platform and ships no bridge or bundling story.
 
-`swift-pwa` is the missing option: one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), one CLI. The same source produces `.app`, `.ipa`, `.AppImage`, portable Windows `.exe`, and MSIX — and iOS is a swift-pwa exclusive, since Tauri, Wails, and Electron don't ship an iOS target at all.
+`swift-pwa` is the option for Swift shops: one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), one CLI. The same source produces `.app`, `.ipa`, `.AppImage`, portable Windows `.exe`, and MSIX, with Android queued for v0.4.
 
-|                  | **swift-pwa** | Tauri    | Wails    | Electron |
-|------------------|---------------|----------|----------|----------|
-| Host language    | Swift         | Rust     | Go       | Node.js  |
-| Webview          | System        | System   | System   | Bundled  |
-| Bundle size      | ~5-15 MB      | ~5-15 MB | ~5-15 MB | ~80+ MB  |
-| iOS              | Yes           | No       | No       | No       |
+|                  | **swift-pwa**  | Tauri    | Wails    | Electron |
+|------------------|----------------|----------|----------|----------|
+| Host language    | Swift          | Rust     | Go       | Node.js  |
+| Webview          | System         | System   | System   | Bundled  |
+| Bundle size      | ~5-15 MB       | ~5-15 MB | ~5-15 MB | ~80+ MB  |
+| macOS            | Yes            | Yes      | Yes      | Yes      |
+| Linux            | Yes            | Yes      | Yes      | Yes      |
+| Windows          | Yes            | Yes      | Yes      | Yes      |
+| iOS              | Yes            | Yes      | No       | No       |
+| Android          | Planned (v0.4) | Yes      | No       | No       |
 
 ## Quickstart
 

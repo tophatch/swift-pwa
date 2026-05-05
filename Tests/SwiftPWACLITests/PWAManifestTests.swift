@@ -1,5 +1,5 @@
 import Foundation
-@testable import swift_pwa_cli
+@testable import SwiftPWACLISupport
 import Testing
 
 @Suite("PWAManifest round-trip")

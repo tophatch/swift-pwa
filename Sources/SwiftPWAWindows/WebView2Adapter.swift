@@ -35,8 +35,9 @@
         // isolation that breaks `nonisolated func inboundFrames()`.
         // `AsyncStream`'s init invokes the closure synchronously,
         // so we lift the continuation out and assign it after the
-        // stored property is set.
-        private nonisolated(unsafe) let stream: AsyncStream<InboundFrame>
+        // stored property is set. (`AsyncStream` is itself
+        // Sendable, so no `nonisolated(unsafe)` modifier needed.)
+        private let stream: AsyncStream<InboundFrame>
         private nonisolated(unsafe) var assetProvider: AssetProvider?
 
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache

@@ -206,10 +206,29 @@ let package = Package(
         ),
 
         // MARK: - CLI
+        //
+        // Split into a library (`SwiftPWACLISupport`, holds the
+        // bundlers, command structs, manifest decoder) and a thin
+        // executable target that owns just the `@main` entry. The
+        // split exists because Swift on Windows otherwise emits a
+        // `main` symbol from the executable target's source list
+        // that collides with the test runner's own `main` when the
+        // CLI test target depends on the executable for `@testable
+        // import`. With the split, tests depend on the library and
+        // never see the entry point.
+
+        .target(
+            name: "SwiftPWACLISupport",
+            dependencies: [
+                .product(name: "ArgumentParser", package: "swift-argument-parser")
+            ],
+            swiftSettings: swiftSettings
+        ),
 
         .executableTarget(
             name: "swift-pwa-cli",
             dependencies: [
+                "SwiftPWACLISupport",
                 .product(name: "ArgumentParser", package: "swift-argument-parser")
             ],
             swiftSettings: swiftSettings
@@ -248,7 +267,7 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftPWACLITests",
-            dependencies: ["swift-pwa-cli"],
+            dependencies: ["SwiftPWACLISupport"],
             resources: [
                 .copy("Fixtures")
             ],

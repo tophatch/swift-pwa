@@ -101,18 +101,21 @@ jobs:
   windows:
     runs-on: windows-latest
     # The Windows backend (`SwiftPWAWindows` + `CWebView2Shim`) needs:
-    #   1. Swift for Windows (compnerd's action — `swift-actions/setup-swift`
-    #      doesn't cover Windows last we checked).
-    #   2. Visual Studio Build Tools for the MSVC CRT (preinstalled on
-    #      windows-latest, but `LIB` only picks up the right arch after
-    #      `Launch-VsDevShell.ps1` runs).
-    #   3. NuGet packages for WebView2 SDK headers / static loader and
-    #      WIL headers.
-    # Everything after the toolchain install lives in a single step
-    # because each PowerShell `run:` is a fresh shell — the dev-shell
-    # exports and INCLUDE/LIB tweaks don't persist across steps.
+    #   1. The MSVC dev environment (CRT headers / libs on INCLUDE / LIB).
+    #   2. Swift for Windows.
+    #   3. NuGet packages for the WebView2 SDK headers + static loader
+    #      and the WIL headers.
+    #
+    # `ilammy/msvc-dev-cmd@v1` writes the VS-dev-shell exports to
+    # `$GITHUB_ENV` so they persist across steps — `Launch-VsDevShell.ps1`
+    # only mutates the current shell, which doesn't carry between
+    # `run:` blocks.
     steps:
       - uses: actions/checkout@v5
+      - name: Set up MSVC environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
@@ -124,19 +127,23 @@ jobs:
         run: |
           nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
           nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
-      - name: Build (release) + run cross-platform tests
+      - name: Add WebView2 / WIL to INCLUDE / LIB
         shell: pwsh
         run: |
-          $vs = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
-          & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
-          $env:INCLUDE = "$pwd\packages\Microsoft.Web.WebView2\build\native\include;" +
-                         "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include;" +
-                         "$env:INCLUDE"
-          $env:LIB = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64;$env:LIB"
-          swift build -c release
-          # Only the cross-platform suites; SwiftPWAWindowsTests is a
-          # placeholder until we add Windows-specific runtime tests.
-          swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+          $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
+          $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
+          $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
+      - name: Build (release)
+        run: swift build -c release
+      - name: Test (cross-platform suites)
+        # SwiftPWAWindowsTests is a placeholder — we run the
+        # cross-platform suites here. Real Windows runtime tests
+        # (window lifecycle, bridge round-trip on WebView2) are a
+        # follow-up once we figure out a headless WebView2 strategy
+        # on hosted runners.
+        run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
   lint:
     runs-on: macos-15

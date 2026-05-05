@@ -1,18 +1,18 @@
-## swift-pwa on Windows (Win32 + WebView2)
+# swift-pwa on Windows (Win32 + WebView2)
 
 The Windows backend wraps `WKWebView`'s closest cousin — Microsoft Edge
 WebView2 — through a small C++ COM shim, plus Win32 for window
 management, clipboard, tray, and balloon notifications. Swift on
 Windows handles the rest via `import WinSDK`.
 
-> **Status (v0.2):** verified end-to-end on Windows 11 ARM64 with Swift
-> 6.3.1, Visual Studio 2026, WebView2 SDK 1.0.3912.50, WIL 1.0.260126.7.
-> Window lifecycle, the JS↔Swift bridge, clipboard, tray, balloon
-> notifications, and the `Ctrl+Alt+J` DevTools shortcut have all been
-> exercised against `Examples/HelloPWA`. x64 should also build by the
-> same recipe but hasn't been re-verified on the latest commits — file
-> issues if you hit something. Richer toast XML (replace-by-id, action
-> buttons) and MSIX packaging wait on the swift-winrt rollout in v0.3.
+> **Status:** verified end-to-end against `Examples/HelloPWA` on
+> Windows 11 ARM64 (Swift 6.3.1, Visual Studio 2026, WebView2 SDK
+> 1.0.3912.50, WIL 1.0.260126.7); x64 builds clean on every commit
+> via the `windows-latest` CI runner. Window lifecycle, JS↔Swift
+> bridge, clipboard, tray, balloon notifications, and the
+> `Ctrl+Alt+J` DevTools shortcut are all in scope. Richer toast XML
+> (replace-by-id, action buttons), MSIX packaging, and DPI awareness
+> wait on the swift-winrt rollout in v0.3.
 
 ## 1. Toolchain
 

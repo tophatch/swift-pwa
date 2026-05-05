@@ -112,9 +112,6 @@
         /// shown.
         func fitTo(client: RECT) {
             guard let controller else { return }
-            FileHandle.standardError.write(Data(
-                "swift-pwa: fitTo bounds (\(client.left),\(client.top))-(\(client.right),\(client.bottom))\n".utf8
-            ))
             swiftpwa_w2_controller_set_bounds(
                 controller,
                 client.left, client.top, client.right, client.bottom
@@ -165,9 +162,6 @@
                 }
                 let host = "swift-pwa.local"
                 let urlString = "https://\(host)/\(entry)"
-                FileHandle.standardError.write(Data(
-                    "swift-pwa: mapping host \(host) -> \(folderPath); navigating \(urlString)\n".utf8
-                ))
                 folderPath.withCString(encodedAs: UTF16.self) { folder in
                     host.withCString(encodedAs: UTF16.self) { hostW in
                         swiftpwa_w2_view_map_virtual_host(view, hostW, folder, 2)
@@ -176,17 +170,8 @@
                 urlString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
                 }
-                // Diagnostic: pop DevTools so we have a proof-of-life
-                // signal independent of the parent HWND's compositing.
-                // Removed once Windows runtime is verified end-to-end.
-                if ProcessInfo.processInfo.environment["SWIFT_PWA_OPEN_DEVTOOLS"] != nil {
-                    swiftpwa_w2_view_open_devtools(view)
-                }
                 assetProvider = AssetProvider(root: directory)
             case let .remote(url):
-                FileHandle.standardError.write(Data(
-                    "swift-pwa: navigating \(url.absoluteString)\n".utf8
-                ))
                 url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
                 }

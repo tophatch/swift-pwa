@@ -5,14 +5,13 @@ WebView2 — through a small C++ COM shim, plus Win32 for window
 management, clipboard, tray, and balloon notifications. Swift on
 Windows handles the rest via `import WinSDK`.
 
-> **Status (v0.2):** builds clean on Windows 11 ARM64 with Swift 6.3.1
-> (verified against Visual Studio 2026 + WebView2 SDK 1.0.3912.50 +
-> WIL 1.0.260126.7). x64 should also build by the same recipe but
-> hasn't been re-verified on the latest commits. Runtime behavior
-> (windows actually appearing, the JS↔Swift bridge round-tripping,
-> clipboard / tray / balloon plumbing) hasn't been smoke-tested yet
-> — please file issues with the failure mode rather than working
-> around them locally. Richer toast XML (replace-by-id, action
+> **Status (v0.2):** verified end-to-end on Windows 11 ARM64 with Swift
+> 6.3.1, Visual Studio 2026, WebView2 SDK 1.0.3912.50, WIL 1.0.260126.7.
+> Window lifecycle, the JS↔Swift bridge, clipboard, tray, balloon
+> notifications, and the `Ctrl+Alt+J` DevTools shortcut have all been
+> exercised against `Examples/HelloPWA`. x64 should also build by the
+> same recipe but hasn't been re-verified on the latest commits — file
+> issues if you hit something. Richer toast XML (replace-by-id, action
 > buttons) and MSIX packaging wait on the swift-winrt rollout in v0.3.
 
 ## 1. Toolchain
@@ -223,11 +222,6 @@ macOS / right-click *Inspect Element* on Linux.
 
 ## Known limitations (Windows-specific)
 
-- **Untested on hardware.** The v0.2 cut compiles cross-platform-clean
-  but hasn't been verified on a real Windows install yet. Expect
-  surprises in the WebView2 controller-creation timing, the message
-  pump's interaction with the controller-ready callback, or the
-  tray's left-click semantics. File issues.
 - **WebView2 Runtime install is on the user.** We don't bundle the
   Evergreen Bootstrapper. `WindowsAppRuntime` detects a missing
   runtime via `GetAvailableCoreWebView2BrowserVersionString` and

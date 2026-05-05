@@ -26,17 +26,33 @@ If `simctl list runtimes` returns no iOS rows, install one via
 
 ## 2. Build for the simulator
 
+Install the prebuilt CLI from the latest GitHub release if you haven't
+already (Apple silicon shown — swap to `swift-pwa-macos-x86_64` on
+Intel):
+
 ```bash
-swift run swift-pwa init MyApp
+curl -L https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-macos-arm64 \
+    -o /usr/local/bin/swift-pwa
+chmod +x /usr/local/bin/swift-pwa
+```
+
+Then scaffold and build:
+
+```bash
+swift-pwa init MyApp
 cd MyApp
 
 # Replace the placeholder dependency with whatever you actually want
 # (a path: dependency for local dev, or a github URL with a tag).
 $EDITOR Package.swift
 
-swift run swift-pwa build --target ios --simulator
+swift-pwa build --target ios --simulator
 # → build/MyApp.app  (universal arm64 + x86_64 simulator slices)
 ```
+
+If you're working from a swift-pwa checkout (or pinning to an
+unreleased commit) substitute `swift run --package-path
+/path/to/swift-pwa swift-pwa …` for `swift-pwa …`.
 
 Under the hood the bundler:
 

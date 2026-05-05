@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** v0.1.0. Window APIs only on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`). Windows/Android stubs in place; tray, notifications, biometric auth, clipboard land as plugin targets in v0.2+.
+> **Status:** v0.2 in flight on `main` — clipboard, tray, and notifications plugins shipped on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`). Windows / Android backends still stubbed; biometric auth, dialog, and fs plugins are queued for v0.3. Last tagged release is v0.1.0.
 
 ## Why
 
@@ -91,7 +91,7 @@ open ./build/MyApp.app
 
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 
-## Supported platforms (v0.1)
+## Supported platforms
 
 | Platform | Webview             | Status                                                  |
 |---------:|---------------------|---------------------------------------------------------|
@@ -173,17 +173,19 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ## Roadmap
 
-### Known limitations in v0.1
+### Known limitations
 
 - **`Window.position()` / `setPosition` are no-ops on the GTK4 backend.** Wayland refuses to give apps their own position, and CSD makes the concept ambiguous; GTK4 dropped the position APIs entirely. `position()` returns `.zero`, `setPosition` silently no-ops, and `.didMove` events are never emitted on GTK4. The GTK3 backend still supports all three.
 - **`TrayPlugin` is a no-op on iOS and on the GTK4 backend.** iOS has no system tray. GTK4 removed `GtkStatusIcon`, and the GTK3 path's `libayatana-appindicator3` can't be reused from a GTK4 process (a single process can't link both GTK3 and GTK4); the GTK4-native `libayatana-appindicator-gtk4` isn't yet broadly packaged. On both platforms `SystemTray()` returns a stub that logs a one-shot warning so cross-platform code stays portable.
+- **`TrayEvent.click` is macOS-only.** The freedesktop StatusNotifierItem spec gives the desktop panel ownership of click semantics on Linux; apps only see menu activations there.
+- **`NotificationsPlugin` requires a bundled, signed `.app` on Apple.** `UNUserNotificationCenter` raises an `NSException` when called from a process without a `CFBundleIdentifier`; the plugin pre-flights and throws a clean `BridgeError` instead of crashing, but actual banners only appear after `swift run swift-pwa build --target macos` (or via Xcode).
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows / Android bundlers print "not implemented".** Targets are scaffolded but the actual build paths land in v0.2/v0.3.
 
 ### Planned
 
-- **v0.2** — Windows (WebView2 + swift-winrt), notifications plugin, tray plugin, clipboard plugin.
-- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin.
+- **v0.2** — remaining: Windows (WebView2 + swift-winrt). Already landed: clipboard, tray (macOS + GTK3 via libayatana-appindicator3), notifications.
+- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged).
 - **v0.4+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
 
 ## Platform setup

@@ -79,7 +79,7 @@ entitlements** into the `.app`. iOS rejects unprovisioned binaries,
 so the resulting `.ipa` won't install via `ideviceinstaller` or Apple
 Configurator on its own.
 
-For v0.1, the recommended device path is to run from Xcode directly:
+Until the CLI's signing / provisioning path is wrapped (queued for a follow-up), the recommended device path is to run from Xcode directly:
 
 ```bash
 xed Package.swift                               # opens the SwiftPM project in Xcode
@@ -148,7 +148,7 @@ A minimal `ExportOptions.plist` for ad-hoc distribution:
   ios --sign <identity>` runs `codesign` but doesn't embed
   `embedded.mobileprovision` or pass entitlements, so its `.ipa`
   output won't install on a real device. Use Xcode for device runs
-  in v0.1; full pipeline support is queued.
+  for now; full pipeline support is queued.
 - **No `--entitlements` flag for iOS.** macOS bundling accepts one;
   iOS doesn't yet. Most apps don't need extra entitlements, but
   things like camera / network extensions / push will require manual
@@ -167,7 +167,7 @@ A minimal `ExportOptions.plist` for ad-hoc distribution:
   `ibtool` — that handles the launch frame. The home-screen icon
   still falls back to iOS's generic placeholder; full asset-catalog
   generation (sized App Icons, alternate-icon support, dark/tinted
-  variants) is queued for v0.2. To customize the launch screen
+  variants) is queued. To customize the launch screen
   beyond "icon on black", drop your own compiled `LaunchScreen.storyboardc`
   into `<App>.app/` after the build for now.
 

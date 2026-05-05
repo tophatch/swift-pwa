@@ -2,6 +2,7 @@
     import AppKit
     import Foundation
     import SwiftPWACore
+    import WebKit
 
     /// macOS-side runtime. Owns the singleton `MacAppContext` and drives
     /// `NSApplication.run()`. The `configure` closure runs synchronously
@@ -12,6 +13,9 @@
         public static let shared = MacAppRuntime()
         public let context = MacAppContext()
         private var didStartConfigure = false
+        // Retained for the lifetime of the process — releasing the
+        // monitor handle removes the hook.
+        private var devToolsMonitor: Any?
 
         private init() {}
 
@@ -23,6 +27,7 @@
             let app = NSApplication.shared
             app.setActivationPolicy(.regular)
             app.mainMenu = Self.makeMainMenu()
+            installDevToolsAccelerator()
 
             // Route MainThread.run through DispatchQueue.main so the
             // bridge runtime can hop to the UI thread uniformly across
@@ -43,6 +48,38 @@
                 )
             }
             NSApp.activate(ignoringOtherApps: true)
+        }
+
+        /// Cmd+Opt+J — open WKWebView's web inspector for the focused
+        /// page. Mirrors Chrome / Edge / Safari's "open JS console"
+        /// shortcut, and matches `Ctrl+Alt+J` on the GTK and Windows
+        /// backends. We use a global `NSEvent` monitor rather than a
+        /// menu item so the surface stays minimal — apps that want a
+        /// visible "Develop" menu can add their own.
+        ///
+        /// Walks the key window's responder chain to find the
+        /// foreground WKWebView, then forwards `_showInspector:` —
+        /// the same SPI `WKWebViewAdapter.openDevTools()` calls.
+        private func installDevToolsAccelerator() {
+            devToolsMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { event in
+                let mods = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
+                guard mods == [.command, .option],
+                      event.charactersIgnoringModifiers == "j"
+                else { return event }
+                var responder: NSResponder? = NSApp.keyWindow?.firstResponder
+                while let r = responder {
+                    if let wkv = r as? WKWebView {
+                        let sel = NSSelectorFromString("_showInspector:")
+                        if wkv.responds(to: sel) {
+                            wkv.perform(sel, with: nil)
+                            return nil // consume
+                        }
+                        break
+                    }
+                    responder = r.nextResponder
+                }
+                return event
+            }
         }
 
         public func runForever() -> Never {

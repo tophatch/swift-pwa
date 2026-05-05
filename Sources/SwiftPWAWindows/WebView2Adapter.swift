@@ -101,7 +101,7 @@
         /// the runtime is fine and the issue is in window painting /
         /// composition. If DevTools doesn't come up either, the
         /// controller is wedged.
-        func openDevTools() {
+        public func openDevTools() {
             guard let view else { return }
             swiftpwa_w2_view_open_devtools(view)
         }

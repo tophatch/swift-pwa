@@ -106,6 +106,32 @@
             return stream
         }
 
+        public nonisolated func openDevTools() {
+            #if os(macOS)
+                // WKWebView responds to the private `_showInspector:`
+                // selector when `isInspectable = true` is set (we set
+                // it during init). Best-effort SPI — guard on
+                // `responds(to:)` so a future runtime change just
+                // logs a hint rather than crashing.
+                let webView = webView
+                Task { @MainActor in
+                    let sel = NSSelectorFromString("_showInspector:")
+                    if webView.responds(to: sel) {
+                        webView.perform(sel, with: nil)
+                    } else {
+                        FileHandle.standardError.write(Data("""
+                        swift-pwa: WKWebView doesn't respond to _showInspector: on this macOS build.
+                        Use Safari's Develop menu (Develop > Open Web Inspector) instead.
+
+                        """.utf8))
+                    }
+                }
+            #endif
+            // iOS: WKWebView doesn't ship a programmatic inspector
+            // opener at all — debug from Safari on a paired Mac
+            // (Develop > <device> > <page>).
+        }
+
         // MARK: - WKScriptMessageHandler
 
         public func userContentController(

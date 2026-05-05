@@ -124,13 +124,22 @@
             }
         }
 
-        /// Install Ctrl+Q on this window. GTK accelerator groups are
-        /// dispatched before focus-based event delivery, so the binding
-        /// fires even when the WebKit page has a focused text input.
+        /// Install Ctrl+Q + Ctrl+Alt+J on this window. GTK accelerator
+        /// groups are dispatched before focus-based event delivery, so
+        /// the bindings fire even when the WebKit page has a focused
+        /// text input.
         private func connectQuitAccelerator(on windowPtr: UnsafeMutablePointer<GtkWindow>) {
             guard let group = gtk_accel_group_new() else { return }
             gtk_window_add_accel_group(windowPtr, group)
             swiftpwa_accel_connect_quit(group, quitAcceleratorCallback, nil)
+            // Pass `self` as the DevTools accelerator's user_data so
+            // the trampoline can dispatch back into this window's
+            // adapter. Lifetime is fine: the accelerator dies with
+            // the window (the closure is released by the destroy
+            // notify), so the unretained pointer stays valid for the
+            // accelerator's lifetime.
+            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+            swiftpwa_accel_connect_devtools(group, devToolsAcceleratorCallback, selfPtr)
             // The window now holds the only ref we care about; release
             // the floating one returned by `_new`.
             g_object_unref(UnsafeMutableRawPointer(group))
@@ -292,6 +301,20 @@
     let quitAcceleratorCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in
         MainActor.assumeIsolated {
             GTKAppContext.shared.quit(exitCode: 0)
+        }
+    }
+
+    /// `@convention(c)` callback wired to Ctrl+Alt+J. `user_data` is
+    /// the unretained `GTKWindow` pointer set up at accelerator install
+    /// time; we resolve it back and call `webView.openDevTools()` for
+    /// just that window.
+    let devToolsAcceleratorCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { userData in
+        guard let userData else { return }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let window = Unmanaged<GTKWindow>.fromOpaque(opaque).takeUnretainedValue()
+            window.webView.openDevTools()
         }
     }
 #endif

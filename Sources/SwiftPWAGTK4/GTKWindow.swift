@@ -85,6 +85,11 @@
             connectSizeNotify()
             connectCloseRequest()
             swiftpwa_window_install_quit_shortcut(windowPtr, quitShortcutCallback, nil)
+            // Pass `self` as the DevTools shortcut's user_data so the
+            // trampoline can dispatch back into this window's adapter.
+            // Lifetime is fine: the controller dies with the window.
+            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+            swiftpwa_window_install_devtools_shortcut(windowPtr, devToolsShortcutCallback, selfPtr)
         }
 
         /// Connect the `default-width` / `default-height` notify signals
@@ -288,6 +293,20 @@
     let quitShortcutCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { _ in
         MainActor.assumeIsolated {
             GTKAppContext.shared.quit(exitCode: 0)
+        }
+    }
+
+    /// `@convention(c)` callback wired to Ctrl+Alt+J. `user_data` is
+    /// the unretained `GTKWindow` pointer set up at shortcut install
+    /// time; we resolve it back and call `webView.openDevTools()` for
+    /// just that window.
+    let devToolsShortcutCallback: @convention(c) (UnsafeMutableRawPointer?) -> Void = { userData in
+        guard let userData else { return }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let window = Unmanaged<GTKWindow>.fromOpaque(opaque).takeUnretainedValue()
+            window.webView.openDevTools()
         }
     }
 #endif

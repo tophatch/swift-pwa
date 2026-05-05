@@ -181,13 +181,12 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 - **`NotificationsPlugin` requires a bundled, signed `.app` on Apple.** `UNUserNotificationCenter` raises an `NSException` when called from a process without a `CFBundleIdentifier`; the plugin pre-flights and throws a clean `BridgeError` instead of crashing, but actual banners only appear after `swift run swift-pwa build --target macos` (or via Xcode).
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows notifications use the legacy `Shell_NotifyIconW` balloon path.** Banners surface as toasts on Windows 10 / 11, but persistence in Action Center requires a registered AppUserModelID (or a packaged app) — unsigned `swift run` invocations show a transient balloon and nothing in history. Richer toast XML (replace-by-id, action buttons) waits on the swift-winrt dependency planned for v0.3.
-- **Cmd+Opt+J / Ctrl+Alt+J only opens DevTools on Windows.** macOS WKWebView and Linux WebKitGTK have to use Safari's *Develop* menu / right-click *Inspect Element* until v0.3 wires the same shortcut on those backends.
 - **Android bundler prints "not implemented".** Targets are scaffolded but the actual build path lands in v0.3.
 
 ### Planned
 
-- **v0.2** — Windows (Win32 + WebView2) verified on Windows 11 ARM64; clipboard, tray (macOS + GTK3 via libayatana-appindicator3), notifications, the portable `.exe` bundler, and the `Ctrl+Alt+J` DevTools shortcut are all in `main`. Remaining: an x64-Windows CI runner so regressions don't sneak past the ARM64-only smoke test.
-- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging, cross-platform DevTools shortcut.
+- **v0.2** — Windows (Win32 + WebView2) verified on Windows 11 ARM64; clipboard, tray (macOS + GTK3 via libayatana-appindicator3), notifications, the portable `.exe` bundler, and the cross-platform DevTools shortcut (`Cmd+Opt+J` on Apple, `Ctrl+Alt+J` on GTK + Windows) are all in `main`.
+- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging.
 - **v0.4+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
 
 ## Platform setup

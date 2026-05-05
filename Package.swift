@@ -282,10 +282,13 @@ let package = Package(
             swiftSettings: swiftSettings
         )
     ],
-    // C++17 — required by `<wil/com.h>` and the C++/WinRT headers
-    // (`<winrt/base.h>` etc.) used by `swiftpwa_toast.cpp`. The
-    // existing WebView2 shim happens to build under cl.exe's
-    // permissive C++14 mode, but moving the package to a stated
-    // standard avoids drift.
-    cxxLanguageStandard: .cxx17
+    // C++20 — required by C++/WinRT under the Swift-for-Windows
+    // toolchain. cppwinrt's coroutine support detects the compiler
+    // mode at preprocess time: under C++17 it tries to include
+    // `<experimental/coroutine>`, which the MSVC STL rejects when
+    // the front-end is clang (Swift-for-Windows builds C++ via
+    // clang-cl). Under C++20 cppwinrt uses the standard `<coroutine>`
+    // header instead, which compiles cleanly. WIL and WebView2.h are
+    // both happy under C++20.
+    cxxLanguageStandard: .cxx20
 )

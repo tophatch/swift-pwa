@@ -76,6 +76,33 @@ static inline void swiftpwa_accel_connect_quit(
     );
 }
 
+/// Wire Ctrl+Alt+J on `grp` to invoke `cb(user_data)`. Mirror of
+/// `swiftpwa_accel_connect_quit` but bound to the cross-platform
+/// DevTools shortcut. `user_data` is typically the owning
+/// `GTKWindow` pointer so the Swift trampoline can dispatch into
+/// `webView.openDevTools()` on the right window.
+static inline void swiftpwa_accel_connect_devtools(
+    GtkAccelGroup *grp,
+    swiftpwa_accel_callback cb,
+    void *user_data
+) {
+    swiftpwa_accel_box *box = (swiftpwa_accel_box *)g_malloc0(sizeof(swiftpwa_accel_box));
+    box->cb = cb;
+    box->user_data = user_data;
+    GClosure *closure = g_cclosure_new(
+        G_CALLBACK(swiftpwa_accel_trampoline),
+        box,
+        swiftpwa_accel_box_free
+    );
+    gtk_accel_group_connect(
+        grp,
+        GDK_KEY_j,
+        GDK_CONTROL_MASK | GDK_MOD1_MASK, /* Mod1 = Alt */
+        GTK_ACCEL_VISIBLE,
+        closure
+    );
+}
+
 // ---------------------------------------------------------------------
 // Clipboard helpers (GTK3 / GtkClipboard).
 //

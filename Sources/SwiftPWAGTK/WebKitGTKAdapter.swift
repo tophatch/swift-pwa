@@ -189,6 +189,23 @@
             return stream
         }
 
+        public func openDevTools() {
+            // `webkit_web_view_get_inspector` is in the WebKitGTK 4.1
+            // umbrella header pulled in by the C shim; calls must run
+            // on the GTK main thread, same as everything else.
+            let raw = UInt(bitPattern: viewWidget)
+            Task {
+                await MainThread.run {
+                    guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
+                    let webView = UnsafeMutableRawPointer(view)
+                        .assumingMemoryBound(to: WebKitWebView.self)
+                    if let inspector = webkit_web_view_get_inspector(webView) {
+                        webkit_web_inspector_show(inspector)
+                    }
+                }
+            }
+        }
+
         /// Called by the C-side signal handler trampoline whenever JS
         /// posts a frame via `mh.postMessage(...)`. Always invoked on
         /// the GTK main thread, but the continuation is thread-safe so

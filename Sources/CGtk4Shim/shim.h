@@ -64,6 +64,39 @@ static inline void swiftpwa_window_install_quit_shortcut(
     gtk_widget_add_controller(GTK_WIDGET(window), ctrl);
 }
 
+/// Install Ctrl+Alt+J on `window` to fire `cb(user_data)` — the
+/// cross-platform DevTools accelerator. Same scope (global) as the
+/// quit shortcut so it works while a focused webview input has
+/// keyboard.
+static inline void swiftpwa_window_install_devtools_shortcut(
+    GtkWindow *window,
+    swiftpwa_shortcut_callback cb,
+    void *user_data
+) {
+    swiftpwa_shortcut_box *box = (swiftpwa_shortcut_box *)g_malloc0(sizeof(swiftpwa_shortcut_box));
+    box->cb = cb;
+    box->user_data = user_data;
+
+    GtkShortcutTrigger *trigger = gtk_shortcut_trigger_parse_string("<Control><Alt>j");
+    GtkShortcutAction *action = gtk_callback_action_new(
+        swiftpwa_shortcut_trampoline,
+        box,
+        swiftpwa_shortcut_box_free
+    );
+    GtkShortcut *shortcut = gtk_shortcut_new(trigger, action);
+
+    GtkEventController *ctrl = gtk_shortcut_controller_new();
+    gtk_shortcut_controller_set_scope(
+        GTK_SHORTCUT_CONTROLLER(ctrl),
+        GTK_SHORTCUT_SCOPE_GLOBAL
+    );
+    gtk_shortcut_controller_add_shortcut(
+        GTK_SHORTCUT_CONTROLLER(ctrl),
+        shortcut
+    );
+    gtk_widget_add_controller(GTK_WIDGET(window), ctrl);
+}
+
 /// `gtk_init` is void/no-args in GTK4 (vs. `gtk_init(&argc, &argv)` on
 /// GTK3). Swift's clang importer doesn't always pick up no-arg C
 /// functions cleanly when there's a macro shim involved, so we expose

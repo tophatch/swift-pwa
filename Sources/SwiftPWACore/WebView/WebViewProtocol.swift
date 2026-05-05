@@ -29,4 +29,15 @@ public protocol PWAWebView: AnyObject, Sendable {
     /// Stream of frames received from JS. Each `WebView` exposes its
     /// own broadcast; `BridgeRuntime` consumes one stream per webview.
     func inboundFrames() -> AsyncStream<InboundFrame>
+
+    /// Open the platform's web inspector / DevTools window. Called
+    /// from the platform-standard accelerator (Cmd+Opt+J on Apple,
+    /// Ctrl+Alt+J on Linux + Windows). No-op on backends that don't
+    /// expose programmatic DevTools (currently iOS — its WKWebView
+    /// is debugged via Safari's *Develop* menu on a paired Mac).
+    func openDevTools()
+}
+
+public extension PWAWebView {
+    func openDevTools() {} // default: no-op
 }

@@ -18,16 +18,24 @@
     const subscribes = new Map();   // id -> {onChunk, onError, onEnd}
 
     function post(frame) {
-        // Backends inject a messageHandler named "__SwiftPWA__post":
-        //   - WKWebView: window.webkit.messageHandlers.__SwiftPWA__post.postMessage(json)
-        //   - WebKitGTK: window.webkit.messageHandlers.__SwiftPWA__post.postMessage(json)
-        //                (registered via webkit_user_content_manager_register_script_message_handler)
+        // Three native message channels, picked by what the platform
+        // exposes:
+        //   - WKWebView (macOS/iOS):
+        //     window.webkit.messageHandlers.__SwiftPWA__post.postMessage(json)
+        //   - WebKitGTK (Linux):
+        //     window.webkit.messageHandlers.__SwiftPWA__post.postMessage(json)
+        //     (registered via webkit_user_content_manager_register_script_message_handler)
+        //   - WebView2 (Windows):
+        //     window.chrome.webview.postMessage(json)
+        //     (the inbound side of WebView2's host<->web message channel)
         const json = JSON.stringify(frame);
         const mh = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.__SwiftPWA__post;
-        if (!mh) {
-            throw new Error("swift-pwa bridge: native message handler unavailable");
+        if (mh) { mh.postMessage(json); return; }
+        if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function") {
+            window.chrome.webview.postMessage(json);
+            return;
         }
-        mh.postMessage(json);
+        throw new Error("swift-pwa bridge: native message handler unavailable");
     }
 
     function deliver(jsonText) {
@@ -101,11 +109,24 @@
         };
     }
 
+    // WebView2's host-to-web channel surfaces native frames as
+    // `message` events on `window.chrome.webview` rather than
+    // `evaluateJavaScript("...__deliver(json)")` calls. Subscribe so
+    // PostWebMessageAsString-delivered frames flow through `deliver`
+    // the same way the WK / WebKitGTK paths do.
+    if (window.chrome && window.chrome.webview && typeof window.chrome.webview.addEventListener === "function") {
+        window.chrome.webview.addEventListener("message", (event) => {
+            if (typeof event.data === "string") {
+                deliver(event.data);
+            }
+        });
+    }
+
     Object.defineProperty(globalThis, "__SWIFT_PWA__", {
         value: Object.freeze({
             invoke,
             subscribe,
-            __deliver: deliver,    // called by the native side via evaluateJavaScript
+            __deliver: deliver,    // called by the native side via evaluateJavaScript (WK / WebKitGTK)
             __version: VERSION,
         }),
         writable: false,

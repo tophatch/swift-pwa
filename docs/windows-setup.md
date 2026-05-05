@@ -150,6 +150,23 @@ Caveats specific to ARM:
 
 ## 3. Build & run
 
+Easiest is to grab the prebuilt CLI from the latest GitHub release
+(added to the matrix in v0.3) and put it on your PATH:
+
+```powershell
+Invoke-WebRequest `
+    -Uri https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-windows-x86_64.exe `
+    -OutFile $env:USERPROFILE\bin\swift-pwa.exe
+# Make sure $env:USERPROFILE\bin is on $env:Path.
+
+swift-pwa init MyApp
+cd MyApp
+swift-pwa build --target windows                       # → build\MyApp\MyApp.exe (+ web/, pwa.json)
+```
+
+Or build the CLI from a swift-pwa checkout (useful when you're
+hacking on the bundler itself — same dance as the iOS / macOS docs):
+
 ```powershell
 swift build                                            # debug
 swift build -c release                                 # ship build

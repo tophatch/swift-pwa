@@ -174,6 +174,23 @@ DISPLAY=:99 import -window root /tmp/swift-pwa.png
 
 ## 6. Build an `.AppImage`
 
+Easiest is to install the prebuilt CLI from the latest release:
+
+```bash
+curl -L https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-linux-x86_64 \
+    -o /usr/local/bin/swift-pwa
+chmod +x /usr/local/bin/swift-pwa
+
+swift-pwa init MyApp
+cd MyApp
+swift-pwa build --target linux
+# → build/MyApp-x86_64.AppImage
+./build/MyApp-x86_64.AppImage
+```
+
+Or build the CLI from a swift-pwa checkout (useful when you're
+hacking on the bundler itself):
+
 ```bash
 swift build --product swift-pwa
 cd Examples/HelloPWA

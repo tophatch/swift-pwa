@@ -49,13 +49,31 @@ the buttons; the JS console should round-trip through `BridgeRuntime`.
 
 ## 4. Bundle a `.app`
 
+The fastest path is the prebuilt CLI from the latest GitHub release —
+no `swift run` overhead for every command. Pick the asset matching
+your arch:
+
 ```bash
-swift run swift-pwa init MyApp
+# Apple silicon:
+curl -L https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-macos-arm64 \
+    -o /usr/local/bin/swift-pwa
+chmod +x /usr/local/bin/swift-pwa
+
+# Intel:
+# curl -L https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-macos-x86_64 \
+#     -o /usr/local/bin/swift-pwa
+
+swift-pwa init MyApp
 cd MyApp
-swift run swift-pwa build --target macos
+swift-pwa build --target macos
 # → build/MyApp.app
 open build/MyApp.app
 ```
+
+If you're hacking on swift-pwa itself (or pinning to a specific
+commit), substitute `swift run --package-path /path/to/swift-pwa
+swift-pwa …` for the `swift-pwa` invocations above. The rest of the
+flags are the same.
 
 The bundler:
 
@@ -98,11 +116,11 @@ account:
 security find-identity -v -p codesigning
 
 # Sign during the build.
-swift run swift-pwa build --target macos \
+swift-pwa build --target macos \
     --sign "Developer ID Application: Jane Doe (TEAMID1234)"
 
 # Optionally pass entitlements (e.g. for hardened runtime + camera).
-swift run swift-pwa build --target macos \
+swift-pwa build --target macos \
     --sign "Developer ID Application: Jane Doe (TEAMID1234)" \
     --entitlements MyApp.entitlements
 ```

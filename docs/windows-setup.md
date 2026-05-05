@@ -15,36 +15,57 @@ Windows handles the rest via `import WinSDK`.
 
 ## 1. Toolchain
 
-| Component                 | Install                                                                                       |
-|---------------------------|-----------------------------------------------------------------------------------------------|
-| Swift 6.0+ for Windows    | <https://www.swift.org/install/windows/> (the official Windows installer or `winget`)         |
-| Visual Studio Build Tools | "Desktop development with C++" workload — supplies `cl.exe`, MSVC libs, the Windows 10/11 SDK |
-| WebView2 SDK              | NuGet package `Microsoft.Web.WebView2` (≥ 1.0.2210)                                           |
-| WebView2 Runtime          | <https://developer.microsoft.com/microsoft-edge/webview2/> (preinstalled on Windows 11)       |
+| Component                              | Install                                                                                         |
+|----------------------------------------|-------------------------------------------------------------------------------------------------|
+| Swift 6.0+ for Windows                 | <https://www.swift.org/install/windows/> (the official Windows installer or `winget`)           |
+| Visual Studio Build Tools              | "Desktop development with C++" workload — supplies `cl.exe`, MSVC libs, the Windows 10/11 SDK   |
+| WebView2 SDK                           | NuGet package `Microsoft.Web.WebView2` (≥ 1.0.2210)                                             |
+| Windows Implementation Libraries (WIL) | NuGet package `Microsoft.Windows.ImplementationLibrary` — `<wil/com.h>` is used by the COM shim |
+| WebView2 Runtime                       | <https://developer.microsoft.com/microsoft-edge/webview2/> (preinstalled on Windows 11)         |
 
 The Swift installer wires `import WinSDK` to the Visual Studio /
 Windows SDK headers; you don't need any extra plumbing for Win32.
 
-## 2. WebView2 SDK on the build path
+## 2. WebView2 SDK + WIL on the build path
 
 `Sources/CWebView2Shim/swiftpwa_webview2.cpp` includes `<WebView2.h>`
-and links `WebView2LoaderStatic.lib`. Both come from the
-`Microsoft.Web.WebView2` NuGet package. The simplest path:
+and `<wil/com.h>`, and links `WebView2LoaderStatic.lib`:
 
-The NuGet package ships per-architecture static loaders under
-`build/native/{x86,x64,arm64}/WebView2LoaderStatic.lib`. Pick the one
-matching your build host (Swift on Windows compiles for the host
-arch — see "Windows on ARM" below for arm64 specifics).
+- `<WebView2.h>` and the static loader come from the
+  `Microsoft.Web.WebView2` NuGet package, which ships per-arch
+  loaders under `build/native/{x86,x64,arm64}/WebView2LoaderStatic.lib`.
+- `<wil/com.h>` comes from `Microsoft.Windows.ImplementationLibrary`
+  (header-only).
 
 ```powershell
-# In your project root:
+# In your project root, fetch both NuGet packages:
 nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
+```
 
+Then enter a Visual Studio Developer Shell with the right architecture
+*before* setting INCLUDE/LIB and building. The default PowerShell
+session inherits the system `LIB`, which on a fresh box may point at
+x86 MSVC libs and produce confusing link-time errors like
+`msvcrt.lib(chkstk.obj): machine type x86 conflicts with arm64`.
+
+```powershell
+# x64 host:
+& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+
+# arm64 host:
+& "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch arm64 -HostArch arm64
+```
+
+(Adjust the path for VS 2022 / a non-Community edition.)
+
+```powershell
 # Pick the arch matching your Swift toolchain. PROCESSOR_ARCHITECTURE
-# is "AMD64" on x64 and "ARM64" on Windows-on-ARM, so the lookup
-# below picks the right folder automatically.
+# is "AMD64" on x64 and "ARM64" on Windows-on-ARM.
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-$env:INCLUDE = "$pwd\packages\Microsoft.Web.WebView2\build\native\include;$env:INCLUDE"
+$env:INCLUDE = "$pwd\packages\Microsoft.Web.WebView2\build\native\include;" +
+               "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include;" +
+               "$env:INCLUDE"
 $env:LIB     = "$pwd\packages\Microsoft.Web.WebView2\build\native\$arch;$env:LIB"
 
 swift build -c release
@@ -58,8 +79,9 @@ install hint if it's missing.
 
 (If you'd rather pull the SDK via vcpkg, `vcpkg install
 microsoft-web-webview2:x64-windows` — or `:arm64-windows` — resolves
-the same headers and loader. Make sure the vcpkg-installed `lib/`
-dir is on `LIB`.)
+the same headers and loader. WIL is also available as
+`vcpkg install wil`. Make sure the vcpkg-installed `lib/` dir is on
+`LIB`.)
 
 ### Windows on ARM
 

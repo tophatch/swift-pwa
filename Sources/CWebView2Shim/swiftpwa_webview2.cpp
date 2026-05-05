@@ -157,7 +157,11 @@ std::string wide_to_utf8(LPCWSTR w) {
     if (len <= 0) return {};
     std::string s;
     s.resize(static_cast<size_t>(len - 1)); // exclude trailing NUL
-    WideCharToMultiByte(CP_UTF8, 0, w, -1, s.data(), len, nullptr, nullptr);
+    // `&s[0]` rather than `s.data()` — MSVC's C++17 surface picks the
+    // const overload of `data()` for non-const strings on some
+    // releases, which can't satisfy WideCharToMultiByte's mutable
+    // `LPSTR` out-param.
+    WideCharToMultiByte(CP_UTF8, 0, w, -1, &s[0], len, nullptr, nullptr);
     return s;
 }
 
@@ -167,7 +171,7 @@ std::wstring utf8_to_wide(const char *s) {
     if (len <= 0) return {};
     std::wstring w;
     w.resize(static_cast<size_t>(len - 1));
-    MultiByteToWideChar(CP_UTF8, 0, s, -1, w.data(), len);
+    MultiByteToWideChar(CP_UTF8, 0, s, -1, &w[0], len);
     return w;
 }
 } // namespace

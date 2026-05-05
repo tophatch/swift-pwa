@@ -214,7 +214,10 @@
         // MARK: - Window protocol
 
         public func eventStream() -> AsyncStream<WindowEvent> {
-            let key = UUID()
+            // `Foundation.UUID()` because the Win32 SDK exports its
+            // own `UUID` typealias (the `_GUIDDef` struct), and Swift
+            // can't disambiguate from `UUID()`.
+            let key = Foundation.UUID()
             return AsyncStream { continuation in
                 self.continuations[key] = continuation
                 continuation.onTermination = { @Sendable _ in

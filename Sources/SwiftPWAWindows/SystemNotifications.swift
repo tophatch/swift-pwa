@@ -79,7 +79,7 @@
             // Win32 doesn't return an id for balloon tips. Synthesize
             // one — callers use it for log correlation only on the
             // Windows backend (action-button events ship in v0.3).
-            return UUID().uuidString
+            return Foundation.UUID().uuidString
         }
 
     }

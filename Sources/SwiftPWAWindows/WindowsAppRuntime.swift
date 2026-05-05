@@ -66,7 +66,12 @@
             }
 
             var msg = MSG()
-            while GetMessageW(&msg, nil, 0, 0) > 0 {
+            // Swift's WinSDK overlay imports `GetMessageW` as
+            // returning `Bool` rather than the C `BOOL` (Int32). We
+            // lose the distinction between the WM_QUIT (returns 0)
+            // and error (returns -1) cases, but for our purposes
+            // both terminate the loop.
+            while GetMessageW(&msg, nil, 0, 0) {
                 TranslateMessage(&msg)
                 DispatchMessageW(&msg)
             }
@@ -89,8 +94,7 @@
         private func pumpUntil(_ cond: () -> Bool) {
             var msg = MSG()
             while !cond() {
-                let r = GetMessageW(&msg, nil, 0, 0)
-                if r <= 0 { break }
+                if !GetMessageW(&msg, nil, 0, 0) { break }
                 TranslateMessage(&msg)
                 DispatchMessageW(&msg)
             }
@@ -102,20 +106,16 @@
         /// owned by this runtime. We post `WM_APP+1` to it carrying a
         /// heap-boxed closure pointer; its WndProc unboxes and fires.
         private func installMainThreadHook() {
-            let hwnd = MainThreadDispatcher.create()
-            // Launder the HWND through `UInt` so the captured value is
-            // `Sendable` under Swift 6 strict concurrency. The
-            // dispatcher window lives for the lifetime of the process
-            // (no early release path), so reconstituting the pointer
-            // inside the hook is always safe.
-            let raw = UInt(bitPattern: hwnd)
+            // HWND imports as `UnsafeMutablePointer<HWND__>` (a
+            // pointer to an opaque tag struct), which isn't
+            // `Sendable`. Wrap it in a class we mark
+            // `@unchecked Sendable` ourselves: the dispatcher
+            // window lives for the lifetime of the process and is
+            // never written to, so capturing it across the hook's
+            // closure boundary is safe.
+            let box = HWNDBox(MainThreadDispatcher.create())
             MainThread.setHook { body in
-                // HWND is `HANDLE` is `UnsafeMutableRawPointer?`, so
-                // round-tripping through `UInt(bitPattern:)` →
-                // `UnsafeMutableRawPointer(bitPattern:)` is exactly
-                // the typealias chain.
-                let hwnd: HWND = UnsafeMutableRawPointer(bitPattern: raw)
-                MainThreadDispatcher.post(to: hwnd, body: body)
+                MainThreadDispatcher.post(to: box.hwnd, body: body)
             }
         }
     }
@@ -125,6 +125,16 @@
     final class EnvBox {
         weak var context: WindowsAppContext?
         init(context: WindowsAppContext) { self.context = context }
+    }
+
+    /// `@unchecked Sendable` wrapper for an HWND we need to capture
+    /// across a Sendable closure boundary. The Win32 HWND type imports
+    /// as `UnsafeMutablePointer<HWND__>`, which isn't `Sendable`; the
+    /// safety here comes from the dispatcher window living for the
+    /// lifetime of the process and being treated as immutable.
+    final class HWNDBox: @unchecked Sendable {
+        let hwnd: HWND
+        init(_ hwnd: HWND) { self.hwnd = hwnd }
     }
 
     /// `@convention(c)` callback fired by the WebView2 shim once the

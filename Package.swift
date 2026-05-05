@@ -150,6 +150,47 @@ let package = Package(
         webkitSystemLibraryTarget,
         gtkBackendTarget
     ] + (appIndicatorSystemLibraryTarget.map { [$0] } ?? []) + [
+        // MARK: - Windows backend (WebView2 via a C++ COM shim)
+        //
+        // The shim is a regular C/C++ target (not a systemLibrary)
+        // because it actually compiles source — the WebView2 SDK is
+        // header-only on the build side but its COM interfaces need
+        // real C++ to wrangle from. The Windows SDK headers
+        // (`<windows.h>`, `<WebView2.h>`) come from the standard
+        // include path on a Swift-on-Windows install. The static
+        // loader (`WebView2LoaderStatic.lib`) is shipped in the
+        // `Microsoft.Web.WebView2` NuGet package; see
+        // `docs/windows-setup.md` for how to put it on the link path.
+
+        .target(
+            name: "CWebView2Shim",
+            path: "Sources/CWebView2Shim",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .define("UNICODE", .when(platforms: [.windows])),
+                .define("_UNICODE", .when(platforms: [.windows])),
+                .define("WIN32_LEAN_AND_MEAN", .when(platforms: [.windows]))
+            ],
+            linkerSettings: [
+                .linkedLibrary("WebView2LoaderStatic", .when(platforms: [.windows])),
+                .linkedLibrary("ole32", .when(platforms: [.windows])),
+                .linkedLibrary("oleaut32", .when(platforms: [.windows])),
+                .linkedLibrary("shlwapi", .when(platforms: [.windows])),
+                .linkedLibrary("user32", .when(platforms: [.windows])),
+                .linkedLibrary("shell32", .when(platforms: [.windows])),
+                .linkedLibrary("RuntimeObject", .when(platforms: [.windows]))
+            ]
+        ),
+
+        .target(
+            name: "SwiftPWAWindows",
+            dependencies: [
+                "SwiftPWACore",
+                .target(name: "CWebView2Shim", condition: .when(platforms: [.windows]))
+            ],
+            swiftSettings: swiftSettings
+        ),
+
         // MARK: - Umbrella
 
         .target(
@@ -157,7 +198,8 @@ let package = Package(
             dependencies: [
                 "SwiftPWACore",
                 .target(name: "SwiftPWAWebKit", condition: .when(platforms: [.macOS, .iOS])),
-                .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux]))
+                .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
+                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows]))
             ],
             swiftSettings: swiftSettings
         ),
@@ -191,6 +233,14 @@ let package = Package(
             name: "SwiftPWAGTKTests",
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
+                "_SwiftPWATestSupport"
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAWindowsTests",
+            dependencies: [
+                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings

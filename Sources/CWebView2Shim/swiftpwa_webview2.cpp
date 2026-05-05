@@ -236,8 +236,27 @@ extern "C" void swiftpwa_w2_create_controller(
                 // `swiftpwa_w2_resource_respond` can build responses
                 // without re-querying.
                 ViewExtension &ext = get_or_create_extension(view.Get());
-                std::lock_guard<std::mutex> lock(ext.mu);
-                ext.env = env_ref;
+                {
+                    std::lock_guard<std::mutex> lock(ext.mu);
+                    ext.env = env_ref;
+                }
+                // Diagnostic: log NavigationCompleted so a failed
+                // navigation surfaces a WebErrorStatus on stderr
+                // instead of just rendering blank.
+                EventRegistrationToken navTok{};
+                view->add_NavigationCompleted(
+                    Callback<ICoreWebView2NavigationCompletedEventHandler>(
+                        [](ICoreWebView2 *, ICoreWebView2NavigationCompletedEventArgs *args) -> HRESULT {
+                            BOOL success = FALSE;
+                            COREWEBVIEW2_WEB_ERROR_STATUS status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
+                            args->get_IsSuccess(&success);
+                            args->get_WebErrorStatus(&status);
+                            fprintf(stderr,
+                                    "swift-pwa: NavigationCompleted success=%d status=%d\n",
+                                    success ? 1 : 0, static_cast<int>(status));
+                            return S_OK;
+                        }).Get(),
+                    &navTok);
             }
             cb(out, 0, user);
             return S_OK;
@@ -269,7 +288,11 @@ extern "C" void swiftpwa_w2_controller_set_bounds(
     int32_t left, int32_t top, int32_t right, int32_t bottom) {
     if (!ctrl || !ctrl->com) return;
     RECT r{left, top, right, bottom};
-    ctrl->com->put_Bounds(r);
+    HRESULT hr = ctrl->com->put_Bounds(r);
+    if (FAILED(hr)) {
+        fprintf(stderr, "swift-pwa: put_Bounds(%d,%d,%d,%d) failed: 0x%08X\n",
+                left, top, right, bottom, static_cast<unsigned int>(hr));
+    }
 }
 
 extern "C" void swiftpwa_w2_controller_set_visible(
@@ -299,7 +322,11 @@ extern "C" swiftpwa_w2_view *swiftpwa_w2_controller_view(swiftpwa_w2_controller 
 
 extern "C" void swiftpwa_w2_view_navigate(swiftpwa_w2_view *view, const wchar_t *url) {
     if (!view || !view->raw || !url) return;
-    view->raw->Navigate(url);
+    HRESULT hr = view->raw->Navigate(url);
+    if (FAILED(hr)) {
+        fprintf(stderr, "swift-pwa: Navigate failed: 0x%08X\n",
+                static_cast<unsigned int>(hr));
+    }
 }
 
 extern "C" void swiftpwa_w2_view_add_script_on_document_created(
@@ -402,13 +429,25 @@ extern "C" void swiftpwa_w2_view_map_virtual_host(
     // SetVirtualHostNameToFolderMapping is on ICoreWebView2_3 (or the
     // matching versioned interface). Query for the highest one we can.
     ComPtr<ICoreWebView2_3> v3;
-    if (FAILED(view->raw->QueryInterface(IID_PPV_ARGS(&v3)))) return;
+    HRESULT qi = view->raw->QueryInterface(IID_PPV_ARGS(&v3));
+    if (FAILED(qi)) {
+        fprintf(stderr, "swift-pwa: QueryInterface(ICoreWebView2_3) failed: 0x%08X "
+                        "— virtual host mapping unavailable on this WebView2 build\n",
+                static_cast<unsigned int>(qi));
+        return;
+    }
     COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND kind =
         access_kind == 0 ? COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY
                          : access_kind == 1
                              ? COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_ALLOW
                              : COREWEBVIEW2_HOST_RESOURCE_ACCESS_KIND_DENY_CORS;
-    v3->SetVirtualHostNameToFolderMapping(host_name, folder_path, kind);
+    HRESULT hr = v3->SetVirtualHostNameToFolderMapping(host_name, folder_path, kind);
+    if (FAILED(hr)) {
+        fprintf(stderr, "swift-pwa: SetVirtualHostNameToFolderMapping failed: 0x%08X\n",
+                static_cast<unsigned int>(hr));
+    } else {
+        fprintf(stderr, "swift-pwa: virtual host mapping installed (kind=%d)\n", access_kind);
+    }
 }
 
 extern "C" void swiftpwa_w2_view_intercept_resources(

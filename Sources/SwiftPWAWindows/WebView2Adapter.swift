@@ -126,49 +126,44 @@
             // and navigate there. For remote content we navigate
             // directly.
             //
-            // **Why `MainThread.run` and not `Task { @MainActor in }`**:
-            // on Windows the runtime owns the message pump
-            // (`GetMessageW`), and Swift's MainActor executor — which
-            // is backed by libdispatch's main queue on Windows — is
-            // not pumped by that loop. A `Task { @MainActor in }`
-            // therefore queues onto an executor nothing is draining,
-            // and never fires (symptom: webview attaches but the
-            // page never navigates → blank window). `MainThread.run`
-            // routes through the dispatcher window we register at
-            // startup, which the message pump *does* drain.
-            //
-            // `nonisolated(unsafe)` on the captured locals because
-            // Swift 6.3's strict-concurrency check otherwise refuses
-            // the `OpaquePointer?` cross into the inner `MainThread.run`
-            // closure. The handle is only dereferenced on the UI
-            // thread inside the closure body.
-            nonisolated(unsafe) let viewLocal = view
+            // Called synchronously from `Win32Window.init`, which is
+            // already on the UI thread (main actor + main OS thread),
+            // so we just invoke WebView2 directly — no Task / MainThread
+            // hop. (`evaluateJavaScript` and `deliver` *do* hop because
+            // they're called from `BridgeRuntime`'s cooperative-pool
+            // pump.)
+            guard let view else { return }
             switch content {
             case let .bundled(directory, entry):
+                // Use the platform's native path representation —
+                // `URL.path` on Windows can return a POSIX-shaped
+                // string with forward slashes, which
+                // `SetVirtualHostNameToFolderMapping` silently
+                // ignores. `withUnsafeFileSystemRepresentation`
+                // gives us the host-native form.
+                let folderPath = directory.withUnsafeFileSystemRepresentation { rep -> String in
+                    rep.map { String(cString: $0) } ?? directory.path
+                }
                 let host = "swift-pwa.local"
                 let urlString = "https://\(host)/\(entry)"
-                Task {
-                    await MainThread.run {
-                        guard let viewLocal else { return }
-                        directory.path.withCString(encodedAs: UTF16.self) { folder in
-                            host.withCString(encodedAs: UTF16.self) { hostW in
-                                swiftpwa_w2_view_map_virtual_host(viewLocal, hostW, folder, 2)
-                            }
-                        }
-                        urlString.withCString(encodedAs: UTF16.self) { urlW in
-                            swiftpwa_w2_view_navigate(viewLocal, urlW)
-                        }
+                FileHandle.standardError.write(Data(
+                    "swift-pwa: mapping host \(host) -> \(folderPath); navigating \(urlString)\n".utf8
+                ))
+                folderPath.withCString(encodedAs: UTF16.self) { folder in
+                    host.withCString(encodedAs: UTF16.self) { hostW in
+                        swiftpwa_w2_view_map_virtual_host(view, hostW, folder, 2)
                     }
+                }
+                urlString.withCString(encodedAs: UTF16.self) { urlW in
+                    swiftpwa_w2_view_navigate(view, urlW)
                 }
                 assetProvider = AssetProvider(root: directory)
             case let .remote(url):
-                Task {
-                    await MainThread.run {
-                        guard let viewLocal else { return }
-                        url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
-                            swiftpwa_w2_view_navigate(viewLocal, urlW)
-                        }
-                    }
+                FileHandle.standardError.write(Data(
+                    "swift-pwa: navigating \(url.absoluteString)\n".utf8
+                ))
+                url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
+                    swiftpwa_w2_view_navigate(view, urlW)
                 }
             }
         }

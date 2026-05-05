@@ -24,7 +24,12 @@
         /// subsequent windows; doesn't matter in practice (we only
         /// ever create one), but `RegisterClassExW` errors on a
         /// duplicate registration.
-        private static var classAtom: ATOM = 0
+        // `nonisolated(unsafe)` because the static var is mutable
+        // global state. The invariant that protects it: `create()` is
+        // only ever called once at startup, on the UI thread, before
+        // any other code touches it. Same pattern as
+        // `MainThread._hook` in `SwiftPWACore/MainThread.swift`.
+        nonisolated(unsafe) private static var classAtom: ATOM = 0
         private static let className: [WCHAR] = "SwiftPWADispatcher".utf16.map { WCHAR($0) } + [0]
 
         static func create() -> HWND {
@@ -57,7 +62,7 @@
             // is reserved for future use (e.g. distinguishing message
             // categories if we ever multiplex this window).
             let lparam = LPARAM(Int(bitPattern: box))
-            if !PostMessageW(hwnd, dispatchMessage, 0, lparam) {
+            if PostMessageW(hwnd, dispatchMessage, 0, lparam) == 0 {
                 // PostMessage failed — release the box so we don't
                 // leak. The WndProc retains-then-fires; on a failed
                 // post nothing else will pick it up.

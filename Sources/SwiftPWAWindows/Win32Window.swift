@@ -40,7 +40,10 @@
 
         // Window class atom — registered lazily on first window. The
         // class holds the wndProc that routes messages back into Swift.
-        private static var classAtom: ATOM = 0
+        // `nonisolated(unsafe)` because the static var is mutable
+        // global state guarded by the "always called from the UI
+        // thread during init" invariant.
+        nonisolated(unsafe) private static var classAtom: ATOM = 0
         private static let className: [WCHAR] = "SwiftPWAWindow".utf16.map { WCHAR($0) } + [0]
 
         public init(
@@ -126,7 +129,7 @@
             wc.style = UINT(CS_HREDRAW | CS_VREDRAW)
             wc.lpfnWndProc = swiftPWAWndProc
             wc.hInstance = GetModuleHandleW(nil)
-            wc.hCursor = LoadCursorW(nil, IDC_ARROW)
+            wc.hCursor = LoadCursorW(nil, IDC_ARROW_W)
             wc.hbrBackground = HBRUSH(bitPattern: UInt(COLOR_WINDOW + 1))
             classAtom = className.withUnsafeBufferPointer { name in
                 wc.lpszClassName = name.baseAddress
@@ -142,7 +145,7 @@
         /// further processing is needed; `false` to fall through to
         /// `DefWindowProcW`.
         @discardableResult
-        func handle(message: UINT, wParam _: WPARAM, lParam: LPARAM) -> Bool {
+        func handle(message: UINT, wParam: WPARAM, lParam: LPARAM) -> Bool {
             switch Int32(message) {
             case WM_SIZE:
                 // LOWORD/HIWORD of lParam are the new client extents.

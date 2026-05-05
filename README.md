@@ -122,13 +122,13 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 
 ## Supported platforms
 
-| Platform | Webview             | Status                                                               |
-|---------:|---------------------|----------------------------------------------------------------------|
-| macOS 15 | WKWebView           | First class                                                          |
-| iOS 18   | WKWebView           | First class (UIScene)                                                |
-| Linux    | WebKitGTK 4.1 / 6.0 | First class (GTK3 default; GTK4 via `SWIFT_PWA_GTK4=1`)              |
-| Windows  | WebView2 (Edge)     | First class (Win32 + WebView2; verified on Windows 11 ARM64)         |
-| Android  | android.webkit      | Stub (planned v0.3)                                                  |
+| Platform | Webview             | Status                                                                                       |
+|---------:|---------------------|----------------------------------------------------------------------------------------------|
+| macOS 15 | WKWebView           | First class                                                                                  |
+| iOS 18   | WKWebView           | First class (UIScene)                                                                        |
+| Linux    | WebKitGTK 4.1 / 6.0 | First class (GTK3 default; GTK4 via `SWIFT_PWA_GTK4=1`)                                      |
+| Windows  | WebView2 (Edge)     | First class (Win32 + WebView2; Per-Monitor V2 DPI; WinRT toasts; portable `.exe` and MSIX)   |
+| Android  | android.webkit      | Stub (planned v0.4)                                                                          |
 
 ## JS API
 

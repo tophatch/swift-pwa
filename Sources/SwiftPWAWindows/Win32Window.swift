@@ -144,7 +144,16 @@
             wc.lpfnWndProc = swiftPWAWndProc
             wc.hInstance = GetModuleHandleW(nil)
             wc.hCursor = LoadCursorW(nil, IDC_ARROW_W)
-            wc.hbrBackground = HBRUSH(bitPattern: UInt(COLOR_WINDOW + 1))
+            // No background brush. WebView2 renders via DirectComposition
+            // (not GDI), so its visual sits on top of the HWND surface;
+            // an `hbrBackground = COLOR_WINDOW+1` would paint white over
+            // the same pixels every WM_ERASEBKGND. Leaving the brush
+            // null means GDI doesn't erase the background — there's a
+            // brief moment between `ShowWindow` and the first WebView2
+            // paint where uninitialized pixels could show, but in
+            // practice the controller is already live by the time we
+            // show the window.
+            wc.hbrBackground = nil
             classAtom = className.withUnsafeBufferPointer { name in
                 wc.lpszClassName = name.baseAddress
                 return RegisterClassExW(&wc)

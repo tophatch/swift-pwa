@@ -377,6 +377,15 @@ extern "C" void swiftpwa_w2_view_post_web_message_string(
     view->raw->PostWebMessageAsString(message);
 }
 
+extern "C" void swiftpwa_w2_view_open_devtools(swiftpwa_w2_view *view) {
+    if (!view || !view->raw) return;
+    HRESULT hr = view->raw->OpenDevToolsWindow();
+    if (FAILED(hr)) {
+        fprintf(stderr, "swift-pwa: OpenDevToolsWindow failed: 0x%08X\n",
+                static_cast<unsigned int>(hr));
+    }
+}
+
 extern "C" void swiftpwa_w2_view_set_web_message_handler(
     swiftpwa_w2_view *view,
     swiftpwa_w2_message_cb cb,
@@ -618,6 +627,7 @@ extern "C" void swiftpwa_w2_view_navigate(swiftpwa_w2_view *, const wchar_t *) {
 extern "C" void swiftpwa_w2_view_add_script_on_document_created(swiftpwa_w2_view *, const wchar_t *) {}
 extern "C" void swiftpwa_w2_view_execute_script(swiftpwa_w2_view *, const wchar_t *, swiftpwa_w2_eval_complete_cb, void *) {}
 extern "C" void swiftpwa_w2_view_post_web_message_string(swiftpwa_w2_view *, const wchar_t *) {}
+extern "C" void swiftpwa_w2_view_open_devtools(swiftpwa_w2_view *) {}
 extern "C" void swiftpwa_w2_view_set_web_message_handler(swiftpwa_w2_view *, swiftpwa_w2_message_cb, void *) {}
 extern "C" void swiftpwa_w2_view_map_virtual_host(swiftpwa_w2_view *, const wchar_t *, const wchar_t *, int) {}
 extern "C" void swiftpwa_w2_view_intercept_resources(swiftpwa_w2_view *, const wchar_t *, swiftpwa_w2_resource_cb, void *) {}

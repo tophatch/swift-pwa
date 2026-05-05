@@ -27,19 +27,16 @@
         /// The Swift instance is retained on construction and the raw
         /// pointer is handed to the C shim as the trampoline's user
         /// data, so the trampoline can resolve back to `self` via
-        /// `Unmanaged.fromOpaque`.
+        /// `Unmanaged.fromOpaque`. The `passRetained` is intentionally
+        /// matched by no `release` anywhere — `SystemTray` is meant
+        /// to live for the app lifetime, so the leaked retain is the
+        /// design rather than a bug. (And because `deinit` therefore
+        /// cannot be reached, attempting to call `swiftpwa_tray_free`
+        /// from one runs into Swift 6's "non-Sendable property in
+        /// nonisolated deinit" rule for nothing.)
         public init() {
             let opaque = Unmanaged.passRetained(self).toOpaque()
             trayPtr = swiftpwa_tray_new(trayEventTrampoline, opaque)
-        }
-
-        deinit {
-            // SystemTray is intended to live for the app lifetime; if
-            // it does get torn down, free the GTK side. We don't release
-            // the retained `self` here — the trampoline is the only
-            // holder, and we're already in `deinit` so there's nothing
-            // to release back to.
-            if let p = trayPtr { swiftpwa_tray_free(p) }
         }
 
         public func setIcon(path: String, template _: Bool) {

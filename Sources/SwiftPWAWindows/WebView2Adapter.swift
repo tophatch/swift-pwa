@@ -179,27 +179,33 @@
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            // `nonisolated(unsafe)` on these locals so the
-            // `MainThread.run` closure can capture them without
-            // tripping Swift 6.3's sending-risk diagnostic. We use
-            // `MainThread.run` (the dispatcher-window hook) rather
-            // than `Task { @MainActor in }` for the same reason as
-            // `load(...)`: Swift's MainActor executor isn't drained
-            // by our `GetMessageW` pump on Windows, so a `@MainActor`
-            // Task would never fire.
+            // `nonisolated(unsafe)` on the view handle for the same
+            // reason as `load(...)` — `OpaquePointer?` isn't Sendable
+            // under strict mode, but the underlying view is only ever
+            // dereferenced on the UI thread.
+            //
+            // We use `MainThread.run` (the dispatcher-window hook)
+            // rather than `Task { @MainActor in }` because Swift's
+            // MainActor executor isn't drained by our `GetMessageW`
+            // pump on Windows.
+            //
+            // The `EvalBox` is captured directly as a class reference
+            // (it's `@unchecked Sendable`); we only convert to a raw
+            // opaque pointer at the C-call boundary inside the
+            // closure, which keeps Swift 6.1's sending-risk check
+            // happy — no raw pointer crosses isolation domains.
             nonisolated(unsafe) let viewLocal = view
             let snippet = js
             return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in
-                let box = Unmanaged.passRetained(EvalBox(continuation: cont)).toOpaque()
-                nonisolated(unsafe) let boxPtr = box
+                let evalBox = EvalBox(continuation: cont)
                 Task {
                     await MainThread.run {
                         guard let viewLocal else {
-                            Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
-                                .continuation.resume(returning: nil)
+                            evalBox.continuation.resume(returning: nil)
                             return
                         }
+                        let boxPtr = Unmanaged.passRetained(evalBox).toOpaque()
                         snippet.withCString(encodedAs: UTF16.self) { wcs in
                             swiftpwa_w2_view_execute_script(
                                 viewLocal, wcs, evalCompleteTrampoline, boxPtr

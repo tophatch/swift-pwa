@@ -16,7 +16,23 @@ If you write Swift and want to ship a small, single-codebase desktop/mobile app 
 
 ## Quickstart
 
-Scaffold a project from a swift-pwa checkout:
+Grab a release binary and scaffold a project:
+
+```bash
+# Pick the asset for your platform from
+# https://github.com/tophatch/swift-pwa/releases/latest
+# (macOS arm64 example):
+curl -L https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-macos-arm64 \
+    -o /usr/local/bin/swift-pwa
+chmod +x /usr/local/bin/swift-pwa
+
+swift-pwa init MyApp
+cd MyApp
+```
+
+Other available assets: `swift-pwa-macos-x86_64`, `swift-pwa-linux-x86_64`. Windows users build from source until the v0.3 release matrix gains a Windows artifact — see [docs/windows-setup.md](docs/windows-setup.md).
+
+Or build the CLI from source (works on every platform, including Windows):
 
 ```bash
 git clone https://github.com/tophatch/swift-pwa

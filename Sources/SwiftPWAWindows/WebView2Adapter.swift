@@ -28,9 +28,15 @@
         private nonisolated(unsafe) var view: OpaquePointer?
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        private nonisolated(unsafe) lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in
-            self.continuation = c
-        }
+        // Eager `let` rather than a `lazy var` for the same reason
+        // as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
+        // toolchain) refuses `nonisolated` on lazy properties, and
+        // dropping the modifier promotes the property to an
+        // isolation that breaks `nonisolated func inboundFrames()`.
+        // `AsyncStream`'s init invokes the closure synchronously,
+        // so we lift the continuation out and assign it after the
+        // stored property is set.
+        private nonisolated(unsafe) let stream: AsyncStream<InboundFrame>
         private nonisolated(unsafe) var assetProvider: AssetProvider?
 
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache
@@ -51,6 +57,9 @@
         ) throws {
             self.environment = environment
             self.parent = parent
+            var captured: AsyncStream<InboundFrame>.Continuation?
+            stream = AsyncStream { captured = $0 }
+            continuation = captured
             // Async controller creation kicks off here; the caller
             // will pump messages via `pumpUntilReady` until the
             // callback flips `ready`.
@@ -250,8 +259,7 @@
         }
 
         public func inboundFrames() -> AsyncStream<InboundFrame> {
-            _ = stream
-            return stream
+            stream
         }
 
         /// Called from `messageReceivedTrampoline` whenever the page
@@ -262,7 +270,6 @@
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
                 let frame = try Envelope.decode(data)
-                _ = stream
                 continuation?.yield(frame)
             } catch {
                 #if DEBUG

@@ -174,7 +174,7 @@
                 } else {
                     let flags: UINT = UINT(MF_STRING) | (item.enabled ? 0 : UINT(MF_GRAYED))
                     item.label.withCString(encodedAs: UTF16.self) { wcs in
-                        AppendMenuW(menu, flags, UINT_PTR(i + 1), wcs)
+                        _ = AppendMenuW(menu, flags, UINT_PTR(i + 1), wcs)
                     }
                 }
             }

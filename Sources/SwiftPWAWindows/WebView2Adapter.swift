@@ -96,6 +96,9 @@
         /// shown.
         func fitTo(client: RECT) {
             guard let controller else { return }
+            FileHandle.standardError.write(Data(
+                "swift-pwa: fitTo bounds (\(client.left),\(client.top))-(\(client.right),\(client.bottom))\n".utf8
+            ))
             swiftpwa_w2_controller_set_bounds(
                 controller,
                 client.left, client.top, client.right, client.bottom

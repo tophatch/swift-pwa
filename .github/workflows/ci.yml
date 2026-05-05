@@ -94,6 +94,46 @@ jobs:
       - name: Test Core + CLI
         run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
+  windows:
+    runs-on: windows-latest
+    # The Windows backend (`SwiftPWAWindows` + `CWebView2Shim`) needs:
+    #   1. Swift for Windows (compnerd's action — `swift-actions/setup-swift`
+    #      doesn't cover Windows last we checked).
+    #   2. Visual Studio Build Tools for the MSVC CRT (preinstalled on
+    #      windows-latest, but `LIB` only picks up the right arch after
+    #      `Launch-VsDevShell.ps1` runs).
+    #   3. NuGet packages for WebView2 SDK headers / static loader and
+    #      WIL headers.
+    # Everything after the toolchain install lives in a single step
+    # because each PowerShell `run:` is a fresh shell — the dev-shell
+    # exports and INCLUDE/LIB tweaks don't persist across steps.
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up Swift for Windows
+        uses: compnerd/gha-setup-swift@main
+        with:
+          branch: swift-6.0.3-release
+          tag: 6.0.3-RELEASE
+      - run: swift --version
+      - name: Install WebView2 SDK + WIL (NuGet)
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+          nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
+      - name: Build (release) + run cross-platform tests
+        shell: pwsh
+        run: |
+          $vs = & "${env:ProgramFiles}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -property installationPath
+          & "$vs\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64 -SkipAutomaticLocation
+          $env:INCLUDE = "$pwd\packages\Microsoft.Web.WebView2\build\native\include;" +
+                         "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include;" +
+                         "$env:INCLUDE"
+          $env:LIB = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64;$env:LIB"
+          swift build -c release
+          # Only the cross-platform suites; SwiftPWAWindowsTests is a
+          # placeholder until we add Windows-specific runtime tests.
+          swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+
   lint:
     runs-on: macos-15
     steps:

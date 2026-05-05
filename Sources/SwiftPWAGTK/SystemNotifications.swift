@@ -20,7 +20,7 @@
         }
 
         public func send(_ request: NotificationRequest) async throws -> String {
-            try await MainThread.run { try sendOnMainThread(request) }
+            try await MainThread.run { [self] in try sendOnMainThread(request) }
         }
 
         /// The D-Bus call has its own internal main loop and is safe

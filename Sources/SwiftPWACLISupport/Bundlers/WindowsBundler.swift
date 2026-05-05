@@ -1,5 +1,13 @@
 import ArgumentParser
 import Foundation
+// On Apple, `URLSession` lives in Foundation; on swift-corelibs-foundation
+// (Linux + Windows) the networking pieces moved to a separate
+// `FoundationNetworking` module. The bundler builds on every host
+// because `SwiftPWACLISupport` isn't platform-gated, so import the
+// extra module wherever it's available.
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
 
 /// Builds a Windows artifact.
 ///

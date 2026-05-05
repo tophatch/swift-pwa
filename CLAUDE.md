@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`swift-pwa` is a Swift-native thin-client PWA wrapper around system webviews — a Tauri/Wails analogue for the Swift world. One Swift package, one JS API (`__SWIFT_PWA__.invoke()` / `subscribe()`), one CLI (`swift-pwa`) that produces `.app`, `.ipa`, and `.AppImage` from the same source. Status: v0.1.0.
+`swift-pwa` is a Swift-native thin-client PWA wrapper around system webviews — a Tauri/Wails analogue for the Swift world. One Swift package, one JS API (`__SWIFT_PWA__.invoke()` / `subscribe()`), one CLI (`swift-pwa`) that produces `.app`, `.ipa`, and `.AppImage` from the same source. Status: v0.2 in flight on `main` (clipboard + tray + notifications plugins shipped, Windows backend pending); last tagged release is v0.1.0.
 
 ## Common commands
 

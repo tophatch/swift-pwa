@@ -30,7 +30,7 @@ git clone https://github.com/tophatch/swift-pwa
 cd swift-pwa
 
 swift build                                    # Core, WebKit backend, CLI, examples
-swift test                                     # 80+ tests including WKWebView integration
+swift test                                     # 50+ tests including WKWebView integration
 ```
 
 The `WKWebViewTests` suite spins up a real `WKWebView` in-process and

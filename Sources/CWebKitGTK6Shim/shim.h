@@ -4,6 +4,19 @@
 #include <webkit/webkit.h>
 #include <jsc/jsc.h>
 
+// Forward declarations for the WebKit types we reference from Swift.
+// In webkitgtk-6.0 the umbrella `<webkit/webkit.h>` reaches them via
+// `G_DECLARE_FINAL_TYPE` macros — but Swift's clang importer doesn't
+// always pick up types defined that way through transitive includes,
+// and emits "cannot find type 'WebKitUserContentManager' in scope" /
+// "WebKitURISchemeRequest" at the Swift-side use sites. Re-declaring
+// them here gives the importer a direct anchor; the typedefs are
+// identical to what the WebKit headers produce, so C11 accepts the
+// duplicate.
+typedef struct _WebKitUserContentManager WebKitUserContentManager;
+typedef struct _WebKitURISchemeRequest WebKitURISchemeRequest;
+typedef struct _WebKitWebView WebKitWebView;
+
 /// Returns the GType name of a GObject instance, or NULL.
 /// Owned by GLib — do *not* free the returned pointer.
 static inline const char *swiftpwa_gobject_type_name(gpointer instance) {

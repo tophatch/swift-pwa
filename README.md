@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** v0.2.0 released — clipboard, tray, and notifications plugins shipped on macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64). Cross-platform `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools. Android remains stubbed; biometric auth, dialog, and fs plugins, plus richer Windows toasts via swift-winrt and MSIX packaging, are queued for v0.3.
+> **Status:** [`v0.2.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.2.0) is the current release. macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64) are first-class. Built-in plugins: window, clipboard, tray, notifications. `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools on every backend. Android, biometric auth / dialog / fs plugins, richer Windows toasts via swift-winrt, and MSIX packaging are queued for v0.3.
 
 ## Why
 
@@ -12,7 +12,7 @@ If you write Swift and want to ship a small, single-codebase desktop/mobile app 
 - **Hand-rolled WKWebView** — locks you to Apple platforms.
 - **SwiftUI WebView** — single platform, no JS↔Swift bridge, no bundling story.
 
-`swift-pwa` gives you one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), and one CLI that produces `.app`, `.ipa`, and `.AppImage` from the same source.
+`swift-pwa` gives you one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), and one CLI that produces `.app`, `.ipa`, `.AppImage`, and a portable Windows folder (`.exe` + assets) from the same source.
 
 ## Quickstart
 
@@ -158,6 +158,7 @@ swift run swift-pwa build --target macos                 # → MyApp.app
 swift run swift-pwa build --target macos --sign "Developer ID Application: Acme"
 swift run swift-pwa build --target ios --simulator       # → unsigned .app for sim
 swift run swift-pwa build --target linux                 # → MyApp-x86_64.AppImage
+swift run swift-pwa build --target windows               # → build\MyApp\MyApp.exe (+ web/, pwa.json)
 ```
 
 The `pwa.json` manifest in your project root is the source of truth — `Info.plist`, `.desktop`, and icon assets are all generated from it.
@@ -185,9 +186,10 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ### Planned
 
-- **v0.2** — Windows (Win32 + WebView2) verified on Windows 11 ARM64; clipboard, tray (macOS + GTK3 via libayatana-appindicator3), notifications, the portable `.exe` bundler, and the cross-platform DevTools shortcut (`Cmd+Opt+J` on Apple, `Ctrl+Alt+J` on GTK + Windows) are all in `main`.
-- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging.
+- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging, opt-in WebView2 Runtime bootstrapper, Windows DPI awareness, Windows binary in the release matrix.
 - **v0.4+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
+
+See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown of what's already shipped.
 
 ## Platform setup
 
@@ -200,7 +202,7 @@ Per-platform walkthroughs (toolchain, build, codesign, device install, known cav
 
 ## Contributing
 
-PRs welcome. See [`CHANGELOG.md`](CHANGELOG.md) for what's in flight.
+PRs welcome. See [`CHANGELOG.md`](CHANGELOG.md) for what shipped, what's in `Unreleased`, and the running list of release notes.
 
 ```bash
 swift test                                     # unit + WebKit integration on macOS

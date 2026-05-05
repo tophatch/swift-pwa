@@ -85,6 +85,40 @@ the same headers and loader. WIL is also available as
 `vcpkg install wil`. Make sure the vcpkg-installed `lib/` dir is on
 `LIB`.)
 
+### Per-session, not per-checkout
+
+The `Launch-VsDevShell.ps1` + `INCLUDE` / `LIB` setup is **per
+PowerShell session**, not stamped into the checkout. Every fresh
+window needs the dance again — including any project that depends on
+swift-pwa as a path or git dependency, since the WebView2 + WIL
+headers are needed to compile `CWebView2Shim` transitively.
+
+When building a downstream project (e.g. `Examples/HelloPWA`), point
+`INCLUDE` / `LIB` at the swift-pwa root's `packages/` folder rather
+than the downstream project's `$pwd`:
+
+```powershell
+# Reuse the swift-pwa repo's NuGet packages from any sibling project:
+$arch     = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
+$swiftpwa = "C:\path\to\swift-pwa"  # absolute path to the swift-pwa checkout
+$env:INCLUDE = "$swiftpwa\packages\Microsoft.Web.WebView2\build\native\include;" +
+               "$swiftpwa\packages\Microsoft.Windows.ImplementationLibrary\include;" +
+               "$env:INCLUDE"
+$env:LIB     = "$swiftpwa\packages\Microsoft.Web.WebView2\build\native\$arch;$env:LIB"
+```
+
+Symptoms of forgetting:
+
+| Missing                    | Failure mode                                                                         |
+|----------------------------|--------------------------------------------------------------------------------------|
+| `Launch-VsDevShell.ps1`    | `lld-link: error: could not open 'msvcrt.lib'` — even at the manifest-compile stage. |
+| `INCLUDE` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`.      |
+| `LIB`                      | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`.                        |
+
+Saving the four lines as a `vendor\Set-SwiftPwaEnv.ps1` you dot-source
+at the start of each session (`. .\vendor\Set-SwiftPwaEnv.ps1`) takes
+the friction out.
+
 ### Windows on ARM
 
 The backend is architecture-clean — no inline asm, no x86 intrinsics,

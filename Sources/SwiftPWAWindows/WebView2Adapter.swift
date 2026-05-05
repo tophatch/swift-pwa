@@ -126,70 +126,80 @@
             // and navigate there. For remote content we navigate
             // directly.
             //
-            // `Task { @MainActor in … }` rather than the
-            // `Task { … await MainThread.run { … } }` form: Swift
-            // 6.3's strict-concurrency check refuses to send the
-            // captured `OpaquePointer` view handle through the
-            // MainThread.run closure boundary, even though
-            // OpaquePointer is conceptually Sendable. Hopping
-            // straight to MainActor avoids the inner closure
-            // crossing. (Same approach as `WKWebViewAdapter`.)
-            let viewLocal = view
+            // **Why `MainThread.run` and not `Task { @MainActor in }`**:
+            // on Windows the runtime owns the message pump
+            // (`GetMessageW`), and Swift's MainActor executor — which
+            // is backed by libdispatch's main queue on Windows — is
+            // not pumped by that loop. A `Task { @MainActor in }`
+            // therefore queues onto an executor nothing is draining,
+            // and never fires (symptom: webview attaches but the
+            // page never navigates → blank window). `MainThread.run`
+            // routes through the dispatcher window we register at
+            // startup, which the message pump *does* drain.
+            //
+            // `nonisolated(unsafe)` on the captured locals because
+            // Swift 6.3's strict-concurrency check otherwise refuses
+            // the `OpaquePointer?` cross into the inner `MainThread.run`
+            // closure. The handle is only dereferenced on the UI
+            // thread inside the closure body.
+            nonisolated(unsafe) let viewLocal = view
             switch content {
             case let .bundled(directory, entry):
                 let host = "swift-pwa.local"
                 let urlString = "https://\(host)/\(entry)"
-                Task { @MainActor in
-                    guard let viewLocal else { return }
-                    directory.path.withCString(encodedAs: UTF16.self) { folder in
-                        host.withCString(encodedAs: UTF16.self) { hostW in
-                            swiftpwa_w2_view_map_virtual_host(viewLocal, hostW, folder, 2)
+                Task {
+                    await MainThread.run {
+                        guard let viewLocal else { return }
+                        directory.path.withCString(encodedAs: UTF16.self) { folder in
+                            host.withCString(encodedAs: UTF16.self) { hostW in
+                                swiftpwa_w2_view_map_virtual_host(viewLocal, hostW, folder, 2)
+                            }
                         }
-                    }
-                    urlString.withCString(encodedAs: UTF16.self) { urlW in
-                        swiftpwa_w2_view_navigate(viewLocal, urlW)
+                        urlString.withCString(encodedAs: UTF16.self) { urlW in
+                            swiftpwa_w2_view_navigate(viewLocal, urlW)
+                        }
                     }
                 }
                 assetProvider = AssetProvider(root: directory)
             case let .remote(url):
-                Task { @MainActor in
-                    guard let viewLocal else { return }
-                    url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
-                        swiftpwa_w2_view_navigate(viewLocal, urlW)
+                Task {
+                    await MainThread.run {
+                        guard let viewLocal else { return }
+                        url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
+                            swiftpwa_w2_view_navigate(viewLocal, urlW)
+                        }
                     }
                 }
             }
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            // `nonisolated(unsafe)` because the local crosses two
-            // closure boundaries (`withCheckedThrowingContinuation`
-            // and the inner `Task { @MainActor in … }`); without it,
-            // Swift 6.3's sending-risk check refuses the second hop
-            // even though `OpaquePointer` is conceptually Sendable.
-            // The pointer is only ever read on the main thread inside
-            // the Task body.
+            // `nonisolated(unsafe)` on these locals so the
+            // `MainThread.run` closure can capture them without
+            // tripping Swift 6.3's sending-risk diagnostic. We use
+            // `MainThread.run` (the dispatcher-window hook) rather
+            // than `Task { @MainActor in }` for the same reason as
+            // `load(...)`: Swift's MainActor executor isn't drained
+            // by our `GetMessageW` pump on Windows, so a `@MainActor`
+            // Task would never fire.
             nonisolated(unsafe) let viewLocal = view
             let snippet = js
             return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in
                 let box = Unmanaged.passRetained(EvalBox(continuation: cont)).toOpaque()
-                // `nonisolated(unsafe)` on a local because the
-                // `MainActor.assumeIsolated` closure below otherwise
-                // captures a non-Sendable raw pointer. The box's
-                // memory is released exactly once via the same path
-                // (`takeRetainedValue` on either branch).
                 nonisolated(unsafe) let boxPtr = box
-                Task { @MainActor in
-                    guard let viewLocal else {
-                        Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
-                            .continuation.resume(returning: nil)
-                        return
-                    }
-                    snippet.withCString(encodedAs: UTF16.self) { wcs in
-                        swiftpwa_w2_view_execute_script(
-                            viewLocal, wcs, evalCompleteTrampoline, boxPtr
-                        )
+                Task {
+                    await MainThread.run {
+                        guard let viewLocal else {
+                            Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
+                                .continuation.resume(returning: nil)
+                            return
+                        }
+                        snippet.withCString(encodedAs: UTF16.self) { wcs in
+                            swiftpwa_w2_view_execute_script(
+                                viewLocal, wcs, evalCompleteTrampoline, boxPtr
+                            )
+                        }
                     }
                 }
             }
@@ -208,8 +218,13 @@
             guard let json = String(data: data, encoding: .utf8) else {
                 throw BridgeError(code: BridgeError.encode, message: "frame is not valid UTF-8")
             }
-            let viewLocal = view
-            await MainActor.run {
+            // `MainThread.run` (dispatcher window) instead of
+            // `MainActor.run`: see `load(...)` for why a MainActor
+            // hop on Windows under our `GetMessageW` pump never
+            // fires. `nonisolated(unsafe)` to satisfy the sending
+            // check on the closure capture.
+            nonisolated(unsafe) let viewLocal = view
+            await MainThread.run {
                 guard let viewLocal else { return }
                 json.withCString(encodedAs: UTF16.self) { wcs in
                     swiftpwa_w2_view_post_web_message_string(viewLocal, wcs)

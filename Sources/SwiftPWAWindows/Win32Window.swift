@@ -73,6 +73,16 @@
             }
 
             let titleW = config.title.utf16.map { WCHAR($0) } + [0]
+            // Initial size: convert from DIPs (the unit the cross-
+            // platform `WindowConfig` uses) to physical pixels, against
+            // the primary monitor's DPI. Per-Monitor V2 awareness means
+            // the OS will reset us to the actual monitor's DPI as soon
+            // as the window is positioned, raising `WM_DPICHANGED` if
+            // they differ — `handle(...)` accepts the OS-suggested
+            // rect from there.
+            let initialDpi = primaryMonitorDpi()
+            let initialW = Int32((config.size.width * Double(initialDpi) / 96.0).rounded())
+            let initialH = Int32((config.size.height * Double(initialDpi) / 96.0).rounded())
             let hwndOpt: HWND? = titleW.withUnsafeBufferPointer { titlePtr in
                 Self.className.withUnsafeBufferPointer { classPtr in
                     CreateWindowExW(
@@ -81,7 +91,7 @@
                         titlePtr.baseAddress,
                         style,
                         Int32(CW_USEDEFAULT), Int32(CW_USEDEFAULT),
-                        Int32(config.size.width), Int32(config.size.height),
+                        initialW, initialH,
                         nil, nil,
                         GetModuleHandleW(nil),
                         nil
@@ -171,9 +181,12 @@
         func handle(message: UINT, wParam: WPARAM, lParam: LPARAM) -> Bool {
             switch Int32(message) {
             case WM_SIZE:
-                // LOWORD/HIWORD of lParam are the new client extents.
-                let w = Double(LOWORD(DWORD(bitPattern: Int32(lParam))))
-                let h = Double(HIWORD(DWORD(bitPattern: Int32(lParam))))
+                // LOWORD/HIWORD of lParam are the new client extents in
+                // *physical* pixels. Convert to DIPs before exposing
+                // them on the cross-platform `Size` API.
+                let scale = dpiScale()
+                let w = Double(LOWORD(DWORD(bitPattern: Int32(lParam)))) / scale
+                let h = Double(HIWORD(DWORD(bitPattern: Int32(lParam)))) / scale
                 let size = Size(width: w, height: h)
                 if size != lastSize {
                     lastSize = size
@@ -182,12 +195,28 @@
                 adapter.fitTo(client: clientRect())
                 return true
             case WM_MOVE:
-                let x = Double(LOWORD(DWORD(bitPattern: Int32(lParam))))
-                let y = Double(HIWORD(DWORD(bitPattern: Int32(lParam))))
+                let scale = dpiScale()
+                let x = Double(LOWORD(DWORD(bitPattern: Int32(lParam)))) / scale
+                let y = Double(HIWORD(DWORD(bitPattern: Int32(lParam)))) / scale
                 let pos = Point(x: x, y: y)
                 if pos != lastPosition {
                     lastPosition = pos
                     emit(.didMove(pos))
+                }
+                return true
+            case WM_DPICHANGED:
+                // Per-Monitor V2 contract: the OS supplies the suggested
+                // new window rect (in physical pixels) via lParam,
+                // already factored for the new DPI. Apply it verbatim
+                // — anything else and the window ends up the wrong
+                // physical size for the new monitor.
+                if let rect = UnsafePointer<RECT>(bitPattern: UInt(lParam))?.pointee {
+                    SetWindowPos(
+                        hwnd, nil,
+                        rect.left, rect.top,
+                        rect.right - rect.left, rect.bottom - rect.top,
+                        UINT(SWP_NOZORDER | SWP_NOACTIVATE)
+                    )
                 }
                 return true
             case WM_SETFOCUS:
@@ -270,25 +299,34 @@
         public func title() -> String { titleStorage }
 
         public func setSize(_ size: Size, animated _: Bool) {
-            // SetWindowPos with SWP_NOMOVE/SWP_NOZORDER preserves
-            // position and z-order while resizing.
+            // SetWindowPos takes physical pixels; convert from DIPs.
+            // SWP_NOMOVE/SWP_NOZORDER preserves position and z-order
+            // while resizing.
+            let scale = dpiScale()
             SetWindowPos(
                 hwnd, nil,
                 0, 0,
-                Int32(size.width), Int32(size.height),
+                Int32((size.width * scale).rounded()),
+                Int32((size.height * scale).rounded()),
                 UINT(SWP_NOMOVE | SWP_NOZORDER)
             )
         }
         public func size() -> Size {
             var r = RECT()
             GetWindowRect(hwnd, &r)
-            return Size(width: Double(r.right - r.left), height: Double(r.bottom - r.top))
+            let scale = dpiScale()
+            return Size(
+                width: Double(r.right - r.left) / scale,
+                height: Double(r.bottom - r.top) / scale
+            )
         }
 
         public func setPosition(_ point: Point) {
+            let scale = dpiScale()
             SetWindowPos(
                 hwnd, nil,
-                Int32(point.x), Int32(point.y),
+                Int32((point.x * scale).rounded()),
+                Int32((point.y * scale).rounded()),
                 0, 0,
                 UINT(SWP_NOSIZE | SWP_NOZORDER)
             )
@@ -296,7 +334,18 @@
         public func position() -> Point {
             var r = RECT()
             GetWindowRect(hwnd, &r)
-            return Point(x: Double(r.left), y: Double(r.top))
+            let scale = dpiScale()
+            return Point(x: Double(r.left) / scale, y: Double(r.top) / scale)
+        }
+
+        // MARK: - DPI
+
+        /// Logical-to-physical pixel ratio for this window's current
+        /// monitor. Always at least 1.0; clamps to 96-DPI when
+        /// `GetDpiForWindow` returns 0 (Windows 8.1 / earlier).
+        private func dpiScale() -> Double {
+            let raw = GetDpiForWindow(hwnd)
+            return raw > 0 ? Double(raw) / 96.0 : 1.0
         }
 
         public func focus() {
@@ -394,4 +443,20 @@
 
     @inline(__always)
     func HIWORD(_ v: DWORD) -> UInt16 { UInt16((v >> 16) & 0xFFFF) }
+
+    // MARK: - Primary monitor DPI
+
+    /// DPI of the primary monitor, used to size the window before its
+    /// HWND exists (so we can't yet call `GetDpiForWindow`). Per-Monitor
+    /// V2 awareness means every secondary monitor may report a different
+    /// DPI; the OS sends `WM_DPICHANGED` once the window is positioned
+    /// on its real monitor, and `handle(...)` re-applies the suggested
+    /// rect from there.
+    func primaryMonitorDpi() -> UINT {
+        // `GetDpiForSystem` returns the DPI of the primary monitor for
+        // a Per-Monitor-V2 process. Available on Win10 1607+; falls
+        // back to 96 below that.
+        let dpi = GetDpiForSystem()
+        return dpi > 0 ? dpi : 96
+    }
 #endif

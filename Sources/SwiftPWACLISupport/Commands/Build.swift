@@ -29,6 +29,16 @@ struct Build: AsyncParsableCommand {
     @Option(help: "Output directory for the bundled artifact. Defaults to ./build.")
     var output: String = "build"
 
+    @Option(
+        help: "Windows package format: portable (default) or msix."
+    )
+    var packageFormat: String = "portable"
+
+    @Flag(
+        help: "Drop the WebView2 Evergreen Bootstrapper (~1.7 MB) into the Windows bundle."
+    )
+    var bootstrapWebview2: Bool = false
+
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
@@ -67,10 +77,22 @@ struct Build: AsyncParsableCommand {
             let url = try await bundler.build()
             print("Built: \(url.path)")
         case .windows:
+            let format: WindowsBundler.PackageFormat
+            switch packageFormat.lowercased() {
+            case "portable": format = .portable
+            case "msix": format = .msix
+            default:
+                throw ValidationError(
+                    "swift-pwa: --package-format must be 'portable' or 'msix' (got '\(packageFormat)')"
+                )
+            }
             let bundler = WindowsBundler(
                 manifest: pwa,
                 projectRoot: cwd,
-                outputDir: outputDir
+                outputDir: outputDir,
+                packageFormat: format,
+                bootstrapWebView2: bootstrapWebview2,
+                signIdentity: sign
             )
             let url = try await bundler.build()
             print("Built: \(url.path)")

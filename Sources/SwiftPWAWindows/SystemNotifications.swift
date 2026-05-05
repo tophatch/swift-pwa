@@ -1,40 +1,33 @@
 #if os(Windows)
+    import CWebView2Shim
     import Foundation
     import SwiftPWACore
     import WinSDK
 
-    /// `Notifications` backed by `Shell_NotifyIconW` balloon tips.
+    /// `Notifications` backed by `Windows.UI.Notifications.ToastNotificationManager`
+    /// via the `swiftpwa_toast` C++/WinRT shim.
     ///
-    /// On modern Windows 10 / 11, balloon tips from a registered
-    /// notification-area icon are routed through Action Center and
-    /// rendered as toast notifications, so a v0.2 cut that piggy-backs
-    /// on the tray icon's HWND gets us "real" toasts without taking
-    /// on a `swift-winrt` dependency. The richer
-    /// `Windows.UI.Notifications.ToastNotificationManager` API (with
-    /// XML payloads, replace-by-id, action buttons) lands in v0.3
-    /// alongside the swift-winrt rollout the rest of the platform
-    /// will use for biometric auth and storage pickers.
+    /// Falls back to `Shell_NotifyIconW` balloon tips when the WinRT
+    /// path is unavailable — for instance on Windows Server SKUs
+    /// without the Desktop Experience, or when the process never set
+    /// an AppUserModelID (the toast shim guards against this in
+    /// `swiftpwa_toast_available`).
     ///
-    /// Caveats:
-    ///
-    ///  - The hosting executable must have a registered AppUserModelID
-    ///    *or* be a packaged app for toasts to persist in Action
-    ///    Center. Unsigned `swift run` invocations show a transient
-    ///    balloon and nothing in history. The CLI's Windows bundler
-    ///    sets a stable AUMID via `SetCurrentProcessExplicitAppUserModelID`
-    ///    on process start.
-    ///  - One tray icon is shared across all calls. We create it
-    ///    on demand and lazily; closing it is fine because Action
-    ///    Center keeps a copy of the toast.
+    /// AUMID is set up by `WindowsAppRuntime` at process start; toasts
+    /// shown from an unpackaged executable will surface but won't
+    /// persist in Action Center across reboots unless the app also
+    /// installs a Start-menu shortcut with a matching AUMID. That's a
+    /// caller-side concern — packaging and shortcut registration live
+    /// in the bundler / installer, not the runtime.
     public final class SystemNotifications: Notifications, @unchecked Sendable {
         public init() {}
 
         public func requestAuthorization() async throws -> Bool {
-            // Balloon tips don't gate on a permission prompt — Windows
-            // routes them through Focus Assist / Do Not Disturb but
-            // never refuses an API call. Returning `true` keeps the
-            // JS-side flow symmetric with Apple, where authorization
-            // is a real boolean.
+            // ToastNotificationManager doesn't gate on a permission
+            // prompt at the Win32 level — Windows routes through Focus
+            // Assist / Do Not Disturb but never refuses an API call.
+            // Returning `true` keeps the JS-side flow symmetric with
+            // Apple, where authorization is a real boolean.
             true
         }
 
@@ -43,6 +36,41 @@
         }
 
         private func sendOnMainThread(_ request: NotificationRequest) throws -> String {
+            // The toast's WinRT tag doubles as the id we return to JS.
+            // We synthesize one per send (the v0.2 protocol doesn't
+            // expose a caller-supplied tag); replace-by-id surfaces
+            // when the protocol grows a `tag` field.
+            let id = Foundation.UUID().uuidString
+
+            if swiftpwa_toast_available() != 0 {
+                let hr = id.withCString(encodedAs: UTF16.self) { tagW in
+                    request.title.withCString(encodedAs: UTF16.self) { titleW in
+                        (request.body ?? "").withCString(encodedAs: UTF16.self) { bodyW in
+                            swiftpwa_toast_send(tagW, titleW, bodyW, request.sound ? 0 : 1)
+                        }
+                    }
+                }
+                if hr == 0 { return id }
+                // Non-zero from the WinRT path — log and fall through
+                // to the balloon tip. Don't throw: the shim already
+                // wrote the HRESULT to stderr, and we'd rather show
+                // *something* than fail the JS call entirely on a
+                // transient WinRT failure.
+                FileHandle.standardError.write(
+                    Data(
+                        "swift-pwa: WinRT toast failed (0x\(String(UInt32(bitPattern: hr), radix: 16))), falling back to balloon\n"
+                            .utf8
+                    )
+                )
+            }
+
+            try sendBalloonFallback(request)
+            return id
+        }
+
+        // MARK: - Balloon-tip fallback
+
+        private func sendBalloonFallback(_ request: NotificationRequest) throws {
             let owner = NotificationHost.shared.hwnd
             var nid = NOTIFYICONDATAW()
             nid.cbSize = UINT(MemoryLayout<NOTIFYICONDATAW>.size)
@@ -52,8 +80,6 @@
             nid.dwInfoFlags = request.sound ? UINT(NIIF_INFO) : UINT(NIIF_INFO | NIIF_NOSOUND)
 
             // szInfoTitle is 64 WCHARs, szInfo is 256 — truncate to fit.
-            // Tuples of WCHAR don't have nice element-by-index APIs in
-            // Swift, so write through `withUnsafeMutableBytes`.
             let titleW = Array(request.title.utf16.prefix(63)) + [0]
             withUnsafeMutableBytes(of: &nid.szInfoTitle) { dst in
                 let w = dst.bindMemory(to: WCHAR.self)
@@ -65,12 +91,7 @@
                 for i in 0 ..< bodyW.count { w[i] = bodyW[i] }
             }
 
-            // First call adds the icon (NIM_ADD); subsequent calls
-            // re-trigger the balloon via NIM_MODIFY. NotificationHost
-            // tracks whether we've added it yet.
             let op: DWORD = NotificationHost.shared.installed ? DWORD(NIM_MODIFY) : DWORD(NIM_ADD)
-            // Swift's WinSDK overlay (6.3+) imports `Shell_NotifyIconW`
-            // as returning Swift `Bool`. Use it directly.
             if !Shell_NotifyIconW(op, &nid) {
                 throw BridgeError(
                     code: BridgeError.handler,
@@ -78,10 +99,6 @@
                 )
             }
             NotificationHost.shared.installed = true
-            // Win32 doesn't return an id for balloon tips. Synthesize
-            // one — callers use it for log correlation only on the
-            // Windows backend (action-button events ship in v0.3).
-            return Foundation.UUID().uuidString
         }
     }
 

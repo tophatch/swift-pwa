@@ -22,4 +22,13 @@
     /// hasn't always imported it consistently across releases, so we
     /// construct it ourselves.
     nonisolated(unsafe) let IDC_ARROW_W: UnsafePointer<WCHAR>? = UnsafePointer(bitPattern: 32512)
+
+    /// `((DPI_AWARENESS_CONTEXT)-4)` — Per-Monitor V2 awareness. This
+    /// is a sentinel "pseudo-handle" the OS recognizes; the Win10 SDK
+    /// expresses it as a cast of a small negative integer. Swift's
+    /// WinSDK overlay imports `DPI_AWARENESS_CONTEXT` as
+    /// `OpaquePointer?` but doesn't ship the constants, so we construct
+    /// the bit pattern by hand.
+    nonisolated(unsafe) let DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2: DPI_AWARENESS_CONTEXT? =
+        DPI_AWARENESS_CONTEXT(bitPattern: -4)
 #endif

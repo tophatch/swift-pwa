@@ -179,7 +179,14 @@ let package = Package(
                 .linkedLibrary("shlwapi", .when(platforms: [.windows])),
                 .linkedLibrary("user32", .when(platforms: [.windows])),
                 .linkedLibrary("shell32", .when(platforms: [.windows])),
-                .linkedLibrary("RuntimeObject", .when(platforms: [.windows]))
+                .linkedLibrary("RuntimeObject", .when(platforms: [.windows])),
+                // C++/WinRT (`<winrt/...>`) calls dispatch through
+                // `WindowsApp.lib`. cl.exe picks it up via a
+                // `#pragma comment(lib, ...)` in `<winrt/base.h>`,
+                // but lld-link in clang-mode under SwiftPM doesn't
+                // always honour the pragma — link it explicitly so
+                // toast notifications resolve at link time.
+                .linkedLibrary("WindowsApp", .when(platforms: [.windows]))
             ]
         ),
 
@@ -274,5 +281,11 @@ let package = Package(
             ],
             swiftSettings: swiftSettings
         )
-    ]
+    ],
+    // C++17 — required by `<wil/com.h>` and the C++/WinRT headers
+    // (`<winrt/base.h>` etc.) used by `swiftpwa_toast.cpp`. The
+    // existing WebView2 shim happens to build under cl.exe's
+    // permissive C++14 mode, but moving the package to a stated
+    // standard avoids drift.
+    cxxLanguageStandard: .cxx17
 )

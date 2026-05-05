@@ -194,6 +194,7 @@ enum Shell {
         }
         #if os(Windows)
             let pathSeparator: Character = ";"
+            let dirSeparator = "\\"
             // `where.exe` resolution order: empty (verbatim, in case
             // the caller passed `tool.exe`), then PATHEXT-style
             // suffixes. We don't read PATHEXT itself — sticking to
@@ -202,15 +203,23 @@ enum Shell {
             let suffixes = ["", ".exe", ".cmd", ".bat"]
         #else
             let pathSeparator: Character = ":"
+            let dirSeparator = "/"
             let suffixes = [""]
         #endif
+        // We test with `fileExists(atPath:)` rather than
+        // `isExecutableFile(atPath:)` because the latter checks the
+        // POSIX executable bit, which doesn't exist on NTFS — every
+        // `.exe` on a Windows host returns false, defeating the
+        // search. Joining the strings with the host separator (rather
+        // than `URL.appendingPathComponent`) keeps the resulting path
+        // entirely in native form so swift-corelibs-foundation
+        // doesn't drop a `/` in front of `C:\…` and confuse `_stat`.
         let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
         for dir in path.split(separator: pathSeparator, omittingEmptySubsequences: true) {
             for suffix in suffixes {
-                let candidate = URL(fileURLWithPath: String(dir))
-                    .appendingPathComponent(name + suffix)
-                if FileManager.default.isExecutableFile(atPath: candidate.path) {
-                    return candidate
+                let candidate = String(dir) + dirSeparator + name + suffix
+                if FileManager.default.fileExists(atPath: candidate) {
+                    return URL(fileURLWithPath: candidate)
                 }
             }
         }

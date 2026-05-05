@@ -141,7 +141,7 @@ enum Shell {
     /// release build looks like the CLI has hung).
     static func run(_ executable: String, _ arguments: [String], cwd: URL? = nil) async throws {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: executable)
+        task.executableURL = try resolveExecutable(executable)
         task.arguments = arguments
         if let cwd { task.currentDirectoryURL = cwd }
         // Inherit stdout/stderr — pass through to the user.
@@ -158,7 +158,7 @@ enum Shell {
     /// Run a short command and capture its stdout. Used for `which`.
     static func capture(_ executable: String, _ arguments: [String]) async throws -> String {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: executable)
+        task.executableURL = try resolveExecutable(executable)
         task.arguments = arguments
         let stdout = Pipe()
         task.standardOutput = stdout
@@ -173,5 +173,47 @@ enum Shell {
             )
         }
         return String(data: outData, encoding: .utf8) ?? ""
+    }
+
+    /// Resolve an executable name to an absolute URL.
+    ///
+    /// Foundation's `Process` on Apple is happy to take a bare
+    /// command name and let the OS PATH-search; on
+    /// swift-corelibs-foundation under Windows, `executableURL` is
+    /// resolved literally — `URL(fileURLWithPath: "swift")` becomes
+    /// `./swift`, which doesn't exist, and `Process.run()` throws
+    /// `NSCocoaError 260` with `WindowsError 2` underneath. We do
+    /// the PATH search ourselves so a bare `Shell.run("swift", …)`
+    /// works the same on every host.
+    ///
+    /// Inputs that already contain a separator (`/usr/bin/env`,
+    /// `C:\Path\To\tool.exe`) are passed through verbatim.
+    private static func resolveExecutable(_ name: String) throws -> URL {
+        if name.contains("/") || name.contains("\\") {
+            return URL(fileURLWithPath: name)
+        }
+        #if os(Windows)
+            let pathSeparator: Character = ";"
+            // `where.exe` resolution order: empty (verbatim, in case
+            // the caller passed `tool.exe`), then PATHEXT-style
+            // suffixes. We don't read PATHEXT itself — sticking to
+            // the four common executable suffixes covers swift /
+            // makeappx / signtool / nuget without surprises.
+            let suffixes = ["", ".exe", ".cmd", ".bat"]
+        #else
+            let pathSeparator: Character = ":"
+            let suffixes = [""]
+        #endif
+        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        for dir in path.split(separator: pathSeparator, omittingEmptySubsequences: true) {
+            for suffix in suffixes {
+                let candidate = URL(fileURLWithPath: String(dir))
+                    .appendingPathComponent(name + suffix)
+                if FileManager.default.isExecutableFile(atPath: candidate.path) {
+                    return candidate
+                }
+            }
+        }
+        throw BundlerError.toolMissing(name)
     }
 }

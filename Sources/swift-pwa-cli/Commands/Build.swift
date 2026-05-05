@@ -67,8 +67,13 @@ struct Build: AsyncParsableCommand {
             let url = try await bundler.build()
             print("Built: \(url.path)")
         case .windows:
-            print("swift-pwa: Windows bundler is a stub in v0.1. Planned for v0.2.")
-            throw ExitCode(2)
+            let bundler = WindowsBundler(
+                manifest: pwa,
+                projectRoot: cwd,
+                outputDir: outputDir
+            )
+            let url = try await bundler.build()
+            print("Built: \(url.path)")
         case .android:
             print("swift-pwa: Android bundler is a stub in v0.1. Planned for v0.3.")
             throw ExitCode(2)

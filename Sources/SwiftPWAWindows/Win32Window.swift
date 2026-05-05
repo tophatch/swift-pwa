@@ -31,7 +31,9 @@
         private let bridge: BridgeRuntime
         private weak var app: WindowsAppContext?
         private var titleStorage: String
-        private var continuations: [UUID: AsyncStream<WindowEvent>.Continuation] = [:]
+        // `Foundation.UUID` because the WinSDK overlay re-exports a
+        // `UUID` typealias for `_GUIDDef`; bare `UUID` is ambiguous.
+        private var continuations: [Foundation.UUID: AsyncStream<WindowEvent>.Continuation] = [:]
         private var lastSize: Size = .zero
         private var lastPosition: Point = .zero
         private var fullscreen = false
@@ -86,12 +88,6 @@
             self.hwnd = hwnd
             self.app = app
 
-            // Stash a back-reference on the HWND so wndProc can find
-            // us. We use GWLP_USERDATA; SetWindowLongPtr returns the
-            // previous value (0 here).
-            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-            _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, LONG_PTR(Int(bitPattern: selfPtr)))
-
             let adapter = try WebView2Adapter(
                 environment: environment,
                 parent: hwnd,
@@ -106,6 +102,15 @@
                 windowID: id,
                 app: app
             )
+
+            // Stash a back-reference on the HWND so wndProc can find
+            // us. Must run after every stored property is initialized
+            // — `Unmanaged.passUnretained(self)` counts as a `self`
+            // use that the compiler refuses on a partially-initialized
+            // instance. We use GWLP_USERDATA; SetWindowLongPtr returns
+            // the previous value (0 here).
+            let selfPtr = Unmanaged.passUnretained(self).toOpaque()
+            _ = SetWindowLongPtrW(hwnd, GWLP_USERDATA, LONG_PTR(Int(bitPattern: selfPtr)))
 
             // Pump the message loop until the WebView2 controller is
             // ready. The adapter posts back to MainThread when its

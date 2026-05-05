@@ -69,7 +69,9 @@
             // re-trigger the balloon via NIM_MODIFY. NotificationHost
             // tracks whether we've added it yet.
             let op: DWORD = NotificationHost.shared.installed ? DWORD(NIM_MODIFY) : DWORD(NIM_ADD)
-            if Shell_NotifyIconW(op, &nid) == 0 {
+            // Swift's WinSDK overlay (6.3+) imports `Shell_NotifyIconW`
+            // as returning Swift `Bool`. Use it directly.
+            if !Shell_NotifyIconW(op, &nid) {
                 throw BridgeError(
                     code: BridgeError.handler,
                     message: "Shell_NotifyIconW failed (\(GetLastError()))"

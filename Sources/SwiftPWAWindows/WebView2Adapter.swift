@@ -125,64 +125,64 @@
             // map a virtual host (`SetVirtualHostNameToFolderMapping`)
             // and navigate there. For remote content we navigate
             // directly.
+            //
+            // `Task { @MainActor in … }` rather than the
+            // `Task { … await MainThread.run { … } }` form: Swift
+            // 6.3's strict-concurrency check refuses to send the
+            // captured `OpaquePointer` view handle through the
+            // MainThread.run closure boundary, even though
+            // OpaquePointer is conceptually Sendable. Hopping
+            // straight to MainActor avoids the inner closure
+            // crossing. (Same approach as `WKWebViewAdapter`.)
             let viewLocal = view
-            let envLocal = environment
             switch content {
             case let .bundled(directory, entry):
                 let host = "swift-pwa.local"
                 let urlString = "https://\(host)/\(entry)"
-                Task { [viewLocal, envLocal] in
-                    _ = envLocal
-                    await MainThread.run {
-                        guard let viewLocal else { return }
-                        directory.path.withCString(encodedAs: UTF16.self) { folder in
-                            host.withCString(encodedAs: UTF16.self) { hostW in
-                                swiftpwa_w2_view_map_virtual_host(viewLocal, hostW, folder, 2)
-                            }
+                Task { @MainActor in
+                    guard let viewLocal else { return }
+                    directory.path.withCString(encodedAs: UTF16.self) { folder in
+                        host.withCString(encodedAs: UTF16.self) { hostW in
+                            swiftpwa_w2_view_map_virtual_host(viewLocal, hostW, folder, 2)
                         }
-                        urlString.withCString(encodedAs: UTF16.self) { urlW in
-                            swiftpwa_w2_view_navigate(viewLocal, urlW)
-                        }
+                    }
+                    urlString.withCString(encodedAs: UTF16.self) { urlW in
+                        swiftpwa_w2_view_navigate(viewLocal, urlW)
                     }
                 }
                 assetProvider = AssetProvider(root: directory)
             case let .remote(url):
-                Task { [viewLocal] in
-                    await MainThread.run {
-                        guard let viewLocal else { return }
-                        url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
-                            swiftpwa_w2_view_navigate(viewLocal, urlW)
-                        }
+                Task { @MainActor in
+                    guard let viewLocal else { return }
+                    url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
+                        swiftpwa_w2_view_navigate(viewLocal, urlW)
                     }
                 }
             }
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            let viewRaw = UInt(bitPattern: view.map { UnsafeMutableRawPointer($0) })
+            let viewLocal = view
+            let snippet = js
             return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in
-                let boxRaw = UInt(bitPattern: Unmanaged.passRetained(
-                    EvalBox(continuation: cont)
-                ).toOpaque())
-                let snippet = js
-                Task {
-                    await MainThread.run {
-                        guard let boxPtr = UnsafeMutableRawPointer(bitPattern: boxRaw) else {
-                            return
-                        }
-                        guard let viewPtr = UnsafeMutableRawPointer(bitPattern: viewRaw) else {
-                            // View deallocated before we got here — release the box.
-                            Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
-                                .continuation.resume(returning: nil)
-                            return
-                        }
-                        let viewOpaque = OpaquePointer(viewPtr)
-                        snippet.withCString(encodedAs: UTF16.self) { wcs in
-                            swiftpwa_w2_view_execute_script(
-                                viewOpaque, wcs, evalCompleteTrampoline, boxPtr
-                            )
-                        }
+                let box = Unmanaged.passRetained(EvalBox(continuation: cont)).toOpaque()
+                // `nonisolated(unsafe)` on a local because the
+                // `MainActor.assumeIsolated` closure below otherwise
+                // captures a non-Sendable raw pointer. The box's
+                // memory is released exactly once via the same path
+                // (`takeRetainedValue` on either branch).
+                nonisolated(unsafe) let boxPtr = box
+                Task { @MainActor in
+                    guard let viewLocal else {
+                        Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
+                            .continuation.resume(returning: nil)
+                        return
+                    }
+                    snippet.withCString(encodedAs: UTF16.self) { wcs in
+                        swiftpwa_w2_view_execute_script(
+                            viewLocal, wcs, evalCompleteTrampoline, boxPtr
+                        )
                     }
                 }
             }
@@ -201,11 +201,11 @@
             guard let json = String(data: data, encoding: .utf8) else {
                 throw BridgeError(code: BridgeError.encode, message: "frame is not valid UTF-8")
             }
-            let viewRaw = UInt(bitPattern: view.map { UnsafeMutableRawPointer($0) })
-            await MainThread.run {
-                guard let viewPtr = UnsafeMutableRawPointer(bitPattern: viewRaw) else { return }
+            let viewLocal = view
+            await MainActor.run {
+                guard let viewLocal else { return }
                 json.withCString(encodedAs: UTF16.self) { wcs in
-                    swiftpwa_w2_view_post_web_message_string(OpaquePointer(viewPtr), wcs)
+                    swiftpwa_w2_view_post_web_message_string(viewLocal, wcs)
                 }
             }
         }
@@ -272,8 +272,14 @@
         // We're already on the UI thread (the controller-ready
         // callback always fires on the call thread). Avoid the
         // MainThread hop and dispatch directly.
+        //
+        // `nonisolated(unsafe)` on the local because Swift 6.3's
+        // strict-concurrency check otherwise refuses to capture the
+        // `OpaquePointer?` controller handle into the
+        // `MainActor.assumeIsolated` closure.
+        nonisolated(unsafe) let ctrl = ctrlPtr
         MainActor.assumeIsolated {
-            adapter._onControllerReady(ctrlPtr)
+            adapter._onControllerReady(ctrl)
         }
     }
 

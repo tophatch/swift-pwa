@@ -1,4 +1,5 @@
 #if os(Windows)
+    import CWebView2Shim
     import Foundation
     import SwiftPWACore
     import WinSDK
@@ -23,13 +24,18 @@
         private var hicon: HICON?
         private var menuItems: [TrayMenuItem] = []
         private var menuHasContent: Bool { !menuItems.isEmpty }
-        private var continuations: [UUID: AsyncStream<TrayEvent>.Continuation] = [:]
+        // `Foundation.UUID` to disambiguate from the Win32 SDK's
+        // `UUID` typealias (`_GUIDDef`).
+        private var continuations: [Foundation.UUID: AsyncStream<TrayEvent>.Continuation] = [:]
         private var visible = false
 
         /// Custom message id Shell_NotifyIcon uses to deliver mouse
         /// events to our owner HWND. Must be in the WM_APP range so
         /// it doesn't collide with other shell messages.
-        static let callbackMessage: UINT = UINT(WM_APP) + 1
+        ///
+        /// `nonisolated` so the trampoline WndProc (which can't be
+        /// `@MainActor`) can read it without a hop.
+        nonisolated static let callbackMessage: UINT = UINT(WM_APP) + 1
 
         // Owner window class name. Registered lazily.
         // `nonisolated(unsafe)` — only mutated on the UI thread under
@@ -178,10 +184,15 @@
             // by Win32 docs to avoid the menu disappearing on the
             // first click.
             SetForegroundWindow(ownerHwnd)
-            let cmd = TrackPopupMenu(
-                menu,
+            // Swift's WinSDK overlay imports `TrackPopupMenu` as
+            // returning `Bool`, dropping the chosen-command id we
+            // need with `TPM_RETURNCMD`. Route through the C shim
+            // (`swiftpwa_track_popup_menu`) which preserves the int.
+            let cmd = swiftpwa_track_popup_menu(
+                UnsafeMutableRawPointer(menu),
                 UINT(TPM_RETURNCMD | TPM_RIGHTBUTTON),
-                pt.x, pt.y, 0, ownerHwnd, nil
+                pt.x, pt.y,
+                UnsafeMutableRawPointer(ownerHwnd)
             )
             // Per docs, post a null message so the menu gets fully
             // dismissed before we do anything reentrant.
@@ -222,15 +233,28 @@
             // Best-effort tray cleanup. Mirrors the GTK tray's
             // intentional leak-on-app-exit pattern, but we still want
             // to remove the icon from the taskbar on early teardown.
-            var n = nid
-            _ = Shell_NotifyIconW(DWORD(NIM_DELETE), &n)
-            if let hicon { DestroyIcon(hicon) }
+            //
+            // `MainActor.assumeIsolated` to satisfy Swift 6's rule
+            // that nonisolated `deinit` can't access `@MainActor`-
+            // isolated stored properties (`nid`, `hicon`). At process
+            // exit the runtime is on the main thread anyway.
+            MainActor.assumeIsolated {
+                var n = nid
+                _ = Shell_NotifyIconW(DWORD(NIM_DELETE), &n)
+                if let hicon { DestroyIcon(hicon) }
+            }
         }
     }
 
     let trayOwnerWndProc: WNDPROC = { hwnd, msg, wParam, lParam in
         guard let hwnd else { return 0 }
-        if msg == SystemTray.callbackMessage {
+        // Inlined `WM_APP+1` rather than referencing
+        // `SystemTray.callbackMessage` — the static is `nonisolated`,
+        // but some Swift 6.3 nightlies still flag the read from a
+        // non-isolated `@convention(c)` closure. Inlining avoids the
+        // diagnostic with no runtime cost.
+        let dispatchMsg: UINT = UINT(WM_APP) + 1
+        if msg == dispatchMsg {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA)
             if raw != 0,
                let opaque = UnsafeMutableRawPointer(bitPattern: UInt(bitPattern: Int(raw)))

@@ -74,13 +74,20 @@
         public func setIcon(path: String, template _: Bool) {
             // Load the file as an HICON. WebView2 / Win32 use 16x16
             // icons in the tray; let the OS pick the best size.
-            let h = path.withCString(encodedAs: UTF16.self) { wcs -> HICON? in
-                LoadImageW(
+            //
+            // `LoadImageW` returns `HANDLE` (`UnsafeMutableRawPointer?`)
+            // on Swift's WinSDK overlay; `HICON` is a distinct typed
+            // pointer (`UnsafeMutablePointer<HICON__>`). Convert
+            // through `OpaquePointer` so the bit pattern is preserved
+            // without going through `Int`.
+            let h: HICON? = path.withCString(encodedAs: UTF16.self) { wcs in
+                guard let raw = LoadImageW(
                     nil, wcs,
                     UINT(IMAGE_ICON),
                     0, 0,
                     UINT(LR_LOADFROMFILE | LR_DEFAULTSIZE)
-                ).map { HICON($0) }
+                ) else { return nil }
+                return HICON(OpaquePointer(raw))
             }
             if let old = hicon { DestroyIcon(old) }
             hicon = h
@@ -118,7 +125,9 @@
         }
 
         public func eventStream() -> AsyncStream<TrayEvent> {
-            let key = UUID()
+            // `Foundation.UUID()` to disambiguate from the Win32 SDK's
+            // `UUID` typealias (`_GUIDDef`), which is also in scope.
+            let key = Foundation.UUID()
             return AsyncStream { continuation in
                 self.continuations[key] = continuation
                 continuation.onTermination = { @Sendable _ in

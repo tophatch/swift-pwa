@@ -59,8 +59,7 @@
         func pumpUntilReady() {
             var msg = MSG()
             while !ready {
-                let r = GetMessageW(&msg, nil, 0, 0)
-                if r <= 0 { break }
+                if !GetMessageW(&msg, nil, 0, 0) { break }
                 TranslateMessage(&msg)
                 DispatchMessageW(&msg)
             }

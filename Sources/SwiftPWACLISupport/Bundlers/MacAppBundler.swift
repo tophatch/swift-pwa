@@ -214,7 +214,16 @@ enum Shell {
         // than `URL.appendingPathComponent`) keeps the resulting path
         // entirely in native form so swift-corelibs-foundation
         // doesn't drop a `/` in front of `C:\…` and confuse `_stat`.
-        let path = ProcessInfo.processInfo.environment["PATH"] ?? ""
+        //
+        // PATH lookup is case-insensitive: Windows environment
+        // variables are case-insensitive at the OS level but
+        // swift-corelibs-foundation surfaces them with whatever case
+        // the source set. PowerShell exports `Path`, cmd.exe exports
+        // `PATH`, the swift-build environment can be either — so a
+        // hard-coded `env["PATH"]` lookup misses on PowerShell-launched
+        // sessions and the search comes up empty.
+        let env = ProcessInfo.processInfo.environment
+        let path = env.first(where: { $0.key.caseInsensitiveCompare("PATH") == .orderedSame })?.value ?? ""
         for dir in path.split(separator: pathSeparator, omittingEmptySubsequences: true) {
             for suffix in suffixes {
                 let candidate = String(dir) + dirSeparator + name + suffix

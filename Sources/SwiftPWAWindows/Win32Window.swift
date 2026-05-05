@@ -56,9 +56,18 @@
             Self.registerClassIfNeeded()
             titleStorage = config.title
 
-            // Style: standard overlapped window. Resizable maps to the
-            // presence of `WS_THICKFRAME` + `WS_MAXIMIZEBOX`.
-            var style: DWORD = DWORD(WS_OVERLAPPEDWINDOW)
+            // Style: standard overlapped window plus `WS_CLIPCHILDREN`.
+            // Without `WS_CLIPCHILDREN`, the parent's WM_ERASEBKGND
+            // paints `hbrBackground` (system white) over the entire
+            // client area — including where the WebView2 child HWND
+            // is rendering — so the page is correctly loaded but
+            // invisible. Setting the flag tells GDI to skip the
+            // child rectangles. Microsoft's WebView2 samples all
+            // do this.
+            //
+            // Resizable maps to the presence of `WS_THICKFRAME` +
+            // `WS_MAXIMIZEBOX`.
+            var style: DWORD = DWORD(WS_OVERLAPPEDWINDOW) | DWORD(WS_CLIPCHILDREN)
             if !config.resizable {
                 style &= ~DWORD(WS_THICKFRAME | WS_MAXIMIZEBOX)
             }

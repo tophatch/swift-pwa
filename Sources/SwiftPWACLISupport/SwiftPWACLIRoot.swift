@@ -27,3 +27,30 @@ public struct SwiftPWACLIRoot: AsyncParsableCommand {
 
     public init() {}
 }
+
+/// Availability-refined entry point for the `swift-pwa` executable.
+///
+/// SwiftArgumentParser ships two overloads of `main()` — a sync one
+/// on `ParsableCommand` and an async one on `AsyncParsableCommand`,
+/// the latter `@available(macOS 10.15, …, *)`-gated. Overload
+/// resolution prefers the async one only inside a scope that
+/// already satisfies that availability. On Apple targets the package
+/// `platforms:` clause lifts the deployment target past 10.15, so a
+/// bare `await SwiftPWACLIRoot.main()` in `main.swift` picks the
+/// async overload. SwiftPM has no Windows / Linux deployment-target
+/// concept, so on those hosts the same call site falls through to
+/// the sync overload — at which point SAP's debug-mode runtime
+/// check fires "Asynchronous root command needs availability
+/// annotation" and the binary exits before reaching the build /
+/// init / dev subcommand.
+///
+/// This wrapper is `@available`-annotated, so its body is a
+/// refined scope where the async `main()` is unambiguously the
+/// preferred overload regardless of host platform. `main.swift`
+/// calls into here instead of touching `SwiftPWACLIRoot` directly.
+@available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
+public enum SwiftPWACLIEntry {
+    public static func run() async {
+        await SwiftPWACLIRoot.main()
+    }
+}

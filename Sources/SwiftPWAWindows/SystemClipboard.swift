@@ -16,10 +16,10 @@
 
         public func readText() async throws -> String? {
             await MainThread.run { () -> String? in
-                // Win32 BOOL is `Int32`, not Swift's `Bool` — every
-                // clipboard call returns nonzero on success. Treat
-                // them all as `!= 0`.
-                guard OpenClipboard(nil) != 0 else { return nil }
+                // Swift's WinSDK overlay (6.3+) imports the BOOL-
+                // returning Win32 clipboard calls as `Bool`, not the
+                // C `BOOL` (Int32). Use them directly.
+                guard OpenClipboard(nil) else { return nil }
                 defer { CloseClipboard() }
                 guard let h = GetClipboardData(UINT(CF_UNICODETEXT)) else { return nil }
                 guard let p = GlobalLock(h) else { return nil }
@@ -31,7 +31,7 @@
 
         public func writeText(_ text: String) async throws {
             _ = await MainThread.run { () -> Bool in
-                guard OpenClipboard(nil) != 0 else { return false }
+                guard OpenClipboard(nil) else { return false }
                 defer { CloseClipboard() }
                 _ = EmptyClipboard()
                 let utf16 = Array(text.utf16) + [0]
@@ -57,9 +57,9 @@
 
         public func clear() async throws {
             _ = await MainThread.run { () -> Bool in
-                guard OpenClipboard(nil) != 0 else { return false }
+                guard OpenClipboard(nil) else { return false }
                 defer { CloseClipboard() }
-                return EmptyClipboard() != 0
+                return EmptyClipboard()
             }
         }
     }

@@ -536,6 +536,16 @@ extern "C" void swiftpwa_w2_resource_respond(
     if (pending.deferral) pending.deferral->Complete();
 }
 
+// MARK: - Win32 helpers
+
+extern "C" int swiftpwa_track_popup_menu(
+    void *menu, unsigned int flags,
+    int x, int y, void *hwnd) {
+    return static_cast<int>(TrackPopupMenu(
+        reinterpret_cast<HMENU>(menu), flags, x, y, 0,
+        reinterpret_cast<HWND>(hwnd), nullptr));
+}
+
 // MARK: - Runtime detection
 
 extern "C" swiftpwa_w2_hresult swiftpwa_w2_check_runtime(void) {
@@ -573,6 +583,7 @@ extern "C" void swiftpwa_w2_view_set_web_message_handler(swiftpwa_w2_view *, swi
 extern "C" void swiftpwa_w2_view_map_virtual_host(swiftpwa_w2_view *, const wchar_t *, const wchar_t *, int) {}
 extern "C" void swiftpwa_w2_view_intercept_resources(swiftpwa_w2_view *, const wchar_t *, swiftpwa_w2_resource_cb, void *) {}
 extern "C" void swiftpwa_w2_resource_respond(swiftpwa_w2_view *, uint64_t, int32_t, const char *, const uint8_t *, int32_t) {}
+extern "C" int swiftpwa_track_popup_menu(void *, unsigned int, int, int, void *) { return 0; }
 extern "C" swiftpwa_w2_hresult swiftpwa_w2_check_runtime(void) { return -1; }
 
 #endif // _WIN32

@@ -62,7 +62,10 @@
             // is reserved for future use (e.g. distinguishing message
             // categories if we ever multiplex this window).
             let lparam = LPARAM(Int(bitPattern: box))
-            if PostMessageW(hwnd, dispatchMessage, 0, lparam) == 0 {
+            // Swift's WinSDK overlay (6.3+) imports `PostMessageW` as
+            // returning Swift `Bool`, not the C `BOOL` (Int32). Use it
+            // directly.
+            if !PostMessageW(hwnd, dispatchMessage, 0, lparam) {
                 // PostMessage failed — release the box so we don't
                 // leak. The WndProc retains-then-fires; on a failed
                 // post nothing else will pick it up.

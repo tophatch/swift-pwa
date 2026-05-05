@@ -5,12 +5,14 @@ WebView2 — through a small C++ COM shim, plus Win32 for window
 management, clipboard, tray, and balloon notifications. Swift on
 Windows handles the rest via `import WinSDK`.
 
-> **Status (v0.2):** the backend just landed. It compiles against the
-> Swift-on-Windows SDK and is wired into the umbrella, but it has not
-> yet been booted on real hardware end-to-end — please file issues
-> with the failure mode rather than working around them locally. The
-> JS bridge, basic window lifecycle, clipboard, tray, and balloon
-> notifications are in scope; richer toast XML (replace-by-id, action
+> **Status (v0.2):** builds clean on Windows 11 ARM64 with Swift 6.3.1
+> (verified against Visual Studio 2026 + WebView2 SDK 1.0.3912.50 +
+> WIL 1.0.260126.7). x64 should also build by the same recipe but
+> hasn't been re-verified on the latest commits. Runtime behavior
+> (windows actually appearing, the JS↔Swift bridge round-tripping,
+> clipboard / tray / balloon plumbing) hasn't been smoke-tested yet
+> — please file issues with the failure mode rather than working
+> around them locally. Richer toast XML (replace-by-id, action
 > buttons) and MSIX packaging wait on the swift-winrt rollout in v0.3.
 
 ## 1. Toolchain

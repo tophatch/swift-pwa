@@ -156,8 +156,13 @@
             context.environmentReady = true
             return
         }
+        // `nonisolated(unsafe)` on the local because Swift 6.3's
+        // strict-concurrency check otherwise refuses to capture the
+        // `OpaquePointer?` env handle into the
+        // `MainActor.assumeIsolated` closure.
+        nonisolated(unsafe) let env = envPtr
         MainActor.assumeIsolated {
-            context.installEnvironment(envPtr)
+            context.installEnvironment(env)
         }
     }
 #endif

@@ -168,6 +168,23 @@ void swiftpwa_w2_resource_respond(
     const uint8_t *body,
     int32_t body_len);
 
+// MARK: - Win32 helpers
+//
+// These aren't WebView2-specific, but live here so we don't need a
+// second C target just to expose one or two functions Swift's WinSDK
+// overlay imports the wrong type for.
+
+/// `TrackPopupMenu` returns the chosen item id when called with
+/// `TPM_RETURNCMD`, but Swift 6.3.1's WinSDK overlay imports the
+/// function as returning `Bool`, dropping the id. We re-expose it
+/// with an `int` return so `SystemTray` can read the chosen command.
+///
+/// `menu` is `HMENU`, `hwnd` is `HWND`. `nReserved` and `lprc`
+/// (rarely used) default to 0 / NULL.
+int swiftpwa_track_popup_menu(
+    void *menu, unsigned int flags,
+    int x, int y, void *hwnd);
+
 // MARK: - WebView2 runtime detection
 
 // Returns 0 if a WebView2 Runtime is installed and usable, otherwise

@@ -17,7 +17,7 @@
         /// be in the application range (`WM_APP..0xBFFF`) per Win32
         /// guidelines so it doesn't collide with anything WebView2 or
         /// the shell sends us.
-        static let dispatchMessage: UINT = UINT(WM_APP) + 1
+        static let dispatchMessage: UINT = .init(WM_APP) + 1
 
         /// Marker class atom — `RegisterClassExW` hands back an `ATOM`
         /// (UInt16). We register on first call and reuse it for
@@ -29,7 +29,7 @@
         // only ever called once at startup, on the UI thread, before
         // any other code touches it. Same pattern as
         // `MainThread._hook` in `SwiftPWACore/MainThread.swift`.
-        nonisolated(unsafe) private static var classAtom: ATOM = 0
+        private nonisolated(unsafe) static var classAtom: ATOM = 0
         private static let className: [WCHAR] = "SwiftPWADispatcher".utf16.map { WCHAR($0) } + [0]
 
         static func create() -> HWND {

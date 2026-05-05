@@ -151,6 +151,7 @@ let package = Package(
         gtkBackendTarget
     ] + (appIndicatorSystemLibraryTarget.map { [$0] } ?? []) + [
         // MARK: - Windows backend (WebView2 via a C++ COM shim)
+
         //
         // The shim is a regular C/C++ target (not a systemLibrary)
         // because it actually compiles source — the WebView2 SDK is

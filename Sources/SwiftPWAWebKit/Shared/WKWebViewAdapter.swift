@@ -15,7 +15,12 @@
         public nonisolated let webView: WKWebView
         private nonisolated(unsafe) var assetProvider: AssetProvider?
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        private nonisolated(unsafe) lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in
+        /// Swift 6.0 (Xcode 16.4) refuses `nonisolated` on `lazy`
+        /// properties — diagnostic was "warning" on Xcode 26+. The
+        /// class itself is `@unchecked Sendable`, so the lazy's
+        /// implicit isolation doesn't bite us at runtime; we just
+        /// can't say so.
+        private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in
             self.continuation = c
         }
 
@@ -51,7 +56,10 @@
             configuration.setURLSchemeHandler(handler, forURLScheme: scheme)
         }
 
-        public func attachAssetProvider(_ provider: AssetProvider) {
+        /// `nonisolated` so `load` (which is also nonisolated for
+        /// protocol conformance) can call it. The stored property is
+        /// already `nonisolated(unsafe)`.
+        public nonisolated func attachAssetProvider(_ provider: AssetProvider) {
             assetProvider = provider
         }
 

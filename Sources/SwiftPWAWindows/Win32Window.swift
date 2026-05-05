@@ -45,7 +45,7 @@
         // `nonisolated(unsafe)` because the static var is mutable
         // global state guarded by the "always called from the UI
         // thread during init" invariant.
-        nonisolated(unsafe) private static var classAtom: ATOM = 0
+        private nonisolated(unsafe) static var classAtom: ATOM = 0
         private static let className: [WCHAR] = "SwiftPWAWindow".utf16.map { WCHAR($0) } + [0]
 
         public init(
@@ -67,7 +67,7 @@
             //
             // Resizable maps to the presence of `WS_THICKFRAME` +
             // `WS_MAXIMIZEBOX`.
-            var style: DWORD = DWORD(WS_OVERLAPPEDWINDOW) | DWORD(WS_CLIPCHILDREN)
+            var style = DWORD(WS_OVERLAPPEDWINDOW) | DWORD(WS_CLIPCHILDREN)
             if !config.resizable {
                 style &= ~DWORD(WS_THICKFRAME | WS_MAXIMIZEBOX)
             }
@@ -205,14 +205,14 @@
                 let ctrlDown = (GetKeyState(VK_CONTROL) & Int16(bitPattern: 0x8000)) != 0
                 let altDown = (GetKeyState(VK_MENU) & Int16(bitPattern: 0x8000)) != 0
                 // Ctrl+Q quit accelerator, matching Linux.
-                if Int32(wParam) == 0x51 /* 'Q' */ && ctrlDown {
+                if Int32(wParam) == 0x51 /* 'Q' */, ctrlDown {
                     app?.quit(exitCode: 0)
                     return true
                 }
                 // Ctrl+Alt+J — open WebView2 DevTools. Mirrors Chrome
                 // / Edge's Cmd+Opt+J on macOS; cross-platform binding
                 // on the other backends is a v0.3 follow-up.
-                if Int32(wParam) == 0x4A /* 'J' */ && ctrlDown && altDown {
+                if Int32(wParam) == 0x4A /* 'J' */, ctrlDown, altDown {
                     adapter.openDevTools()
                     return true
                 }
@@ -384,6 +384,7 @@
     }
 
     // MARK: - LOWORD / HIWORD helpers
+
     //
     // The Win32 macros aren't imported into Swift. They're trivial
     // bit-twiddles, so just spell them out.

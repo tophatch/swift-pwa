@@ -17,9 +17,9 @@
     /// `((HWND)0)` — z-order constant for `SetWindowPos`.
     nonisolated(unsafe) let HWND_TOP: HWND? = nil
 
-    // `IDC_ARROW` is `MAKEINTRESOURCE(32512)` — a `LPCWSTR` carrying
-    // the integer 32512 in its low 16 bits. Swift's WinSDK overlay
-    // hasn't always imported it consistently across releases, so we
-    // construct it ourselves.
+    /// `IDC_ARROW` is `MAKEINTRESOURCE(32512)` — a `LPCWSTR` carrying
+    /// the integer 32512 in its low 16 bits. Swift's WinSDK overlay
+    /// hasn't always imported it consistently across releases, so we
+    /// construct it ourselves.
     nonisolated(unsafe) let IDC_ARROW_W: UnsafePointer<WCHAR>? = UnsafePointer(bitPattern: 32512)
 #endif

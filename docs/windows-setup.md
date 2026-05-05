@@ -19,7 +19,7 @@ Windows handles the rest via `import WinSDK`.
 
 | Component                              | Install                                                                                         |
 |----------------------------------------|-------------------------------------------------------------------------------------------------|
-| Swift 6.0+ for Windows                 | <https://www.swift.org/install/windows/> (the official Windows installer or `winget`)           |
+| Swift 6.0+ for Windows                 | <https://www.swift.org/install/windows/> — or `winget install --id Swift.Toolchain`             |
 | Visual Studio Build Tools              | "Desktop development with C++" workload — supplies `cl.exe`, MSVC libs, the Windows 10/11 SDK   |
 | WebView2 SDK                           | NuGet package `Microsoft.Web.WebView2` (≥ 1.0.2210)                                             |
 | Windows Implementation Libraries (WIL) | NuGet package `Microsoft.Windows.ImplementationLibrary` — `<wil/com.h>` is used by the COM shim |
@@ -109,15 +109,49 @@ $env:LIB     = "$swiftpwa\packages\Microsoft.Web.WebView2\build\native\$arch;$en
 
 Symptoms of forgetting:
 
-| Missing                    | Failure mode                                                                         |
-|----------------------------|--------------------------------------------------------------------------------------|
-| `Launch-VsDevShell.ps1`    | `lld-link: error: could not open 'msvcrt.lib'` — even at the manifest-compile stage. |
-| `INCLUDE` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`.      |
-| `LIB`                      | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`.                        |
+| Missing                    | Failure mode                                                                                       |
+|----------------------------|----------------------------------------------------------------------------------------------------|
+| `Launch-VsDevShell.ps1`    | `lld-link: error: could not open 'msvcrt.lib'` — even at the manifest-compile stage.              |
+| `INCLUDE` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`.                   |
+| `LIB`                      | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`.                                     |
+| stdlib junction            | `error: unable to load standard library for target 'x86_64-unknown-windows-msvc'` at manifest compile. See [One-time stdlib junction](#one-time-stdlib-junction-swift-asserts-installer). |
 
 Saving the four lines as a `vendor\Set-SwiftPwaEnv.ps1` you dot-source
 at the start of each session (`. .\vendor\Set-SwiftPwaEnv.ps1`) takes
 the friction out.
+
+### One-time stdlib junction (Swift `+Asserts` installer)
+
+The official Swift Windows installer ships two toolchain trees:
+`Toolchains\6.x.y+Asserts` (the default on PATH) and `Platforms\6.x.y\Windows.platform\Developer\SDKs\Windows.sdk`.  
+The `+Asserts` tree intentionally omits a `lib\swift\windows` directory — it
+expects `swiftc` to resolve the stdlib via `SDKROOT`. However, SwiftPM's
+manifest compiler (`swift package`) invokes `swiftc` directly without that
+variable, so on a fresh install you get:
+
+```
+<unknown>:0: error: unable to load standard library for target 'x86_64-unknown-windows-msvc'
+error: 'swift-pwa': Invalid manifest
+```
+
+The fix is a one-time directory junction that makes the Platform SDK's stdlib
+visible where the toolchain expects it:
+
+```powershell
+# Run once after installing Swift (adjust the version number if needed):
+$base = "$env:LOCALAPPDATA\Programs\Swift"
+New-Item -ItemType Junction `
+    -Path  "$base\Toolchains\6.3.1+Asserts\usr\lib\swift\windows" `
+    -Target "$base\Platforms\6.3.1\Windows.platform\Developer\SDKs\Windows.sdk\usr\lib\swift\windows"
+```
+
+The junction survives reboots and only needs to be recreated if you reinstall
+or upgrade Swift. Verify it worked:
+
+```powershell
+Test-Path "$env:LOCALAPPDATA\Programs\Swift\Toolchains\6.3.1+Asserts\usr\lib\swift\windows\x86_64\swiftCore.lib"
+# → True
+```
 
 ### Windows on ARM
 

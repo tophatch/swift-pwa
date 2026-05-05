@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** v0.2 in flight on `main` — clipboard, tray, and notifications plugins shipped on macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64). Android remains stubbed; biometric auth, dialog, and fs plugins, plus richer Windows toasts via swift-winrt, are queued for v0.3. Last tagged release is v0.1.0.
+> **Status:** v0.2.0 released — clipboard, tray, and notifications plugins shipped on macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64). Cross-platform `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools. Android remains stubbed; biometric auth, dialog, and fs plugins, plus richer Windows toasts via swift-winrt and MSIX packaging, are queued for v0.3.
 
 ## Why
 

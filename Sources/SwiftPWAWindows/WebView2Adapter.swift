@@ -162,7 +162,14 @@
         }
 
         public func evaluateJavaScript(_ js: String) async throws -> String? {
-            let viewLocal = view
+            // `nonisolated(unsafe)` because the local crosses two
+            // closure boundaries (`withCheckedThrowingContinuation`
+            // and the inner `Task { @MainActor in … }`); without it,
+            // Swift 6.3's sending-risk check refuses the second hop
+            // even though `OpaquePointer` is conceptually Sendable.
+            // The pointer is only ever read on the main thread inside
+            // the Task body.
+            nonisolated(unsafe) let viewLocal = view
             let snippet = js
             return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in

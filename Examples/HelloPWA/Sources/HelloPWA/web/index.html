@@ -105,6 +105,25 @@
             color: var(--muted);
         }
         .shortcuts strong { color: var(--fg); font-weight: 600; }
+        /* Windows-specific verification block — its own card so it
+           reads as separate from the cross-platform actions above
+           and the help text isn't lost in a sea of buttons. */
+        .winverify {
+            margin: 1rem 0;
+            padding: .85rem 1rem;
+            background: var(--surface);
+            border-radius: 10px;
+            border-left: 3px solid var(--accent);
+        }
+        .winverify h2 {
+            font-size: .8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--muted);
+            margin: 0 0 .35rem;
+        }
+        .winverify p { margin: .25rem 0 .75rem; font-size: .9rem; }
         kbd {
             font: inherit;
             font-size: .8em;
@@ -170,6 +189,22 @@
         <kbd id="k-paste">⇧⌘V</kbd> paste ·
         <kbd id="k-clear">⌘K</kbd> clear log
     </p>
+    <section class="winverify">
+        <h2>Windows toast verification</h2>
+        <p>
+            On Windows this exercises the WinRT
+            <code>ToastNotificationManager</code> path. Look for the
+            toast in Action Center after dismissal — its header should
+            read <code>SwiftPWA.HelloPWA</code> (the AUMID derived from
+            the exe basename). If the WinRT path failed, the process'
+            stderr will say so and the message came from the
+            <code>Shell_NotifyIconW</code> balloon fallback. On macOS
+            / Linux this button just sends a regular notification.
+        </p>
+        <div class="actions">
+            <button id="toast">Send Windows toast</button>
+        </div>
+    </section>
     <div class="panes">
         <div class="pane">
             <h2>Actions</h2>
@@ -293,6 +328,27 @@
         document.getElementById("cycle-tray").onclick = actions.cycleTray;
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
         document.getElementById("notify").onclick = actions.notify;
+
+        // Windows toast verification — same backend call as
+        // `notifications.send`, but with a fixed payload that's
+        // easier to spot in Action Center, and a label that names
+        // the surface it's exercising. On macOS / Linux it surfaces
+        // as a regular notification through the same code path.
+        actions.toast = async () => {
+            try {
+                const auth = await __SWIFT_PWA__.invoke("notifications.requestAuthorization");
+                if (!auth.granted) { log("toast: not authorized"); return; }
+                const r = await __SWIFT_PWA__.invoke("notifications.send", {
+                    title: "swift-pwa toast verification",
+                    body:  "If this is in Action Center under SwiftPWA.HelloPWA, the WinRT path is live.",
+                    sound: false,
+                });
+                log("toast → id=" + r.id);
+            } catch (e) {
+                log("toast failed: " + e.message);
+            }
+        };
+        document.getElementById("toast").onclick = actions.toast;
 
         // React to tray clicks / menu-item activations from the JS side.
         // Some items (e.g. "rename") map directly onto existing actions;

@@ -23,7 +23,9 @@
         private var nid: NOTIFYICONDATAW
         private var hicon: HICON?
         private var menuItems: [TrayMenuItem] = []
-        private var menuHasContent: Bool { !menuItems.isEmpty }
+        private var menuHasContent: Bool {
+            !menuItems.isEmpty
+        }
         // `Foundation.UUID` to disambiguate from the Win32 SDK's
         // `UUID` typealias (`_GUIDDef`).
         private var continuations: [Foundation.UUID: AsyncStream<TrayEvent>.Continuation] = [:]
@@ -35,12 +37,12 @@
         ///
         /// `nonisolated` so the trampoline WndProc (which can't be
         /// `@MainActor`) can read it without a hop.
-        nonisolated static let callbackMessage: UINT = UINT(WM_APP) + 1
+        nonisolated static let callbackMessage: UINT = .init(WM_APP) + 1
 
         // Owner window class name. Registered lazily.
         // `nonisolated(unsafe)` — only mutated on the UI thread under
         // the same invariant that guards the other class atoms.
-        nonisolated(unsafe) private static var classAtom: ATOM = 0
+        private nonisolated(unsafe) static var classAtom: ATOM = 0
         private static let className: [WCHAR] = "SwiftPWATrayOwner".utf16.map { WCHAR($0) } + [0]
 
         public init() {
@@ -110,7 +112,7 @@
                 let cap = dst.count / MemoryLayout<WCHAR>.size
                 let n = min(wide.count, cap)
                 let dstW = dst.bindMemory(to: WCHAR.self)
-                for i in 0..<n { dstW[i] = wide[i] }
+                for i in 0 ..< n { dstW[i] = wide[i] }
             }
             nid.uFlags |= UINT(NIF_TIP)
             _ = Shell_NotifyIconW(DWORD(NIM_MODIFY), &nid)
@@ -172,7 +174,7 @@
                 if item.separator {
                     AppendMenuW(menu, UINT(MF_SEPARATOR), 0, nil)
                 } else {
-                    let flags: UINT = UINT(MF_STRING) | (item.enabled ? 0 : UINT(MF_GRAYED))
+                    let flags = UINT(MF_STRING) | (item.enabled ? 0 : UINT(MF_GRAYED))
                     item.label.withCString(encodedAs: UTF16.self) { wcs in
                         _ = AppendMenuW(menu, flags, UINT_PTR(i + 1), wcs)
                     }
@@ -253,7 +255,7 @@
         // but some Swift 6.3 nightlies still flag the read from a
         // non-isolated `@convention(c)` closure. Inlining avoids the
         // diagnostic with no runtime cost.
-        let dispatchMsg: UINT = UINT(WM_APP) + 1
+        let dispatchMsg = UINT(WM_APP) + 1
         if msg == dispatchMsg {
             let raw = GetWindowLongPtrW(hwnd, GWLP_USERDATA)
             if raw != 0,

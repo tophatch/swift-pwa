@@ -57,12 +57,12 @@
             let titleW = Array(request.title.utf16.prefix(63)) + [0]
             withUnsafeMutableBytes(of: &nid.szInfoTitle) { dst in
                 let w = dst.bindMemory(to: WCHAR.self)
-                for i in 0..<titleW.count { w[i] = titleW[i] }
+                for i in 0 ..< titleW.count { w[i] = titleW[i] }
             }
             let bodyW = Array((request.body ?? "").utf16.prefix(255)) + [0]
             withUnsafeMutableBytes(of: &nid.szInfo) { dst in
                 let w = dst.bindMemory(to: WCHAR.self)
-                for i in 0..<bodyW.count { w[i] = bodyW[i] }
+                for i in 0 ..< bodyW.count { w[i] = bodyW[i] }
             }
 
             // First call adds the icon (NIM_ADD); subsequent calls
@@ -83,19 +83,19 @@
             // Windows backend (action-button events ship in v0.3).
             return Foundation.UUID().uuidString
         }
-
     }
 
     // MARK: - Notification host
-    //
-    // Hidden HWND owning the lifetime of the shared tray icon used as
-    // the toast source. Lazily created on first send.
-    //
-    // Not `@MainActor` — the surrounding `SystemNotifications` is
-    // `@unchecked Sendable` and accesses the host only from inside
-    // `MainThread.run` closures, so the "UI thread only" invariant is
-    // upheld externally. `installed` is `nonisolated(unsafe)` for
-    // the same reason.
+
+    ///
+    /// Hidden HWND owning the lifetime of the shared tray icon used as
+    /// the toast source. Lazily created on first send.
+    ///
+    /// Not `@MainActor` — the surrounding `SystemNotifications` is
+    /// `@unchecked Sendable` and accesses the host only from inside
+    /// `MainThread.run` closures, so the "UI thread only" invariant is
+    /// upheld externally. `installed` is `nonisolated(unsafe)` for
+    /// the same reason.
     final class NotificationHost: @unchecked Sendable {
         static let shared = NotificationHost()
         static let iconId: UINT = 2 // distinct from SystemTray.uID = 1
@@ -104,7 +104,7 @@
 
         private static let className: [WCHAR] =
             "SwiftPWANotifyHost".utf16.map { WCHAR($0) } + [0]
-        nonisolated(unsafe) private static var classAtom: ATOM = 0
+        private nonisolated(unsafe) static var classAtom: ATOM = 0
 
         private init() {
             Self.registerClassIfNeeded()

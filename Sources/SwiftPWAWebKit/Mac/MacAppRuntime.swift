@@ -13,8 +13,8 @@
         public static let shared = MacAppRuntime()
         public let context = MacAppContext()
         private var didStartConfigure = false
-        // Retained for the lifetime of the process — releasing the
-        // monitor handle removes the hook.
+        /// Retained for the lifetime of the process — releasing the
+        /// monitor handle removes the hook.
         private var devToolsMonitor: Any?
 
         private init() {}

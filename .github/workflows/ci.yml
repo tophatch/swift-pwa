@@ -49,15 +49,19 @@ jobs:
           swift-version: "6.0"
       - name: Show Swift version
         run: swift --version
-      - name: Install GTK3 + WebKitGTK 4.1
+      - name: Install GTK3 + WebKitGTK 4.1 + libayatana-appindicator3
         # Required so SwiftPM's package graph resolution doesn't fail
         # on the pkgConfig declarations for the GTK system-library targets,
         # even when SwiftPWAGTK itself isn't built into the test executable.
+        # `libayatana-appindicator3-dev` was added when the tray plugin
+        # landed — without it the C shim's `<libayatana-appindicator/...>`
+        # include fails resolution.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
             xvfb
       - name: Build Core + CLI
         # GTK backend builds are scaffolded but require additional

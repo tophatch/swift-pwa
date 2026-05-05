@@ -240,9 +240,9 @@ extern "C" void swiftpwa_w2_create_controller(
                     std::lock_guard<std::mutex> lock(ext.mu);
                     ext.env = env_ref;
                 }
-                // Diagnostic: log NavigationCompleted so a failed
-                // navigation surfaces a WebErrorStatus on stderr
-                // instead of just rendering blank.
+                // Surface failed navigations on stderr so a 404 / CORS
+                // / virtual-host-mapping miss doesn't just render blank.
+                // Successful navigations stay quiet.
                 EventRegistrationToken navTok{};
                 view->add_NavigationCompleted(
                     Callback<ICoreWebView2NavigationCompletedEventHandler>(
@@ -251,9 +251,11 @@ extern "C" void swiftpwa_w2_create_controller(
                             COREWEBVIEW2_WEB_ERROR_STATUS status = COREWEBVIEW2_WEB_ERROR_STATUS_UNKNOWN;
                             args->get_IsSuccess(&success);
                             args->get_WebErrorStatus(&status);
-                            fprintf(stderr,
-                                    "swift-pwa: NavigationCompleted success=%d status=%d\n",
-                                    success ? 1 : 0, static_cast<int>(status));
+                            if (!success) {
+                                fprintf(stderr,
+                                        "swift-pwa: NavigationCompleted failed (status=%d)\n",
+                                        static_cast<int>(status));
+                            }
                             return S_OK;
                         }).Get(),
                     &navTok);
@@ -454,8 +456,6 @@ extern "C" void swiftpwa_w2_view_map_virtual_host(
     if (FAILED(hr)) {
         fprintf(stderr, "swift-pwa: SetVirtualHostNameToFolderMapping failed: 0x%08X\n",
                 static_cast<unsigned int>(hr));
-    } else {
-        fprintf(stderr, "swift-pwa: virtual host mapping installed (kind=%d)\n", access_kind);
     }
 }
 

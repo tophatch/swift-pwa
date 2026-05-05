@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** v0.2 in flight on `main` — clipboard, tray, and notifications plugins shipped on macOS 15+, iOS 18+, and Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`). The Windows backend (Win32 + WebView2 via a C++ COM shim) just landed but hasn't been tested on real hardware yet — expect rough edges and please file issues. Android remains stubbed; biometric auth, dialog, and fs plugins are queued for v0.3. Last tagged release is v0.1.0.
+> **Status:** v0.2 in flight on `main` — clipboard, tray, and notifications plugins shipped on macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 — selected at build time via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64). Android remains stubbed; biometric auth, dialog, and fs plugins, plus richer Windows toasts via swift-winrt, are queued for v0.3. Last tagged release is v0.1.0.
 
 ## Why
 
@@ -98,7 +98,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | macOS 15 | WKWebView           | First class                                                          |
 | iOS 18   | WKWebView           | First class (UIScene)                                                |
 | Linux    | WebKitGTK 4.1 / 6.0 | First class (GTK3 default; GTK4 via `SWIFT_PWA_GTK4=1`)              |
-| Windows  | WebView2 (Edge)     | First class (Win32 + WebView2; v0.2 untested on hardware — see docs) |
+| Windows  | WebView2 (Edge)     | First class (Win32 + WebView2; verified on Windows 11 ARM64)         |
 | Android  | android.webkit      | Stub (planned v0.3)                                                  |
 
 ## JS API
@@ -180,13 +180,14 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 - **`TrayEvent.click` is macOS-only.** The freedesktop StatusNotifierItem spec gives the desktop panel ownership of click semantics on Linux; apps only see menu activations there.
 - **`NotificationsPlugin` requires a bundled, signed `.app` on Apple.** `UNUserNotificationCenter` raises an `NSException` when called from a process without a `CFBundleIdentifier`; the plugin pre-flights and throws a clean `BridgeError` instead of crashing, but actual banners only appear after `swift run swift-pwa build --target macos` (or via Xcode).
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
-- **Windows backend is unverified on hardware.** The `SwiftPWAWindows` target compiles against the Swift-on-Windows SDK and links the WebView2 static loader, but the v0.2 cut hasn't been booted on a real Windows box yet — expect to find rough edges in the WebView2 lifecycle, the Win32 message routing, or the bundler. Please file issues with the failure mode rather than working around it. Notifications use the legacy `Shell_NotifyIconW` balloon path; richer toast XML (replace-by-id, action buttons) waits on the swift-winrt dependency planned for v0.3.
+- **Windows notifications use the legacy `Shell_NotifyIconW` balloon path.** Banners surface as toasts on Windows 10 / 11, but persistence in Action Center requires a registered AppUserModelID (or a packaged app) — unsigned `swift run` invocations show a transient balloon and nothing in history. Richer toast XML (replace-by-id, action buttons) waits on the swift-winrt dependency planned for v0.3.
+- **Cmd+Opt+J / Ctrl+Alt+J only opens DevTools on Windows.** macOS WKWebView and Linux WebKitGTK have to use Safari's *Develop* menu / right-click *Inspect Element* until v0.3 wires the same shortcut on those backends.
 - **Android bundler prints "not implemented".** Targets are scaffolded but the actual build path lands in v0.3.
 
 ### Planned
 
-- **v0.2** — Windows (Win32 + WebView2) just landed; clipboard, tray (macOS + GTK3 via libayatana-appindicator3), notifications, and the portable `.exe` bundler are all in `main`. Remaining: hardening the Windows backend on real machines + a CI runner.
-- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging.
+- **v0.2** — Windows (Win32 + WebView2) verified on Windows 11 ARM64; clipboard, tray (macOS + GTK3 via libayatana-appindicator3), notifications, the portable `.exe` bundler, and the `Ctrl+Alt+J` DevTools shortcut are all in `main`. Remaining: an x64-Windows CI runner so regressions don't sneak past the ARM64-only smoke test.
+- **v0.3** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), Windows toast notifications via swift-winrt + `Windows.UI.Notifications`, MSIX packaging, cross-platform DevTools shortcut.
 - **v0.4+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
 
 ## Platform setup

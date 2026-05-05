@@ -201,12 +201,19 @@
                 emit(.didClose)
                 cleanupAfterClose()
                 return true
-            case WM_KEYDOWN:
+            case WM_KEYDOWN, WM_SYSKEYDOWN:
+                let ctrlDown = (GetKeyState(VK_CONTROL) & Int16(bitPattern: 0x8000)) != 0
+                let altDown = (GetKeyState(VK_MENU) & Int16(bitPattern: 0x8000)) != 0
                 // Ctrl+Q quit accelerator, matching Linux.
-                if Int32(wParam) == 0x51 /* 'Q' */
-                    && (GetKeyState(VK_CONTROL) & Int16(bitPattern: 0x8000)) != 0
-                {
+                if Int32(wParam) == 0x51 /* 'Q' */ && ctrlDown {
                     app?.quit(exitCode: 0)
+                    return true
+                }
+                // Ctrl+Alt+J — open WebView2 DevTools. Mirrors Chrome
+                // / Edge's Cmd+Opt+J on macOS; cross-platform binding
+                // on the other backends is a v0.3 follow-up.
+                if Int32(wParam) == 0x4A /* 'J' */ && ctrlDown && altDown {
+                    adapter.openDevTools()
                     return true
                 }
                 return false

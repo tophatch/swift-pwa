@@ -208,6 +208,19 @@ A few load-bearing details:
   emits `TrayEvent.click` only when no menu is currently set, mirroring
   the macOS `NSStatusItem` behavior.
 
+## Keyboard shortcuts
+
+| Shortcut       | Action                                        |
+|----------------|-----------------------------------------------|
+| `Ctrl+Q`       | Quit (matches the Linux GTK binding).         |
+| `Ctrl+Alt+J`   | Open WebView2 DevTools in a separate window.  |
+
+The DevTools binding is windows-only in v0.2 — adding `Cmd+Opt+J` on
+macOS (WKWebView's `_showInspector` SPI) and `Ctrl+Alt+J` on Linux
+(`webkit_web_inspector_show`) for cross-platform parity is a v0.3
+follow-up. Until then, use Safari's *Develop > Open Web Inspector* on
+macOS / right-click *Inspect Element* on Linux.
+
 ## Known limitations (Windows-specific)
 
 - **Untested on hardware.** The v0.2 cut compiles cross-platform-clean

@@ -4,10 +4,10 @@ Two parallel Linux backends, selected at build time via the
 `SWIFT_PWA_GTK4` environment variable. Both go through the same
 `SwiftPWAGTK` Swift module, so downstream code is identical:
 
-| Backend | Build command                  | System dev packages                       | Tested distro          |
-|---------|--------------------------------|-------------------------------------------|------------------------|
-| GTK3    | `swift build` (default)        | `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`   | Ubuntu 22.04 / 24.04   |
-| GTK4    | `SWIFT_PWA_GTK4=1 swift build` | `libgtk-4-dev`, `libwebkitgtk-6.0-dev`    | Ubuntu 24.04+ / 26.04  |
+| Backend | Build command                  | System dev packages                                                     | Tested distro          |
+|---------|--------------------------------|-------------------------------------------------------------------------|------------------------|
+| GTK3    | `swift build` (default)        | `libgtk-3-dev`, `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev` | Ubuntu 22.04 / 24.04   |
+| GTK4    | `SWIFT_PWA_GTK4=1 swift build` | `libgtk-4-dev`, `libwebkitgtk-6.0-dev`                                  | Ubuntu 24.04+ / 26.04  |
 
 Pick GTK3 if you're shipping to older distros (Ubuntu 22.04 LTS doesn't
 have WebKitGTK 6.0 in apt without a PPA). Pick GTK4 for modern distros
@@ -47,6 +47,7 @@ sudo apt-get install -y \
     pkg-config \
     libgtk-3-dev \
     libwebkit2gtk-4.1-dev \
+    libayatana-appindicator3-dev \
     libglib2.0-dev \
     xvfb \
     wget \
@@ -54,11 +55,17 @@ sudo apt-get install -y \
     zlib1g-dev   # Swift sometimes needs this on minimal images
 ```
 
+`libayatana-appindicator3-dev` powers `TrayPlugin` (StatusNotifierItem
+over D-Bus, with a fallback to `GtkStatusIcon` on legacy desktops).
+It's a hard build dep of the GTK3 backend even if you don't use
+`TrayPlugin` — the C shim is part of the target.
+
 Sanity-check the headers are findable:
 
 ```bash
-pkg-config --modversion gtk+-3.0           # any 3.x
-pkg-config --modversion webkit2gtk-4.1     # any 2.4x
+pkg-config --modversion gtk+-3.0                       # any 3.x
+pkg-config --modversion webkit2gtk-4.1                 # any 2.4x
+pkg-config --modversion ayatana-appindicator3-0.1      # any 0.5.x+
 ```
 
 ### GTK4 + WebKitGTK 6.0

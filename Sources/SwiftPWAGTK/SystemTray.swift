@@ -1,20 +1,30 @@
 #if os(Linux)
+    import CAyatanaAppIndicator3Shim
     import CGtk3Shim
     import Foundation
     import SwiftPWACore
 
-    /// `Tray` backed by `GtkStatusIcon` on the GTK3 backend. The whole
-    /// state machine (status icon, currently-attached menu, signal
-    /// trampolines) lives in the C shim — Swift just holds an opaque
-    /// `swiftpwa_tray *` and forwards user calls. The shim invokes
-    /// `trayEventTrampoline` on the GTK main thread when the icon is
-    /// clicked or a menu item is activated.
+    /// `Tray` backed by `libayatana-appindicator3` (StatusNotifierItem
+    /// over D-Bus) on the GTK3 backend. The whole state machine —
+    /// `AppIndicator` instance, currently-attached menu, signal
+    /// trampolines — lives in the AppIndicator C shim; Swift just
+    /// holds the opaque handle and forwards user calls. The shim
+    /// invokes `trayEventTrampoline` on the GTK main thread when a
+    /// menu item is activated.
     ///
-    /// `GtkStatusIcon` is deprecated upstream but is still the simplest
-    /// surface that works on most Linux desktops without dragging in
-    /// libayatana-appindicator. AppIndicator support is on the roadmap;
-    /// until then the GTK4 backend ships a no-op `SystemTray` since
-    /// `GtkStatusIcon` was removed entirely in GTK4.
+    /// SNI is what GNOME (with the AppIndicator extension), Plasma,
+    /// Sway, Hyprland, XFCE, MATE, Cinnamon all consume; on legacy
+    /// Xembed-only desktops the AppIndicator library falls back to
+    /// drawing a `GtkStatusIcon` itself, so this works everywhere the
+    /// previous `GtkStatusIcon`-based code did, plus modern Wayland
+    /// targets the old code couldn't reach.
+    ///
+    /// **`.click` events are never emitted on Linux.** SNI gives the
+    /// desktop panel ownership of click semantics — the host decides
+    /// what happens (typically: open the menu). Apps only see menu
+    /// activations. The GTK4 backend's `SystemTray` stays a no-op
+    /// stub because `libayatana-appindicator3` is GTK3-only and a
+    /// process can't link both GTK versions at once.
     @MainActor
     public final class SystemTray: Tray {
         // Swift's clang importer sees the full struct definition in

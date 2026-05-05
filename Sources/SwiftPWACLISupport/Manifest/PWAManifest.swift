@@ -63,7 +63,30 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     }
 
     public static func load(from url: URL) throws -> PWAManifest {
-        let data = try Data(contentsOf: url)
+        // `Data(contentsOf: fileURL)` is unreliable on swift-corelibs-
+        // foundation under Windows: the file URL is routed through a
+        // URL-loading path that returns NSCocoaError 260 ("file
+        // doesn't exist") even when the file does exist. Read via
+        // path string for `file://` URLs to go straight through
+        // `CreateFileW` / `fopen` — works identically on every host.
+        // (Apple Foundation's `Data(contentsOf:)` is fine, but
+        // routing the same way there too keeps the behavior uniform.)
+        let data: Data
+        if url.isFileURL {
+            guard let bytes = FileManager.default.contents(atPath: url.path) else {
+                throw NSError(
+                    domain: NSCocoaErrorDomain,
+                    code: 260,
+                    userInfo: [
+                        NSFilePathErrorKey: url.path,
+                        NSLocalizedDescriptionKey: "Couldn't read pwa.json at \(url.path)"
+                    ]
+                )
+            }
+            data = bytes
+        } else {
+            data = try Data(contentsOf: url)
+        }
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         return try decoder.decode(PWAManifest.self, from: data)

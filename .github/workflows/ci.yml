@@ -69,7 +69,8 @@ jobs:
         # we don't gate CI on them yet.
         run: swift build --target SwiftPWACore --target swift-pwa-cli
       - name: Test Core + CLI
-        run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+        timeout-minutes: 5
+        run: swift test --verbose --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
   linux-gtk4:
     runs-on: ubuntu-24.04
@@ -142,12 +143,13 @@ jobs:
       - name: Build (release)
         run: swift build -c release
       - name: Test (cross-platform suites)
+        timeout-minutes: 5
         # SwiftPWAWindowsTests is a placeholder — we run the
         # cross-platform suites here. Real Windows runtime tests
         # (window lifecycle, bridge round-trip on WebView2) are a
         # follow-up once we figure out a headless WebView2 strategy
         # on hosted runners.
-        run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+        run: swift test --verbose --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
   lint:
     runs-on: macos-15

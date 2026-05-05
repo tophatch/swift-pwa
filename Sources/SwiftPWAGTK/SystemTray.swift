@@ -17,7 +17,11 @@
     /// `GtkStatusIcon` was removed entirely in GTK4.
     @MainActor
     public final class SystemTray: Tray {
-        private var trayPtr: OpaquePointer?
+        // Swift's clang importer sees the full struct definition in
+        // the inline shim header, so `swiftpwa_tray *` imports as a
+        // typed `UnsafeMutablePointer<swiftpwa_tray>`, not the
+        // `OpaquePointer` you'd get for a forward-declared type.
+        private var trayPtr: UnsafeMutablePointer<swiftpwa_tray>?
         private var continuations: [UUID: AsyncStream<TrayEvent>.Continuation] = [:]
 
         /// The Swift instance is retained on construction and the raw

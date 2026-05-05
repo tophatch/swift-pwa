@@ -31,7 +31,7 @@ public struct TrayPlugin: Plugin {
         registry.register(
             "tray.setIcon",
             typed: { (args: TraySetIconArgs, _) async throws -> EmptyResult in
-                try await MainThread.run {
+                await MainThread.run {
                     tray.setIcon(path: args.path, template: args.template ?? false)
                 }
                 return EmptyResult()
@@ -41,7 +41,7 @@ public struct TrayPlugin: Plugin {
         registry.register(
             "tray.setTooltip",
             typed: { (args: TraySetTooltipArgs, _) async throws -> EmptyResult in
-                try await MainThread.run { tray.setTooltip(args.text) }
+                await MainThread.run { tray.setTooltip(args.text) }
                 return EmptyResult()
             }
         )
@@ -49,7 +49,7 @@ public struct TrayPlugin: Plugin {
         registry.register(
             "tray.setMenu",
             typed: { (args: TrayMenu, _) async throws -> EmptyResult in
-                try await MainThread.run { tray.setMenu(args) }
+                await MainThread.run { tray.setMenu(args) }
                 return EmptyResult()
             }
         )
@@ -57,7 +57,7 @@ public struct TrayPlugin: Plugin {
         registry.register(
             "tray.setVisible",
             typed: { (args: TraySetVisibleArgs, _) async throws -> EmptyResult in
-                try await MainThread.run { tray.setVisible(args.visible) }
+                await MainThread.run { tray.setVisible(args.visible) }
                 return EmptyResult()
             }
         )

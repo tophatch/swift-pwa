@@ -14,6 +14,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var macos: MacOSSection?
     public var ios: IOSSection?
     public var linux: LinuxSection?
+    public var updater: UpdaterSection?
 
     public struct WebSection: Codable, Sendable, Equatable {
         public var directory: String // path relative to project root
@@ -60,6 +61,70 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public struct LinuxSection: Codable, Sendable, Equatable {
         public var desktopCategories: [String]? // e.g. ["Utility"]
         public var executableName: String? // defaults to top-level `id` last component
+    }
+
+    /// Auto-updater configuration. Optional — apps that don't ship
+    /// in-app updates (e.g. App Store / Mac App Store distribution,
+    /// Microsoft Store MSIX) leave this section out. The runtime side
+    /// (`UpdaterPlugin` + a backend `Updater`) is opt-in regardless;
+    /// this section primarily configures the *publishing* side (CLI
+    /// manifest signing, planned in v0.4) and documents the runtime's
+    /// expected wiring.
+    ///
+    /// Example:
+    /// ```json
+    /// "updater": {
+    ///   "endpoint": "https://updates.example.com/{{target}}/{{current_version}}",
+    ///   "public_key": "RWQf6...",
+    ///   "pubkey_algorithm": "ed25519",
+    ///   "auto_check": true,
+    ///   "check_interval_seconds": 21600,
+    ///   "windows": { "install_mode": "passive" },
+    ///   "linux":   { "appimage_strategy": "in_place" }
+    /// }
+    /// ```
+    public struct UpdaterSection: Codable, Sendable, Equatable {
+        /// HTTPS URL of the JSON manifest endpoint. May contain
+        /// `{{target}}` and `{{current_version}}` placeholders.
+        public var endpoint: String
+
+        /// Base64 of the raw 32-byte Ed25519 public key. Required for
+        /// macOS / Windows / Linux backends; ignored on iOS (where
+        /// `itms-services://` validates the .ipa via Apple's signing
+        /// chain). Minisign-format key parsing is a planned follow-up.
+        public var publicKey: String?
+
+        /// Signature algorithm. Only `"ed25519"` is supported today;
+        /// the field exists so the schema can extend without a
+        /// breaking change.
+        public var pubkeyAlgorithm: String?
+
+        /// Whether the runtime should poll on its own. Defaults to
+        /// false — most apps want to drive checks from a menu item or
+        /// foregrounding event rather than a timer.
+        public var autoCheck: Bool?
+
+        /// Polling cadence when `auto_check` is true.
+        public var checkIntervalSeconds: Int?
+
+        public var windows: WindowsUpdater?
+        public var linux: LinuxUpdater?
+
+        public struct WindowsUpdater: Codable, Sendable, Equatable {
+            /// `"passive"` (no UI, no reboot prompts; default) or
+            /// `"silent"` (no UI at all). Reserved for the Windows
+            /// updater backend (pending in v0.4).
+            public var installMode: String?
+        }
+
+        public struct LinuxUpdater: Codable, Sendable, Equatable {
+            /// `"in_place"` (atomic-rename onto the running AppImage's
+            /// path; default) or `"side_by_side"` (write next to the
+            /// running AppImage and let the launcher pick it up next
+            /// time). Reserved for the Linux updater backend (pending
+            /// in v0.4).
+            public var appimageStrategy: String?
+        }
     }
 
     public static func load(from url: URL) throws -> PWAManifest {

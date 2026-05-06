@@ -130,6 +130,50 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | Windows  | WebView2 (Edge)     | First class (Win32 + WebView2; Per-Monitor V2 DPI; WinRT toasts; portable `.exe` and MSIX)   |
 | Android  | android.webkit      | Stub (planned v0.4)                                                                          |
 
+## Features
+
+A capability index. Anything with a dedicated doc links out; anything without is documented inline below or in the platform setup docs.
+
+### Bridge & runtime
+
+- **Tauri-style JS↔Swift bridge** — `__SWIFT_PWA__.invoke(cmd, args)` for unary, `__SWIFT_PWA__.subscribe(cmd, args, onChunk)` for streaming. Wire envelope is one frame format across WKWebView, WebKitGTK, and WebView2. See [JS API](#js-api) and [Swift API](#swift-api) below.
+- **`bridge.js` injected at document start** — calls work before user JS loads. Three native message channels picked automatically (WKWebView `messageHandlers`, WebKitGTK `script_message_handler`, WebView2 `chrome.webview`).
+- **Bundled-asset scheme handler** — `pwa://localhost/...` on Apple / Linux, `https://swift-pwa.local/...` on Windows (WebView2's `SetVirtualHostNameToFolderMapping`). Relative URLs / `fetch` / ESM all work without a local dev server.
+- **Custom commands** — `ctx.registry.register("ping") { (_: Args, _) in result }`. Plugins are just bundles of commands sharing a name; see `Plugin.swift`.
+
+### Built-in plugins
+
+Auto-installed on every backend:
+
+- **`WindowPlugin`** — `window.id` / `list`, `setTitle` / `title`, `setSize` / `size`, `setPosition` / `position`, `focus`, `minimize` / `maximize`, `setFullscreen` / `isFullscreen`, `close`, `subscribe` (streaming events). Multi-window on macOS / Linux / Windows; UIScene-aware on iOS (single scene polished, multi-scene scaffolded).
+- **`ClipboardPlugin`** — `clipboard.readText`, `writeText`, `clear`. (`clear` wipes on Apple; on X11 / Wayland it only relinquishes local ownership of the selection.)
+
+Opt-in (add via `ctx.use(...)`):
+
+- **`TrayPlugin`** — `tray.setIcon` / `setTooltip` / `setMenu` / `setVisible` / `subscribe`. Full impl on macOS (`NSStatusItem`) and GTK3 (`libayatana-appindicator3` → StatusNotifierItem over D-Bus); no-op stub on iOS and GTK4 (no available system tray). `TrayEvent.click` is macOS-only (SNI gives the desktop panel click semantics on Linux).
+- **`NotificationsPlugin`** — `notifications.requestAuthorization`, `send`. macOS / iOS use `UNUserNotificationCenter` (requires a bundled, signed app — see [docs/macos-setup.md](docs/macos-setup.md#known-limitations-on-macos)); Linux uses GIO D-Bus to `org.freedesktop.Notifications` (no `libnotify` dep); Windows uses `Windows.UI.Notifications.ToastNotificationManager` via a C++/WinRT shim with `Shell_NotifyIconW` balloon fallback (see [docs/windows-setup.md](docs/windows-setup.md)).
+- **`UpdaterPlugin`** — `updater.check`, `updater.run` (streaming), `updater.installAndRelaunch`. macOS bundle swap and iOS enterprise / ad-hoc ship in v0.3; Linux AppImage and Windows MSIX / portable queued for v0.4. See [docs/auto-updates.md](docs/auto-updates.md).
+
+### Bundling & distribution
+
+`swift-pwa build --target <platform>` produces a native artifact from one source tree. `pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets are all generated from it.
+
+| Platform | Artifact                                                 | Setup                                          |
+|----------|----------------------------------------------------------|------------------------------------------------|
+| macOS    | `.app` (+ Developer ID `--sign` pass-through)            | [docs/macos-setup.md](docs/macos-setup.md)     |
+| iOS      | `.app` (Simulator) / `.ipa` (device, partial)            | [docs/ios-setup.md](docs/ios-setup.md)         |
+| Linux    | `.AppImage` (via `linuxdeploy`)                          | [docs/linux-setup.md](docs/linux-setup.md)     |
+| Windows  | Portable folder bundle or MSIX (`--package-format msix`) | [docs/windows-setup.md](docs/windows-setup.md) |
+
+See [Bundling](#bundling) below for the command reference.
+
+### Platform polish
+
+- **Per-Monitor V2 DPI on Windows.** `setSize` / `position` convert at API boundaries; `WM_DPICHANGED` accepts the OS-suggested rect verbatim. Non-client (titlebar, scrollbars) scales correctly. Details in [docs/windows-setup.md](docs/windows-setup.md).
+- **Cross-platform DevTools shortcut.** `Cmd+Opt+J` on macOS (WKWebView's `_showInspector:` SPI), `Ctrl+Alt+J` on GTK3/4 (`webkit_web_inspector_show`), `Ctrl+Alt+J` on Windows (WebView2's `OpenDevToolsWindow`).
+- **Opt-in WebView2 Evergreen Bootstrapper** (`--bootstrap-webview2`) — bundle a ~1.7 MB Microsoft installer next to your EXE for fresh boxes without the WebView2 Runtime. See [docs/windows-setup.md](docs/windows-setup.md).
+- **Two parallel Linux backends** — GTK3 + WebKitGTK 4.1 by default for Ubuntu 22.04+ / Fedora 36+; GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1` for newer distros. Same Swift module name (`SwiftPWAGTK`) so the umbrella doesn't change. See [docs/linux-setup.md](docs/linux-setup.md).
+
 ## JS API
 
 ```js
@@ -145,15 +189,6 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
 await __SWIFT_PWA__.invoke('clipboard.writeText', { text: 'copied!' });
 const { text } = await __SWIFT_PWA__.invoke('clipboard.readText');
 ```
-
-### Built-in plugins
-
-`WindowPlugin` and `ClipboardPlugin` are auto-installed on every backend; `TrayPlugin` is opt-in (creating a tray puts a visible icon up — most apps want to do that conditionally).
-
-- **`WindowPlugin`** — `window.id`, `window.list`, `window.setTitle` / `title`, `window.setSize` / `size`, `window.setPosition` / `position`, `window.focus`, `window.minimize` / `maximize`, `window.setFullscreen` / `isFullscreen`, `window.close`, `window.subscribe`.
-- **`ClipboardPlugin`** — `clipboard.readText`, `clipboard.writeText`, `clipboard.clear`. `clear()` wipes the system clipboard on Apple; on X11 / Wayland it only relinquishes local ownership of the selection.
-- **`TrayPlugin`** (opt-in) — `tray.setIcon`, `tray.setTooltip`, `tray.setMenu`, `tray.setVisible`, `tray.subscribe`. Add via `ctx.use(TrayPlugin(SystemTray()))`. Full implementation on macOS (`NSStatusItem`) and the GTK3 backend (`libayatana-appindicator3` → StatusNotifierItem over D-Bus, with a fallback to `GtkStatusIcon` on legacy desktops). On iOS and the GTK4 backend `SystemTray()` returns a no-op stub so the same call site works portably — the tray just isn't displayed. `TrayEvent.click` is macOS-only (the SNI spec gives the desktop panel ownership of click semantics on Linux).
-- **`NotificationsPlugin`** (opt-in) — `notifications.requestAuthorization`, `notifications.send` (`{title, body?, sound?}` → notification id). Add via `ctx.use(NotificationsPlugin(SystemNotifications()))`. macOS / iOS use `UNUserNotificationCenter` (which requires a bundled, signed app — `swift run` returns "not allowed"); Linux calls `org.freedesktop.Notifications` over D-Bus through GIO, no `libnotify` dep needed.
 
 ## Swift API
 
@@ -205,12 +240,13 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows toast persistence in Action Center requires a Start-menu shortcut.** The runtime sets a stable AppUserModelID (`SwiftPWA.<exe-stem>`) at process start which is enough for toasts to show, but Windows only keeps them in Action Center across reboots when the AUMID also matches a registered Start-menu `.lnk`. The MSIX bundler path takes care of this; portable bundles shipped outside an installer don't get persistence.
 - **Android bundler prints "not implemented".** Targets are scaffolded but the actual build path lands in v0.3.
+- **Auto-updates ship Apple-only in v0.3.** `AppleUpdater` covers macOS bundle swap and iOS enterprise / ad-hoc via `itms-services://`. Linux AppImage (atomic-rename onto the running mmap) and Windows MSIX / portable updaters are queued for v0.4, along with the `swift-pwa updater keygen / sign / manifest` CLI subcommands. macOS install fires no UI before the swap — apps that want a "Restart now / later" prompt should gate `updater.installAndRelaunch` behind their own dialog.
 
 ### Planned
 
-- **v0.3** — Windows WinRT toast notifications (`Windows.UI.Notifications.ToastNotificationManager` via a C++/WinRT shim, balloon-tip fallback when WinRT is unavailable), Per-Monitor V2 DPI awareness, MSIX packaging in the bundler (`--package-format msix`, optional `signtool` integration), opt-in WebView2 Evergreen Bootstrapper (`--bootstrap-webview2`), Windows binary in the release matrix.
-- **v0.4** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged).
-- **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation.
+- **v0.3** — Windows WinRT toast notifications (`Windows.UI.Notifications.ToastNotificationManager` via a C++/WinRT shim, balloon-tip fallback when WinRT is unavailable), Per-Monitor V2 DPI awareness, MSIX packaging in the bundler (`--package-format msix`, optional `signtool` integration), opt-in WebView2 Evergreen Bootstrapper (`--bootstrap-webview2`), Windows binary in the release matrix, auto-updater on Apple platforms (macOS bundle swap, iOS enterprise / ad-hoc).
+- **v0.4** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), auto-updater on Linux AppImage + Windows MSIX/portable, `swift-pwa updater` CLI (keygen / sign / manifest), minisign-format key + signature parsing.
+- **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation, delta updates, mandatory-update kill-switch.
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown of what's already shipped.
 

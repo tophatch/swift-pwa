@@ -85,17 +85,38 @@ the same headers and loader. WIL is also available as
 `vcpkg install wil`. Make sure the vcpkg-installed `lib/` dir is on
 `LIB`.)
 
-### Per-session, not per-checkout
+### Per-session prerequisites
 
-The `Launch-VsDevShell.ps1` + `INCLUDE` / `LIB` setup is **per
-PowerShell session**, not stamped into the checkout. Every fresh
-window needs the dance again — including any project that depends on
-swift-pwa as a path or git dependency, since the WebView2 + WIL
-headers are needed to compile `CWebView2Shim` transitively.
+`Launch-VsDevShell.ps1` is **per PowerShell session** — every fresh
+window needs the VS Developer environment loaded again before
+`swift build` will resolve the MSVC toolchain. (Reproducing what
+`vsdevcmd.bat` does ourselves is fragile, so we leave it to VS.)
 
-When building a downstream project (e.g. `Examples/HelloPWA`), point
-`INCLUDE` / `LIB` at the swift-pwa root's `packages/` folder rather
-than the downstream project's `$pwd`:
+The WebView2 + WIL `INCLUDE` / `LIB` exports were also a per-session
+chore in v0.2; in v0.3 the bundler auto-detects the swift-pwa repo's
+`packages/` folder and prepends the matching directories to
+`INCLUDE` / `LIB` before launching `swift build`. Walk order, from
+the project being bundled:
+
+  1. `<projectRoot>/packages/...` — running inside the swift-pwa repo
+  2. `<projectRoot>/../packages/...` — running from a sibling
+     directory like `Examples/HelloPWA`
+  3. `<projectRoot>/../../packages/...`
+  4. `<projectRoot>/.build/checkouts/swift-pwa/packages/...` — when
+     swift-pwa is pulled as a git dependency
+
+If any of those resolves, you'll see:
+
+```text
+swift-pwa: prepending swift-pwa NuGet packages to INCLUDE / LIB
+  WebView2: …\Microsoft.Web.WebView2\build\native\include
+  WIL:      …\Microsoft.Windows.ImplementationLibrary\include
+  Loader:   …\Microsoft.Web.WebView2\build\native\x64
+```
+
+If you're invoking `swift build` directly (e.g. plain `swift build -c
+release` outside the bundler), the auto-detect doesn't run and you
+still need the manual exports:
 
 ```powershell
 # Reuse the swift-pwa repo's NuGet packages from any sibling project:
@@ -109,16 +130,12 @@ $env:LIB     = "$swiftpwa\packages\Microsoft.Web.WebView2\build\native\$arch;$en
 
 Symptoms of forgetting:
 
-| Missing                    | Failure mode                                                                                       |
-|----------------------------|----------------------------------------------------------------------------------------------------|
-| `Launch-VsDevShell.ps1`    | `lld-link: error: could not open 'msvcrt.lib'` — even at the manifest-compile stage.              |
-| `INCLUDE` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`.                   |
-| `LIB`                      | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`.                                     |
-| stdlib junction            | `error: unable to load standard library for target 'x86_64-unknown-windows-msvc'` at manifest compile. See [One-time stdlib junction](#one-time-stdlib-junction-swift-asserts-installer). |
-
-Saving the four lines as a `vendor\Set-SwiftPwaEnv.ps1` you dot-source
-at the start of each session (`. .\vendor\Set-SwiftPwaEnv.ps1`) takes
-the friction out.
+| Missing                    | Failure mode                                                                                                                                                          |
+|----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `Launch-VsDevShell.ps1`    | `lld-link: error: could not open 'msvcrt.lib'` — even at the manifest-compile stage.                                                                                  |
+| `INCLUDE` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`. Plain `swift build` only — the bundler auto-injects these.                            |
+| `LIB`                      | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`. Plain `swift build` only — same auto-inject.                                                            |
+| stdlib junction            | `error: unable to load standard library for target 'x86_64-unknown-windows-msvc'`. See [One-time stdlib junction](#one-time-stdlib-junction-swift-asserts-installer). |
 
 ### One-time stdlib junction (Swift `+Asserts` installer)
 

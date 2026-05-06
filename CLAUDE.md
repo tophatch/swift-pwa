@@ -64,3 +64,10 @@ This is the trickiest part of the codebase and the source of past bugs:
 - swiftformat config: 4-space indent, 120 max width, `--self remove`, `--stripunusedargs closure-only`. Examples are excluded.
 - Tests use **swift-testing** (`@Test`, `#expect`), not XCTest.
 - **Cross-platform parity is the default.** If a feature lands on one backend (Apple `SwiftPWAWebKit` or Linux `SwiftPWAGTK`), implement the equivalent on the others in the same change — adapted to each platform's HIG / norms rather than ported literally. Example: Mac's Cmd+Q lives in an `NSApplication` menu; the Linux equivalent is a `GtkAccelGroup` Ctrl+Q binding plus quit-on-last-window-closed (Mac keeps the menu bar after last window; Linux exits). If parity isn't feasible in the same change, document it in [docs/linux-setup.md](docs/linux-setup.md)'s "Known limitations" section (or the equivalent platform doc) so users aren't surprised.
+- **Docs travel with code changes.** Each behavioral change ships with a doc update in the same commit (or commit pair). The relevant surfaces:
+  - User-visible CLI flags / output format → [README.md](README.md) and the matching [docs/&lt;platform&gt;-setup.md](docs/).
+  - Per-backend behavior or known limitations → the relevant [docs/&lt;platform&gt;-setup.md](docs/) "Known limitations" section.
+  - Anything affecting the public Swift API or `pwa.json` schema → [README.md](README.md)'s API / configuration sections.
+  - Always: a `## [Unreleased]` entry in [CHANGELOG.md](CHANGELOG.md) with the *why*, not just the *what*.
+
+  If you change behavior and don't update docs, the next person working in the area finds the docs lying — and the friction of "do I trust the doc or the code?" is what we're trying to avoid. When in doubt, grep the docs for the file / symbol you just changed; anything that mentions it gets a once-over.

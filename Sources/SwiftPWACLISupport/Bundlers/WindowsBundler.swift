@@ -64,7 +64,9 @@ struct WindowsBundler {
             """)
         #else
             try await Shell.run(
-                "swift", ["build", "-c", "release"], cwd: projectRoot
+                "swift", ["build", "-c", "release"],
+                cwd: projectRoot,
+                envOverrides: resolvePackageEnvOverrides()
             )
             let exeName = manifest.name + ".exe"
             let binary = projectRoot
@@ -119,6 +121,106 @@ struct WindowsBundler {
             case .msix:
                 return try await buildMSIX(stagingDir: bundleDir)
             }
+        #endif
+    }
+
+    // MARK: - swift-pwa NuGet packages auto-detect
+
+    /// Walk likely locations to find the swift-pwa repo's `packages/`
+    /// folder (where `nuget install` drops `Microsoft.Web.WebView2`
+    /// and `Microsoft.Windows.ImplementationLibrary` headers + libs).
+    /// If we find them, prepend the matching directories to INCLUDE
+    /// and LIB before launching `swift build`, so users no longer
+    /// have to re-export both env vars in every fresh PowerShell
+    /// session.
+    ///
+    /// Returns `nil` (no override) on non-Windows hosts and on hosts
+    /// where we can't locate the packages — falls through to inherited
+    /// env, and `clang-cl` will surface the same `'wil/com.h' file
+    /// not found` error as before, which is at least directly
+    /// actionable.
+    ///
+    /// Search order (covers the two common dependency layouts):
+    ///
+    ///   1. `<projectRoot>/packages/...` — projectRoot *is* swift-pwa
+    ///   2. `<projectRoot>/../packages/...` — Examples/HelloPWA case
+    ///   3. `<projectRoot>/../../packages/...`
+    ///   4. `<projectRoot>/.build/checkouts/swift-pwa/packages/...`
+    ///      — when swift-pwa was pulled as a git dependency
+    ///
+    /// We do not try to drive `Launch-VsDevShell.ps1` ourselves —
+    /// reproducing what `vsdevcmd.bat` does is fragile, and most
+    /// users are already running inside a VS Developer PowerShell
+    /// (or have it on PATH via a different mechanism). If the MSVC
+    /// environment is missing entirely, `swift build` fails earlier
+    /// with `lld-link: error: could not open 'msvcrt.lib'`, which
+    /// the docs cover.
+    private func resolvePackageEnvOverrides() -> [String: String]? {
+        #if !os(Windows)
+            return nil
+        #else
+            let webview2Subpath = "packages/Microsoft.Web.WebView2/build/native"
+            let wilSubpath = "packages/Microsoft.Windows.ImplementationLibrary/include"
+
+            let candidates: [URL] = [
+                projectRoot,
+                projectRoot.deletingLastPathComponent(),
+                projectRoot.deletingLastPathComponent().deletingLastPathComponent(),
+                projectRoot.appendingPathComponent(".build/checkouts/swift-pwa")
+            ]
+
+            guard let swiftPwaRoot = candidates.first(where: {
+                let p = $0.appendingPathComponent("\(webview2Subpath)/include/WebView2.h").path
+                return FileManager.default.fileExists(atPath: p)
+            }) else {
+                return nil
+            }
+
+            // Architecture for the loader lib subdirectory. The NuGet
+            // package ships per-arch loaders under `build/native/{x86,
+            // x64,arm64}`; pick the one matching the host's Swift
+            // toolchain since we don't cross-compile.
+            #if arch(arm64)
+                let arch = "arm64"
+            #else
+                let arch = "x64"
+            #endif
+
+            let webview2IncludePath = swiftPwaRoot
+                .appendingPathComponent("\(webview2Subpath)/include").path
+            let wilIncludePath = swiftPwaRoot
+                .appendingPathComponent(wilSubpath).path
+            let webview2LibPath = swiftPwaRoot
+                .appendingPathComponent("\(webview2Subpath)/\(arch)").path
+
+            // Preserve whatever's already on INCLUDE / LIB — the user's
+            // VS Developer Shell put the Windows SDK and MSVC paths
+            // there, and we'd break the C++ build by replacing them.
+            // Case-insensitive lookup because PowerShell exports `Include`
+            // / `Lib` (capital first letter) while cmd.exe exports
+            // `INCLUDE` / `LIB`.
+            let env = ProcessInfo.processInfo.environment
+            let existingInclude = env.first(where: {
+                $0.key.caseInsensitiveCompare("INCLUDE") == .orderedSame
+            })?.value ?? ""
+            let existingLib = env.first(where: {
+                $0.key.caseInsensitiveCompare("LIB") == .orderedSame
+            })?.value ?? ""
+
+            let newInclude = [webview2IncludePath, wilIncludePath]
+                .joined(separator: ";")
+                + (existingInclude.isEmpty ? "" : ";" + existingInclude)
+            let newLib = webview2LibPath
+                + (existingLib.isEmpty ? "" : ";" + existingLib)
+
+            print("""
+            swift-pwa: prepending swift-pwa NuGet packages to INCLUDE / LIB
+              WebView2: \(webview2IncludePath)
+              WIL:      \(wilIncludePath)
+              Loader:   \(webview2LibPath)
+            """)
+
+            return ["INCLUDE": newInclude, "LIB": newLib]
         #endif
     }
 

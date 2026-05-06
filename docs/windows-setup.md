@@ -425,3 +425,18 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   `*-windows-msvc\release\<Name>.exe` directly, so the warning is
   safe to ignore; enabling Developer Mode silences it but isn't
   required.
+- **The Evergreen Bootstrapper trusts the WebView2 registry.** The
+  `--bootstrap-webview2` install path works end-to-end on a fresh
+  machine where the runtime was never installed. On a *partially
+  broken* WebView2 install (binaries missing but registry entries
+  still present — typically the result of a manual delete or a
+  failed uninstall),
+  `MicrosoftEdgeWebview2Setup.exe` reads the registry, decides the
+  runtime is already installed, and exits without writing anything.
+  The user is left with the same "WebView2 Runtime not found"
+  diagnostic. Recovery is to run an Edge repair (Settings → Apps
+  → Microsoft Edge → Modify → Repair) — the WebView2 Runtime is
+  shipped as part of Edge's redistributable on stable Win11. We
+  don't try to detect this state from the runtime side because
+  there's no signal beyond the same `COREWEBVIEW2_E_RUNTIME_NOT_FOUND`
+  HRESULT a clean-uninstalled box returns.

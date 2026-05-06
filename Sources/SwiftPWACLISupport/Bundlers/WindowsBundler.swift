@@ -69,12 +69,42 @@ struct WindowsBundler {
                 envOverrides: resolvePackageEnvOverrides()
             )
             let exeName = manifest.name + ".exe"
-            let binary = projectRoot
-                .appendingPathComponent(".build")
+            let buildDir = projectRoot.appendingPathComponent(".build")
+            // SwiftPM creates `.build/release` as a symlink to the
+            // arch-qualified output directory (e.g.
+            // `.build/x86_64-unknown-windows-msvc/release/`). Symlink
+            // creation on Windows requires Administrator privileges
+            // *or* Developer Mode enabled in Settings — without either,
+            // SwiftPM emits the cosmetic
+            //   "warning: unable to create symbolic link at .build\release"
+            // and the symlink simply doesn't exist. Look for the binary
+            // through the symlink first, then fall back to scanning
+            // `.build` for the first `*-windows-msvc` arch directory
+            // (covers x86_64 and aarch64 hosts) and trying its `release/`.
+            // We don't require Developer Mode because that's a
+            // machine-wide setting, often unavailable on CI runners or
+            // shared boxes.
+            let symlinkBinary = buildDir
                 .appendingPathComponent("release")
                 .appendingPathComponent(exeName)
-            guard FileManager.default.fileExists(atPath: binary.path) else {
-                throw BundlerError.binaryMissing(binary)
+            let binary: URL
+            if FileManager.default.fileExists(atPath: symlinkBinary.path) {
+                binary = symlinkBinary
+            } else if let archDir = (try? FileManager.default.contentsOfDirectory(
+                at: buildDir, includingPropertiesForKeys: nil
+            ))?.first(where: { url in
+                let name = url.lastPathComponent
+                return name.hasSuffix("-windows-msvc") && !name.hasPrefix(".")
+            }) {
+                let candidate = archDir
+                    .appendingPathComponent("release")
+                    .appendingPathComponent(exeName)
+                guard FileManager.default.fileExists(atPath: candidate.path) else {
+                    throw BundlerError.binaryMissing(symlinkBinary)
+                }
+                binary = candidate
+            } else {
+                throw BundlerError.binaryMissing(symlinkBinary)
             }
 
             let bundleDir = outputDir.appendingPathComponent(manifest.name)

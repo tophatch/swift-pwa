@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.2.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.2.0) is the current release; v0.3 is in flight on `main` with Windows WinRT toasts, Per-Monitor V2 DPI, MSIX packaging, an opt-in WebView2 Evergreen Bootstrapper, and a Windows binary in the release matrix. macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2, verified on ARM64) are first-class. Built-in plugins: window, clipboard, tray, notifications. `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools on every backend. Android and biometric auth / dialog / fs plugins are queued for v0.4.
+> **Status:** [`v0.3.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.3.0) is the current release. Windows WinRT toasts, Per-Monitor V2 DPI, MSIX packaging, the opt-in WebView2 Evergreen Bootstrapper, a Windows binary in the release matrix, and the cross-platform auto-updater (Apple backend) all land in v0.3 — verified end-to-end on Windows 11 amd64 and ARM64 plus macOS 15. macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2) are first-class. Built-in plugins: window, clipboard, tray, notifications, updater. `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools on every backend. Android, biometric auth / dialog / fs plugins, the Linux AppImage + Windows updater backends, and the `swift-pwa updater` CLI subcommands are queued for v0.4.
 
 ## Why
 

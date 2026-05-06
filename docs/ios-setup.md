@@ -158,6 +158,86 @@ A minimal `ExportOptions.plist` for ad-hoc distribution:
 </plist>
 ```
 
+## 6. Auto-updates (enterprise / ad-hoc)
+
+The App Store handles updates for store-distributed apps automatically;
+swift-pwa's auto-updater on iOS targets the **enterprise** (Apple
+Developer Enterprise Program, `Distribution: <Org Name>` certificate)
+and **ad-hoc** (provisioning profile lists specific UDIDs) paths,
+which Apple lets users install via `itms-services://` URLs the
+system installer trusts.
+
+The contract is: the manifest entry under `ios-aarch64-enterprise`
+points at the **install-manifest plist** on your server (not the
+`.ipa`). The runtime opens
+`itms-services://?action=download-manifest&url=<plist-url>`; the
+system pulls the plist, downloads the `.ipa` it references, validates
+the signing chain, and installs in place. No Ed25519 key is required
+on the swift-pwa side because Apple's signing chain is what's being
+trusted.
+
+Wire it the same way as macOS — pass `nil` for `publicKey`:
+
+```swift
+import SwiftPWA
+
+ctx.use(UpdaterPlugin(AppleUpdater(
+    endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
+    publicKey: nil
+)))
+```
+
+Sample manifest entry your server returns (the JSON manifest fetched
+from `endpoint`):
+
+```json
+{
+  "version": "0.4.0",
+  "platforms": {
+    "ios-aarch64-enterprise": {
+      "url": "https://updates.example.com/HelloPWA-0.4.0-manifest.plist",
+      "signature": ""
+    }
+  }
+}
+```
+
+And the install-manifest plist that `url` points at (Apple's format):
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>items</key>
+    <array>
+        <dict>
+            <key>assets</key>
+            <array>
+                <dict>
+                    <key>kind</key><string>software-package</string>
+                    <key>url</key>
+                    <string>https://updates.example.com/HelloPWA-0.4.0.ipa</string>
+                </dict>
+            </array>
+            <key>metadata</key>
+            <dict>
+                <key>bundle-identifier</key><string>com.example.hellopwa</string>
+                <key>bundle-version</key><string>0.4.0</string>
+                <key>kind</key><string>software</string>
+                <key>title</key><string>HelloPWA</string>
+            </dict>
+        </dict>
+    </array>
+</dict>
+</plist>
+```
+
+Both the JSON manifest and the install-manifest plist must be served
+over HTTPS. The `.ipa` itself can be HTTP-redirected from the plist's
+`software-package` URL but the plist URL given to `itms-services://`
+must be HTTPS — iOS rejects http manifests outright.
+
 ## Known limitations on iOS
 
 - **The CLI's device path is incomplete.** `swift-pwa build --target
@@ -177,6 +257,13 @@ A minimal `ExportOptions.plist` for ad-hoc distribution:
   per-scene window plumbing in `IOSWindow` is the bare minimum to
   attach the first scene. iPad multi-window polish lands in a
   follow-up.
+- **Auto-updater is enterprise / ad-hoc only.** Apps distributed via
+  the App Store get updates from the App Store; swift-pwa's
+  `AppleUpdater` on iOS targets the `itms-services://` install path,
+  which only succeeds when the running build is signed with an
+  enterprise distribution certificate or an ad-hoc profile that lists
+  the device's UDID. A clean `BridgeError` is returned when the
+  system declines to open the URL.
 - **`pwa.json.icon` only feeds the launch screen on iOS.** When
   set, the bundler generates a minimal `LaunchScreen.storyboard`
   with the icon centered on a black background and compiles it via

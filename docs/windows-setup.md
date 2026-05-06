@@ -401,3 +401,13 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   `AppxManifest.xml` declares `ProcessorArchitecture="x64"`. To ship
   ARM64 packages, build on an ARM64 host and edit the manifest (or
   wait for the bundler's `--arch` flag).
+- **Auto-updater backend isn't implemented yet on Windows.**
+  `UpdaterPlugin` and the cross-platform `Updater` protocol ship in
+  v0.3 (Apple platforms only); the Windows backend lands in v0.4.
+  Plan: MSIX targets hand off to `PackageManager.AddPackageAsync` and
+  let the OS validate the chain (so swift-pwa only does Ed25519 over
+  the bytes for tamper detection in transit); portable targets
+  download + verify + spawn a tiny detached helper that waits for the
+  parent to exit, replaces the EXE, and relaunches. The `pwa.json`
+  `updater.windows.install_mode` field (`passive` / `silent`) is
+  reserved for that backend.

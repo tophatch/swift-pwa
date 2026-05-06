@@ -156,8 +156,53 @@ xcrun stapler validate build/MyApp.app
 Stapled `.app`s pass `spctl --assess` on first launch on a fresh
 machine.
 
+## 7. Auto-updates
+
+Opt-in, signed JSON manifest format (Tauri v1-compatible). One
+subscription on the JS side covers the full check + download + install
+flow; the runtime handles the bundle swap via a detached `/bin/sh`
+helper that waits for the running app to exit, `ditto`s the new bundle
+in place of the old one, and re-`open`s it. See
+[docs/auto-updates.md](auto-updates.md) for the full JS surface and
+manifest format.
+
+Quick wiring:
+
+```swift
+import SwiftPWA
+
+ctx.use(UpdaterPlugin(AppleUpdater(
+    endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
+    publicKey: "BASE64-OF-32-RAW-ED25519-BYTES"
+)))
+```
+
+The macOS artifact under `darwin-aarch64` (or `darwin-x86_64`) must be
+a `.app.tar.gz` — `tar -czf HelloPWA-0.4.0-arm64.app.tar.gz HelloPWA.app`.
+The `signature` field in the manifest entry is base64 of the raw
+64-byte Ed25519 signature over the gzip bytes (signing tooling
+ships with `swift-pwa updater sign` in v0.4 — for now use any
+Ed25519 signer that emits raw bytes).
+
+`installAndRelaunch` requires a real bundled `.app`; running from
+`swift run` (where `Bundle.main.bundleURL` points at `.build/...`)
+returns a clean error explaining how to bundle first.
+
 ## Known limitations on macOS
 
+- **Auto-updater install fires no UI before swapping.** The runtime
+  hands off to the detached helper as soon as `updater.installAndRelaunch`
+  is called. Apps that want a "Restart now / later" dialog should gate
+  the call behind their own UI (the `readyToInstall` event from
+  `updater.run` is the natural prompt point).
+- **Auto-updater download progress is start + end only.** Fine-grained
+  `URLSessionDownloadDelegate`-driven streaming progress is queued for
+  a follow-up; for now the `downloadProgress` events fire once at zero
+  bytes and once at completion.
+- **Auto-updater signatures are raw base64 only.** Minisign-format
+  parsing (Tauri's preferred form) is queued. For now, the manifest's
+  `public_key` is base64 of the raw 32-byte Ed25519 key and per-target
+  `signature` is base64 of the raw 64-byte signature.
 - **Notarization is pass-through, not automated.** The bundler stops
   at codesign. Wire the `notarytool` step into your release script
   or CI.

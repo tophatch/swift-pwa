@@ -228,6 +228,14 @@ remain:
 - **Swiftly's bundled toolchain prints noisy warnings** on Ubuntu
   (`libxml2.so.2: no version information available`, `prohibited
   flag(s): -pthread`). Cosmetic; ignore.
+- **Auto-updater backend isn't implemented yet on Linux.**
+  `UpdaterPlugin` and the cross-platform `Updater` protocol ship in
+  v0.3 (Apple platforms only); the Linux AppImage backend lands in
+  v0.4. Plan: download + verify Ed25519 + `chmod +x` + atomic-rename
+  onto the running AppImage's path (the kernel keeps the running
+  mmap valid; new launches pick up the new file). The `pwa.json`
+  `updater.linux.appimage_strategy` field (`in_place` / `side_by_side`)
+  is reserved for that backend.
 
 If you hit linker errors around `webkit_*` symbols, the most common
 cause is `pkg-config --libs <module>` returning empty — confirm with:

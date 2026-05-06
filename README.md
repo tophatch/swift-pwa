@@ -244,9 +244,8 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ### Planned
 
-- **v0.3** — Windows WinRT toast notifications (`Windows.UI.Notifications.ToastNotificationManager` via a C++/WinRT shim, balloon-tip fallback when WinRT is unavailable), Per-Monitor V2 DPI awareness, MSIX packaging in the bundler (`--package-format msix`, optional `signtool` integration), opt-in WebView2 Evergreen Bootstrapper (`--bootstrap-webview2`), Windows binary in the release matrix, auto-updater on Apple platforms (macOS bundle swap, iOS enterprise / ad-hoc).
-- **v0.4** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), auto-updater on Linux AppImage + Windows MSIX/portable, `swift-pwa updater` CLI (keygen / sign / manifest), minisign-format key + signature parsing.
-- **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation, delta updates, mandatory-update kill-switch.
+- **v0.4** — Android (swift-android + JNI), biometric auth plugin, dialog plugin, fs plugin, GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), auto-updater on Linux AppImage + Windows MSIX/portable, `swift-pwa updater` CLI (keygen / sign / manifest), minisign-format key + signature parsing, MSIX `--arch arm64` for cross-arch packages, streaming `URLSessionDownloadDelegate`-driven progress for the macOS updater.
+- **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown of what's already shipped.
 

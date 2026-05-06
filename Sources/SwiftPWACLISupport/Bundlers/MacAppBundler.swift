@@ -139,11 +139,23 @@ enum Shell {
     /// Used for `swift build`, `xcodebuild`, `linuxdeploy`, etc. so the
     /// user sees compile progress as it happens (otherwise a long
     /// release build looks like the CLI has hung).
-    static func run(_ executable: String, _ arguments: [String], cwd: URL? = nil) async throws {
+    ///
+    /// `envOverrides` are merged on top of the inherited process
+    /// environment — pass overrides keyed by the env var name and we
+    /// apply them with case-insensitive collision detection (`INCLUDE`
+    /// wins over a pre-existing `Include`, etc.). Pass `nil` to inherit
+    /// the parent env unchanged.
+    static func run(
+        _ executable: String, _ arguments: [String],
+        cwd: URL? = nil, envOverrides: [String: String]? = nil
+    ) async throws {
         let task = Process()
         task.executableURL = try resolveExecutable(executable)
         task.arguments = arguments
         if let cwd { task.currentDirectoryURL = cwd }
+        if let envOverrides {
+            task.environment = mergeEnv(envOverrides)
+        }
         // Inherit stdout/stderr — pass through to the user.
         try task.run()
         task.waitUntilExit()
@@ -153,6 +165,24 @@ enum Shell {
                 ([executable] + arguments).joined(separator: " ")
             )
         }
+    }
+
+    /// Merge `overrides` on top of the inherited process environment.
+    /// Case-insensitive: an override of `INCLUDE` displaces any of
+    /// `Include` / `include` already in the parent env. Necessary on
+    /// Windows where env var names are case-insensitive at the OS
+    /// level but Foundation surfaces them with the source's case.
+    private static func mergeEnv(_ overrides: [String: String]) -> [String: String] {
+        var merged = ProcessInfo.processInfo.environment
+        for (key, value) in overrides {
+            if let existingKey = merged.first(where: {
+                $0.key.caseInsensitiveCompare(key) == .orderedSame
+            })?.key {
+                merged.removeValue(forKey: existingKey)
+            }
+            merged[key] = value
+        }
+        return merged
     }
 
     /// Run a short command and capture its stdout. Used for `which`.

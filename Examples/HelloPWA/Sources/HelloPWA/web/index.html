@@ -31,7 +31,7 @@
                 max(1.25rem, env(safe-area-inset-right))
                 max(1rem, env(safe-area-inset-bottom))
                 max(1.25rem, env(safe-area-inset-left));
-            max-width: 720px;
+            max-width: 1080px;
             margin: 0 auto;
         }
         h1 { font-weight: 600; font-size: 1.6rem; margin: 0 0 .5rem; }
@@ -41,12 +41,6 @@
             background: var(--surface);
             padding: 1px 5px;
             border-radius: 4px;
-        }
-        .actions {
-            display: flex;
-            flex-wrap: wrap;
-            gap: .5rem;
-            margin-bottom: 1rem;
         }
         button {
             font: inherit;
@@ -61,6 +55,11 @@
             -webkit-tap-highlight-color: transparent;
         }
         button:active { opacity: 0.7; }
+        .actions {
+            display: flex;
+            flex-wrap: wrap;
+            gap: .5rem;
+        }
         /* Touch-only devices (iPhone, iPad without pointer) fill the
            scene — window.setSize is a no-op there, so hide the resize
            controls rather than show buttons that visually do nothing. */
@@ -68,23 +67,57 @@
             .resize-only { display: none; }
         }
         pre {
-            background: var(--surface);
-            padding: .75rem;
-            border-radius: 8px;
+            background: var(--bg);
+            padding: .65rem .75rem;
+            border-radius: 6px;
             font-size: .85rem;
             white-space: pre-wrap;
             word-break: break-word;
             margin: 0;
-            min-height: 6rem;
+            min-height: 5rem;
+            max-height: 14rem;
+            overflow-y: auto;
+            border: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
         }
-        .panes {
+
+        /* Two-column shell: controls on the left, logs on the right.
+           Reflows to a single column at narrow widths and on touch
+           where vertical real estate is at a premium. The grid lets
+           individual sections size to their content rather than
+           stretching uniformly. */
+        .layout {
             display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: .75rem;
-            margin-top: .25rem;
+            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+            gap: 1rem;
+            align-items: start;
         }
-        .pane.full { grid-column: 1 / -1; }
-        .pane h2 {
+        @media (max-width: 760px) {
+            .layout { grid-template-columns: 1fr; }
+        }
+        .controls, .logs {
+            display: flex;
+            flex-direction: column;
+            gap: .75rem;
+            min-width: 0;
+        }
+
+        /* Card style shared by control sections (left column) and log
+           panes (right column). The accent stripe gives the Notifications
+           card the same visual weight the Windows-toast verification
+           block had before — every section is a peer now, so the same
+           treatment applies uniformly. */
+        .section {
+            padding: .85rem 1rem;
+            background: var(--surface);
+            border-radius: 10px;
+            border-left: 3px solid var(--accent);
+        }
+        .section.log {
+            /* Logs get a softer accent so the controls column remains
+               the eye-grabbing one. */
+            border-left-color: color-mix(in srgb, var(--accent) 50%, transparent);
+        }
+        .section > h2 {
             font-size: .8rem;
             font-weight: 600;
             text-transform: uppercase;
@@ -92,9 +125,14 @@
             color: var(--muted);
             margin: 0 0 .35rem;
         }
-        @media (max-width: 540px) {
-            .panes { grid-template-columns: 1fr; }
+        .section > h2 .hint {
+            font-weight: 400;
+            text-transform: none;
+            letter-spacing: 0;
+            color: var(--muted);
         }
+        .section > p { margin: .25rem 0 .75rem; font-size: .9rem; }
+
         .shortcuts {
             margin: 0 0 1rem;
             padding: .65rem .8rem;
@@ -105,25 +143,6 @@
             color: var(--muted);
         }
         .shortcuts strong { color: var(--fg); font-weight: 600; }
-        /* Windows-specific verification block — its own card so it
-           reads as separate from the cross-platform actions above
-           and the help text isn't lost in a sea of buttons. */
-        .winverify {
-            margin: 1rem 0;
-            padding: .85rem 1rem;
-            background: var(--surface);
-            border-radius: 10px;
-            border-left: 3px solid var(--accent);
-        }
-        .winverify h2 {
-            font-size: .8rem;
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: .04em;
-            color: var(--muted);
-            margin: 0 0 .35rem;
-        }
-        .winverify p { margin: .25rem 0 .75rem; font-size: .9rem; }
         kbd {
             font: inherit;
             font-size: .8em;
@@ -168,17 +187,6 @@
 <body>
     <h1>Hello from swift-pwa</h1>
     <p>A system <code>WKWebView</code> driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
-    <div class="actions">
-        <button id="rename">Rename window</button>
-        <button id="resize" class="resize-only">Resize 800×600</button>
-        <button id="reset" class="resize-only">Reset 1024×768</button>
-        <button id="now">Server time</button>
-        <button id="copy-title">Copy title</button>
-        <button id="paste">Paste from clipboard</button>
-        <button id="cycle-tray">Cycle tray menu</button>
-        <button id="toggle-tray">Hide tray</button>
-        <button id="notify">Send notification</button>
-    </div>
     <p class="shortcuts" id="shortcuts">
         <strong>Shortcuts:</strong>
         <kbd id="k-rename">⌘R</kbd> rename ·
@@ -189,36 +197,90 @@
         <kbd id="k-paste">⇧⌘V</kbd> paste ·
         <kbd id="k-clear">⌘K</kbd> clear log
     </p>
-    <section class="winverify">
-        <h2>Windows toast verification</h2>
-        <p>
-            On Windows this exercises the WinRT
-            <code>ToastNotificationManager</code> path. Look for the
-            toast in Action Center after dismissal — its header should
-            read <code>SwiftPWA.HelloPWA</code> (the AUMID derived from
-            the exe basename). If the WinRT path failed, the process'
-            stderr will say so and the message came from the
-            <code>Shell_NotifyIconW</code> balloon fallback. On macOS
-            / Linux this button just sends a regular notification.
-        </p>
-        <div class="actions">
-            <button id="toast">Send Windows toast</button>
+
+    <div class="layout">
+        <div class="controls">
+            <section class="section">
+                <h2>Window</h2>
+                <p>Title and size go through <code>WindowPlugin</code>'s
+                main-actor-hopping invokes.</p>
+                <div class="actions">
+                    <button id="rename">Rename window</button>
+                    <button id="resize" class="resize-only">Resize 800×600</button>
+                    <button id="reset" class="resize-only">Reset 1024×768</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Bridge</h2>
+                <p>Round-trip a JSON envelope through
+                <code>BridgeRuntime</code> — minimal proof the dispatcher
+                is alive.</p>
+                <div class="actions">
+                    <button id="now">Server time</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Clipboard</h2>
+                <p>Reads and writes via the host's pasteboard:
+                <code>NSPasteboard</code> on macOS,
+                <code>UIPasteboard</code> on iOS, <code>GdkClipboard</code>
+                on Linux, the Win32 Clipboard API on Windows.</p>
+                <div class="actions">
+                    <button id="copy-title">Copy title</button>
+                    <button id="paste">Paste from clipboard</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Tray</h2>
+                <p>System tray icon plus popup menu. iOS and the GTK4
+                backend log a one-shot warning instead — no system tray
+                on iOS, and <code>libayatana-appindicator3</code> can't
+                be reused from a GTK4 process.</p>
+                <div class="actions">
+                    <button id="cycle-tray">Cycle tray menu</button>
+                    <button id="toggle-tray">Hide tray</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Notifications</h2>
+                <p>
+                    Cross-platform <code>notifications.send</code>. On
+                    Windows the second button names what it's exercising:
+                    look for the toast in Action Center attributed to
+                    <code>SwiftPWA.HelloPWA</code> (the AUMID derived
+                    from the exe basename). If the WinRT path failed,
+                    stderr will say so and the message came from the
+                    <code>Shell_NotifyIconW</code> balloon fallback. On
+                    macOS / Linux both buttons just send a regular
+                    notification.
+                </p>
+                <div class="actions">
+                    <button id="notify">Send notification</button>
+                    <button id="toast">Send Windows toast</button>
+                </div>
+            </section>
         </div>
-    </section>
-    <div class="panes">
-        <div class="pane">
-            <h2>Actions</h2>
-            <pre id="log"></pre>
-        </div>
-        <div class="pane">
-            <h2>Window events</h2>
-            <pre id="events"></pre>
-        </div>
-        <div class="pane full">
-            <h2>Tray events <span style="font-weight: 400; text-transform: none; letter-spacing: 0">— click the menu-bar icon, or pick a menu item</span></h2>
-            <pre id="tray-events"></pre>
-        </div>
+
+        <aside class="logs">
+            <section class="section log">
+                <h2>Actions</h2>
+                <pre id="log"></pre>
+            </section>
+            <section class="section log">
+                <h2>Window events</h2>
+                <pre id="events"></pre>
+            </section>
+            <section class="section log">
+                <h2>Tray events <span class="hint">— click the menu-bar icon, or pick a menu item</span></h2>
+                <pre id="tray-events"></pre>
+            </section>
+        </aside>
     </div>
+
     <footer>
         <div class="bird" id="bird" role="button" tabindex="0" aria-label="give the bird a gentle tap">🐦</div>
         <p id="motto">chirp — you've reached the end of the page</p>
@@ -297,6 +359,25 @@
                     log("notification failed: " + e.message);
                 }
             },
+            // Windows toast verification — same backend call as
+            // `notifications.send`, but with a fixed payload that's
+            // easier to spot in Action Center, and a label that names
+            // the surface it's exercising. On macOS / Linux it surfaces
+            // as a regular notification through the same code path.
+            toast: async () => {
+                try {
+                    const auth = await __SWIFT_PWA__.invoke("notifications.requestAuthorization");
+                    if (!auth.granted) { log("toast: not authorized"); return; }
+                    const r = await __SWIFT_PWA__.invoke("notifications.send", {
+                        title: "swift-pwa toast verification",
+                        body:  "If this is in Action Center under SwiftPWA.HelloPWA, the WinRT path is live.",
+                        sound: false,
+                    });
+                    log("toast → id=" + r.id);
+                } catch (e) {
+                    log("toast failed: " + e.message);
+                }
+            },
         };
 
         // Two menu shapes that the cycle button swaps between, so users
@@ -328,27 +409,7 @@
         document.getElementById("cycle-tray").onclick = actions.cycleTray;
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
         document.getElementById("notify").onclick = actions.notify;
-
-        // Windows toast verification — same backend call as
-        // `notifications.send`, but with a fixed payload that's
-        // easier to spot in Action Center, and a label that names
-        // the surface it's exercising. On macOS / Linux it surfaces
-        // as a regular notification through the same code path.
-        actions.toast = async () => {
-            try {
-                const auth = await __SWIFT_PWA__.invoke("notifications.requestAuthorization");
-                if (!auth.granted) { log("toast: not authorized"); return; }
-                const r = await __SWIFT_PWA__.invoke("notifications.send", {
-                    title: "swift-pwa toast verification",
-                    body:  "If this is in Action Center under SwiftPWA.HelloPWA, the WinRT path is live.",
-                    sound: false,
-                });
-                log("toast → id=" + r.id);
-            } catch (e) {
-                log("toast failed: " + e.message);
-            }
-        };
-        document.getElementById("toast").onclick = actions.toast;
+        document.getElementById("toast").onclick  = actions.toast;
 
         // React to tray clicks / menu-item activations from the JS side.
         // Some items (e.g. "rename") map directly onto existing actions;

@@ -186,7 +186,7 @@
 </head>
 <body>
     <h1>Hello from swift-pwa</h1>
-    <p>A system <code>WKWebView</code> driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
+    <p>A system webview (<code id="webview-name">WKWebView / WebKitGTK / WebView2</code>) driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
     <p class="shortcuts" id="shortcuts">
         <strong>Shortcuts:</strong>
         <kbd id="k-rename">⌘R</kbd> rename ·
@@ -286,6 +286,33 @@
         <p id="motto">chirp — you've reached the end of the page</p>
     </footer>
     <script>
+        // Backend detection for the subtitle. We dispatch on the
+        // host-bridge object each backend exposes, not UA-sniffing —
+        // WebView2 puts `chrome.webview` on `window`, both WKWebView
+        // and WebKitGTK expose `webkit.messageHandlers`. Apple vs
+        // Linux for the latter pair falls out of `navigator.platform`
+        // (Linux WebKitGTK reports "Linux", Apple reports Mac/iPhone/
+        // iPad). If detection somehow misses, we leave the generic
+        // "WKWebView / WebKitGTK / WebView2" placeholder in place.
+        (() => {
+            const el = document.getElementById("webview-name");
+            if (!el) return;
+            const platform = navigator.platform || "";
+            let name = null;
+            if (window.chrome && window.chrome.webview) {
+                name = "WebView2";
+            } else if (window.webkit && window.webkit.messageHandlers) {
+                if (/iPhone|iPad|iPod/.test(platform)) {
+                    name = "WKWebView (iOS)";
+                } else if (/Mac/.test(platform)) {
+                    name = "WKWebView (macOS)";
+                } else {
+                    name = "WebKitGTK";
+                }
+            }
+            if (name) el.textContent = name;
+        })();
+
         // Two log streams: actions you triggered, and window events the
         // backend pushed up via `window.subscribe`. Keeping them apart
         // makes it obvious which side initiated each line.

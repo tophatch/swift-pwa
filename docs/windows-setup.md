@@ -92,6 +92,66 @@ window needs the VS Developer environment loaded again before
 `swift build` will resolve the MSVC toolchain. (Reproducing what
 `vsdevcmd.bat` does ourselves is fragile, so we leave it to VS.)
 
+**Auto-loading it.** PowerShell's profile (`$PROFILE`) is the .zshrc
+analogue and will run on every shell launch, but most VS users *don't*
+auto-load `Launch-VsDevShell.ps1` globally and you probably shouldn't
+either:
+
+- VsDevShell mutates ~50 env vars. MSVC's `link.exe` jumps to the
+  front of `$env:Path`, shadowing GNU `link` and any other tools
+  with colliding names.
+- It locks the session to one arch (x64 *or* arm64) and one VS
+  install — switching means a fresh shell anyway, defeating the
+  point.
+- It adds 1–3s to every PowerShell startup, including non-dev
+  sessions.
+
+The cleaner per-context options:
+
+- **Windows Terminal profile** — add a "VS Dev" profile in *Settings
+  → Profiles → Add new* with `commandline` set to:
+
+  ```text
+  powershell.exe -NoExit -Command "& 'C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\Launch-VsDevShell.ps1' -Arch amd64 -HostArch amd64"
+  ```
+
+  Default profile stays clean; you pick the dev tab when you need it.
+
+- **VS Code workspace terminal** — drop a `.vscode/settings.json` in
+  your swift-pwa-using project that overrides
+  `terminal.integrated.profiles.windows` and
+  `terminal.integrated.defaultProfile.windows`:
+
+  ```json
+  {
+    "terminal.integrated.profiles.windows": {
+      "VS Dev PowerShell": {
+        "path": "powershell.exe",
+        "args": ["-NoExit", "-Command",
+          "& 'C:\\Program Files\\Microsoft Visual Studio\\18\\Community\\Common7\\Tools\\Launch-VsDevShell.ps1' -Arch amd64 -HostArch amd64"]
+      }
+    },
+    "terminal.integrated.defaultProfile.windows": "VS Dev PowerShell"
+  }
+  ```
+
+  Per-workspace, no global pollution.
+
+- **Project-local script** — save the loader + (optional) NuGet
+  exports as `vendor\Set-SwiftPwaEnv.ps1` and dot-source it (`. .\vendor\Set-SwiftPwaEnv.ps1`)
+  whenever you open a fresh shell on the project. Lowest blast
+  radius, slight per-session friction.
+
+If you do go the `$PROFILE` route anyway, gate it on the working
+directory so non-dev sessions stay clean:
+
+```powershell
+# In $PROFILE
+if ((Get-Location).Path -like "*\swift-pwa*") {
+    & "C:\Program Files\Microsoft Visual Studio\18\Community\Common7\Tools\Launch-VsDevShell.ps1" -Arch amd64 -HostArch amd64
+}
+```
+
 The WebView2 + WIL `INCLUDE` / `LIB` exports were also a per-session
 chore in v0.2; in v0.3 the bundler auto-detects the swift-pwa repo's
 `packages/` folder and prepends the matching directories to

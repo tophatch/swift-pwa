@@ -411,3 +411,17 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   parent to exit, replaces the EXE, and relaunches. The `pwa.json`
   `updater.windows.install_mode` field (`passive` / `silent`) is
   reserved for that backend.
+- **`.build\release` symlink warning is cosmetic.** Without
+  Developer Mode (Settings → For developers → Developer Mode) or
+  Administrator privileges, SwiftPM can't create the
+  `.build\release` symlink to the arch-qualified output directory
+  and prints
+
+  ```text
+  warning: unable to create symbolic link at .build\release: encountered an I/O error (code: 512)
+  ```
+
+  on every `swift build`. The bundler scans for the
+  `*-windows-msvc\release\<Name>.exe` directly, so the warning is
+  safe to ignore; enabling Developer Mode silences it but isn't
+  required.

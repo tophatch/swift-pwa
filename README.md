@@ -191,6 +191,35 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
 // Built-in clipboard plugin (auto-installed on every backend).
 await __SWIFT_PWA__.invoke('clipboard.writeText', { text: 'copied!' });
 const { text } = await __SWIFT_PWA__.invoke('clipboard.readText');
+
+// Opt-in plugins below — only available when the Swift side did
+// `ctx.use(DialogPlugin(...))`, `FsPlugin(...)`, etc.
+
+// Native dialogs.
+await __SWIFT_PWA__.invoke('dialog.message',
+    { title: 'Heads up', message: 'Saved.', kind: 'info' });
+
+const { ok: confirmed } = await __SWIFT_PWA__.invoke('dialog.confirm',
+    { message: 'Discard changes?', okLabel: 'Discard', cancelLabel: 'Keep editing' });
+
+const { paths } = await __SWIFT_PWA__.invoke('dialog.openFile', {
+    filters: [{ name: 'Images', extensions: ['png', 'jpg'] }],
+    multiple: false,
+});
+
+// Filesystem (path comes from a picker or your own bookkeeping).
+await __SWIFT_PWA__.invoke('fs.writeText', { path: paths[0], contents: 'hi' });
+const { contents } = await __SWIFT_PWA__.invoke('fs.readText', { path: paths[0] });
+
+// Biometric (Touch / Face / Optic ID on Apple, Windows Hello on Windows,
+// stub on Linux — `available: false`). Cancel reports
+// `authenticated: false, error: "cancelled"` rather than throwing.
+const status = await __SWIFT_PWA__.invoke('biometric.canAuthenticate');
+if (status.available) {
+    const { authenticated } = await __SWIFT_PWA__.invoke('biometric.authenticate',
+        { reason: 'Unlock the journal' });
+    if (authenticated) { /* ... */ }
+}
 ```
 
 ## Swift API
@@ -207,6 +236,17 @@ struct HelloApp {
             await ctx.registry.register("ping") { (_: EmptyArgs, _) in
                 "pong"
             }
+
+            // Opt-in plugins. `WindowPlugin` and `ClipboardPlugin`
+            // are auto-installed; everything else is à la carte so
+            // apps that don't need a tray / file dialogs / biometrics
+            // don't pay the binary or runtime cost.
+            ctx.use(DialogPlugin(SystemDialog()))
+            ctx.use(FsPlugin(SystemFs()))
+            ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
+            // ctx.use(TrayPlugin(SystemTray()))
+            // ctx.use(NotificationsPlugin(SystemNotifications()))
+            // ctx.use(UpdaterPlugin(AppleUpdater(...)))
 
             _ = try ctx.createWindow(.init(
                 title: "Hello",
@@ -237,13 +277,13 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 ### Known limitations
 
 - **`Window.position()` / `setPosition` are no-ops on the GTK4 backend.** Wayland refuses to give apps their own position, and CSD makes the concept ambiguous; GTK4 dropped the position APIs entirely. `position()` returns `.zero`, `setPosition` silently no-ops, and `.didMove` events are never emitted on GTK4. The GTK3 backend still supports all three.
-- **`TrayPlugin` is a no-op on iOS and on the GTK4 backend.** iOS has no system tray. GTK4 removed `GtkStatusIcon`, and the GTK3 path's `libayatana-appindicator3` can't be reused from a GTK4 process (a single process can't link both GTK3 and GTK4); the GTK4-native `libayatana-appindicator-gtk4` isn't yet broadly packaged. On both platforms `SystemTray()` returns a stub that logs a one-shot warning so cross-platform code stays portable.
+- **`TrayPlugin` is a no-op on iOS and on the GTK4 backend.** iOS has no system tray. GTK4 removed `GtkStatusIcon`, and the GTK3 path's `libayatana-appindicator3` can't be reused from a GTK4 process (a single process can't link both GTK3 and GTK4). On both platforms `SystemTray()` returns a stub that logs a one-shot warning so cross-platform code stays portable. Real GTK4 tray support is queued for v0.5 alongside the switch from `libayatana-appindicator` (GTK3-tied, deprecated) to `libayatana-appindicator-glib` (GTK-free, works for both backends) — see the Roadmap below.
 - **`TrayEvent.click` is macOS-only.** The freedesktop StatusNotifierItem spec gives the desktop panel ownership of click semantics on Linux; apps only see menu activations there.
 - **`NotificationsPlugin` requires a bundled, signed `.app` on Apple.** `UNUserNotificationCenter` raises an `NSException` when called from a process without a `CFBundleIdentifier`; the plugin pre-flights and throws a clean `BridgeError` instead of crashing, but actual banners only appear after `swift run swift-pwa build --target macos` (or via Xcode).
 - **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
 - **Windows toast persistence in Action Center requires a Start-menu shortcut.** The runtime sets a stable AppUserModelID (`SwiftPWA.<exe-stem>`) at process start which is enough for toasts to show, but Windows only keeps them in Action Center across reboots when the AUMID also matches a registered Start-menu `.lnk`. The MSIX bundler path takes care of this; portable bundles shipped outside an installer don't get persistence.
-- **Android bundler prints "not implemented".** Targets are scaffolded but the actual build path lands in v0.3.
-- **Auto-updates ship Apple-only in v0.3.** `AppleUpdater` covers macOS bundle swap and iOS enterprise / ad-hoc via `itms-services://`. Linux AppImage (atomic-rename onto the running mmap) and Windows MSIX / portable updaters are queued for v0.4, along with the `swift-pwa updater keygen / sign / manifest` CLI subcommands. macOS install fires no UI before the swap — apps that want a "Restart now / later" prompt should gate `updater.installAndRelaunch` behind their own dialog.
+- **Android bundler prints "not implemented".** Target is scaffolded; the actual `swift-pwa build --target android` build path is queued (see the Roadmap below).
+- **Auto-updates are Apple-only.** `AppleUpdater` covers macOS bundle swap and iOS enterprise / ad-hoc via `itms-services://`. Linux AppImage (atomic-rename onto the running mmap) and Windows MSIX / portable updater backends are queued, along with the `swift-pwa updater keygen / sign / manifest` CLI subcommands. macOS install fires no UI before the swap — apps that want a "Restart now / later" prompt should gate `updater.installAndRelaunch` behind their own dialog.
 - **`DialogPlugin.saveFile` is a stub on iOS.** iOS has no system save panel; apps export through `UIDocumentPickerViewController(forExporting:)` (which takes a *written* file URL) or `UIActivityViewController`, neither of which fits the cross-platform shape. The plugin returns `nil` and logs a one-shot stderr warning on first call.
 - **GTK4 dialogs require GTK 4.10+** for `GtkAlertDialog` / `GtkFileDialog`. Older 4.x distros need to upgrade or stick with the GTK3 backend (which does not have this constraint).
 - **`BiometricAuthPlugin` is unsupported on Linux.** No cross-distro biometric primitive exists — `libfprint` only covers a subset of fingerprint readers and isn't preinstalled, polkit gives root-style authorization, PAM is system configuration. The Linux `SystemBiometricAuth` always reports `available: false`; apps targeting Linux should fall back to a passphrase flow and treat `canAuthenticate().available == false` as the universal cue.
@@ -252,7 +292,8 @@ The `pwa.json` manifest in your project root is the source of truth — `Info.pl
 
 ### Planned
 
-- **v0.4** — Dialog / fs / biometric-auth plugins are landed on `main` (see [`Unreleased`](CHANGELOG.md) for the per-backend breakdown). Still queued: Android (swift-android + JNI), GTK4 tray (libayatana-appindicator-gtk4 once it's broadly packaged), auto-updater on Linux AppImage + Windows MSIX/portable, `swift-pwa updater` CLI (keygen / sign / manifest), minisign-format key + signature parsing, MSIX `--arch arm64` for cross-arch packages, streaming `URLSessionDownloadDelegate`-driven progress for the macOS updater.
+- **v0.4** — Dialog / fs / biometric-auth plugins are landed on `main` (see [`Unreleased`](CHANGELOG.md) for the per-backend breakdown). Still queued: Android (swift-android + JNI), auto-updater on Linux AppImage + Windows MSIX/portable, `swift-pwa updater` CLI (keygen / sign / manifest), minisign-format key + signature parsing, MSIX `--arch arm64` for cross-arch packages, streaming `URLSessionDownloadDelegate`-driven progress for the macOS updater.
+- **v0.5** — GTK4 tray + retire deprecated `libayatana-appindicator` dep. The current C shim links GTK3-only `libayatana-appindicator3`, which prints `libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code.` at runtime. Switching to `libayatana-appindicator-glib` decouples the shim from GTK so it works on GTK3 and GTK4 (which currently has a no-op `SystemTray` stub), and silences the warning. The catch: the menu API changes from `GtkMenu` to `DbusmenuMenuitem`/`DbusmenuServer` (libdbusmenu), so it's a real shim rewrite, not a pkg-config swap. Bundling it with "GTK4 tray finally works" justifies the churn — doing the rewrite without the GTK4 win wouldn't.
 - **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
 
 See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown of what's already shipped.

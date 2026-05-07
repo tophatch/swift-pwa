@@ -7,18 +7,20 @@ format covers every platform — different artifacts under one
 `platforms` table.
 
 > **Status:** macOS bundle swap and iOS enterprise / ad-hoc
-> (`itms-services://`) ship in `AppleUpdater` (v0.3). Linux AppImage
-> support ships in `LinuxAppImageUpdater` and the
-> `swift-pwa updater keygen / sign / manifest` CLI is landed on `main`,
-> both for the v0.4 release. The Windows MSIX / portable runtime backend
-> is the remaining v0.4 follow-up.
+> (`itms-services://`) ship in `AppleUpdater` (v0.3). The
+> `swift-pwa updater keygen / sign / manifest` CLI, the Linux AppImage
+> runtime (`LinuxAppImageUpdater`), and the Windows portable + MSIX
+> runtime (`WindowsUpdater`) are all landed on `main` for the v0.4
+> release. Every supported platform now has both publishing and
+> consuming sides of the pipeline.
 
 ## Wiring the runtime
 
 Construct a backend `Updater` and install the plugin. macOS and iOS
 use `AppleUpdater` (pass `nil` for `publicKey` on iOS — Apple's signing
-chain validates the .ipa). Linux uses `LinuxAppImageUpdater`. The
-Windows backend will follow the same shape once it lands.
+chain validates the .ipa). Linux uses `LinuxAppImageUpdater`. Windows
+uses `WindowsUpdater`, which takes an `installMode` of `.portable` or
+`.msix` to pick between EXE-replacement and `Add-AppxPackage`.
 
 ```swift
 import SwiftPWA
@@ -35,6 +37,13 @@ try runtime.run { ctx in
         endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
         publicKey: "BASE64-OF-32-RAW-ED25519-BYTES",
         currentVersion: "0.4.0" // or pull from your own config
+    )))
+    #elseif os(Windows)
+    ctx.use(UpdaterPlugin(WindowsUpdater(
+        endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
+        publicKey: "BASE64-OF-32-RAW-ED25519-BYTES",
+        installMode: .portable, // or .msix to match how you packaged
+        currentVersion: "0.4.0"
     )))
     #endif
 
@@ -256,15 +265,45 @@ The `pwa.json` `updater.linux.appimage_strategy` field (`in_place` /
 AppImage alongside the old one and updates a `~/.local/bin` symlink
 instead of replacing the file in place; v0.4 is `in_place` only.
 
-### Windows (queued for v0.4)
+### Windows (portable + MSIX)
 
-Plan: MSIX targets hand off to `PackageManager.AddPackageAsync` and
-let the OS validate the signing chain (so swift-pwa only does Ed25519
-over the bytes for tamper detection in transit); portable targets
-download + verify + spawn a tiny detached helper that waits for the
-parent to exit, replaces the EXE, and relaunches. The `pwa.json`
-`updater.windows.install_mode` field (`passive` / `silent`) is
-reserved for that backend.
+`WindowsUpdater` covers both formats `swift-pwa build --target windows`
+produces. Pick the install mode that matches how you packaged.
+
+**Portable mode** (`installMode: .portable`). `download` fetches the
+new EXE, verifies the Ed25519 signature, and stages it under
+`%LOCALAPPDATA%\<bundle-id>\SwiftPWAUpdates\<version>\`.
+`installAndRelaunch` writes a tiny PowerShell helper, spawns it
+detached via `powershell.exe -EncodedCommand …`, and `exit(0)`s. The
+helper does `Wait-Process -Id <pid>` (so the running EXE releases the
+file lock), `Move-Item -Force` the staged EXE onto the running EXE's
+path (resolved with `GetModuleFileNameW`), and `Start-Process`es the
+result. We use `-EncodedCommand` rather than dropping a `.ps1` on disk
+both to avoid the default Restricted execution policy and to dodge
+PowerShell's command-line quoting rules (which break on paths
+containing brackets, single quotes, or non-ASCII characters).
+
+**MSIX mode** (`installMode: .msix`). `download` fetches the new
+`.msix` and signature-verifies it (Ed25519 is best-effort here:
+Authenticode is the real authentication, but our signature pins
+*which* signed package this updater channel is allowed to install).
+`installAndRelaunch` spawns the same kind of helper, but instead of
+`Move-Item` the helper runs `Add-AppxPackage -Path <staged>
+-ForceUpdateFromAnyVersion`. The OS validates the chain and updates
+the package on disk; the running EXE keeps the old code mapped until
+it exits, so `WindowsUpdater` returns control to the helper and the
+runtime `exit(0)`s. The user relaunches from Start (post-install
+relaunch via `shell:AppsFolder\<AUMID>!App` is queued).
+
+For the public-key argument: `.portable` requires it (a swappable EXE
+is full code execution; verifying signatures is non-negotiable);
+`.msix` accepts `nil` if you want to trust Authenticode unconditionally
+and skip Ed25519. Production deployments should set it on both modes.
+
+The `pwa.json` `updater.windows.install_mode` field (`passive` /
+`silent`) is reserved for a future iteration — `Add-AppxPackage`
+currently runs in its default mode (foreground UI on errors only;
+silent on success).
 
 ## What's not in the first cut
 
@@ -284,8 +323,11 @@ reserved for that backend.
   "Restart now / later" dialog should gate `updater.installAndRelaunch`
   behind their own prompt UI (the `readyToInstall` event from
   `updater.run` is the natural prompt point).
-- **Windows MSIX / portable backend** — `AppleUpdater` ships in v0.3
-  and `LinuxAppImageUpdater` ships in v0.4; `WindowsUpdater` remains
-  the queued runtime backend for v0.4. The publishing CLI already
-  emits manifests for the Windows targets — the missing piece is the
-  runtime side that consumes them.
+- **Fine-grained download progress on the macOS / Linux / Windows
+  updaters** — single start + end progress events for now. Switching
+  to `URLSessionDownloadDelegate` will give per-chunk progress on all
+  three platforms.
+- **Post-install relaunch on Windows MSIX** — `Add-AppxPackage`
+  updates the package on disk but the running EXE continues with the
+  old code. The user has to relaunch from Start; wiring up
+  `shell:AppsFolder\<AUMID>!App` for automatic relaunch is queued.

@@ -1,0 +1,429 @@
+#if os(Windows)
+    import Crypto
+    import Foundation
+    import SwiftPWACore
+    import WinSDK
+
+    #if canImport(FoundationNetworking)
+        import FoundationNetworking
+    #endif
+
+    /// `Updater` for Windows.
+    ///
+    /// Handles both v0.4-supported package formats produced by
+    /// `swift-pwa build --target windows`:
+    ///
+    /// - **`.portable`** — the app is a self-contained EXE in a folder
+    ///   the user installed by hand (typical "drop and run" deploys).
+    ///   `download` fetches the new EXE, signature-verifies it, and
+    ///   stages it. `installAndRelaunch` spawns a detached PowerShell
+    ///   helper that waits for the running process to exit, `Move-Item`s
+    ///   the staged EXE onto the running EXE's path (`MoveFileExW`-style
+    ///   atomic replace, `MOVEFILE_REPLACE_EXISTING`), and `Start-Process`es
+    ///   the result. We use PowerShell rather than a `cmd.exe` batch
+    ///   because the quoting model is far more forgiving for paths
+    ///   containing spaces / brackets / unicode, and `-EncodedCommand`
+    ///   bypasses the default Restricted execution policy without us
+    ///   needing to drop a `.ps1` on disk first.
+    /// - **`.msix`** — the app was installed via `Add-AppxPackage`
+    ///   (sideload) or the Microsoft Store. `download` fetches the new
+    ///   `.msix` and signature-verifies it; `installAndRelaunch` hands
+    ///   the staged file to PowerShell's `Add-AppxPackage`, which lets
+    ///   the OS validate the Authenticode chain and update the
+    ///   installation in place. We still verify Ed25519 over the bytes
+    ///   for tamper detection in transit (a compromised CDN could swap
+    ///   in a different Microsoft-signed package — Authenticode catches
+    ///   wholesale tampering but doesn't pin *which* signed package the
+    ///   updater is allowed to install).
+    ///
+    /// **First-cut limitations** (each tracked in
+    /// `docs/windows-setup.md` "Known limitations"):
+    ///
+    /// - Download progress fires at start + end only. Fine-grained
+    ///   `URLSessionDownloadDelegate`-driven progress is a follow-up.
+    /// - Public-key + signature must be base64 of the raw 32-byte /
+    ///   64-byte Ed25519 values. Minisign format (Tauri's preferred
+    ///   form) parsing is a planned follow-up.
+    /// - `installAndRelaunch` on `.portable` requires write access to
+    ///   the directory containing the running EXE. Apps installed
+    ///   under `C:\Program Files\…` without an elevation step on
+    ///   install will see `Move-Item` fail in the helper script.
+    ///   Recommend installing portable bundles under `%LOCALAPPDATA%`
+    ///   or the user's home directory.
+    /// - `installAndRelaunch` on `.msix` does **not** relaunch the
+    ///   updated app — `Add-AppxPackage` updates the package on disk
+    ///   but the OS keeps the old code mapped into the running process.
+    ///   We exit so the kernel can release the package files; the user
+    ///   relaunches from Start. Wiring up post-install relaunch via
+    ///   `shell:AppsFolder\<AUMID>!App` is queued.
+    public final class WindowsUpdater: Updater, @unchecked Sendable {
+        public enum InstallMode: String, Sendable {
+            case portable
+            case msix
+        }
+
+        private let endpoint: URL
+        private let publicKey: String?
+        private let currentVersion: String
+        private let target: String
+        private let installMode: InstallMode
+        private let urlSession: URLSession
+        private let stagingRoot: URL
+        private let executablePathOverride: URL?
+
+        private let lock = NSLock()
+        private var stagedArtifactPath: URL?
+        private var stagedInfo: UpdateInfo?
+
+        /// - Parameters:
+        ///   - endpoint: URL of the JSON manifest. May contain
+        ///     `{{target}}` and `{{current_version}}` placeholders;
+        ///     they are substituted before the request is made.
+        ///   - publicKey: Base64 of the 32-byte raw Ed25519 public key.
+        ///     Required for `.portable` (an unsigned drop-in replaces
+        ///     the EXE, which is full code execution). Optional for
+        ///     `.msix` — Authenticode validates the package — but
+        ///     setting it pins *which* signed package this updater
+        ///     channel is allowed to install, which is the right
+        ///     posture for production deployments.
+        ///   - installMode: Picks between EXE-replacement and
+        ///     `Add-AppxPackage`. Should match how the app was packaged
+        ///     by `swift-pwa build --target windows`
+        ///     (`--package-format portable` vs `msix`).
+        ///   - currentVersion: Version string the running build
+        ///     identifies as. Defaults to `"0.0.0"` — apps should pass
+        ///     the value they baked into `pwa.json` / their build
+        ///     metadata so manifest comparisons are accurate.
+        ///   - target: Manifest target key (e.g. `windows-x86_64-msix`).
+        ///     Defaults to `UpdaterTarget.current(packageFormat: <mode>)`
+        ///     where `<mode>` is `"portable"` or `"msix"`.
+        ///   - urlSession: Override for tests. Defaults to `.shared`.
+        ///   - stagingRoot: Where to stage downloaded artifacts.
+        ///     Defaults to `%LOCALAPPDATA%\<bundle-id>\SwiftPWAUpdates`,
+        ///     falling back to `%TEMP%` if `LOCALAPPDATA` is unset.
+        ///   - executablePath: Override for the running EXE's path.
+        ///     Defaults to `GetModuleFileNameW(NULL, …)`. Tests pass an
+        ///     explicit URL so they don't have to spoof a real install.
+        public init(
+            endpoint: URL,
+            publicKey: String?,
+            installMode: InstallMode,
+            currentVersion: String? = nil,
+            target: String? = nil,
+            urlSession: URLSession = .shared,
+            stagingRoot: URL? = nil,
+            executablePath: URL? = nil
+        ) {
+            self.endpoint = endpoint
+            self.publicKey = publicKey
+            self.installMode = installMode
+            self.currentVersion = currentVersion ?? "0.0.0"
+            self.target = target ?? UpdaterTarget.current(packageFormat: installMode.rawValue)
+            self.urlSession = urlSession
+            self.stagingRoot = stagingRoot ?? Self.defaultStagingRoot()
+            executablePathOverride = executablePath
+        }
+
+        // MARK: - check
+
+        public func check() async throws -> UpdateInfo? {
+            let url = expandPlaceholders(endpoint)
+            let data: Data
+            let response: URLResponse
+            do {
+                (data, response) = try await urlSession.data(from: url)
+            } catch {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "manifest fetch failed: \(error.localizedDescription)"
+                )
+            }
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "manifest fetch returned HTTP \(http.statusCode)"
+                )
+            }
+            let manifest: UpdateManifest
+            do {
+                manifest = try JSONDecoder().decode(UpdateManifest.self, from: data)
+            } catch {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "manifest decode failed: \(error)"
+                )
+            }
+            guard let info = manifest.updateInfo(for: target, currentVersion: currentVersion) else {
+                return nil
+            }
+            guard UpdaterVersion.isNewer(info.version, than: currentVersion) else {
+                return nil
+            }
+            return info
+        }
+
+        // MARK: - download
+
+        public func download(_ info: UpdateInfo) -> AsyncThrowingStream<UpdaterEvent, any Error> {
+            AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        let staged = try await self.stage(info: info) { event in
+                            continuation.yield(event)
+                        }
+                        self.lock.withLock {
+                            self.stagedArtifactPath = staged
+                            self.stagedInfo = info
+                        }
+                        continuation.yield(.readyToInstall)
+                        continuation.finish()
+                    } catch let bridge as BridgeError {
+                        continuation.finish(throwing: bridge)
+                    } catch {
+                        continuation.finish(throwing: BridgeError(
+                            code: BridgeError.handler,
+                            message: "download failed: \(error)"
+                        ))
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+
+        /// Download → (verify) → return staged path. Yields a single
+        /// start + end progress pair — fine-grained progress is a
+        /// follow-up. For `.msix` with no public key configured,
+        /// Ed25519 verification is skipped — the OS validates the
+        /// Authenticode chain on `Add-AppxPackage`.
+        private func stage(
+            info: UpdateInfo,
+            yield: @Sendable (UpdaterEvent) -> Void
+        ) async throws -> URL {
+            let dir = try ensureVersionStagingDir(version: info.version)
+            let suffix = installMode == .msix ? "msix" : "exe"
+            let staged = dir.appendingPathComponent("update.\(suffix)")
+
+            yield(.downloadProgress(bytesDownloaded: 0, contentLength: nil))
+            let (tempFile, response) = try await urlSession.download(from: info.downloadURL)
+            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "artifact fetch returned HTTP \(http.statusCode)"
+                )
+            }
+            try? FileManager.default.removeItem(at: staged)
+            try FileManager.default.moveItem(at: tempFile, to: staged)
+            let bytes = (try? FileManager.default.attributesOfItem(atPath: staged.path)[.size]
+                as? Int) ?? 0
+            yield(.downloadProgress(bytesDownloaded: bytes, contentLength: bytes))
+
+            try verifySignature(at: staged, info: info)
+
+            return staged
+        }
+
+        // MARK: - installAndRelaunch
+
+        public func installAndRelaunch() async throws {
+            let staged = lock.withLock { stagedArtifactPath }
+            guard let staged else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "no staged update — call updater.run (or updater.download) first"
+                )
+            }
+            switch installMode {
+            case .portable:
+                try installPortable(staged: staged)
+            case .msix:
+                try installMSIX(staged: staged)
+            }
+            // Hand off to the helper. Exiting frees the running EXE so
+            // the helper's `Move-Item` (portable) or `Add-AppxPackage`
+            // (msix) can replace it. Mirrors the macOS / Linux pattern.
+            exit(0)
+        }
+
+        private func installPortable(staged: URL) throws {
+            guard let target = currentExecutablePath() else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: """
+                    installAndRelaunch could not detect the running EXE path. \
+                    GetModuleFileNameW returned an empty string, which usually \
+                    means the process was started in an unusual way (e.g. via \
+                    a memory-mapped image without a backing file). Pass the path \
+                    explicitly via WindowsUpdater(executablePath:) for tests.
+                    """
+                )
+            }
+            let pid = GetCurrentProcessId()
+            let script = """
+            $ErrorActionPreference = 'SilentlyContinue'
+            try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
+            Move-Item -LiteralPath \(psQuote(staged.path)) -Destination \(psQuote(target.path)) -Force
+            Start-Process -FilePath \(psQuote(target.path))
+            """
+            try spawnDetachedPowerShell(script: script)
+        }
+
+        private func installMSIX(staged: URL) throws {
+            let pid = GetCurrentProcessId()
+            // `-ForceUpdateFromAnyVersion` lets us replace a higher-versioned
+            // package with a lower one (e.g. emergency rollback); without
+            // it `Add-AppxPackage` rejects an "older" install and exits 1.
+            // The MSIX subsystem still requires the publisher CN to match.
+            let script = """
+            $ErrorActionPreference = 'SilentlyContinue'
+            try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
+            Add-AppxPackage -Path \(psQuote(staged.path)) -ForceUpdateFromAnyVersion
+            """
+            try spawnDetachedPowerShell(script: script)
+        }
+
+        // MARK: - helpers (internal so tests can exercise them directly)
+
+        /// Resolve the running EXE's path. Returns the constructor
+        /// override if set, otherwise reads `GetModuleFileNameW(NULL)`.
+        func currentExecutablePath() -> URL? {
+            if let override = executablePathOverride { return override }
+            var buf = [WCHAR](repeating: 0, count: 1024)
+            let len = buf.withUnsafeMutableBufferPointer { ptr -> DWORD in
+                GetModuleFileNameW(nil, ptr.baseAddress, DWORD(ptr.count))
+            }
+            guard len > 0 else { return nil }
+            let path = String(decoding: buf.prefix(Int(len)).map { UInt16($0) }, as: UTF16.self)
+            return URL(fileURLWithPath: path)
+        }
+
+        /// Verify the staged artifact's Ed25519 signature against the
+        /// configured public key. For `.msix` with no public key
+        /// configured (and no signature in the manifest entry), skips
+        /// verification and trusts the OS Authenticode chain.
+        func verifySignature(at staged: URL, info: UpdateInfo) throws {
+            if installMode == .msix, publicKey == nil, info.signature.isEmpty {
+                // Explicit opt-out for MSIX: rely on `Add-AppxPackage`'s
+                // chain validation. The portable path doesn't get this
+                // escape hatch — without Ed25519 it has no integrity check.
+                return
+            }
+            let data = try Data(contentsOf: staged)
+            try verifyEd25519(data: data, signature: info.signature)
+        }
+
+        /// Verify a base64 Ed25519 signature over `data` against the
+        /// configured public key. Throws a bridge error with a clear
+        /// message on every failure mode (missing key, malformed key /
+        /// signature, signature mismatch).
+        func verifyEd25519(data: Data, signature: String) throws {
+            guard let publicKey else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "no public key configured — pass one to WindowsUpdater(publicKey:)"
+                )
+            }
+            guard let pubKeyBytes = Data(base64Encoded: publicKey),
+                  pubKeyBytes.count == 32
+            else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: """
+                    public key must be base64 of the raw 32-byte Ed25519 value. \
+                    Minisign-format key parsing is a planned follow-up.
+                    """
+                )
+            }
+            guard let sigBytes = Data(base64Encoded: signature),
+                  sigBytes.count == 64
+            else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "signature must be base64 of the raw 64-byte Ed25519 signature"
+                )
+            }
+            let key: Curve25519.Signing.PublicKey
+            do {
+                key = try Curve25519.Signing.PublicKey(rawRepresentation: pubKeyBytes)
+            } catch {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "invalid Ed25519 public key: \(error)"
+                )
+            }
+            guard key.isValidSignature(sigBytes, for: data) else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "signature verification failed"
+                )
+            }
+        }
+
+        /// Spawn `powershell.exe` running `script` detached from this
+        /// process. Uses `-EncodedCommand <utf16-le-base64>` so we don't
+        /// have to escape quotes for the cmdline parser, and so the
+        /// default `Restricted` execution policy doesn't reject the
+        /// inline command (encoded commands are treated as a single
+        /// `-Command` invocation, which the policy exempts).
+        ///
+        /// Stdio is redirected to `NUL` so the helper isn't tied to a
+        /// terminal that's about to disappear with us.
+        func spawnDetachedPowerShell(script: String) throws {
+            let utf16 = script.utf16.flatMap { unit in
+                [UInt8(unit & 0xFF), UInt8((unit >> 8) & 0xFF)]
+            }
+            let encoded = Data(utf16).base64EncodedString()
+            let proc = Process()
+            proc.executableURL = URL(fileURLWithPath: "C:\\Windows\\System32\\WindowsPowerShell\\v1.0\\powershell.exe")
+            proc.arguments = [
+                "-NoProfile",
+                "-NonInteractive",
+                "-WindowStyle", "Hidden",
+                "-EncodedCommand", encoded
+            ]
+            proc.standardInput = FileHandle.nullDevice
+            proc.standardOutput = FileHandle.nullDevice
+            proc.standardError = FileHandle.nullDevice
+            try proc.run()
+            // Don't waitUntilExit — the helper script is supposed to
+            // outlive us. We exit(0) right after this returns; Windows
+            // doesn't propagate parent termination to children, so the
+            // helper keeps running on its own.
+        }
+
+        private func expandPlaceholders(_ url: URL) -> URL {
+            let raw = url.absoluteString
+                .replacingOccurrences(of: "{{target}}", with: target)
+                .replacingOccurrences(of: "{{current_version}}", with: currentVersion)
+            return URL(string: raw) ?? url
+        }
+
+        private func ensureVersionStagingDir(version: String) throws -> URL {
+            let dir = stagingRoot.appendingPathComponent(version, isDirectory: true)
+            if !FileManager.default.fileExists(atPath: dir.path) {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            }
+            return dir
+        }
+
+        private static func defaultStagingRoot() -> URL {
+            let env = ProcessInfo.processInfo.environment
+            let base = if let local = env["LOCALAPPDATA"], !local.isEmpty {
+                URL(fileURLWithPath: local)
+            } else {
+                URL(fileURLWithPath: NSTemporaryDirectory())
+            }
+            let appID = Bundle.main.bundleIdentifier ?? "swift-pwa"
+            return base
+                .appendingPathComponent(appID, isDirectory: true)
+                .appendingPathComponent("SwiftPWAUpdates", isDirectory: true)
+        }
+
+        /// Wrap a string for use as a PowerShell single-quoted literal.
+        /// PowerShell escapes a single quote inside `'…'` by doubling it
+        /// (`''`), same as SQL. Single-quoted strings don't interpolate,
+        /// which is exactly what we want for paths that may contain `$`.
+        private func psQuote(_ s: String) -> String {
+            "'" + s.replacingOccurrences(of: "'", with: "''") + "'"
+        }
+    }
+#endif

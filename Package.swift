@@ -81,11 +81,19 @@ let appIndicatorSystemLibraryTarget: Target? = useGtk4
         ]
     )
 
+/// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
+/// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit
+/// itself is Apple-only). On Apple it shadows CryptoKit; on Linux it
+/// links against BoringSSL. Linux-conditional because the GTK target's
+/// .swift sources are all `#if os(Linux)`-guarded — pulling Crypto in on
+/// macOS hosts where the GTK target compiles to an empty object would
+/// just bloat the link.
 let gtkBackendTarget: Target = useGtk4
     ? .target(
         name: "SwiftPWAGTK",
         dependencies: [
             "SwiftPWACore",
+            .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk4Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux]))
         ],
@@ -96,6 +104,7 @@ let gtkBackendTarget: Target = useGtk4
         name: "SwiftPWAGTK",
         dependencies: [
             "SwiftPWACore",
+            .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk3Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux])),
             .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux]))
@@ -273,6 +282,7 @@ let package = Package(
             name: "SwiftPWAGTKTests",
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings

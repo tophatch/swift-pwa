@@ -7,9 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Known issues
+### Fixed
 
-- **Windows CI `Test (cross-platform suites)` step still red.** The Linux + macOS + iOS + lint jobs all went green in the v0.4 cycle, but the Windows test step continues to fail at lld-link time. Root cause appears to be that SwiftPM links `SwiftPWAWindowsTests` (a v0.4 addition) into the package's discovered-tests runner regardless of the `--filter SwiftPWACoreTests --filter SwiftPWACLITests` invocation — `--filter` gates execution, not the link graph — and the linker stderr is buffered out of GitHub's log so the actual unresolved-symbol message isn't visible. The pre-v0.4 Windows job had the same step in red for unrelated timeout reasons; v0.4 didn't introduce the failure but inherits it. Fix landed on a v0.5 PR rather than the v0.4.0 tag — pre-existing breakage, won't block on it. Workarounds tracked: gate `SwiftPWAWindowsTests` behind a platforms condition in `Package.swift`, or drop `--filter` and run all suites.
+- **Windows CI `Test` step now green.** The v0.4-cycle Windows job had been red since the timeout fixes landed. The link itself was clean (the workflow log ends with `Build complete!`); the failure was the *next* line — `error: abnormal(312): swift-pwaPackageTests.xctest --dump-tests-json output:` (empty). `--dump-tests-json` is the discovery launch SwiftPM runs *only* when `--filter` is in play, before re-launching with the matched test ids; on Windows that launch was exiting with status 312 against this package's combined test product. Without a stable repro of why the discovery launch crashes (status 312 doesn't map to a documented Windows error code, the binary produces no stderr), we sidestep the discovery step entirely: drop `--filter` on the Windows job and run `swift test` against all suites. SwiftPWAGTKTests / SwiftPWAWebKitTests link to empty bundles on Windows (their target deps are platform-conditional and the test files are `#if`-gated), and SwiftPWAWindowsTests is a real suite (`WindowsUpdater` coverage — crypto, file ops, no GUI), so a single all-suites pass on Windows is the right shape anyway. The previous "Known issues" note in this section pointed at this same workaround as a candidate fix; landed.
 
 ### Added
 

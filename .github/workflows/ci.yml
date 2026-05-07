@@ -74,14 +74,20 @@ jobs:
         run: swift build -v
       - name: Build test targets
         # `--build-tests` compiles the test bundles outside the test
-        # step's 5-min timer. Without it, `swift test` rebuilds the
+        # step's timer. Without it, `swift test` rebuilds the
         # _SwiftPWATestSupport / *Tests modules from scratch — fast
-        # locally but slow enough on hosted runners (especially with
-        # swift-crypto's BoringSSL still settling) to push past the
-        # timer before any test actually runs.
+        # locally but slow on hosted runners (swift-crypto's BoringSSL
+        # alone is hundreds of clang invocations).
         run: swift build --build-tests
       - name: Test Core + CLI
-        timeout-minutes: 5
+        # 12 minutes rather than 5: even with `--build-tests` having
+        # already produced the bundles, `swift test --filter` still
+        # does an incremental link pass on every invocation (visible in
+        # the log as `lld-link @response.txt` being the last thing the
+        # 5-min timeout was killing). 12 min gives test execution and
+        # the link plenty of headroom; the workflow-level default of
+        # 360 min remains the runaway-test safety net.
+        timeout-minutes: 12
         run: swift test --verbose --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
   linux-gtk4:
@@ -117,7 +123,8 @@ jobs:
       - name: Build test targets
         run: swift build --build-tests
       - name: Test Core + CLI
-        timeout-minutes: 5
+        # See linux-gtk3 for the rationale on 12-minute timeout.
+        timeout-minutes: 12
         run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
   windows:
@@ -173,7 +180,11 @@ jobs:
         # the timeout mid-rebuild before any test actually ran.
         run: swift build --build-tests
       - name: Test (cross-platform suites)
-        timeout-minutes: 5
+        # See linux-gtk3 for the rationale on 12-minute timeout —
+        # `swift test --filter` still does an incremental link pass
+        # even after `--build-tests` produced the bundles, and Windows
+        # runners are slow enough that 5 min wasn't enough headroom.
+        timeout-minutes: 12
         # SwiftPWAWindowsTests is a placeholder — we run the
         # cross-platform suites here. Real Windows runtime tests
         # (window lifecycle, bridge round-trip on WebView2) are a

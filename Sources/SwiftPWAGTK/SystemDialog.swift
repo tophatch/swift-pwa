@@ -152,7 +152,13 @@
             for filter in filters {
                 let patterns = filter.extensions.map { "*.\($0)" }
                 // Build a NULL-terminated `const char *const *` buffer.
-                let cStrings: [UnsafePointer<CChar>?] = patterns.map { strdup($0) } + [nil]
+                // `strdup` returns `UnsafeMutablePointer<CChar>!`; wrap
+                // explicitly in `UnsafePointer(...)` so Swift infers the
+                // array's element type as the optional `const`-pointer
+                // the shim signature expects (the implicit conversion
+                // doesn't fire for pointer types inside an array
+                // literal).
+                let cStrings: [UnsafePointer<CChar>?] = patterns.map { UnsafePointer<CChar>(strdup($0)) } + [nil]
                 cStrings.withUnsafeBufferPointer { buf in
                     filter.name.withCString { namePtr in
                         swiftpwa_file_chooser_add_filter(dialog, namePtr, buf.baseAddress)

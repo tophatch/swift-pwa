@@ -50,6 +50,15 @@ struct HelloPWAApp {
             // reports unavailable.
             ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
 
+            // Auto-updater. The real backends — `AppleUpdater`,
+            // `LinuxAppImageUpdater`, `WindowsUpdater` — only do
+            // useful things from inside a bundled artifact pointing
+            // at a real signed manifest, so the demo stands one in
+            // with `DemoUpdater` (below) which synthesises a visible
+            // progress arc and lets users exercise the streaming
+            // event surface end-to-end.
+            ctx.use(UpdaterPlugin(DemoUpdater()))
+
             // Drive a couple of menu items from Swift directly so users
             // can see backend-side reactions to tray events. JS also
             // subscribes via `tray.subscribe` and logs every event.
@@ -72,6 +81,70 @@ struct HelloPWAApp {
 
 struct NowResult: Codable, Sendable {
     let iso: String
+}
+
+/// Local stand-in for a real `Updater` used by the demo's "Updater"
+/// card. `check` always reports a fresh release; `download` synthesises
+/// a fast progress arc so the v0.4 streaming-download feature has a
+/// visible exhibit; `installAndRelaunch` deliberately throws because
+/// the running `swift run` process has nothing to swap onto. Production
+/// apps wire one of `AppleUpdater` / `LinuxAppImageUpdater` /
+/// `WindowsUpdater` here against a real signed manifest endpoint.
+final class DemoUpdater: Updater, @unchecked Sendable {
+    func check() async throws -> UpdateInfo? {
+        UpdateInfo(
+            version: "0.4.0",
+            currentVersion: "0.3.0",
+            pubDate: ISO8601DateFormatter().string(from: Date()),
+            notes: "Demo update — never actually installs.",
+            downloadURL: URL(string: "https://example.invalid/demo.bin")!,
+            signature: "",
+            target: "demo"
+        )
+    }
+
+    func download(_: UpdateInfo) -> AsyncThrowingStream<UpdaterEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            // 18 chunks across ~270 ms — slow enough for the user to
+            // see the progress bar fill, fast enough that they aren't
+            // stuck waiting. Real backends emit at the granularity of
+            // `URLSessionDownloadDelegate.didWriteData` (~64 KB).
+            let task = Task {
+                let total = 4_500_000
+                let chunks = 18
+                for i in 0 ... chunks {
+                    if Task.isCancelled {
+                        continuation.finish()
+                        return
+                    }
+                    let bytes = total * i / chunks
+                    continuation.yield(.downloadProgress(
+                        bytesDownloaded: bytes,
+                        contentLength: total
+                    ))
+                    try? await Task.sleep(nanoseconds: 15_000_000)
+                }
+                continuation.yield(.readyToInstall)
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    func installAndRelaunch() async throws {
+        // `swift run`'s process has nothing meaningful to swap onto;
+        // a real Updater backend would `exec` into a detached helper
+        // here. Throw a clear bridge error so the demo's UI shows
+        // what production apps would do behind a "Restart now" prompt.
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: """
+            DemoUpdater can't relaunch the running `swift run` process. Wire a real \
+            backend (AppleUpdater / LinuxAppImageUpdater / WindowsUpdater) against \
+            a signed manifest endpoint to exercise the install path.
+            """
+        )
+    }
 }
 
 /// Locates the `web/` folder, looking in:

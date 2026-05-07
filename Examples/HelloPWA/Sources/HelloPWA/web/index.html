@@ -132,6 +132,25 @@
             color: var(--muted);
         }
         .section > p { margin: .25rem 0 .75rem; font-size: .9rem; }
+        /* Progress bar styled to match the card aesthetic. Used by the
+           Updater card to render `downloadProgress` events as they
+           stream in. Cross-browser consistency requires hitting the
+           webkit + moz pseudo-elements separately. */
+        progress {
+            display: block;
+            margin-top: .6rem;
+            width: 100%;
+            height: .55rem;
+            border: 0;
+            border-radius: 4px;
+            background: var(--bg);
+            overflow: hidden;
+            appearance: none;
+            -webkit-appearance: none;
+        }
+        progress::-webkit-progress-bar { background: var(--bg); border-radius: 4px; }
+        progress::-webkit-progress-value { background: var(--accent); border-radius: 4px; transition: width .1s linear; }
+        progress::-moz-progress-bar { background: var(--accent); border-radius: 4px; }
 
         .shortcuts {
             margin: 0 0 1rem;
@@ -291,6 +310,28 @@
                     <button id="bio-status">Check status</button>
                     <button id="bio-auth">Authenticate</button>
                 </div>
+            </section>
+
+            <section class="section">
+                <h2>Updater</h2>
+                <p>
+                    Cross-platform <code>updater.check</code> +
+                    <code>updater.run</code> +
+                    <code>updater.installAndRelaunch</code>. The demo wires
+                    a synthetic <code>DemoUpdater</code> (defined in
+                    <code>HelloPWA.swift</code>) so you can see the
+                    streaming progress bar fill without a real release
+                    server. Production apps swap in <code>AppleUpdater</code>
+                    / <code>LinuxAppImageUpdater</code> /
+                    <code>WindowsUpdater</code> pointed at a signed
+                    manifest.
+                </p>
+                <div class="actions">
+                    <button id="updater-check">Check for updates</button>
+                    <button id="updater-run">Run full flow</button>
+                    <button id="updater-install">Try install</button>
+                </div>
+                <progress id="updater-progress" value="0" max="1" hidden></progress>
             </section>
 
             <section class="section">
@@ -532,6 +573,91 @@
                 });
                 log(r.path == null ? "openDirectory → cancel" : "openDirectory → " + r.path);
             },
+            updaterCheck: async () => {
+                try {
+                    const r = await __SWIFT_PWA__.invoke("updater.check");
+                    if (r == null) {
+                        log("updater.check → up to date");
+                    } else {
+                        log("updater.check → " + r.version + " available (current " + r.currentVersion + ")");
+                    }
+                } catch (e) {
+                    log("updater.check failed: " + e.message);
+                }
+            },
+            updaterRun: async () => {
+                // Reset the progress bar and reveal it for this run.
+                // The streaming-download contract guarantees at least
+                // one (0, total) frame at the start of the transfer
+                // and (total, total) at the end, so we don't have to
+                // hide / show on every event.
+                const bar = document.getElementById("updater-progress");
+                bar.value = 0;
+                bar.removeAttribute("max");
+                bar.hidden = false;
+                log("updater.run → starting");
+                try {
+                    await new Promise((resolve, reject) => {
+                        const unsub = __SWIFT_PWA__.subscribe(
+                            "updater.run", {},
+                            (event) => {
+                                if (!event || typeof event !== "object") {
+                                    log("updater event: " + JSON.stringify(event));
+                                    return;
+                                }
+                                switch (event.type) {
+                                    case "checking":
+                                        log("updater → checking…"); break;
+                                    case "available":
+                                        log("updater → available (v" + event.info.version + ")");
+                                        break;
+                                    case "upToDate":
+                                        log("updater → up to date");
+                                        bar.hidden = true;
+                                        unsub(); resolve(); break;
+                                    case "downloadProgress":
+                                        if (event.contentLength != null) {
+                                            bar.max = event.contentLength;
+                                            bar.value = event.bytesDownloaded;
+                                        } else {
+                                            // Indeterminate length —
+                                            // remove `max` to render
+                                            // the indeterminate animation.
+                                            bar.removeAttribute("max");
+                                        }
+                                        break;
+                                    case "readyToInstall":
+                                        log("updater → readyToInstall (use 'Try install')");
+                                        bar.value = bar.max || 1;
+                                        unsub(); resolve(); break;
+                                    case "error":
+                                        log("updater error: " + event.code + " " + event.message);
+                                        unsub(); reject(new Error(event.message)); break;
+                                    default:
+                                        log("updater event: " + JSON.stringify(event));
+                                }
+                            },
+                        );
+                    });
+                } catch (e) {
+                    log("updater.run failed: " + e.message);
+                } finally {
+                    // Leave the bar visible at the terminal value so
+                    // the user can see the final state; reset on the
+                    // next run.
+                }
+            },
+            updaterInstall: async () => {
+                try {
+                    await __SWIFT_PWA__.invoke("updater.installAndRelaunch");
+                    log("updater.installAndRelaunch → returned");
+                } catch (e) {
+                    // Expected for the demo updater — production
+                    // backends would have killed the JS context by
+                    // this point.
+                    log("updater.installAndRelaunch failed: " + e.message);
+                }
+            },
             toast: async () => {
                 try {
                     const auth = await __SWIFT_PWA__.invoke("notifications.requestAuthorization");
@@ -589,6 +715,9 @@
         document.getElementById("fs-remove").onclick = actions.fsRemove;
         document.getElementById("bio-status").onclick = actions.bioStatus;
         document.getElementById("bio-auth").onclick   = actions.bioAuth;
+        document.getElementById("updater-check").onclick   = actions.updaterCheck;
+        document.getElementById("updater-run").onclick     = actions.updaterRun;
+        document.getElementById("updater-install").onclick = actions.updaterInstall;
 
         // React to tray clicks / menu-item activations from the JS side.
         // Some items (e.g. "rename") map directly onto existing actions;

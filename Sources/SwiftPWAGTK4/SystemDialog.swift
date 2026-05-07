@@ -104,7 +104,15 @@
         ) async throws -> Int32 {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Int32, any Error>) in
                 let box = AlertContinuation(continuation: cont)
-                let opaque = Unmanaged.passRetained(box).toOpaque()
+                // Wrap the raw pointer in a Sendable container — Swift
+                // on Linux's strict-concurrency mode flags the implicit
+                // `UnsafeMutableRawPointer` capture across the Task
+                // boundary even though the standard library declares it
+                // Sendable. The wrapper is `@unchecked Sendable`
+                // because the pointer is genuinely safe to share here:
+                // it's a one-shot hand-off to the C shim, which uses it
+                // synchronously inside the same MainThread.run hop.
+                let opaqueRef = OpaquePointerRef(Unmanaged.passRetained(box).toOpaque())
 
                 // Detached hop: the continuation body must be
                 // synchronous, so we spawn a Task that awaits
@@ -113,7 +121,7 @@
                 // shim is async). The user-facing continuation is
                 // resumed later, by `alertCallback`, when the dialog
                 // is dismissed.
-                Task { [self] in
+                Task { [self, opaqueRef] in
                     await MainThread.run { [self] in
                         fireAlertOnMain(
                             parent: parent,
@@ -123,7 +131,7 @@
                             buttons: buttons,
                             defaultButton: defaultButton,
                             cancelButton: cancelButton,
-                            opaque: opaque
+                            opaque: opaqueRef.value
                         )
                     }
                 }
@@ -182,9 +190,9 @@
         ) async throws -> [String] {
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String], any Error>) in
                 let box = FileContinuation(continuation: cont)
-                let opaque = Unmanaged.passRetained(box).toOpaque()
+                let opaqueRef = OpaquePointerRef(Unmanaged.passRetained(box).toOpaque())
 
-                Task { [self] in
+                Task { [self, opaqueRef] in
                     await MainThread.run { [self] in
                         fireFileDialogOnMain(
                             action: action,
@@ -193,7 +201,7 @@
                             folder: folder,
                             name: name,
                             filters: filters,
-                            opaque: opaque
+                            opaque: opaqueRef.value
                         )
                     }
                 }
@@ -308,6 +316,20 @@
     }
 
     // MARK: - Continuation boxes
+
+    /// `@unchecked Sendable` wrapper around an `UnsafeMutableRawPointer`.
+    /// Used to hand the heap-boxed continuation pointer across the
+    /// Task / MainThread.run hop without tripping Swift on Linux's
+    /// strict-concurrency diagnostic — the standard library declares
+    /// `UnsafeMutableRawPointer` Sendable, but implicit captures
+    /// across actor-isolation boundaries are still flagged on some
+    /// toolchain versions. Safe in this specific use because the
+    /// pointer is a one-shot hand-off to the C shim, which uses it
+    /// synchronously inside the MainThread.run body.
+    private struct OpaquePointerRef: @unchecked Sendable {
+        let value: UnsafeMutableRawPointer
+        init(_ value: UnsafeMutableRawPointer) { self.value = value }
+    }
 
     /// Boxed continuation handed to the C shim as user_data. The
     /// trampoline reconstitutes it via `Unmanaged.fromOpaque` and

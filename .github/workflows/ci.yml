@@ -185,18 +185,25 @@ jobs:
         # still does an incremental link pass, and Windows runners are
         # slow enough that 5 min wasn't enough headroom.
         timeout-minutes: 12
+        # `--testing-library swift-testing`: every suite in the package
+        # is swift-testing (`@Test` / `#expect`), no XCTest. Without
+        # this flag SwiftPM runs the bundle twice — once per library —
+        # and the auto-generated `runner.swift` defaults to xctest when
+        # `--testing-library` isn't passed, even though there are no
+        # XCTest tests to run. On Apple / Linux that empty xctest pass
+        # tolerates the no-tests-found case, but on Windows the bundle
+        # exits non-zero before producing any output (link itself
+        # clean — `Build complete!` precedes the failure, no stderr).
+        # Restrict to the swift-testing pass so the run matches what we
+        # actually have.
+        #
         # No `--filter`: when `swift test --filter` runs, SwiftPM first
         # invokes `<bundle>.xctest --dump-tests-json` to enumerate tests
         # and then re-launches with the matched ids. On Windows that
-        # discovery launch was exiting with status 312 against the
-        # `--filter`-targeted test product (linked clean — `Build
-        # complete!` precedes the failure), failing the step before any
-        # test ran. Without `--filter` SwiftPM runs the bundle directly,
-        # bypassing the discovery step. SwiftPWAWindowsTests is now a
-        # real suite (WindowsUpdater coverage); the GTK / WebKit suites
-        # compile to empty bundles on Windows so this is safe to run as
-        # a single pass.
-        run: swift test --verbose
+        # discovery launch was the surface of the same xctest-pass
+        # issue (status 312, empty stderr); pinning the testing library
+        # skips that path too.
+        run: swift test --verbose --testing-library swift-testing
 
   lint:
     runs-on: macos-15

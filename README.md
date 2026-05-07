@@ -218,6 +218,8 @@ swift test                                     # unit + WebKit integration on ma
 SWIFT_PWA_LINUX_GUI=1 swift test               # GTK integration tests on Linux
 ```
 
+Before tagging a release, walk the manual cases in [docs/manual-test-cases.md](docs/manual-test-cases.md) — they cover the OS-level install machinery, on-device installer flows, and visual smoothness checks that the unit suite can't reach.
+
 ## License
 
 Apache-2.0. See [`LICENSE`](LICENSE).

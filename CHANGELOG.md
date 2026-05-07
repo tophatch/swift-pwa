@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/manual-test-cases.md`** — release-engineering checklist for behaviour the unit suite can't cover. Eight cases for the updater module: macOS `.app` end-to-end (Ed25519 verify + `ditto` swap + relaunch), wrong-key rejection visible in the UI, Linux AppImage atomic-rename swap (with an `EXDEV` cross-filesystem sub-case), Windows portable EXE `Move-Item` swap (with a Program Files permission-failure sub-case), Windows MSIX update *with the v0.4 post-install relaunch* (and a `msixIdentityName: nil` opt-out sub-case), iOS enterprise / ad-hoc `itms-services://` hand-off, `minisign(1)` interop including the prehashed `ED` rejection sub-case, and a cross-host CLI publishing round-trip. Each case has the same shape (What it covers / Setup / Steps / Pass criteria) so a release engineer can scan it as a checklist; per-release setup (build vN-1 + vN, generate keys + manifest) lives in one block at the top of the module so individual cases don't repeat it. README's Contributing section + `docs/auto-updates.md` both link to it so anyone touching the updater code lands on the manual cases. New modules (clipboard, dialogs, biometrics, …) get their own sections as they ship features whose pass criteria need a real OS in the loop.
+
 ## [0.4.0] - 2026-05-07
 
 ### Added

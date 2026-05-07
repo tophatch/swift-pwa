@@ -11,13 +11,18 @@
     /// continuation from the callback the same way the GTK4 dialog
     /// adapter does.
     ///
-    /// **Identity caveat.** `UserConsentVerifier` reliably succeeds
-    /// only when the executable runs under an MSIX-packaged identity.
-    /// Unpackaged portable builds may see `DeviceNotPresent` even
-    /// when Windows Hello is configured — apps that need biometrics
-    /// to "just work" on every install should ship MSIX. We surface
-    /// the raw status code in `BiometricAvailability.reason` so
-    /// callers can show an actionable message.
+    /// **Interop interface.** Verification goes through the
+    /// `IUserConsentVerifierInterop` desktop-app variant
+    /// (`RequestVerificationForWindowAsync`) rather than the static
+    /// WinRT entry point. The static method assumes package identity;
+    /// from an unpackaged Win32 EXE it kicks off the verification
+    /// (camera indicator turns on) but never shows its prompt UI, so
+    /// the async operation hangs forever and the JS side never gets
+    /// a reply. The interop variant takes an explicit HWND parent —
+    /// the shim picks `GetForegroundWindow()` so the prompt anchors
+    /// to whatever the user is looking at — and brings up the dialog
+    /// as a modal. With this in place the plugin works equally well
+    /// from packaged (MSIX) and unpackaged builds.
     public final class SystemBiometricAuth: BiometricAuth, @unchecked Sendable {
         public init() {}
 

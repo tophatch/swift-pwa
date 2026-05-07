@@ -411,23 +411,26 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   parent to exit, replaces the EXE, and relaunches. The `pwa.json`
   `updater.windows.install_mode` field (`passive` / `silent`) is
   reserved for that backend.
-- **`BiometricAuthPlugin` reliably succeeds only under MSIX identity.**
+- **`BiometricAuthPlugin` works on both packaged and unpackaged
+  builds, via the `IUserConsentVerifierInterop` desktop-app
+  variant.** The static
   `Windows.Security.Credentials.UI.UserConsentVerifier::RequestVerificationAsync`
-  is the WinRT API the plugin wraps. On unpackaged portable
-  executables, it can return `DeviceNotPresent` even when Windows
-  Hello is configured for the current user — the documented behaviour
-  is "succeeds reliably only when the application has package
-  identity", and SwiftPM-built EXEs by default do not. Apps that
-  need biometrics to "just work" on every install should ship
-  MSIX (the bundler's `--package-format msix` path takes care of
-  the identity declaration in `AppxManifest.xml`). For unpackaged
-  builds, surface `BiometricAvailability.reason` to the user — the
-  raw status string makes the failure mode actionable. The plugin
-  itself has no link-time dependency on the WinRT projection
+  entry point assumes package identity; from a portable Win32 EXE
+  the symptom is that calling `biometric.authenticate` lights up
+  the camera indicator (verification *started*) but the consent
+  dialog never displays — so the IAsyncOperation hangs and the JS
+  side never sees a reply. The shim therefore goes through
+  `IUserConsentVerifierInterop::RequestVerificationForWindowAsync`,
+  passing `GetForegroundWindow()` as the parent HWND. The dialog
+  appears anchored to whatever the user is looking at, which is
+  the documented path for unpackaged Win32 desktop apps. The
+  plugin has no link-time dependency on the WinRT projection
   toolchain; the call surface lives in
-  `Sources/CWebView2Shim/swiftpwa_biometric.cpp` (C++/WinRT, header-
-  only) and links the same `WindowsApp.lib` we already pull in for
-  toasts.
+  `Sources/CWebView2Shim/swiftpwa_biometric.cpp` (C++/WinRT,
+  header-only) and links the same `WindowsApp.lib` we already pull
+  in for toasts. If you do ship MSIX, the static path is also
+  available — but using interop unconditionally keeps the code
+  paths shared between the two distribution shapes.
 - **Newly-added shim headers can stay stale across `swift build`.**
   When a new `.h` lands in `Sources/CWebView2Shim/include/` (e.g.
   `swiftpwa_dialog.h`, `swiftpwa_biometric.h`), an *incremental* Swift

@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.4.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.4.0) is the current release; macOS 15+, iOS 18+, Linux (GTK3 / GTK4), and Windows 11 (WebView2) are all first-class. v0.4 closes out the auto-updater work — dialog / fs / biometric-auth plugins, the `swift-pwa updater` publishing CLI, the Linux AppImage + Windows portable / MSIX runtime backends, minisign-format keys + signatures, streaming download progress, post-install relaunch on MSIX, and the bundler's `--arch x64|x86|arm64` flag are all in. See the [feature matrix](#feature-matrix) for what works where, and [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown.
+> **Status:** [`v0.4.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.4.0) is the current release; macOS 15+, iOS 18+, Linux (GTK3 / GTK4), and Windows 11 (WebView2) are all first-class. v0.4 closes out the auto-updater work — dialog / fs / biometric-auth plugins, the `swift-pwa updater` publishing CLI, the Linux AppImage + Windows portable / MSIX runtime backends, minisign-format keys + signatures, streaming download progress, post-install relaunch on MSIX, and the bundler's `--arch x64|x86|arm64` flag are all in. **The runtime updater backends ship as preview in v0.4** — implementation complete and unit-tested, but the OS-level install paths haven't been walked end-to-end against real bundled artifacts (see the matrix footnote and [docs/manual-test-cases.md](docs/manual-test-cases.md)). See the [feature matrix](#feature-matrix) for what works where, and [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown.
 
 ## Why
 
@@ -139,7 +139,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | `TrayPlugin`                  | Yes                     | —                            | Yes                        | —                       | Yes                      |
 | `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      |
 | `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            |
-| `UpdaterPlugin` (runtime)     | Yes                     | Enterprise / ad-hoc          | Yes                        | Yes                     | Portable / MSIX          |
+| `UpdaterPlugin` (runtime)     | Untested⁶               | Untested⁶                    | Untested⁶                  | Untested⁶               | Untested⁶                |
 | `swift-pwa updater` CLI       | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      |
 | Bundler artifact              | `.app`                  | `.app` / `.ipa`              | `.AppImage`                | `.AppImage`             | Portable / MSIX          |
 | Code-signing pass-through     | `codesign`              | `codesign`                   | —                          | —                       | `signtool`               |
@@ -149,6 +149,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 3. `dialog.saveFile` is a stub — iOS has no system save panel.
 4. GTK4 dialogs require GTK 4.10+ (`GtkAlertDialog` / `GtkFileDialog`).
 5. Apple notifications require a bundled, signed `.app` (`UNUserNotificationCenter` rejects unsigned processes).
+6. Runtime updater backends are implemented and unit-tested (134 tests pass) but **the OS-level install paths haven't been walked end-to-end against real bundled artifacts in this release** — `ditto` swap on macOS, atomic `rename(2)` on Linux, `Move-Item` / `Add-AppxPackage` on Windows, `itms-services://` on iOS. Treat as preview until the [docs/manual-test-cases.md](docs/manual-test-cases.md) checklist is walked. The publishing CLI (`swift-pwa updater keygen / sign / manifest`) is in tested status — the surface that's flagged is only the runtime backends that hand off to the OS.
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 

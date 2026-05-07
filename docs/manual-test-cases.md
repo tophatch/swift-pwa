@@ -32,9 +32,14 @@ When adding new cases:
 
 ## Coverage
 
-| Module       | Cases | Last verified |
-|--------------|-------|---------------|
-| Updater      | 8     | _pending v0.4.0_ |
+| Module       | Cases | Last verified  |
+|--------------|-------|----------------|
+| Updater      | 8     | **Untested**¹  |
+
+¹ Runtime backends ship as preview in v0.4.0 — implementation
+complete and unit-tested, but this checklist hasn't been walked
+end-to-end yet under the release's time pressure. The next release
+cycle re-runs all eight cases against real bundled artifacts.
 
 ---
 

@@ -13,6 +13,14 @@ format covers every platform — different artifacts under one
 > runtime (`WindowsUpdater`) are all landed on `main` for the v0.4
 > release. Every supported platform now has both publishing and
 > consuming sides of the pipeline.
+>
+> ⚠️ **The runtime backends ship as preview in v0.4.** Implementation
+> complete, 134 unit tests pass, but the OS-level install paths
+> (`ditto` swap on macOS, atomic `rename(2)` on Linux, `Move-Item` /
+> `Add-AppxPackage` on Windows, `itms-services://` on iOS) haven't
+> been walked end-to-end against real bundled artifacts in this
+> release. Walk [manual-test-cases.md](manual-test-cases.md) before
+> shipping production updates. The publishing CLI is fully tested.
 
 ## Wiring the runtime
 

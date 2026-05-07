@@ -153,6 +153,15 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
       - name: Build (release)
         run: swift build -c release
+      - name: Build (debug, for tests)
+        # `swift test` drops back to the debug configuration regardless
+        # of the prior release build, which on Windows means a from-
+        # scratch rebuild of swift-crypto's BoringSSL (~hundreds of
+        # clang invocations). Pulling the debug build into its own step
+        # keeps the test step's timeout focused on test time rather
+        # than the rebuild — without this, the test step kept hitting
+        # the 5-min cap mid-rebuild before any test actually ran.
+        run: swift build
       - name: Test (cross-platform suites)
         timeout-minutes: 5
         # SwiftPWAWindowsTests is a placeholder — we run the

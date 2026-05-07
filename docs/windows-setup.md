@@ -401,16 +401,24 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   `AppxManifest.xml` declares `ProcessorArchitecture="x64"`. To ship
   ARM64 packages, build on an ARM64 host and edit the manifest (or
   wait for the bundler's `--arch` flag).
-- **Auto-updater backend isn't implemented yet on Windows.**
-  `UpdaterPlugin` and the cross-platform `Updater` protocol ship in
-  v0.3 (Apple platforms only); the Windows backend lands in v0.4.
-  Plan: MSIX targets hand off to `PackageManager.AddPackageAsync` and
-  let the OS validate the chain (so swift-pwa only does Ed25519 over
-  the bytes for tamper detection in transit); portable targets
-  download + verify + spawn a tiny detached helper that waits for the
-  parent to exit, replaces the EXE, and relaunches. The `pwa.json`
-  `updater.windows.install_mode` field (`passive` / `silent`) is
-  reserved for that backend.
+- **`WindowsUpdater` doesn't relaunch on MSIX install.**
+  `Add-AppxPackage` updates the package on disk but the running EXE
+  keeps the old code mapped, so the runtime `exit(0)`s after handing
+  off to the helper and the user relaunches from Start. Auto-relaunch
+  via `shell:AppsFolder\<AUMID>!App` is queued. Portable mode does
+  relaunch automatically (the helper `Start-Process`es the EXE after
+  the move).
+- **Portable updates need a user-writable install location.**
+  `WindowsUpdater(installMode: .portable)` rewrites the running EXE in
+  place via a PowerShell helper. Apps installed under `C:\Program
+  Files\…` without an elevation step on install will see the helper's
+  `Move-Item` fail. Recommend installing portable bundles under
+  `%LOCALAPPDATA%` or the user's home directory; switch to MSIX if you
+  need elevation-free updates against a system-wide install. See
+  [docs/auto-updates.md](auto-updates.md) for the full publishing flow.
+- **`updater.windows.install_mode` field is reserved.** The
+  `pwa.json` `updater.windows.install_mode` (`passive` / `silent`) is
+  not consumed yet — `Add-AppxPackage` runs in its default mode.
 - **`BiometricAuthPlugin` works on both packaged and unpackaged
   builds, via the `IUserConsentVerifierInterop` desktop-app
   variant.** The static

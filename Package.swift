@@ -213,6 +213,11 @@ let package = Package(
             name: "SwiftPWAWindows",
             dependencies: [
                 "SwiftPWACore",
+                // swift-crypto's `Crypto` module is what `WindowsUpdater`
+                // uses for Ed25519 verification. Same rationale as the
+                // GTK targets — Linux/Windows-conditional so the empty
+                // object on macOS hosts doesn't pull BoringSSL in.
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
                 .target(name: "CWebView2Shim", condition: .when(platforms: [.windows]))
             ],
             swiftSettings: swiftSettings
@@ -291,6 +296,7 @@ let package = Package(
             name: "SwiftPWAWindowsTests",
             dependencies: [
                 .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings

@@ -2,8 +2,8 @@ import Foundation
 
 /// Cross-platform auto-updater. Backends provide a concrete impl:
 /// `AppleUpdater` (macOS + iOS) ships from `SwiftPWAWebKit`,
-/// `LinuxAppImageUpdater` ships from `SwiftPWAGTK`. The Windows backend
-/// is the remaining v0.4 follow-up tracked in `docs/windows-setup.md`.
+/// `LinuxAppImageUpdater` ships from `SwiftPWAGTK`, and `WindowsUpdater`
+/// (portable + MSIX install modes) ships from `SwiftPWAWindows`.
 /// Tests use `MockUpdater` from `_SwiftPWATestSupport`.
 ///
 /// **Scope (v0.3 first cut):** signed JSON manifest fetch, full-bundle

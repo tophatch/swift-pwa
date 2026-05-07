@@ -60,4 +60,45 @@ struct AppxManifestGeneratorTests {
         // Raw form must not leak through.
         #expect(!xml.contains("<script>alert(1)</script>"))
     }
+
+    // MARK: - Architecture
+
+    @Test("Default architecture is x64")
+    func defaultArchIsX64() {
+        let xml = AppxManifestGenerator.render(manifest: base())
+        #expect(xml.contains("ProcessorArchitecture=\"x64\""))
+    }
+
+    @Test("arm64 architecture emits ProcessorArchitecture=\"arm64\"")
+    func archArm64() {
+        let xml = AppxManifestGenerator.render(manifest: base(), arch: .arm64)
+        #expect(xml.contains("ProcessorArchitecture=\"arm64\""))
+        #expect(!xml.contains("ProcessorArchitecture=\"x64\""))
+    }
+
+    @Test("x86 architecture emits ProcessorArchitecture=\"x86\"")
+    func archX86() {
+        let xml = AppxManifestGenerator.render(manifest: base(), arch: .x86)
+        #expect(xml.contains("ProcessorArchitecture=\"x86\""))
+    }
+
+    @Test("Architecture.parse accepts canonical and Swift-style spellings")
+    func archParseAliases() throws {
+        #expect(try AppxManifestGenerator.Architecture.parse("x64") == .x64)
+        #expect(try AppxManifestGenerator.Architecture.parse("X64") == .x64)
+        #expect(try AppxManifestGenerator.Architecture.parse("x86_64") == .x64)
+        #expect(try AppxManifestGenerator.Architecture.parse("arm64") == .arm64)
+        #expect(try AppxManifestGenerator.Architecture.parse("aarch64") == .arm64)
+        #expect(try AppxManifestGenerator.Architecture.parse("x86") == .x86)
+    }
+
+    @Test("Architecture.parse rejects unknown values with a friendly message")
+    func archParseRejectsUnknown() {
+        do {
+            _ = try AppxManifestGenerator.Architecture.parse("riscv64")
+            Issue.record("expected throw")
+        } catch {
+            #expect("\(error)".contains("x64") || "\(error)".contains("arm64"))
+        }
+    }
 }

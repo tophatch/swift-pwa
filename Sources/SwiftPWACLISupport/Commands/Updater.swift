@@ -4,20 +4,26 @@ import Foundation
 import SwiftPWACore
 
 /// Top-level `swift-pwa updater` group. The three subcommands form the
-/// publishing pipeline that backs `AppleUpdater` (and the upcoming
-/// Linux / Windows updaters):
+/// publishing pipeline that backs the runtime-side `Updater` protocol
+/// across every supported backend:
 ///
 /// 1. `keygen` — generate a fresh Ed25519 keypair. The public half is
 ///    what apps embed via `pwa.json`'s `updater.public_key`; the private
 ///    half stays on the release machine and is fed to `sign`.
 /// 2. `sign` — sign a release artifact with the private key. Output is
 ///    base64 of the raw 64-byte Ed25519 signature, byte-compatible with
-///    the format `AppleUpdater.verifyEd25519` expects on the runtime
-///    side. Minisign-format signatures (Tauri's preferred form) are a
-///    planned follow-up.
+///    the format the runtime verifiers (`AppleUpdater`,
+///    `LinuxAppImageUpdater`, `WindowsUpdater`) expect.
 /// 3. `manifest` — assemble the JSON manifest file that the runtime's
 ///    `updater.endpoint` URL will serve. Optionally signs each platform
 ///    artifact in one pass when `--private-key` is supplied.
+///
+/// Both `keygen` and `sign` accept a `--minisign` flag that switches the
+/// output from raw-base64 to the [minisign](https://jedisct1.github.io/minisign/)
+/// two-line `untrusted comment: …\n<base64>` shape — the runtime
+/// verifiers accept either form transparently. Existing pipelines that
+/// already produce minisign keys with the `minisign` CLI can also feed
+/// those files through unchanged.
 ///
 /// The wire format is the `UpdateManifest` shape from `SwiftPWACore`,
 /// matching Tauri v1's updater manifest layout — same publishing
@@ -48,10 +54,21 @@ extension Updater {
         @Flag(help: "Overwrite the output files if they already exist.")
         var force: Bool = false
 
+        @Flag(help: """
+        Wrap the public key in the two-line minisign `untrusted comment: …\\n<base64>` \
+        shape (legacy 'Ed' algorithm). The private key stays as raw base64 — \
+        `swift-pwa updater sign` reads only the raw form. Existing minisign \
+        public-key files can be embedded as-is in `pwa.json`'s `updater.public_key` \
+        without going through this flag.
+        """)
+        var minisign: Bool = false
+
         func run() throws {
             let priv = Curve25519.Signing.PrivateKey()
             let privB64 = priv.rawRepresentation.base64EncodedString()
             let pubB64 = priv.publicKey.rawRepresentation.base64EncodedString()
+            let pubMinisign = MinisignFormat.publicKeyText(rawPubKey: priv.publicKey.rawRepresentation)
+            let pubOutput = minisign ? pubMinisign : pubB64
 
             let privURL = URL(fileURLWithPath: privateKey)
             let pubURL = URL(fileURLWithPath: publicKey)
@@ -72,14 +89,22 @@ extension Updater {
                     [.posixPermissions: 0o600], ofItemAtPath: privURL.path
                 )
             #endif
-            try (pubB64 + "\n").write(to: pubURL, atomically: true, encoding: .utf8)
+            try (pubOutput + "\n").write(to: pubURL, atomically: true, encoding: .utf8)
 
             print("Wrote private key: \(privURL.path)")
             print("Wrote public key:  \(pubURL.path)")
             print("")
             print("Add to pwa.json:")
             print("  \"updater\": {")
-            print("    \"public_key\": \"\(pubB64)\",")
+            if minisign {
+                // pwa.json's value is a JSON string — escape newlines
+                // so the user can paste the multi-line minisign block
+                // verbatim and JSON parsers don't choke.
+                let escaped = pubOutput.replacingOccurrences(of: "\n", with: "\\n")
+                print("    \"public_key\": \"\(escaped)\",")
+            } else {
+                print("    \"public_key\": \"\(pubB64)\",")
+            }
             print("    \"pubkey_algorithm\": \"ed25519\"")
             print("  }")
         }
@@ -107,20 +132,35 @@ extension Updater {
         @Argument(help: "Path to the artifact to sign.")
         var artifact: String
 
+        @Flag(help: """
+        Wrap the output in the two-line minisign `untrusted comment: …\\n<base64>` \
+        shape (legacy 'Ed' algorithm). Default output is raw-base64 — both forms \
+        are accepted by every runtime verifier.
+        """)
+        var minisign: Bool = false
+
         func run() throws {
             let key = try UpdaterCLISupport.loadPrivateKey(at: privateKey)
             let artifactURL = URL(fileURLWithPath: artifact)
             let data = try UpdaterCLISupport.readArtifact(at: artifactURL)
-            let signature = try key.signature(for: data).base64EncodedString()
+            let rawSignature = try key.signature(for: data)
+            let signatureOutput: String = if minisign {
+                MinisignFormat.signatureText(
+                    rawSignature: rawSignature,
+                    artifactName: artifactURL.lastPathComponent
+                )
+            } else {
+                rawSignature.base64EncodedString()
+            }
 
             if stdout {
-                print(signature)
+                print(signatureOutput)
                 return
             }
 
             let outPath = output ?? (artifact + ".sig")
             let outURL = URL(fileURLWithPath: outPath)
-            try (signature + "\n").write(to: outURL, atomically: true, encoding: .utf8)
+            try (signatureOutput + "\n").write(to: outURL, atomically: true, encoding: .utf8)
             print("Wrote signature: \(outURL.path)")
         }
     }
@@ -328,5 +368,61 @@ enum UpdaterCLISupport {
         let formatter = ISO8601DateFormatter()
         formatter.formatOptions = [.withInternetDateTime]
         return formatter.string(from: Date())
+    }
+}
+
+/// Encoder for minisign-format outputs. Pure formatting logic — the
+/// runtime-side parser lives in `SwiftPWACore.Minisign`. We don't try
+/// to round-trip the same key id minisign would generate (`SipHash24`
+/// over the raw key) because nothing in the verification path checks
+/// it; a deterministic placeholder keeps the output stable for tests
+/// without ever being meaningful.
+enum MinisignFormat {
+    /// Stable 8-byte key id placeholder. Real minisign derives this
+    /// from a hash of the raw key so the same key always rounds-trips
+    /// to the same id; we don't have that machinery in `Crypto` and
+    /// the verifier ignores the id, so a constant value is fine. The
+    /// pattern (`5357 4946 5450 5741`) spells `SWIFTPWA` in ASCII so
+    /// `xxd` on a generated key shows where it came from.
+    private static let keyIDPlaceholder: [UInt8] = [
+        0x53, 0x57, 0x49, 0x46, 0x54, 0x50, 0x57, 0x41
+    ]
+
+    /// Encode `rawPubKey` (32 raw Ed25519 bytes) as a minisign-format
+    /// public-key file (legacy 'Ed' algorithm). The trailing newline is
+    /// the caller's responsibility.
+    static func publicKeyText(rawPubKey: Data) -> String {
+        precondition(rawPubKey.count == 32, "public key must be 32 raw bytes")
+        var blob = Data()
+        blob.append(contentsOf: "Ed".utf8)
+        blob.append(contentsOf: keyIDPlaceholder)
+        blob.append(rawPubKey)
+        return """
+        untrusted comment: minisign public key (swift-pwa)
+        \(blob.base64EncodedString())
+        """
+    }
+
+    /// Encode `rawSignature` (64 raw Ed25519 bytes) as a minisign-format
+    /// signature file. The trusted-comment block is informational only —
+    /// our verifier doesn't check the global signature over it. The
+    /// global-signature line is filled with zeroes for that reason; tools
+    /// that want a real global signature should sign with the `minisign`
+    /// CLI directly.
+    static func signatureText(rawSignature: Data, artifactName: String) -> String {
+        precondition(rawSignature.count == 64, "signature must be 64 raw bytes")
+        var blob = Data()
+        blob.append(contentsOf: "Ed".utf8)
+        blob.append(contentsOf: keyIDPlaceholder)
+        blob.append(rawSignature)
+        let trustedComment = "timestamp:\(Int(Date().timeIntervalSince1970))" +
+            "\tfile:\(artifactName)\thashed"
+        let globalSig = Data(repeating: 0, count: 64).base64EncodedString()
+        return """
+        untrusted comment: signature from swift-pwa updater sign
+        \(blob.base64EncodedString())
+        trusted comment: \(trustedComment)
+        \(globalSig)
+        """
     }
 }

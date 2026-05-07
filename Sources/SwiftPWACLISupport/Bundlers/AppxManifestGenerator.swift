@@ -1,3 +1,4 @@
+import ArgumentParser
 import Foundation
 
 /// Renders an `AppxManifest.xml` from a `PWAManifest`. The schema is
@@ -9,10 +10,35 @@ import Foundation
 /// schema mismatches against current `makeappx.exe`. The output is
 /// the minimum that passes the manifest schema validator and produces
 /// a sideloadable package; richer features (capabilities, file
-/// associations, protocol handlers) ride on a v0.4 follow-up where
-/// the manifest grows the corresponding fields.
+/// associations, protocol handlers) ride on follow-up work that grows
+/// the manifest with the corresponding fields.
 enum AppxManifestGenerator {
-    static func render(manifest: PWAManifest) -> String {
+    /// MSIX `<Identity ProcessorArchitecture="…">` values understood by
+    /// `makeappx.exe`. We expose the same set the Windows SDK accepts
+    /// (minus `neutral`, which is for resource-only packages and not
+    /// what `swift-pwa build` emits).
+    enum Architecture: String {
+        case x64
+        case x86
+        case arm64
+
+        /// Map a `swift-pwa build --arch <value>` argument to an
+        /// `Architecture`. Throws on an unknown value so the CLI can
+        /// surface a friendly error before reaching the bundler.
+        static func parse(_ raw: String) throws -> Architecture {
+            switch raw.lowercased() {
+            case "x64", "x86_64": return .x64
+            case "x86": return .x86
+            case "arm64", "aarch64": return .arm64
+            default:
+                throw ValidationError(
+                    "swift-pwa: --arch must be one of x64, x86, arm64 (got '\(raw)')"
+                )
+            }
+        }
+    }
+
+    static func render(manifest: PWAManifest, arch: Architecture = .x64) -> String {
         // Identity.Name must be A-Z, a-z, 0-9, dot, hyphen — no
         // underscores, no spaces. We start from `manifest.id` (which
         // looks like reverse-DNS already) and strip anything outside
@@ -47,7 +73,7 @@ enum AppxManifestGenerator {
               Name="\(identityName)"
               Publisher="\(publisher)"
               Version="\(version)"
-              ProcessorArchitecture="x64" />
+              ProcessorArchitecture="\(arch.rawValue)" />
 
           <Properties>
             <DisplayName>\(displayName)</DisplayName>

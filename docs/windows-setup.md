@@ -249,10 +249,16 @@ Caveats specific to ARM:
   Windows is the path that "just works" today.
 - **The portable bundle is host-arch.** `swift run swift-pwa build
   --target windows` produces a folder containing whatever
-  `swift build -c release` emitted on the calling machine — there's
-  no `--arch arm64` flag yet. To ship both, build twice on the
+  `swift build -c release` emitted on the calling machine — Swift's
+  cross-compile is still rough enough that we don't try to drive it
+  from the bundler. To ship both architectures, build twice on the
   matching hosts (or via two CI runners) and label the output
-  folders `MyApp-arm64/` and `MyApp-x64/`.
+  folders `MyApp-arm64/` and `MyApp-x64/`. For MSIX, `--arch arm64`
+  / `--arch x64` controls the `<Identity ProcessorArchitecture>`
+  attribute the OS validates against — the value must match the
+  EXE's actual architecture (i.e. the host's Swift toolchain), or
+  `Add-AppxPackage` rejects the install with "doesn't match this
+  device".
 - **WebView2 Runtime is preinstalled** on Windows 11 ARM and on
   Windows 10 ARM since the 21H2 update. Older ARM boxes (the
   original Surface Pro X on 1809/1903) are the only realistic
@@ -293,6 +299,7 @@ For an MSIX/Appx package instead of a portable folder:
 
 ```powershell
 swift run swift-pwa build --target windows --package-format msix
+swift run swift-pwa build --target windows --package-format msix --arch arm64
 swift run swift-pwa build --target windows --package-format msix --sign <thumbprint-or-pfx>
 ```
 
@@ -301,9 +308,11 @@ and a `Square150x150Logo.png` (taken from `pwa.json`'s `icon` if
 provided, otherwise a 1×1 placeholder), then drives `makeappx.exe pack`
 and — if `--sign` is supplied — `signtool.exe sign`. Both binaries
 ship with the Windows SDK; no extra install needed once you've launched
-the VS Developer Shell. The signed MSIX installs on any Windows 10
-1809+ box; an unsigned MSIX is sideloadable on developer-mode boxes
-only.
+the VS Developer Shell. `--arch` is one of `x64` (default), `x86`, or
+`arm64`; it sets `<Identity ProcessorArchitecture>` and must match the
+host Swift toolchain's architecture (we don't cross-compile). The
+signed MSIX installs on any Windows 10 1809+ box; an unsigned MSIX is
+sideloadable on developer-mode boxes only.
 
 To embed the WebView2 Evergreen Bootstrapper (~1.7 MB) in either the
 portable bundle or the MSIX so the app can self-install the runtime:
@@ -397,17 +406,19 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   tag, so `swift-pwa` synthesizes a UUID per send. The shim itself
   (`swiftpwa_toast_send`) takes a tag; surfacing it requires a
   protocol-level addition.
-- **MSIX builds are x64-only by default.** The generated
-  `AppxManifest.xml` declares `ProcessorArchitecture="x64"`. To ship
-  ARM64 packages, build on an ARM64 host and edit the manifest (or
-  wait for the bundler's `--arch` flag).
-- **`WindowsUpdater` doesn't relaunch on MSIX install.**
-  `Add-AppxPackage` updates the package on disk but the running EXE
-  keeps the old code mapped, so the runtime `exit(0)`s after handing
-  off to the helper and the user relaunches from Start. Auto-relaunch
-  via `shell:AppsFolder\<AUMID>!App` is queued. Portable mode does
-  relaunch automatically (the helper `Start-Process`es the EXE after
-  the move).
+- **MSIX cross-compile not supported.** `--arch x64 | x86 | arm64`
+  controls `<Identity ProcessorArchitecture>`, but the EXE itself
+  comes out of `swift build` for the *host* architecture. To ship
+  ARM64 + x64 packages, build twice — once on each host arch — with
+  the matching `--arch` value. `Add-AppxPackage` rejects mismatched
+  identity / EXE arch with "doesn't match this device".
+- **MSIX post-install relaunch needs `msixIdentityName:`.** When the
+  app is packaged via `swift-pwa build --target windows --package-format
+  msix`, pass `msixIdentityName:` to `WindowsUpdater(installMode: .msix,
+  …)` matching `pwa.json`'s `id` (with non-alphanumeric / non-dot /
+  non-hyphen characters stripped — the same transform the bundler
+  applies). Without it, the helper still updates the package on disk
+  but skips the relaunch line and the user re-launches from Start.
 - **Portable updates need a user-writable install location.**
   `WindowsUpdater(installMode: .portable)` rewrites the running EXE in
   place via a PowerShell helper. Apps installed under `C:\Program

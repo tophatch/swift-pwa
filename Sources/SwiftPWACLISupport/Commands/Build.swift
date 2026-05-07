@@ -34,6 +34,15 @@ struct Build: AsyncParsableCommand {
     )
     var packageFormat: String = "portable"
 
+    @Option(
+        help: """
+        Windows MSIX target architecture: x64 (default), x86, or arm64. Must match the architecture \
+        of the Swift toolchain running the build — cross-compile on Swift-for-Windows is still rough, \
+        so an arm64 MSIX needs to be produced from an arm64 host.
+        """
+    )
+    var arch: String = "x64"
+
     @Flag(
         help: "Drop the WebView2 Evergreen Bootstrapper (~1.7 MB) into the Windows bundle."
     )
@@ -86,11 +95,13 @@ struct Build: AsyncParsableCommand {
                     "swift-pwa: --package-format must be 'portable' or 'msix' (got '\(packageFormat)')"
                 )
             }
+            let archValue = try AppxManifestGenerator.Architecture.parse(arch)
             let bundler = WindowsBundler(
                 manifest: pwa,
                 projectRoot: cwd,
                 outputDir: outputDir,
                 packageFormat: format,
+                arch: archValue,
                 bootstrapWebView2: bootstrapWebview2,
                 signIdentity: sign
             )

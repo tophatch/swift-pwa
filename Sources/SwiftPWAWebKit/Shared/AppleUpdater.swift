@@ -30,11 +30,6 @@
     /// **First-cut limitations** (each tracked in
     /// `docs/macos-setup.md` / `docs/ios-setup.md` "Known limitations"):
     ///
-    /// - Download progress fires at start + end only. Fine-grained
-    ///   `URLSessionDownloadDelegate`-driven progress is a follow-up.
-    /// - Public-key + signature must be base64 of the raw 32-byte /
-    ///   64-byte Ed25519 values. Minisign format (Tauri's preferred
-    ///   form) parsing is a planned follow-up.
     /// - macOS install prompts no UI before swapping. Apps that want a
     ///   "Restart now / later" dialog should subscribe to
     ///   `updater.run`, gate `updater.installAndRelaunch` behind their
@@ -162,28 +157,24 @@
 
         #if os(macOS)
             /// Download → verify → untar. Returns the staged `.app`
-            /// bundle URL. Yields a single start + end progress pair —
-            /// fine-grained progress is a follow-up.
+            /// bundle URL. Streams `downloadProgress` frames at the
+            /// granularity of `URLSessionDownloadDelegate.didWriteData`
+            /// — typically every ~64 KB chunk on Apple URL loaders.
             private func macStage(
                 info: UpdateInfo,
-                yield: @Sendable (UpdaterEvent) -> Void
+                yield: @escaping @Sendable (UpdaterEvent) -> Void
             ) async throws -> URL {
                 let dir = try ensureVersionStagingDir(version: info.version)
                 let archiveURL = dir.appendingPathComponent("update.tar.gz")
 
-                yield(.downloadProgress(bytesDownloaded: 0, contentLength: nil))
-                let (tempFile, response) = try await urlSession.download(from: info.downloadURL)
-                if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "artifact fetch returned HTTP \(http.statusCode)"
-                    )
-                }
-                try? FileManager.default.removeItem(at: archiveURL)
-                try FileManager.default.moveItem(at: tempFile, to: archiveURL)
-                let bytes = (try? FileManager.default.attributesOfItem(atPath: archiveURL.path)[.size]
-                    as? Int) ?? 0
-                yield(.downloadProgress(bytesDownloaded: bytes, contentLength: bytes))
+                _ = try await UpdaterDownload.download(
+                    from: info.downloadURL,
+                    to: archiveURL,
+                    urlSession: urlSession,
+                    onProgress: { bytes, total in
+                        yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                    }
+                )
 
                 let archiveData = try Data(contentsOf: archiveURL)
                 try verifyEd25519(data: archiveData, signature: info.signature)
@@ -217,32 +208,15 @@
                 return extracted.appendingPathComponent(appName)
             }
 
-            private func verifyEd25519(data: Data, signature: String) throws {
+            func verifyEd25519(data: Data, signature: String) throws {
                 guard let publicKey else {
                     throw BridgeError(
                         code: BridgeError.handler,
                         message: "no public key configured — pass one to AppleUpdater(publicKey:)"
                     )
                 }
-                guard let pubKeyBytes = Data(base64Encoded: publicKey),
-                      pubKeyBytes.count == 32
-                else {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: """
-                        public key must be base64 of the raw 32-byte Ed25519 value. \
-                        Minisign-format key parsing is a planned follow-up.
-                        """
-                    )
-                }
-                guard let sigBytes = Data(base64Encoded: signature),
-                      sigBytes.count == 64
-                else {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "signature must be base64 of the raw 64-byte Ed25519 signature"
-                    )
-                }
+                let pubKeyBytes = try resolveEd25519PublicKey(publicKey)
+                let sigBytes = try resolveEd25519Signature(signature)
                 let key: Curve25519.Signing.PublicKey
                 do {
                     key = try Curve25519.Signing.PublicKey(rawRepresentation: pubKeyBytes)

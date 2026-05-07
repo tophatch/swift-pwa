@@ -39,23 +39,12 @@
     /// **First-cut limitations** (each tracked in
     /// `docs/windows-setup.md` "Known limitations"):
     ///
-    /// - Download progress fires at start + end only. Fine-grained
-    ///   `URLSessionDownloadDelegate`-driven progress is a follow-up.
-    /// - Public-key + signature must be base64 of the raw 32-byte /
-    ///   64-byte Ed25519 values. Minisign format (Tauri's preferred
-    ///   form) parsing is a planned follow-up.
     /// - `installAndRelaunch` on `.portable` requires write access to
     ///   the directory containing the running EXE. Apps installed
     ///   under `C:\Program Files\…` without an elevation step on
     ///   install will see `Move-Item` fail in the helper script.
     ///   Recommend installing portable bundles under `%LOCALAPPDATA%`
     ///   or the user's home directory.
-    /// - `installAndRelaunch` on `.msix` does **not** relaunch the
-    ///   updated app — `Add-AppxPackage` updates the package on disk
-    ///   but the OS keeps the old code mapped into the running process.
-    ///   We exit so the kernel can release the package files; the user
-    ///   relaunches from Start. Wiring up post-install relaunch via
-    ///   `shell:AppsFolder\<AUMID>!App` is queued.
     public final class WindowsUpdater: Updater, @unchecked Sendable {
         public enum InstallMode: String, Sendable {
             case portable
@@ -71,6 +60,9 @@
         private let stagingRoot: URL
         private let executablePathOverride: URL?
 
+        let msixIdentityName: String?
+        let applicationID: String
+
         private let lock = NSLock()
         private var stagedArtifactPath: URL?
         private var stagedInfo: UpdateInfo?
@@ -79,13 +71,16 @@
         ///   - endpoint: URL of the JSON manifest. May contain
         ///     `{{target}}` and `{{current_version}}` placeholders;
         ///     they are substituted before the request is made.
-        ///   - publicKey: Base64 of the 32-byte raw Ed25519 public key.
-        ///     Required for `.portable` (an unsigned drop-in replaces
-        ///     the EXE, which is full code execution). Optional for
-        ///     `.msix` — Authenticode validates the package — but
-        ///     setting it pins *which* signed package this updater
-        ///     channel is allowed to install, which is the right
-        ///     posture for production deployments.
+        ///   - publicKey: Either base64 of the 32-byte raw Ed25519
+        ///     public key or a minisign-format public-key file's
+        ///     contents (the two-line `untrusted comment: …\n<base64>`
+        ///     shape — see `Minisign`). Required for `.portable` (an
+        ///     unsigned drop-in replaces the EXE, which is full code
+        ///     execution). Optional for `.msix` — Authenticode
+        ///     validates the package — but setting it pins *which*
+        ///     signed package this updater channel is allowed to
+        ///     install, which is the right posture for production
+        ///     deployments.
         ///   - installMode: Picks between EXE-replacement and
         ///     `Add-AppxPackage`. Should match how the app was packaged
         ///     by `swift-pwa build --target windows`
@@ -104,6 +99,22 @@
         ///   - executablePath: Override for the running EXE's path.
         ///     Defaults to `GetModuleFileNameW(NULL, …)`. Tests pass an
         ///     explicit URL so they don't have to spoof a real install.
+        ///   - msixIdentityName: The `Identity.Name` value baked into
+        ///     the running MSIX package's `AppxManifest.xml` — used to
+        ///     resolve the AUMID for post-install relaunch via
+        ///     PowerShell's `Get-AppxPackage -Name <identity>`.
+        ///     `AppxManifestGenerator.render` derives this by stripping
+        ///     non-alphanumeric / non-dot / non-hyphen characters from
+        ///     `pwa.json`'s `id` field; pass the same value here. When
+        ///     `nil` (or for `installMode = .portable`), the helper
+        ///     skips the relaunch line and the user re-launches from
+        ///     Start manually.
+        ///   - applicationID: Application id (the `Id` attribute of
+        ///     `AppxManifest.xml`'s `<Application>` element). Defaults
+        ///     to `"App"`, which matches what
+        ///     `AppxManifestGenerator.render` emits. Apps that override
+        ///     the manifest with a different application id should pass
+        ///     a matching value here so the AUMID resolves.
         public init(
             endpoint: URL,
             publicKey: String?,
@@ -112,7 +123,9 @@
             target: String? = nil,
             urlSession: URLSession = .shared,
             stagingRoot: URL? = nil,
-            executablePath: URL? = nil
+            executablePath: URL? = nil,
+            msixIdentityName: String? = nil,
+            applicationID: String = "App"
         ) {
             self.endpoint = endpoint
             self.publicKey = publicKey
@@ -122,6 +135,8 @@
             self.urlSession = urlSession
             self.stagingRoot = stagingRoot ?? Self.defaultStagingRoot()
             executablePathOverride = executablePath
+            self.msixIdentityName = msixIdentityName
+            self.applicationID = applicationID
         }
 
         // MARK: - check
@@ -190,11 +205,12 @@
             }
         }
 
-        /// Download → (verify) → return staged path. Yields a single
-        /// start + end progress pair — fine-grained progress is a
-        /// follow-up. For `.msix` with no public key configured,
-        /// Ed25519 verification is skipped — the OS validates the
-        /// Authenticode chain on `Add-AppxPackage`.
+        /// Download → (verify) → return staged path. Streams
+        /// `downloadProgress` frames at the granularity of
+        /// `URLSessionDownloadDelegate.didWriteData`. For `.msix` with
+        /// no public key configured, Ed25519 verification is skipped —
+        /// the OS validates the Authenticode chain on
+        /// `Add-AppxPackage`.
         private func stage(
             info: UpdateInfo,
             yield: @Sendable (UpdaterEvent) -> Void
@@ -203,19 +219,14 @@
             let suffix = installMode == .msix ? "msix" : "exe"
             let staged = dir.appendingPathComponent("update.\(suffix)")
 
-            yield(.downloadProgress(bytesDownloaded: 0, contentLength: nil))
-            let (tempFile, response) = try await urlSession.download(from: info.downloadURL)
-            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                throw BridgeError(
-                    code: BridgeError.handler,
-                    message: "artifact fetch returned HTTP \(http.statusCode)"
-                )
-            }
-            try? FileManager.default.removeItem(at: staged)
-            try FileManager.default.moveItem(at: tempFile, to: staged)
-            let bytes = (try? FileManager.default.attributesOfItem(atPath: staged.path)[.size]
-                as? Int) ?? 0
-            yield(.downloadProgress(bytesDownloaded: bytes, contentLength: bytes))
+            _ = try await UpdaterDownload.download(
+                from: info.downloadURL,
+                to: staged,
+                urlSession: urlSession,
+                onProgress: { bytes, total in
+                    yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                }
+            )
 
             try verifySignature(at: staged, info: info)
 
@@ -273,10 +284,40 @@
             // package with a lower one (e.g. emergency rollback); without
             // it `Add-AppxPackage` rejects an "older" install and exits 1.
             // The MSIX subsystem still requires the publisher CN to match.
+            //
+            // For relaunch we need the AUMID, which is
+            // `<PackageFamilyName>!<ApplicationId>`. The family name is
+            // an opaque hash derived from the publisher; resolving it
+            // by hand from Swift is fiddly (and `GetCurrentPackageFamilyName`
+            // wouldn't reflect the *new* package on disk after the
+            // update anyway). Letting PowerShell's `Get-AppxPackage`
+            // do the lookup via the manifest's `Identity.Name` is both
+            // simpler and self-correcting — if the update changed the
+            // family name, we still find it by identity.
+            //
+            // No identity → no relaunch line. The package is still
+            // updated on disk, the user just relaunches from Start.
+            // Same for `installMode = .portable`, which doesn't get a
+            // relaunch path (the portable `installPortable` already
+            // handles its own `Start-Process`).
+            let relaunch = if let identity = msixIdentityName, !identity.isEmpty {
+                """
+                $pkg = Get-AppxPackage -Name \(psQuote(identity)) | Select-Object -First 1
+                if ($pkg) {
+                    Start-Sleep -Milliseconds 500
+                    Start-Process -FilePath ('shell:AppsFolder\\' + $pkg.PackageFamilyName + '!' + \(
+                        psQuote(applicationID)
+                    ))
+                }
+                """
+            } else {
+                ""
+            }
             let script = """
             $ErrorActionPreference = 'SilentlyContinue'
             try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
             Add-AppxPackage -Path \(psQuote(staged.path)) -ForceUpdateFromAnyVersion
+            \(relaunch)
             """
             try spawnDetachedPowerShell(script: script)
         }
@@ -311,10 +352,14 @@
             try verifyEd25519(data: data, signature: info.signature)
         }
 
-        /// Verify a base64 Ed25519 signature over `data` against the
-        /// configured public key. Throws a bridge error with a clear
-        /// message on every failure mode (missing key, malformed key /
-        /// signature, signature mismatch).
+        /// Verify an Ed25519 signature over `data` against the configured
+        /// public key. Both the public-key and signature inputs accept
+        /// either base64 of the raw bytes (32 / 64 respectively) or
+        /// minisign-format file contents (the two-line `untrusted
+        /// comment: …\n<base64>` shape) — see `Minisign` for the wire
+        /// shape. Throws a bridge error with a clear message on every
+        /// failure mode (missing key, malformed key / signature,
+        /// signature mismatch).
         func verifyEd25519(data: Data, signature: String) throws {
             guard let publicKey else {
                 throw BridgeError(
@@ -322,25 +367,8 @@
                     message: "no public key configured — pass one to WindowsUpdater(publicKey:)"
                 )
             }
-            guard let pubKeyBytes = Data(base64Encoded: publicKey),
-                  pubKeyBytes.count == 32
-            else {
-                throw BridgeError(
-                    code: BridgeError.handler,
-                    message: """
-                    public key must be base64 of the raw 32-byte Ed25519 value. \
-                    Minisign-format key parsing is a planned follow-up.
-                    """
-                )
-            }
-            guard let sigBytes = Data(base64Encoded: signature),
-                  sigBytes.count == 64
-            else {
-                throw BridgeError(
-                    code: BridgeError.handler,
-                    message: "signature must be base64 of the raw 64-byte Ed25519 signature"
-                )
-            }
+            let pubKeyBytes = try resolveEd25519PublicKey(publicKey)
+            let sigBytes = try resolveEd25519Signature(signature)
             let key: Curve25519.Signing.PublicKey
             do {
                 key = try Curve25519.Signing.PublicKey(rawRepresentation: pubKeyBytes)

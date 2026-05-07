@@ -162,6 +162,41 @@ struct UpdaterCLITests {
         #expect(parser.date(from: formatted) != nil)
     }
 
+    // MARK: - minisign output round-trip
+
+    @Test("Minisign-format public key from the CLI parses back via Minisign")
+    func minisignPublicKeyRoundtrip() throws {
+        let priv = Curve25519.Signing.PrivateKey()
+        let raw = priv.publicKey.rawRepresentation
+        let text = MinisignFormat.publicKeyText(rawPubKey: raw)
+
+        // The runtime-side parser lives in SwiftPWACore — same one the
+        // updater verifiers call. Round-tripping through it proves the
+        // CLI's output is consumable as-is by every backend.
+        let parsed = try Minisign.parsePublicKey(text)
+        #expect(parsed == raw)
+    }
+
+    @Test("Minisign-format signature from the CLI parses back via Minisign")
+    func minisignSignatureRoundtrip() throws {
+        let priv = Curve25519.Signing.PrivateKey()
+        let payload = Data("artifact bytes".utf8)
+        let rawSig = try priv.signature(for: payload)
+        let text = MinisignFormat.signatureText(rawSignature: rawSig, artifactName: "x.AppImage")
+
+        let parsed = try Minisign.parseSignature(text)
+        #expect(parsed == rawSig)
+
+        // And the public-key side verifies the parsed signature against
+        // the artifact bytes — proves the wire format is end-to-end
+        // valid, not just structurally well-formed.
+        guard let parsed else {
+            Issue.record("parser returned nil")
+            return
+        }
+        #expect(priv.publicKey.isValidSignature(parsed, for: payload))
+    }
+
     // MARK: - helpers
 
     private func makeTempDir() throws -> URL {

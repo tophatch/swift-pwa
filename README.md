@@ -184,7 +184,7 @@ swift run swift-pwa build --target macos --sign "Developer ID Application: Acme"
 swift run swift-pwa build --target ios --simulator                    # unsigned .app for sim
 swift run swift-pwa build --target linux                              # → MyApp-x86_64.AppImage
 swift run swift-pwa build --target windows                            # → portable folder bundle
-swift run swift-pwa build --target windows --package-format msix --sign <thumbprint>
+swift run swift-pwa build --target windows --package-format msix --arch arm64 --sign <thumbprint>
 swift run swift-pwa build --target windows --bootstrap-webview2       # bundle the Evergreen Bootstrapper
 ```
 

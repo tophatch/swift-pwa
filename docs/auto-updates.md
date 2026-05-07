@@ -292,8 +292,14 @@ Authenticode is the real authentication, but our signature pins
 -ForceUpdateFromAnyVersion`. The OS validates the chain and updates
 the package on disk; the running EXE keeps the old code mapped until
 it exits, so `WindowsUpdater` returns control to the helper and the
-runtime `exit(0)`s. The user relaunches from Start (post-install
-relaunch via `shell:AppsFolder\<AUMID>!App` is queued).
+runtime `exit(0)`s. If you supply `msixIdentityName:` (matching the
+`Identity.Name` value in your `AppxManifest.xml` — derived from
+`pwa.json`'s `id` if you used `swift-pwa build --target windows
+--package-format msix` to package), the helper looks the package up
+via `Get-AppxPackage -Name`, resolves the AUMID, and re-launches the
+updated app via `Start-Process shell:AppsFolder\<family>!<app-id>` ~500
+ms after the install completes. Without `msixIdentityName:` the helper
+skips the relaunch line and the user re-launches from Start manually.
 
 For the public-key argument: `.portable` requires it (a swappable EXE
 is full code execution; verifying signatures is non-negotiable);
@@ -305,6 +311,34 @@ The `pwa.json` `updater.windows.install_mode` field (`passive` /
 currently runs in its default mode (foreground UI on errors only;
 silent on success).
 
+## Minisign-format keys and signatures
+
+Both the runtime verifiers and the publishing CLI accept either raw
+base64 (32-byte key / 64-byte signature) *or* the two-line
+[minisign](https://jedisct1.github.io/minisign/) `untrusted comment:
+…\n<base64>` shape — pick whichever fits your release pipeline. The
+runtime detects which form the input is in and falls through cleanly:
+
+- Plain base64 still works as before — no migration needed for v0.3
+  pipelines.
+- Existing minisign public-key files can be embedded verbatim in
+  `pwa.json`'s `updater.public_key` (escape newlines as `\n` so the
+  surrounding JSON parses cleanly).
+- `swift-pwa updater keygen --minisign` writes the public key in
+  minisign format.
+- `swift-pwa updater sign --minisign` writes the signature in
+  minisign format.
+
+swift-pwa supports the legacy `Ed` algorithm only (pure Ed25519 over
+the artifact bytes). The modern prehashed `ED` mode (BLAKE2b-256) is
+rejected with a message pointing at `minisign -Sl` to produce a
+legacy-mode signature. Tauri's publishing pipelines also use legacy
+mode, so swift-pwa apps and Tauri apps can share signing tooling.
+
+The trusted-comment block on minisign signatures is informational —
+swift-pwa doesn't verify the global signature over it. Verification
+happens against the artifact bytes only.
+
 ## What's not in the first cut
 
 - **Delta updates** — full-bundle replacement only. The wire format
@@ -313,21 +347,10 @@ silent on success).
 - **Mandatory updates / kill-switch** — no `min_supported_version`
   enforcement. Trivially additive — the runtime will refuse to start
   older clients once the field is wired.
-- **Minisign-format public keys / signatures** — only raw base64
-  (32-byte key, 64-byte signature) for now; minisign's preamble
-  parsing is queued (Tauri's preferred format).
-- **Fine-grained download progress on macOS** — single start + end
-  progress events for now. Switching to `URLSessionDownloadDelegate`
-  will give per-chunk progress.
+- **Prehashed minisign (`ED` mode)** — only legacy `Ed` (pure Ed25519
+  over the artifact bytes) is supported. Adding `ED` means vendoring
+  BLAKE2b — not in CryptoKit / swift-crypto out of the box.
 - **macOS install fires no UI before swap** — apps that want a
   "Restart now / later" dialog should gate `updater.installAndRelaunch`
   behind their own prompt UI (the `readyToInstall` event from
   `updater.run` is the natural prompt point).
-- **Fine-grained download progress on the macOS / Linux / Windows
-  updaters** — single start + end progress events for now. Switching
-  to `URLSessionDownloadDelegate` will give per-chunk progress on all
-  three platforms.
-- **Post-install relaunch on Windows MSIX** — `Add-AppxPackage`
-  updates the package on disk but the running EXE continues with the
-  old code. The user has to relaunch from Start; wiring up
-  `shell:AppsFolder\<AUMID>!App` for automatic relaunch is queued.

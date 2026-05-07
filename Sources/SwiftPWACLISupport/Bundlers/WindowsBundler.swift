@@ -53,6 +53,7 @@ struct WindowsBundler {
     let projectRoot: URL
     let outputDir: URL
     var packageFormat: PackageFormat = .portable
+    var arch: AppxManifestGenerator.Architecture = .x64
     var bootstrapWebView2: Bool = false
     var signIdentity: String?
 
@@ -369,8 +370,16 @@ struct WindowsBundler {
     /// is the documented path), so unsigned packages here are valid
     /// only on developer-mode boxes.
     private func buildMSIX(stagingDir: URL) async throws -> URL {
-        // Generate AppxManifest.xml.
-        let appxManifest = AppxManifestGenerator.render(manifest: manifest)
+        // Generate AppxManifest.xml. The architecture written into
+        // `<Identity ProcessorArchitecture="…">` must match the EXE
+        // SwiftPM produced — when the host's Swift toolchain is x86_64
+        // and the user passed `--arch arm64` (or vice versa),
+        // `Add-AppxPackage` rejects the install with a "doesn't match
+        // current device" error. We don't try to detect that mismatch
+        // here because cross-compile on Swift-for-Windows is still
+        // rough; instead, document the constraint in
+        // `docs/windows-setup.md`.
+        let appxManifest = AppxManifestGenerator.render(manifest: manifest, arch: arch)
         try appxManifest.write(
             to: stagingDir.appendingPathComponent("AppxManifest.xml"),
             atomically: true,

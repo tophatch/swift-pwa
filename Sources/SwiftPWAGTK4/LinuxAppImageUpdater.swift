@@ -34,11 +34,6 @@
     /// **First-cut limitations** (each tracked in
     /// `docs/linux-setup.md` "Known limitations"):
     ///
-    /// - Download progress fires at start + end only. Fine-grained
-    ///   `URLSessionDownloadDelegate`-driven progress is a follow-up.
-    /// - Public-key + signature must be base64 of the raw 32-byte /
-    ///   64-byte Ed25519 values. Minisign format (Tauri's preferred
-    ///   form) parsing is a planned follow-up.
     /// - Only the in-place strategy is implemented. `pwa.json`'s
     ///   `updater.linux.appimage_strategy = "side_by_side"` is reserved
     ///   for a future iteration that writes the new AppImage alongside
@@ -166,28 +161,25 @@
         }
 
         /// Download → verify → chmod. Returns the staged AppImage URL.
-        /// Yields a single start + end progress pair — fine-grained
-        /// progress is a follow-up.
+        /// Streams `downloadProgress` frames at the granularity of
+        /// `URLSessionDownloadDelegate.didWriteData`, so progress
+        /// indicators in the UI tick smoothly through a multi-MB
+        /// AppImage rather than jumping 0→100% on completion.
         private func stage(
             info: UpdateInfo,
-            yield: @Sendable (UpdaterEvent) -> Void
+            yield: @escaping @Sendable (UpdaterEvent) -> Void
         ) async throws -> URL {
             let dir = try ensureVersionStagingDir(version: info.version)
             let staged = dir.appendingPathComponent("update.AppImage")
 
-            yield(.downloadProgress(bytesDownloaded: 0, contentLength: nil))
-            let (tempFile, response) = try await urlSession.download(from: info.downloadURL)
-            if let http = response as? HTTPURLResponse, !(200 ..< 300).contains(http.statusCode) {
-                throw BridgeError(
-                    code: BridgeError.handler,
-                    message: "artifact fetch returned HTTP \(http.statusCode)"
-                )
-            }
-            try? FileManager.default.removeItem(at: staged)
-            try FileManager.default.moveItem(at: tempFile, to: staged)
-            let bytes = (try? FileManager.default.attributesOfItem(atPath: staged.path)[.size]
-                as? Int) ?? 0
-            yield(.downloadProgress(bytesDownloaded: bytes, contentLength: bytes))
+            _ = try await UpdaterDownload.download(
+                from: info.downloadURL,
+                to: staged,
+                urlSession: urlSession,
+                onProgress: { bytes, total in
+                    yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                }
+            )
 
             let bytesData = try Data(contentsOf: staged)
             try verifyEd25519(data: bytesData, signature: info.signature)
@@ -313,10 +305,14 @@
             try? FileManager.default.removeItem(at: source)
         }
 
-        /// Verify a base64 Ed25519 signature over `data` against the
-        /// configured public key. Throws a bridge error with a clear
-        /// message on every failure mode (missing key, malformed key /
-        /// signature, signature mismatch).
+        /// Verify an Ed25519 signature over `data` against the configured
+        /// public key. Both the public-key and signature inputs accept
+        /// either base64 of the raw bytes (32 / 64 respectively) or
+        /// minisign-format file contents (the two-line `untrusted
+        /// comment: …\n<base64>` shape) — see `Minisign` for the wire
+        /// shape. Throws a bridge error with a clear message on every
+        /// failure mode (missing key, malformed key / signature,
+        /// signature mismatch).
         func verifyEd25519(data: Data, signature: String) throws {
             guard let publicKey else {
                 throw BridgeError(
@@ -324,25 +320,8 @@
                     message: "no public key configured — pass one to LinuxAppImageUpdater(publicKey:)"
                 )
             }
-            guard let pubKeyBytes = Data(base64Encoded: publicKey),
-                  pubKeyBytes.count == 32
-            else {
-                throw BridgeError(
-                    code: BridgeError.handler,
-                    message: """
-                    public key must be base64 of the raw 32-byte Ed25519 value. \
-                    Minisign-format key parsing is a planned follow-up.
-                    """
-                )
-            }
-            guard let sigBytes = Data(base64Encoded: signature),
-                  sigBytes.count == 64
-            else {
-                throw BridgeError(
-                    code: BridgeError.handler,
-                    message: "signature must be base64 of the raw 64-byte Ed25519 signature"
-                )
-            }
+            let pubKeyBytes = try resolveEd25519PublicKey(publicKey)
+            let sigBytes = try resolveEd25519Signature(signature)
             let key: Curve25519.Signing.PublicKey
             do {
                 key = try Curve25519.Signing.PublicKey(rawRepresentation: pubKeyBytes)

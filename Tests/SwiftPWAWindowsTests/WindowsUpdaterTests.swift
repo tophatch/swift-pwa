@@ -196,6 +196,66 @@
             }
         }
 
+        // MARK: - MSIX relaunch identity
+
+        @Test("MSIX identity defaults to nil when not supplied")
+        func msixIdentityDefaultsNil() throws {
+            let updater = try WindowsUpdater(
+                endpoint: #require(URL(string: "https://example.invalid/manifest.json")),
+                publicKey: nil,
+                installMode: .msix
+            )
+            #expect(updater.msixIdentityName == nil)
+            #expect(updater.applicationID == "App")
+        }
+
+        @Test("MSIX identity round-trips through the constructor")
+        func msixIdentityRoundtrip() throws {
+            let updater = try WindowsUpdater(
+                endpoint: #require(URL(string: "https://example.invalid/manifest.json")),
+                publicKey: nil,
+                installMode: .msix,
+                msixIdentityName: "com.example.hello",
+                applicationID: "App"
+            )
+            #expect(updater.msixIdentityName == "com.example.hello")
+            #expect(updater.applicationID == "App")
+        }
+
+        @Test("verifyEd25519 accepts minisign-format inputs")
+        func verifyEd25519MinisignInputs() throws {
+            let priv = Curve25519.Signing.PrivateKey()
+            let payload = Data("an msix's bytes".utf8)
+            let rawSig = try priv.signature(for: payload)
+
+            var pubBlob = Data()
+            pubBlob.append(contentsOf: "Ed".utf8)
+            pubBlob.append(contentsOf: Array(repeating: UInt8(0), count: 8))
+            pubBlob.append(priv.publicKey.rawRepresentation)
+            let pubText = """
+            untrusted comment: minisign public key
+            \(pubBlob.base64EncodedString())
+            """
+
+            var sigBlob = Data()
+            sigBlob.append(contentsOf: "Ed".utf8)
+            sigBlob.append(contentsOf: Array(repeating: UInt8(0), count: 8))
+            sigBlob.append(rawSig)
+            let sigText = """
+            untrusted comment: signature
+            \(sigBlob.base64EncodedString())
+            trusted comment: x
+            \(Data(repeating: 0, count: 64).base64EncodedString())
+            """
+
+            let updater = try WindowsUpdater(
+                endpoint: #require(URL(string: "https://example.invalid/manifest.json")),
+                publicKey: pubText,
+                installMode: .portable
+            )
+            try updater.verifyEd25519(data: payload, signature: sigText)
+        }
+
         // MARK: - helpers
 
         private func makeTempDir() throws -> URL {

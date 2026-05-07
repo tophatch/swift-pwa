@@ -7,28 +7,36 @@ format covers every platform — different artifacts under one
 `platforms` table.
 
 > **Status:** macOS bundle swap and iOS enterprise / ad-hoc
-> (`itms-services://`) ship in `AppleUpdater` (v0.3). The
-> `swift-pwa updater keygen / sign / manifest` CLI is landed on `main`
-> for the v0.4 release. Linux AppImage and Windows MSIX / portable
-> runtime backends are still queued for v0.4.
+> (`itms-services://`) ship in `AppleUpdater` (v0.3). Linux AppImage
+> support ships in `LinuxAppImageUpdater` and the
+> `swift-pwa updater keygen / sign / manifest` CLI is landed on `main`,
+> both for the v0.4 release. The Windows MSIX / portable runtime backend
+> is the remaining v0.4 follow-up.
 
 ## Wiring the runtime
 
-Construct a backend `Updater` and install the plugin. macOS uses
-`AppleUpdater`; the same type provides an iOS enterprise / ad-hoc path
-(pass `nil` for `publicKey` — Apple's signing chain validates the
-.ipa). Linux GTK and Windows backends will follow the same shape once
-they land.
+Construct a backend `Updater` and install the plugin. macOS and iOS
+use `AppleUpdater` (pass `nil` for `publicKey` on iOS — Apple's signing
+chain validates the .ipa). Linux uses `LinuxAppImageUpdater`. The
+Windows backend will follow the same shape once it lands.
 
 ```swift
 import SwiftPWA
 
 let runtime = try SwiftPWA.runtime()
 try runtime.run { ctx in
+    #if os(macOS) || os(iOS)
     ctx.use(UpdaterPlugin(AppleUpdater(
         endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
         publicKey: "BASE64-OF-32-RAW-ED25519-BYTES" // nil on iOS
     )))
+    #elseif os(Linux)
+    ctx.use(UpdaterPlugin(LinuxAppImageUpdater(
+        endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
+        publicKey: "BASE64-OF-32-RAW-ED25519-BYTES",
+        currentVersion: "0.4.0" // or pull from your own config
+    )))
+    #endif
 
     _ = try ctx.createWindow(...)
 }
@@ -222,13 +230,31 @@ on the swift-pwa side because Apple's signing chain is what's being
 trusted. See [docs/ios-setup.md](ios-setup.md) for a worked example
 including the install-manifest plist format.
 
-### Linux (queued for v0.4)
+### Linux (AppImage)
 
-Plan: download + verify Ed25519 + `chmod +x` + atomic-rename onto the
-running AppImage's path (the kernel keeps the running mmap valid; new
-launches pick up the new file). The `pwa.json`
-`updater.linux.appimage_strategy` field (`in_place` / `side_by_side`)
-is reserved for that backend.
+`LinuxAppImageUpdater` downloads the new AppImage, verifies the Ed25519
+signature, `chmod +x`s it, and on `updater.installAndRelaunch`
+**atomically renames** the staged file onto the running AppImage's path
+— Linux `rename(2)` is atomic within a filesystem and replaces the
+destination, while the running process keeps its mmap of the old inode
+valid until it exits. Once the rename lands, the updater spawns the
+(now-updated) AppImage as a detached child via `setsid` and `exit(0)`s.
+Cross-filesystem rename (`EXDEV`) falls back to `copy → rename` via a
+temp file in the destination directory so the final swap is still
+atomic.
+
+The running AppImage's path is read from the `APPIMAGE` environment
+variable that the AppImage runtime sets when launching the embedded
+ELF. `installAndRelaunch` returns a clear error if that's unset
+(running from `swift run` or `.build/...`); bundle with
+`swift run swift-pwa build --target linux` and run from the resulting
+`.AppImage` to exercise the full pipeline. Stage by default to
+`${XDG_CACHE_HOME:-$HOME/.cache}/<bundle-id>/SwiftPWAUpdates/<version>/`.
+
+The `pwa.json` `updater.linux.appimage_strategy` field (`in_place` /
+`side_by_side`) is reserved for a future iteration that writes the new
+AppImage alongside the old one and updates a `~/.local/bin` symlink
+instead of replacing the file in place; v0.4 is `in_place` only.
 
 ### Windows (queued for v0.4)
 
@@ -258,8 +284,8 @@ reserved for that backend.
   "Restart now / later" dialog should gate `updater.installAndRelaunch`
   behind their own prompt UI (the `readyToInstall` event from
   `updater.run` is the natural prompt point).
-- **Linux AppImage and Windows MSIX / portable backends** —
-  `AppleUpdater` ships in v0.3; `LinuxAppImageUpdater` and
-  `WindowsUpdater` are queued for v0.4. The publishing CLI already
-  emits manifests for those targets — the missing piece is the
+- **Windows MSIX / portable backend** — `AppleUpdater` ships in v0.3
+  and `LinuxAppImageUpdater` ships in v0.4; `WindowsUpdater` remains
+  the queued runtime backend for v0.4. The publishing CLI already
+  emits manifests for the Windows targets — the missing piece is the
   runtime side that consumes them.

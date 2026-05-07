@@ -255,14 +255,15 @@ remain:
   Either upgrade GTK or stick with the default GTK3 backend (which
   uses `GtkMessageDialog` / `GtkFileChooserDialog` and has no version
   floor beyond what WebKitGTK 4.1 itself requires).
-- **Auto-updater backend isn't implemented yet on Linux.**
-  `UpdaterPlugin` and the cross-platform `Updater` protocol ship in
-  v0.3 (Apple platforms only); the Linux AppImage backend lands in
-  v0.4. Plan: download + verify Ed25519 + `chmod +x` + atomic-rename
-  onto the running AppImage's path (the kernel keeps the running
-  mmap valid; new launches pick up the new file). The `pwa.json`
-  `updater.linux.appimage_strategy` field (`in_place` / `side_by_side`)
-  is reserved for that backend.
+- **Auto-updater is `in_place` only on Linux.** `LinuxAppImageUpdater`
+  ships in v0.4 and covers the full download → Ed25519 verify →
+  atomic-rename → relaunch pipeline against the running AppImage's
+  path (read from the `APPIMAGE` env var the AppImage runtime sets).
+  The `pwa.json` `updater.linux.appimage_strategy` field is reserved
+  for a future iteration that adds `side_by_side` (write the new
+  AppImage alongside the old and update a `~/.local/bin` symlink
+  rather than swapping in place). See [docs/auto-updates.md](auto-updates.md)
+  for the full publishing flow.
 
 If you hit linker errors around `webkit_*` symbols, the most common
 cause is `pkg-config --libs <module>` returning empty — confirm with:

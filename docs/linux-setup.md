@@ -60,6 +60,13 @@ over D-Bus, with a fallback to `GtkStatusIcon` on legacy desktops).
 It's a hard build dep of the GTK3 backend even if you don't use
 `TrayPlugin` — the C shim is part of the target.
 
+> The library prints `libayatana-appindicator is deprecated. Please
+> use libayatana-appindicator-glib in newly written code.` to stderr
+> at startup. Soft deprecation, not a removal — the library still
+> works on every distro that has it. Migrating the shim to the GTK-
+> free `libayatana-appindicator-glib` is queued for v0.5 (bundled with
+> finally enabling the GTK4 tray); see the README's Roadmap.
+
 Sanity-check the headers are findable:
 
 ```bash

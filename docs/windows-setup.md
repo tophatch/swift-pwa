@@ -447,16 +447,23 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   pulling new header files into an already-built tree.
 - **`DialogPlugin.confirm` routes through `TaskDialogIndirect` only
   when labels are customised.** `MessageBoxW` is the simpler / more
-  forgiving path (no `comctl32` v6 manifest dance, works on locked-
-  down Server Core SKUs without the Desktop Experience), but its
-  buttons are fixed to system-localised "OK" / "Cancel". Whenever
-  the JS caller passes a non-`null` `okLabel` or `cancelLabel`, the
-  shim falls back to `TaskDialogIndirect` (themed, allows custom
-  text) — which depends on `comctl32.dll` (linked in the package
-  manifest) and the standard themed-controls activation context that
-  `swift-pwa`'s static linkage already provides. If you are running
-  on an SKU without `comctl32`, omit the labels and you'll get the
-  `MessageBoxW` path.
+  forgiving path; its buttons are fixed to system-localised "OK" /
+  "Cancel". Whenever the JS caller passes a non-`null` `okLabel` or
+  `cancelLabel`, the shim falls back to `TaskDialogIndirect` (themed,
+  allows custom text), which lives in `comctl32` **v6** — and v6
+  only loads when the EXE has a `Microsoft.Windows.Common-Controls`
+  manifest dependency baked into its resource section. The CLI
+  bundler embeds that manifest post-build via `mt.exe -manifest ...
+  -outputresource:<exe>;#1` (`WindowsBundler.embedComCtl6Manifest`);
+  the C++ shim cannot do it via `#pragma comment(linker,
+  "/manifestdependency:...")` because `lld-link` (Swift-on-Windows
+  uses clang-cl + lld-link, not MSVC's link.exe) silently drops the
+  pragma at .obj-merge time. If `mt.exe` isn't on PATH (you're in a
+  non-VS shell), the bundler warns and continues — `dialog.confirm`
+  with custom labels falls back to plain `MessageBoxW` at runtime.
+  To get the themed path: launch your build from inside a Visual
+  Studio Developer Shell (the same shell that already needs to be
+  active for `swift build` to find the MSVC + Windows SDK headers).
 - **`.build\release` symlink warning is cosmetic.** Without
   Developer Mode (Settings → For developers → Developer Mode) or
   Administrator privileges, SwiftPM can't create the

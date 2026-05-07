@@ -115,10 +115,22 @@ struct WindowsBundler {
                 at: bundleDir, withIntermediateDirectories: true
             )
 
-            try FileManager.default.copyItem(
-                at: binary,
-                to: bundleDir.appendingPathComponent(exeName)
-            )
+            let bundledExe = bundleDir.appendingPathComponent(exeName)
+            try FileManager.default.copyItem(at: binary, to: bundledExe)
+
+            // Embed the Common Controls v6 manifest into the bundled
+            // EXE's resource section. The dialog shim's
+            // `TaskDialogIndirect` import only exists in comctl32 v6;
+            // without an SxS manifest, the loader resolves it against
+            // v5 (which stubs the symbol by ordinal but doesn't
+            // implement it) and surfaces "Ordinal 345 could not be
+            // located" at process start. We embed the manifest here
+            // rather than via `#pragma comment(linker, "/manifestdependency:...")`
+            // in the C++ shim because lld-link (Swift-on-Windows uses
+            // clang-cl + lld-link, not link.exe) silently drops that
+            // pragma. The resulting EXE has no resource section, and
+            // the manifest never makes it in.
+            try await embedComCtl6Manifest(at: bundledExe)
 
             let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)
             if FileManager.default.fileExists(atPath: webSrc.path) {
@@ -252,6 +264,65 @@ struct WindowsBundler {
 
             return ["INCLUDE": newInclude, "LIB": newLib]
         #endif
+    }
+
+    // MARK: - Common Controls v6 manifest embed
+
+    /// Embed the `Microsoft.Windows.Common-Controls` v6 manifest
+    /// dependency into the EXE's resource section via `mt.exe`. Runs
+    /// after `swift build` and the bundle copy — the source `.exe`
+    /// SwiftPM produced has no resource section, and `lld-link`
+    /// silently drops the `/manifestdependency` pragma we'd otherwise
+    /// embed at link time.
+    ///
+    /// `mt.exe` ships with the Windows SDK; it lands on PATH inside a
+    /// Visual Studio Developer Shell. From a plain PowerShell with no
+    /// SDK setup, the call throws `BundlerError.toolMissing` — we
+    /// warn and continue. `dialog.confirm` with custom labels then
+    /// falls back to `MessageBoxW` (system-localised buttons, no
+    /// themed look) at runtime; the rest of the dialog surface and
+    /// every other plugin keep working.
+    private func embedComCtl6Manifest(at exe: URL) async throws {
+        let manifestXML = """
+        <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+        <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+          <dependency>
+            <dependentAssembly>
+              <assemblyIdentity
+                type="win32"
+                name="Microsoft.Windows.Common-Controls"
+                version="6.0.0.0"
+                processorArchitecture="*"
+                publicKeyToken="6595b64144ccf1df"
+                language="*"
+              />
+            </dependentAssembly>
+          </dependency>
+        </assembly>
+        """
+        let manifestURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-pwa-comctl6-\(UUID().uuidString).manifest")
+        try manifestXML.write(to: manifestURL, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(at: manifestURL) }
+
+        do {
+            // `;#1` is `CREATEPROCESS_MANIFEST_RESOURCE_ID` — the
+            // resource id Windows reads at process start. `#2` is the
+            // DLL slot, which we don't care about here.
+            try await Shell.run(
+                "mt.exe",
+                ["-manifest", manifestURL.path, "-outputresource:\(exe.path);#1"]
+            )
+        } catch BundlerError.toolMissing {
+            FileHandle.standardError.write(Data("""
+            swift-pwa: warning — mt.exe not found on PATH; skipping Common \
+            Controls v6 manifest embed. `dialog.confirm` with custom labels \
+            will fall back to MessageBoxW. Run from inside a Visual Studio \
+            Developer Shell (which puts the Windows SDK on PATH) to enable \
+            the themed TaskDialogIndirect path.
+
+            """.utf8))
+        }
     }
 
     // MARK: - WebView2 Evergreen Bootstrapper

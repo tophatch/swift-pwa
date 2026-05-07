@@ -15,21 +15,23 @@
 
 #include "swiftpwa_dialog.h"
 
-// Activate Common Controls v6 (the themed control set) by baking a
-// `manifestdependency` directive into the linked EXE's resource
-// manifest. Required by `TaskDialogIndirect`: comctl32.lib's import
-// resolves at load time against the v5 DLL by default — v5 has the
-// symbol stubbed by ordinal but not implemented, so the loader
-// surfaces it as `Ordinal 345 could not be located` at process
-// start. The manifest dependency tells the OS to load v6 instead,
-// which has the real implementation. Both `link.exe` and `lld-link`
-// (Swift-on-Windows uses the latter via clang-cl) honour the pragma.
-#if defined(_WIN32) || defined(_WIN64)
-#pragma comment(linker, "\"/manifestdependency:type='win32' " \
-    "name='Microsoft.Windows.Common-Controls' version='6.0.0.0' " \
-    "processorArchitecture='*' publicKeyToken='6595b64144ccf1df' " \
-    "language='*'\"")
-#endif
+// `TaskDialogIndirect` requires Common Controls v6. The standard
+// way to opt into v6 is a `<dependentAssembly>` manifest dependency
+// embedded in the EXE's resource section.
+//
+// We do *not* emit it here via
+//   #pragma comment(linker, "/manifestdependency:...")
+// because Swift-on-Windows links via `clang-cl` + `lld-link`, and
+// lld-link silently drops the pragma at .obj-merge time. The
+// resulting EXE has no resource section and the loader resolves
+// the import against comctl32 v5 — which has the symbol stubbed by
+// ordinal but not implemented, surfacing as
+// "Ordinal 345 could not be located" at process start.
+//
+// The manifest is embedded post-build by the CLI bundler instead:
+// `WindowsBundler.embedComCtl6Manifest` runs `mt.exe -manifest ...
+// -outputresource:<exe>;#1` after `swift build` completes. See
+// `Sources/SwiftPWACLISupport/Bundlers/WindowsBundler.swift`.
 
 #include <windows.h>
 #include <commctrl.h>     // TaskDialogIndirect

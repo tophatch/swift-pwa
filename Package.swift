@@ -117,7 +117,14 @@ let package = Package(
         .executable(name: "swift-pwa", targets: ["swift-pwa-cli"])
     ],
     dependencies: [
-        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0")
+        .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
+        // swift-crypto gives the `swift-pwa updater` CLI subcommands an
+        // Ed25519 implementation that works on Linux and Windows hosts
+        // too — CryptoKit is Apple-only, but `import Crypto` from
+        // swift-crypto presents an API-compatible surface across
+        // platforms (and on Apple it just shadows CryptoKit). The CLI
+        // is the only consumer; the runtime side stays on CryptoKit.
+        .package(url: "https://github.com/apple/swift-crypto", "3.0.0" ..< "5.0.0")
     ],
     targets: [
         // MARK: - Platform-agnostic core
@@ -231,7 +238,9 @@ let package = Package(
         .target(
             name: "SwiftPWACLISupport",
             dependencies: [
-                .product(name: "ArgumentParser", package: "swift-argument-parser")
+                "SwiftPWACore",
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "Crypto", package: "swift-crypto")
             ],
             swiftSettings: swiftSettings
         ),
@@ -278,7 +287,11 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftPWACLITests",
-            dependencies: ["SwiftPWACLISupport"],
+            dependencies: [
+                "SwiftPWACLISupport",
+                "SwiftPWACore",
+                .product(name: "Crypto", package: "swift-crypto")
+            ],
             resources: [
                 .copy("Fixtures")
             ],

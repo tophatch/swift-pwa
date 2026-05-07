@@ -130,7 +130,7 @@
                 publicKey: nil,
                 installMode: .msix
             )
-            let info = UpdateInfo(
+            let info = try UpdateInfo(
                 version: "0.4.0",
                 currentVersion: "0.3.0",
                 downloadURL: #require(URL(string: "https://example.invalid/update.msix")),
@@ -158,7 +158,7 @@
                 publicKey: pubB64,
                 installMode: .msix
             )
-            let info = UpdateInfo(
+            let info = try UpdateInfo(
                 version: "0.4.0",
                 currentVersion: "0.3.0",
                 downloadURL: #require(URL(string: "https://example.invalid/update.msix")),
@@ -179,7 +179,7 @@
                 publicKey: nil,
                 installMode: .portable
             )
-            let info = UpdateInfo(
+            let info = try UpdateInfo(
                 version: "0.4.0",
                 currentVersion: "0.3.0",
                 downloadURL: #require(URL(string: "https://example.invalid/update.exe")),

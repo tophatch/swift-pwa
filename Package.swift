@@ -180,6 +180,9 @@ let package = Package(
                 .linkedLibrary("user32", .when(platforms: [.windows])),
                 .linkedLibrary("shell32", .when(platforms: [.windows])),
                 .linkedLibrary("RuntimeObject", .when(platforms: [.windows])),
+                // TaskDialogIndirect (themed message + confirm boxes) lives
+                // in `comctl32`. Required by the dialog shim.
+                .linkedLibrary("comctl32", .when(platforms: [.windows])),
                 // C++/WinRT (`<winrt/...>`) calls dispatch through
                 // `WindowsApp.lib`. cl.exe picks it up via a
                 // `#pragma comment(lib, ...)` in `<winrt/base.h>`,

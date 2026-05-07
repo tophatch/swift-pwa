@@ -141,6 +141,197 @@ static inline void swiftpwa_clipboard_clear(GtkClipboard *cb) {
 // which works on GNOME / Wayland / KDE without the legacy Xembed tray.
 
 // ---------------------------------------------------------------------
+// Dialogs (GtkMessageDialog + GtkFileChooserDialog).
+//
+// Both APIs are variadic in C — `gtk_message_dialog_new(parent, flags,
+// type, buttons, format, ...)` and `gtk_file_chooser_dialog_new(title,
+// parent, action, button1, response1, ..., NULL)` — and Swift's clang
+// importer does not surface variadic C functions cleanly, so we wrap
+// each in a fixed-arity helper.
+//
+// The widgets returned are GObjects; Swift owns the reference and is
+// expected to `gtk_widget_destroy` after `gtk_dialog_run` returns.
+// ---------------------------------------------------------------------
+
+/// Severity hint that maps onto `GtkMessageType`. Mirrors `DialogKind`
+/// on the Swift side so we don't import the GTK enum directly.
+typedef enum {
+    SWIFTPWA_DIALOG_INFO = 0,
+    SWIFTPWA_DIALOG_WARNING = 1,
+    SWIFTPWA_DIALOG_ERROR = 2,
+} swiftpwa_dialog_kind;
+
+static inline GtkMessageType swiftpwa_dialog_message_type(swiftpwa_dialog_kind kind) {
+    switch (kind) {
+        case SWIFTPWA_DIALOG_WARNING: return GTK_MESSAGE_WARNING;
+        case SWIFTPWA_DIALOG_ERROR:   return GTK_MESSAGE_ERROR;
+        default:                      return GTK_MESSAGE_INFO;
+    }
+}
+
+/// Create a one-button (OK) message dialog and run it modally. Caller
+/// destroys the returned widget. Title is set on the underlying
+/// `GtkWindow`; the message is the dialog's primary text. `parent` may
+/// be NULL.
+static inline GtkWidget *swiftpwa_message_dialog_new(
+    GtkWindow *parent,
+    swiftpwa_dialog_kind kind,
+    const char *title,
+    const char *message
+) {
+    GtkWidget *dialog = gtk_message_dialog_new(
+        parent,
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        swiftpwa_dialog_message_type(kind),
+        GTK_BUTTONS_OK,
+        "%s", message ? message : ""
+    );
+    if (title) gtk_window_set_title(GTK_WINDOW(dialog), title);
+    return dialog;
+}
+
+/// Create a two-button (Cancel / OK) confirm dialog. `ok_label` /
+/// `cancel_label` may be NULL to use the platform defaults. Returns
+/// `TRUE` from `swiftpwa_dialog_run` when the user picks OK.
+static inline GtkWidget *swiftpwa_confirm_dialog_new(
+    GtkWindow *parent,
+    swiftpwa_dialog_kind kind,
+    const char *title,
+    const char *message,
+    const char *ok_label,
+    const char *cancel_label
+) {
+    GtkWidget *dialog = gtk_message_dialog_new(
+        parent,
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
+        swiftpwa_dialog_message_type(kind),
+        GTK_BUTTONS_NONE,
+        "%s", message ? message : ""
+    );
+    gtk_dialog_add_button(
+        GTK_DIALOG(dialog),
+        cancel_label ? cancel_label : "_Cancel",
+        GTK_RESPONSE_CANCEL
+    );
+    gtk_dialog_add_button(
+        GTK_DIALOG(dialog),
+        ok_label ? ok_label : "_OK",
+        GTK_RESPONSE_OK
+    );
+    gtk_dialog_set_default_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);
+    if (title) gtk_window_set_title(GTK_WINDOW(dialog), title);
+    return dialog;
+}
+
+/// Run the dialog modally (nested main loop) and return the response
+/// code. Pumps events on the GTK main thread; safe to call only from
+/// the GTK main thread.
+static inline int swiftpwa_dialog_run(GtkWidget *dialog) {
+    return (int)gtk_dialog_run(GTK_DIALOG(dialog));
+}
+
+static inline void swiftpwa_widget_destroy(GtkWidget *widget) {
+    gtk_widget_destroy(widget);
+}
+
+/// File-chooser actions. Matches `GtkFileChooserAction` constants.
+typedef enum {
+    SWIFTPWA_FILE_CHOOSER_OPEN = 0,
+    SWIFTPWA_FILE_CHOOSER_SAVE = 1,
+    SWIFTPWA_FILE_CHOOSER_SELECT_FOLDER = 2,
+} swiftpwa_file_chooser_action;
+
+static inline GtkFileChooserAction swiftpwa_file_chooser_action_map(
+    swiftpwa_file_chooser_action action
+) {
+    switch (action) {
+        case SWIFTPWA_FILE_CHOOSER_SAVE:          return GTK_FILE_CHOOSER_ACTION_SAVE;
+        case SWIFTPWA_FILE_CHOOSER_SELECT_FOLDER: return GTK_FILE_CHOOSER_ACTION_SELECT_FOLDER;
+        default:                                  return GTK_FILE_CHOOSER_ACTION_OPEN;
+    }
+}
+
+/// Create a file-chooser dialog with Cancel / OK buttons. The dialog
+/// is wired in modal mode; the caller runs it via
+/// `swiftpwa_dialog_run` (which returns `GTK_RESPONSE_OK` on success)
+/// and reads the chosen path via `swiftpwa_file_chooser_get_filenames`
+/// or `gtk_file_chooser_get_filename`.
+static inline GtkWidget *swiftpwa_file_chooser_dialog_new(
+    GtkWindow *parent,
+    swiftpwa_file_chooser_action action,
+    const char *title,
+    int allow_multiple
+) {
+    GtkWidget *dialog = gtk_file_chooser_dialog_new(
+        title ? title : "",
+        parent,
+        swiftpwa_file_chooser_action_map(action),
+        "_Cancel", GTK_RESPONSE_CANCEL,
+        action == SWIFTPWA_FILE_CHOOSER_SAVE ? "_Save" : "_Open", GTK_RESPONSE_OK,
+        (const char *)NULL
+    );
+    if (allow_multiple) {
+        gtk_file_chooser_set_select_multiple(GTK_FILE_CHOOSER(dialog), TRUE);
+    }
+    if (action == SWIFTPWA_FILE_CHOOSER_SAVE) {
+        gtk_file_chooser_set_do_overwrite_confirmation(GTK_FILE_CHOOSER(dialog), TRUE);
+    }
+    return dialog;
+}
+
+static inline void swiftpwa_file_chooser_set_current_folder(GtkWidget *dialog, const char *folder) {
+    if (folder) gtk_file_chooser_set_current_folder(GTK_FILE_CHOOSER(dialog), folder);
+}
+
+static inline void swiftpwa_file_chooser_set_current_name(GtkWidget *dialog, const char *name) {
+    if (name) gtk_file_chooser_set_current_name(GTK_FILE_CHOOSER(dialog), name);
+}
+
+/// Add a file filter with `name` (e.g. "Images") and a list of glob
+/// patterns (e.g. "*.png"). `patterns` is a NULL-terminated array of
+/// C strings; each is added via `gtk_file_filter_add_pattern`.
+static inline void swiftpwa_file_chooser_add_filter(
+    GtkWidget *dialog,
+    const char *name,
+    const char *const *patterns
+) {
+    GtkFileFilter *filter = gtk_file_filter_new();
+    if (name) gtk_file_filter_set_name(filter, name);
+    if (patterns) {
+        for (const char *const *p = patterns; *p; ++p) {
+            gtk_file_filter_add_pattern(filter, *p);
+        }
+    }
+    gtk_file_chooser_add_filter(GTK_FILE_CHOOSER(dialog), filter);
+}
+
+/// Read all selected paths (single-select dialogs return one). Caller
+/// receives a freshly-allocated NULL-terminated `char **` array; both
+/// the array and the strings inside it are owned by the caller and
+/// must be freed via `g_strfreev`. Returns NULL when no files were
+/// selected.
+static inline char **swiftpwa_file_chooser_get_filenames(GtkWidget *dialog) {
+    GSList *list = gtk_file_chooser_get_filenames(GTK_FILE_CHOOSER(dialog));
+    if (!list) return NULL;
+    guint n = g_slist_length(list);
+    char **out = (char **)g_malloc0(sizeof(char *) * (n + 1));
+    guint i = 0;
+    for (GSList *node = list; node; node = node->next) {
+        out[i++] = (char *)node->data; /* Transfer ownership to `out`. */
+    }
+    g_slist_free(list); /* Items themselves are now owned by `out`. */
+    return out;
+}
+
+/// Convenience for save dialogs / single-select directory pickers,
+/// where the caller wants exactly one path. Returns a freshly
+/// allocated string the caller must `g_free`, or NULL when nothing
+/// was selected.
+static inline char *swiftpwa_file_chooser_get_filename(GtkWidget *dialog) {
+    return gtk_file_chooser_get_filename(GTK_FILE_CHOOSER(dialog));
+}
+
+// ---------------------------------------------------------------------
 // Notifications (org.freedesktop.Notifications via D-Bus).
 //
 // We hit the freedesktop.org notification spec directly through GIO

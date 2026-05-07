@@ -246,6 +246,54 @@
             </section>
 
             <section class="section">
+                <h2>Dialogs</h2>
+                <p>Native message / confirm / file pickers via
+                <code>DialogPlugin</code>. Each backend wires its
+                platform's HIG dialog: <code>NSAlert</code> /
+                <code>NSOpenPanel</code> on macOS,
+                <code>UIAlertController</code> /
+                <code>UIDocumentPickerViewController</code> on iOS,
+                <code>GtkMessageDialog</code> /
+                <code>GtkFileChooser</code> on Linux,
+                <code>MessageBoxW</code> /
+                <code>IFileOpenDialog</code> on Windows.</p>
+                <div class="actions">
+                    <button id="dialog-confirm">Confirm</button>
+                    <button id="dialog-open">Open file</button>
+                    <button id="dialog-save">Save file</button>
+                    <button id="dialog-folder">Pick folder</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Filesystem</h2>
+                <p>Round-trip a scratch file via <code>FsPlugin</code>:
+                <code>fs.writeText</code>, <code>fs.readText</code>,
+                <code>fs.metadata</code>, <code>fs.remove</code>. Path
+                comes back from <code>dialog.saveFile</code> / picks
+                a temp file when cancelled. Foundation-backed, same
+                surface on every host.</p>
+                <div class="actions">
+                    <button id="fs-write">Save scratchpad</button>
+                    <button id="fs-read">Read it back</button>
+                    <button id="fs-meta">Stat it</button>
+                    <button id="fs-remove">Delete it</button>
+                </div>
+            </section>
+
+            <section class="section">
+                <h2>Biometrics</h2>
+                <p>Cross-platform <code>biometric.canAuthenticate</code>
+                + <code>biometric.authenticate</code>. Touch ID / Face ID /
+                Optic ID on Apple, Windows Hello on Windows, stub on
+                Linux (no clean cross-distro primitive).</p>
+                <div class="actions">
+                    <button id="bio-status">Check status</button>
+                    <button id="bio-auth">Authenticate</button>
+                </div>
+            </section>
+
+            <section class="section">
                 <h2>Notifications</h2>
                 <p>
                     Cross-platform <code>notifications.send</code>. On
@@ -386,11 +434,104 @@
                     log("notification failed: " + e.message);
                 }
             },
+            // Filesystem demo — share a single scratch path across the
+            // three buttons so the user can write, read it back, and
+            // remove the same file. Default to a temp location so it
+            // works without picking up the dialog plugin first.
+            fsWrite: async () => {
+                if (!fsScratchPath) {
+                    const r = await __SWIFT_PWA__.invoke("dialog.saveFile", {
+                        title: "Where to save the scratchpad?",
+                        defaultName: "swift-pwa-scratch.txt",
+                    });
+                    if (r.path == null) { log("save cancelled"); return; }
+                    fsScratchPath = r.path;
+                }
+                await __SWIFT_PWA__.invoke("fs.writeText", {
+                    path: fsScratchPath,
+                    contents: "swift-pwa was here at " + new Date().toISOString() + "\n",
+                });
+                log("fs.writeText → " + fsScratchPath);
+            },
+            fsRead: async () => {
+                if (!fsScratchPath) { log("nothing saved yet — Save first"); return; }
+                try {
+                    const r = await __SWIFT_PWA__.invoke("fs.readText", { path: fsScratchPath });
+                    log("fs.readText → " + r.contents.trim());
+                } catch (e) { log("fs.readText failed: " + e.message); }
+            },
+            fsMeta: async () => {
+                if (!fsScratchPath) { log("nothing saved yet — Save first"); return; }
+                try {
+                    const m = await __SWIFT_PWA__.invoke("fs.metadata", { path: fsScratchPath });
+                    log("fs.metadata → size=" + m.size + " modified=" +
+                        (m.modified ? new Date(m.modified).toLocaleTimeString() : "?"));
+                } catch (e) { log("fs.metadata failed: " + e.message); }
+            },
+            fsRemove: async () => {
+                if (!fsScratchPath) { log("nothing saved yet"); return; }
+                try {
+                    await __SWIFT_PWA__.invoke("fs.remove", { path: fsScratchPath });
+                    log("fs.remove → " + fsScratchPath);
+                    fsScratchPath = null;
+                } catch (e) { log("fs.remove failed: " + e.message); }
+            },
+            bioStatus: async () => {
+                const r = await __SWIFT_PWA__.invoke("biometric.canAuthenticate");
+                if (r.available) {
+                    log("biometric → available (" + r.kind + ")");
+                } else {
+                    log("biometric → unavailable: " + (r.reason || "unknown") + " (" + r.kind + ")");
+                }
+            },
+            bioAuth: async () => {
+                try {
+                    const r = await __SWIFT_PWA__.invoke("biometric.authenticate", {
+                        reason: "Authenticate to verify the swift-pwa demo flow.",
+                    });
+                    if (r.authenticated) {
+                        log("biometric → authenticated");
+                    } else {
+                        log("biometric → not authenticated: " + (r.error || "unknown"));
+                    }
+                } catch (e) { log("biometric failed: " + e.message); }
+            },
             // Windows toast verification — same backend call as
             // `notifications.send`, but with a fixed payload that's
             // easier to spot in Action Center, and a label that names
             // the surface it's exercising. On macOS / Linux it surfaces
             // as a regular notification through the same code path.
+            dialogConfirm: async () => {
+                const r = await __SWIFT_PWA__.invoke("dialog.confirm", {
+                    title: "Are you sure?",
+                    message: "This is a confirm dialog from swift-pwa.",
+                    okLabel: "Yes, confirm",
+                    cancelLabel: "Nope",
+                });
+                log(r.ok ? "confirm → ok" : "confirm → cancel");
+            },
+            dialogOpen: async () => {
+                const r = await __SWIFT_PWA__.invoke("dialog.openFile", {
+                    title: "Pick a file",
+                    multiple: false,
+                    filters: [{ name: "All files", extensions: ["*"] }],
+                });
+                log(r.paths.length ? "openFile → " + r.paths.join(", ") : "openFile → cancel");
+            },
+            dialogSave: async () => {
+                const r = await __SWIFT_PWA__.invoke("dialog.saveFile", {
+                    title: "Save as",
+                    defaultName: "untitled.txt",
+                    filters: [{ name: "Text", extensions: ["txt"] }],
+                });
+                log(r.path == null ? "saveFile → cancel" : "saveFile → " + r.path);
+            },
+            dialogFolder: async () => {
+                const r = await __SWIFT_PWA__.invoke("dialog.openDirectory", {
+                    title: "Pick a folder",
+                });
+                log(r.path == null ? "openDirectory → cancel" : "openDirectory → " + r.path);
+            },
             toast: async () => {
                 try {
                     const auth = await __SWIFT_PWA__.invoke("notifications.requestAuthorization");
@@ -411,6 +552,7 @@
         // can see `tray.setMenu` actually change what's in the menu bar.
         let trayMenuVariant = 0;
         let trayVisible = true;
+        let fsScratchPath = null;
         const trayMenus = [
             { items: [
                 { id: "ping", label: "Server ping", enabled: true, separator: false },
@@ -437,6 +579,16 @@
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
         document.getElementById("notify").onclick = actions.notify;
         document.getElementById("toast").onclick  = actions.toast;
+        document.getElementById("dialog-confirm").onclick = actions.dialogConfirm;
+        document.getElementById("dialog-open").onclick    = actions.dialogOpen;
+        document.getElementById("dialog-save").onclick    = actions.dialogSave;
+        document.getElementById("dialog-folder").onclick  = actions.dialogFolder;
+        document.getElementById("fs-write").onclick  = actions.fsWrite;
+        document.getElementById("fs-read").onclick   = actions.fsRead;
+        document.getElementById("fs-meta").onclick   = actions.fsMeta;
+        document.getElementById("fs-remove").onclick = actions.fsRemove;
+        document.getElementById("bio-status").onclick = actions.bioStatus;
+        document.getElementById("bio-auth").onclick   = actions.bioAuth;
 
         // React to tray clicks / menu-item activations from the JS side.
         // Some items (e.g. "rename") map directly onto existing actions;

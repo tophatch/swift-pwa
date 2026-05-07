@@ -74,6 +74,21 @@
                 registerScheme(provider: provider)
             }
 
+            // Enable the WebKit inspector. Without this,
+            // `webkit_web_inspector_show` is a no-op — the inspector
+            // object exists but the developer-extras flag gates the
+            // window from actually appearing. We turn it on
+            // unconditionally; gating by build configuration would
+            // require plumbing a debug/release flag through the
+            // `Window` API, and the cost of an enabled inspector in
+            // release builds (a slightly larger WebKit subprocess) is
+            // small enough to ignore.
+            let webViewPtr = UnsafeMutableRawPointer(view)
+                .assumingMemoryBound(to: WebKitWebView.self)
+            if let settings = webkit_web_view_get_settings(webViewPtr) {
+                webkit_settings_set_enable_developer_extras(settings, gboolean(1))
+            }
+
             connectMessageHandler(ucm: ucm)
         }
 

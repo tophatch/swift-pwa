@@ -5,16 +5,27 @@
 
     /// GTK4 `Dialog` backed by `GtkAlertDialog` (message / confirm) and
     /// `GtkFileDialog` (open / save / directory). Both are async — the
-    /// GTK4 backend does not have a `gtk_dialog_run` analogue — so we
-    /// bridge the `GAsyncReadyCallback` chain into Swift continuations
-    /// the same way `swiftpwa_clipboard_read_text` does for the
-    /// clipboard. Requires GTK 4.10 (when both APIs landed); the Linux
-    /// setup doc calls this out.
+    /// GTK4 backend has no `gtk_dialog_run` analogue — so we bridge the
+    /// `GAsyncReadyCallback` chain into Swift continuations the same
+    /// way `swiftpwa_clipboard_read_text` does for the clipboard.
+    /// Requires GTK 4.10+ (when both APIs landed); the Linux setup
+    /// doc calls this out.
+    ///
+    /// **Threading.** The C shim has to be invoked on the GTK main
+    /// thread, and routing through `MainThread.run` (which uses the
+    /// `g_idle_add`-based hook) is the only way to do that under
+    /// `gtk_main()`. A `@MainActor` hop would route through Swift's
+    /// MainActor executor — libdispatch's main queue — which
+    /// `gtk_main()` doesn't drain, so the call would never run and
+    /// the bridge pump would stall behind it (taking other plugins
+    /// with it). This is the same constraint the GTK3 dialog
+    /// implementation hits, just more visible here because GTK4's
+    /// dialogs are async.
     public final class SystemDialog: Dialog, @unchecked Sendable {
         public init() {}
 
         public func message(_ args: DialogMessageArgs, parent: WindowID?) async throws {
-            _ = try await runAlert(
+            _ = try await runAlertAsync(
                 title: args.title,
                 message: args.message,
                 kind: args.kind,
@@ -26,10 +37,10 @@
         }
 
         public func confirm(_ args: DialogConfirmArgs, parent: WindowID?) async throws -> Bool {
-            // Buttons are ordered cancel, ok — index 0 is the cancel /
-            // dismiss row, index 1 is the affirmative one. GTK lays
-            // them out as the platform convention indicates.
-            let chosen = try await runAlert(
+            // Buttons ordered cancel, ok — index 0 is the cancel /
+            // dismiss row, index 1 the affirmative one. GTK lays them
+            // out per platform convention.
+            let chosen = try await runAlertAsync(
                 title: args.title,
                 message: args.message,
                 kind: args.kind,
@@ -42,7 +53,7 @@
         }
 
         public func openFile(_ args: DialogOpenFileArgs, parent: WindowID?) async throws -> [String] {
-            try await runFileDialog(
+            try await runFileDialogAsync(
                 action: args.multiple == true
                     ? SWIFTPWA_FILE_DIALOG_OPEN_MULTIPLE
                     : SWIFTPWA_FILE_DIALOG_OPEN,
@@ -55,7 +66,7 @@
         }
 
         public func saveFile(_ args: DialogSaveFileArgs, parent: WindowID?) async throws -> String? {
-            try await runFileDialog(
+            try await runFileDialogAsync(
                 action: SWIFTPWA_FILE_DIALOG_SAVE,
                 title: args.title,
                 folder: args.defaultPath,
@@ -66,7 +77,7 @@
         }
 
         public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> String? {
-            try await runFileDialog(
+            try await runFileDialogAsync(
                 action: SWIFTPWA_FILE_DIALOG_SELECT_FOLDER,
                 title: args.title,
                 folder: args.defaultPath,
@@ -78,8 +89,11 @@
 
         // MARK: - Alert bridge
 
-        @MainActor
-        private func runAlert(
+        /// Suspend until the alert dialog's C callback resumes us.
+        /// Hops to the GTK main thread via `MainThread.run` to fire
+        /// the (async) C shim; the shim's `Completed` callback
+        /// resumes the continuation when the user dismisses.
+        private func runAlertAsync(
             title: String?,
             message: String,
             kind: DialogKind?,
@@ -88,46 +102,77 @@
             cancelButton: Int32,
             parent: WindowID?
         ) async throws -> Int32 {
-            let parentPtr = lookupParent(parent)
-            return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Int32, any Error>) in
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Int32, any Error>) in
                 let box = AlertContinuation(continuation: cont)
                 let opaque = Unmanaged.passRetained(box).toOpaque()
 
-                // Build a NULL-terminated `const char *const *` array
-                // of button labels owned by this scope.
-                var cButtons: [UnsafeMutablePointer<CChar>?] = buttons.map { strdup($0) } + [nil]
-                cButtons.withUnsafeMutableBufferPointer { buf in
-                    title.withOptionalCString { titlePtr in
-                        message.withCString { msgPtr in
-                            // The shim retains the buttons array internally
-                            // by passing it to gtk_alert_dialog_set_buttons,
-                            // which copies, so freeing after the call is safe.
-                            buf.baseAddress?.withMemoryRebound(
-                                to: UnsafePointer<CChar>?.self,
-                                capacity: buf.count
-                            ) { typed in
-                                swiftpwa_alert_dialog_run(
-                                    parentPtr,
-                                    kindToShim(kind),
-                                    titlePtr, msgPtr,
-                                    typed,
-                                    defaultButton,
-                                    cancelButton,
-                                    alertCallback,
-                                    opaque
-                                )
-                            }
+                // Detached hop: the continuation body must be
+                // synchronous, so we spawn a Task that awaits
+                // `MainThread.run` for us. The Task itself completes
+                // as soon as the C shim returns (which is fast — the
+                // shim is async). The user-facing continuation is
+                // resumed later, by `alertCallback`, when the dialog
+                // is dismissed.
+                Task { [self] in
+                    await MainThread.run { [self] in
+                        fireAlertOnMain(
+                            parent: parent,
+                            kind: kind,
+                            title: title,
+                            message: message,
+                            buttons: buttons,
+                            defaultButton: defaultButton,
+                            cancelButton: cancelButton,
+                            opaque: opaque
+                        )
+                    }
+                }
+            }
+        }
+
+        @MainActor
+        private func fireAlertOnMain(
+            parent: WindowID?,
+            kind: DialogKind?,
+            title: String?,
+            message: String,
+            buttons: [String],
+            defaultButton: Int32,
+            cancelButton: Int32,
+            opaque: UnsafeMutableRawPointer
+        ) {
+            let parentPtr = lookupParent(parent)
+            var cButtons: [UnsafeMutablePointer<CChar>?] = buttons.map { strdup($0) } + [nil]
+            cButtons.withUnsafeMutableBufferPointer { buf in
+                title.withOptionalCString { titlePtr in
+                    message.withCString { msgPtr in
+                        // `gtk_alert_dialog_set_buttons` copies the
+                        // labels array internally, so freeing the
+                        // strdup'd entries after the call is safe.
+                        buf.baseAddress?.withMemoryRebound(
+                            to: UnsafePointer<CChar>?.self,
+                            capacity: buf.count
+                        ) { typed in
+                            swiftpwa_alert_dialog_run(
+                                parentPtr,
+                                kindToShim(kind),
+                                titlePtr, msgPtr,
+                                typed,
+                                defaultButton,
+                                cancelButton,
+                                alertCallback,
+                                opaque
+                            )
                         }
                     }
                 }
-                for ptr in cButtons where ptr != nil { free(ptr) }
             }
+            for ptr in cButtons where ptr != nil { free(ptr) }
         }
 
         // MARK: - File dialog bridge
 
-        @MainActor
-        private func runFileDialog(
+        private func runFileDialogAsync(
             action: swiftpwa_file_dialog_action,
             title: String?,
             folder: String?,
@@ -135,84 +180,116 @@
             filters: [DialogFileFilter],
             parent: WindowID?
         ) async throws -> [String] {
-            let parentPtr = lookupParent(parent)
-            return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String], any Error>) in
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<[String], any Error>) in
                 let box = FileContinuation(continuation: cont)
                 let opaque = Unmanaged.passRetained(box).toOpaque()
 
-                // Build the filter store. The shim takes ownership of
-                // the returned `GListStore*` (unrefs it after the
-                // dialog is set up), so we don't free it here.
-                let store = buildFilterStore(filters)
-
-                title.withOptionalCString { titlePtr in
-                    folder.withOptionalCString { folderPtr in
-                        name.withOptionalCString { namePtr in
-                            swiftpwa_file_dialog_run(
-                                parentPtr,
-                                action,
-                                titlePtr,
-                                folderPtr,
-                                namePtr,
-                                store,
-                                fileDialogCallback,
-                                opaque
-                            )
-                        }
+                Task { [self] in
+                    await MainThread.run { [self] in
+                        fireFileDialogOnMain(
+                            action: action,
+                            parent: parent,
+                            title: title,
+                            folder: folder,
+                            name: name,
+                            filters: filters,
+                            opaque: opaque
+                        )
                     }
                 }
             }
         }
 
         @MainActor
-        private func buildFilterStore(_ filters: [DialogFileFilter]) -> OpaquePointer? {
-            guard !filters.isEmpty else { return nil }
+        private func fireFileDialogOnMain(
+            action: swiftpwa_file_dialog_action,
+            parent: WindowID?,
+            title: String?,
+            folder: String?,
+            name: String?,
+            filters: [DialogFileFilter],
+            opaque: UnsafeMutableRawPointer
+        ) {
+            let parentPtr = lookupParent(parent)
 
-            // For each filter: keep an array of strdup'd `*.ext` C
-            // strings (NULL-terminated), plus a strdup'd name. We have
-            // to pass a `const char *const *const *` to the shim — a
-            // pointer to per-filter pattern arrays.
-            var allocations: [[UnsafeMutablePointer<CChar>?]] = []
-            var nameStorage: [UnsafeMutablePointer<CChar>?] = []
-            var patternArrayStorage: [UnsafePointer<UnsafePointer<CChar>?>?] = []
+            // The shim takes ownership of the returned `GListStore*`
+            // (unrefs after binding to the dialog), so we don't free
+            // it here.
+            let store = buildFilterStore(filters)
 
-            for filter in filters {
-                let cName = strdup(filter.name)
-                nameStorage.append(cName)
-                var patterns: [UnsafeMutablePointer<CChar>?] = filter.extensions.map { strdup("*.\($0)") } + [nil]
-                allocations.append(patterns)
-                patterns.withUnsafeMutableBufferPointer { buf in
-                    buf.baseAddress?.withMemoryRebound(
-                        to: UnsafePointer<CChar>?.self, capacity: buf.count
-                    ) { typed in
-                        // Keep the typed pointer for the shim call.
-                        patternArrayStorage.append(UnsafePointer(typed))
+            title.withOptionalCString { titlePtr in
+                folder.withOptionalCString { folderPtr in
+                    name.withOptionalCString { namePtr in
+                        swiftpwa_file_dialog_run(
+                            parentPtr,
+                            action,
+                            titlePtr,
+                            folderPtr,
+                            namePtr,
+                            store,
+                            fileDialogCallback,
+                            opaque
+                        )
                     }
                 }
             }
+        }
 
-            let store = nameStorage.withUnsafeBufferPointer { nameBuf -> OpaquePointer? in
-                nameBuf.baseAddress?.withMemoryRebound(
-                    to: UnsafePointer<CChar>?.self, capacity: nameBuf.count
-                ) { namePtrs in
-                    patternArrayStorage.withUnsafeBufferPointer { patBuf -> OpaquePointer? in
-                        guard let patBase = patBuf.baseAddress else { return nil }
-                        return swiftpwa_file_dialog_build_filters(
-                            Int32(filters.count),
-                            namePtrs,
-                            patBase
-                        )
-                    } ?? nil
-                } ?? nil
-            } ?? nil
+        /// Build the GListStore<GtkFileFilter> the C shim uses to
+        /// install the file-type filter chooser on the dialog.
+        ///
+        /// Implementation note: every C string we hand to the shim
+        /// (filter name, filter pattern) is heap-allocated via
+        /// `strdup`, and every per-filter NULL-terminated pattern
+        /// array is heap-allocated via `UnsafeMutablePointer.allocate`.
+        /// Both go through `free` / `deallocate` at the end of the
+        /// function. We can't use `Array.withUnsafeBufferPointer`
+        /// for the per-filter pattern arrays because we need their
+        /// addresses to outlive any single closure scope — they're
+        /// referenced by the outer "array of pattern-array pointers"
+        /// passed to the shim.
+        @MainActor
+        private func buildFilterStore(_ filters: [DialogFileFilter]) -> OpaquePointer? {
+            guard !filters.isEmpty else { return nil }
 
-            // Free the strdup'd C strings — the GtkFileFilter copies
-            // them at `set_name` / `add_pattern` time.
-            for ptr in nameStorage where ptr != nil { free(ptr) }
-            for arr in allocations {
-                for ptr in arr where ptr != nil { free(ptr) }
+            var stringAllocations: [UnsafeMutablePointer<CChar>] = []
+            var arrayAllocations: [UnsafeMutablePointer<UnsafePointer<CChar>?>] = []
+            defer {
+                for ptr in stringAllocations { free(ptr) }
+                for ptr in arrayAllocations { ptr.deallocate() }
             }
-            return store
+
+            func dup(_ s: String) -> UnsafePointer<CChar> {
+                let p = strdup(s)!
+                stringAllocations.append(p)
+                return UnsafePointer(p)
+            }
+
+            var nameArray: [UnsafePointer<CChar>?] = []
+            var patternArrayPtrs: [UnsafePointer<UnsafePointer<CChar>?>?] = []
+
+            for filter in filters {
+                nameArray.append(dup(filter.name))
+
+                let n = filter.extensions.count
+                let arr = UnsafeMutablePointer<UnsafePointer<CChar>?>.allocate(capacity: n + 1)
+                arrayAllocations.append(arr)
+                for (i, ext) in filter.extensions.enumerated() {
+                    (arr + i).initialize(to: dup("*.\(ext)"))
+                }
+                (arr + n).initialize(to: nil)
+                patternArrayPtrs.append(UnsafePointer(arr))
+            }
+
+            return nameArray.withUnsafeBufferPointer { nameBuf -> OpaquePointer? in
+                patternArrayPtrs.withUnsafeBufferPointer { patBuf -> OpaquePointer? in
+                    swiftpwa_file_dialog_build_filters(
+                        Int32(filters.count),
+                        nameBuf.baseAddress,
+                        patBuf.baseAddress
+                    )
+                }
+            }
         }
 
         @MainActor
@@ -245,8 +322,10 @@
         init(continuation: CheckedContinuation<[String], any Error>) { self.continuation = continuation }
     }
 
-    /// `@convention(c)` callback for `swiftpwa_alert_dialog_run`. Fires
-    /// on the GTK main thread.
+    /// `@convention(c)` callback for `swiftpwa_alert_dialog_run`.
+    /// Fires on the GTK main thread once the dialog dismisses.
+    /// Resumes the captured continuation; the awaiting Task wakes
+    /// up on the cooperative pool.
     private let alertCallback: @convention(c) (
         Int32, UnsafeMutablePointer<CChar>?, UnsafeMutableRawPointer?
     ) -> Void = { button, errPtr, userData in
@@ -254,7 +333,6 @@
         let raw = UInt(bitPattern: userData)
         let errMsg: String? = errPtr.map { String(cString: $0) }
         if let errPtr { g_free(UnsafeMutableRawPointer(errPtr)) }
-        // Resume off the GTK thread on a Task — the C shim doesn't care.
         guard let opaque = UnsafeMutableRawPointer(bitPattern: raw) else { return }
         let box = Unmanaged<AlertContinuation>.fromOpaque(opaque).takeRetainedValue()
         if let errMsg {
@@ -264,8 +342,8 @@
         }
     }
 
-    /// `@convention(c)` callback for `swiftpwa_file_dialog_run`. Fires
-    /// on the GTK main thread.
+    /// `@convention(c)` callback for `swiftpwa_file_dialog_run`.
+    /// Fires on the GTK main thread.
     private let fileDialogCallback: @convention(c) (
         UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?,
         UnsafeMutablePointer<CChar>?,

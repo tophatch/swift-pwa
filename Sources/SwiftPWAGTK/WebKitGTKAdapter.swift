@@ -68,6 +68,16 @@
                 registerScheme(provider: provider)
             }
 
+            // Enable the WebKit inspector. Without this,
+            // `webkit_web_inspector_show` is a no-op — the inspector
+            // object exists but the developer-extras flag gates the
+            // window from actually appearing.
+            let webViewPtr = UnsafeMutableRawPointer(view)
+                .assumingMemoryBound(to: WebKitWebView.self)
+            if let settings = webkit_web_view_get_settings(webViewPtr) {
+                webkit_settings_set_enable_developer_extras(settings, gboolean(1))
+            }
+
             // Connect `script-message-received` so JS calls to
             // `mh.postMessage(json)` make it back into Swift.
             connectMessageHandler(ucm: ucm)

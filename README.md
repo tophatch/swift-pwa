@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.3.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.3.0) is the current release. Windows WinRT toasts, Per-Monitor V2 DPI, MSIX packaging, the opt-in WebView2 Evergreen Bootstrapper, a Windows binary in the release matrix, and the cross-platform auto-updater (Apple backend) all land in v0.3 — verified end-to-end on Windows 11 amd64 and ARM64 plus macOS 15. macOS 15+, iOS 18+, Linux (GTK3 + WebKitGTK 4.1, or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`), and Windows 11 (Win32 + WebView2) are first-class. Built-in plugins: window, clipboard, tray, notifications, updater. `Cmd+Opt+J` / `Ctrl+Alt+J` opens DevTools on every backend. Android, biometric auth / dialog / fs plugins, the Linux AppImage + Windows updater backends, and the `swift-pwa updater` CLI subcommands are queued for v0.4.
+> **Status:** [`v0.3.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.3.0) is the current release; macOS 15+, iOS 18+, Linux (GTK3 / GTK4), and Windows 11 (WebView2) are all first-class. The `[Unreleased]` branch on `main` adds dialog / fs / biometric-auth plugins and the `swift-pwa updater` publishing CLI. See the [feature matrix](#feature-matrix) for what works where, and [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown.
 
 ## Why
 
@@ -45,7 +45,7 @@ cd MyApp
 
 Other available assets: `swift-pwa-macos-x86_64`, `swift-pwa-linux-x86_64`, `swift-pwa-windows-x86_64.exe` (added to the release matrix in v0.3). See [docs/windows-setup.md](docs/windows-setup.md) for the Windows toolchain.
 
-Or build the CLI from source (works on every platform, including Windows):
+Or build the CLI from source (works on every platform, including Windows on ARM64):
 
 ```bash
 git clone https://github.com/tophatch/swift-pwa
@@ -120,183 +120,85 @@ open ./build/MyApp.app
 
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 
-## Supported platforms
+## Feature matrix
 
-| Platform | Webview             | Status                                                                                       |
-|---------:|---------------------|----------------------------------------------------------------------------------------------|
-| macOS 15 | WKWebView           | First class                                                                                  |
-| iOS 18   | WKWebView           | First class (UIScene)                                                                        |
-| Linux    | WebKitGTK 4.1 / 6.0 | First class (GTK3 default; GTK4 via `SWIFT_PWA_GTK4=1`)                                      |
-| Windows  | WebView2 (Edge)     | First class (Win32 + WebView2; Per-Monitor V2 DPI; WinRT toasts; portable `.exe` and MSIX)   |
-| Android  | android.webkit      | Stub (planned v0.4)                                                                          |
+`Yes` = first-class. `Partial` = works with documented caveats (footnoted; per-platform detail in the matching [docs/&lt;platform&gt;-setup.md](docs/)). `—` = not applicable. `v0.4` = on the roadmap.
 
-## Features
+| Capability                    | macOS                   | iOS                          | Linux GTK3                 | Linux GTK4              | Windows                  |
+| ----------------------------- | :---------------------: | :--------------------------: | :------------------------: | :---------------------: | :----------------------: |
+| Webview                       | WKWebView               | WKWebView                    | WebKitGTK 4.1              | WebKitGTK 6.0           | WebView2 (Edge)          |
+| Min OS / runtime              | macOS 15                | iOS 18                       | Ubuntu 22.04+ / Fedora 36+ | GTK 4.10+               | Win10 21H2+ + WebView2   |
+| JS↔Swift bridge               | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      |
+| Multi-window                  | Yes                     | Partial¹                     | Yes                        | Yes                     | Yes                      |
+| DevTools (`Cmd/Ctrl+Alt+J`)   | Yes                     | —                            | Yes                        | Yes                     | Yes                      |
+| Per-Monitor V2 DPI            | —                       | —                            | —                          | —                       | Yes                      |
+| `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      |
+| `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      |
+| `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      |
+| `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      |
+| `TrayPlugin`                  | Yes                     | —                            | Yes                        | —                       | Yes                      |
+| `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      |
+| `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            |
+| `UpdaterPlugin` (runtime)     | Yes                     | Enterprise / ad-hoc          | v0.4                       | v0.4                    | v0.4                     |
+| `swift-pwa updater` CLI       | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      |
+| Bundler artifact              | `.app`                  | `.app` / `.ipa`              | `.AppImage`                | `.AppImage`             | Portable / MSIX          |
+| Code-signing pass-through     | `codesign`              | `codesign`                   | —                          | —                       | `signtool`               |
 
-A capability index. Anything with a dedicated doc links out; anything without is documented inline below or in the platform setup docs.
+1. iOS UIScene single scene polished, multi-scene scaffolded.
+2. `Window.position()` / `setPosition` / `.didMove` are no-ops on GTK4 (Wayland refuses to give apps their own position).
+3. `dialog.saveFile` is a stub — iOS has no system save panel.
+4. GTK4 dialogs require GTK 4.10+ (`GtkAlertDialog` / `GtkFileDialog`).
+5. Apple notifications require a bundled, signed `.app` (`UNUserNotificationCenter` rejects unsigned processes).
 
-### Bridge & runtime
+The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 
-- **Tauri-style JS↔Swift bridge** — `__SWIFT_PWA__.invoke(cmd, args)` for unary, `__SWIFT_PWA__.subscribe(cmd, args, onChunk)` for streaming. Wire envelope is one frame format across WKWebView, WebKitGTK, and WebView2. See [JS API](#js-api) and [Swift API](#swift-api) below.
-- **`bridge.js` injected at document start** — calls work before user JS loads. Three native message channels picked automatically (WKWebView `messageHandlers`, WebKitGTK `script_message_handler`, WebView2 `chrome.webview`).
-- **Bundled-asset scheme handler** — `pwa://localhost/...` on Apple / Linux, `https://swift-pwa.local/...` on Windows (WebView2's `SetVirtualHostNameToFolderMapping`). Relative URLs / `fetch` / ESM all work without a local dev server.
-- **Custom commands** — `ctx.registry.register("ping") { (_: Args, _) in result }`. Plugins are just bundles of commands sharing a name; see `Plugin.swift`.
-
-### Built-in plugins
-
-Auto-installed on every backend:
-
-- **`WindowPlugin`** — `window.id` / `list`, `setTitle` / `title`, `setSize` / `size`, `setPosition` / `position`, `focus`, `minimize` / `maximize`, `setFullscreen` / `isFullscreen`, `close`, `subscribe` (streaming events). Multi-window on macOS / Linux / Windows; UIScene-aware on iOS (single scene polished, multi-scene scaffolded).
-- **`ClipboardPlugin`** — `clipboard.readText`, `writeText`, `clear`. (`clear` wipes on Apple; on X11 / Wayland it only relinquishes local ownership of the selection.)
-
-Opt-in (add via `ctx.use(...)`):
-
-- **`TrayPlugin`** — `tray.setIcon` / `setTooltip` / `setMenu` / `setVisible` / `subscribe`. Full impl on macOS (`NSStatusItem`) and GTK3 (`libayatana-appindicator3` → StatusNotifierItem over D-Bus); no-op stub on iOS and GTK4 (no available system tray). `TrayEvent.click` is macOS-only (SNI gives the desktop panel click semantics on Linux).
-- **`NotificationsPlugin`** — `notifications.requestAuthorization`, `send`. macOS / iOS use `UNUserNotificationCenter` (requires a bundled, signed app — see [docs/macos-setup.md](docs/macos-setup.md#known-limitations-on-macos)); Linux uses GIO D-Bus to `org.freedesktop.Notifications` (no `libnotify` dep); Windows uses `Windows.UI.Notifications.ToastNotificationManager` via a C++/WinRT shim with `Shell_NotifyIconW` balloon fallback (see [docs/windows-setup.md](docs/windows-setup.md)).
-- **`UpdaterPlugin`** — `updater.check`, `updater.run` (streaming), `updater.installAndRelaunch`. macOS bundle swap and iOS enterprise / ad-hoc ship in v0.3; Linux AppImage and Windows MSIX / portable queued for v0.4. See [docs/auto-updates.md](docs/auto-updates.md).
-- **`DialogPlugin`** — `dialog.message`, `dialog.confirm`, `dialog.openFile`, `dialog.saveFile`, `dialog.openDirectory`. Native message + file pickers on every backend: `NSAlert` / `NSOpenPanel` on macOS (window-modal sheets), `UIAlertController` / `UIDocumentPickerViewController` on iOS, `GtkMessageDialog` / `GtkFileChooser` on GTK3, `GtkAlertDialog` / `GtkFileDialog` on GTK4 (4.10+), `MessageBoxW` / `TaskDialogIndirect` / `IFileOpenDialog` on Windows. Parented automatically to the originating window. iOS `saveFile` is a stub (no system save panel — see Known limitations).
-- **`FsPlugin`** — `fs.readText`, `fs.writeText`, `fs.readBinary` / `fs.writeBinary` (base64), `fs.exists`, `fs.mkdir`, `fs.remove`, `fs.readDir`, `fs.copy`, `fs.rename`, `fs.metadata`. Foundation-backed `SystemFs` works identically on every host — no per-backend implementation. Pair with `DialogPlugin.openFile` for "user grants the path" privilege flows on hosts without a sandbox.
-- **`BiometricAuthPlugin`** — `biometric.canAuthenticate`, `biometric.authenticate`. Touch ID / Face ID / Optic ID on Apple via `LocalAuthentication`, Windows Hello via `UserConsentVerifier` (C++/WinRT shim). Linux is a stub (no clean cross-distro primitive — see Known limitations). Cancellation is reported as `authenticated: false` with `error: "cancelled"`, never thrown.
-
-### Bundling & distribution
-
-`swift-pwa build --target <platform>` produces a native artifact from one source tree. `pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets are all generated from it.
-
-| Platform | Artifact                                                 | Setup                                          |
-|----------|----------------------------------------------------------|------------------------------------------------|
-| macOS    | `.app` (+ Developer ID `--sign` pass-through)            | [docs/macos-setup.md](docs/macos-setup.md)     |
-| iOS      | `.app` (Simulator) / `.ipa` (device, partial)            | [docs/ios-setup.md](docs/ios-setup.md)         |
-| Linux    | `.AppImage` (via `linuxdeploy`)                          | [docs/linux-setup.md](docs/linux-setup.md)     |
-| Windows  | Portable folder bundle or MSIX (`--package-format msix`) | [docs/windows-setup.md](docs/windows-setup.md) |
-
-See [Bundling](#bundling) below for the command reference.
-
-### Platform polish
-
-- **Per-Monitor V2 DPI on Windows.** `setSize` / `position` convert at API boundaries; `WM_DPICHANGED` accepts the OS-suggested rect verbatim. Non-client (titlebar, scrollbars) scales correctly. Details in [docs/windows-setup.md](docs/windows-setup.md).
-- **Cross-platform DevTools shortcut.** `Cmd+Opt+J` on macOS (WKWebView's `_showInspector:` SPI), `Ctrl+Alt+J` on GTK3/4 (`webkit_web_inspector_show`), `Ctrl+Alt+J` on Windows (WebView2's `OpenDevToolsWindow`).
-- **Opt-in WebView2 Evergreen Bootstrapper** (`--bootstrap-webview2`) — bundle a ~1.7 MB Microsoft installer next to your EXE for fresh boxes without the WebView2 Runtime. See [docs/windows-setup.md](docs/windows-setup.md).
-- **Two parallel Linux backends** — GTK3 + WebKitGTK 4.1 by default for Ubuntu 22.04+ / Fedora 36+; GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1` for newer distros. Same Swift module name (`SwiftPWAGTK`) so the umbrella doesn't change. See [docs/linux-setup.md](docs/linux-setup.md).
-
-## JS API
+## API at a glance
 
 ```js
-// Provided by the bridge runtime, injected at document start.
-const ok = await __SWIFT_PWA__.invoke('window.setTitle', { title: 'Hello' });
-
-const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
-    console.log('window event:', event);
-});
-// later: unsub();
-
-// Built-in clipboard plugin (auto-installed on every backend).
-await __SWIFT_PWA__.invoke('clipboard.writeText', { text: 'copied!' });
-const { text } = await __SWIFT_PWA__.invoke('clipboard.readText');
-
-// Opt-in plugins below — only available when the Swift side did
-// `ctx.use(DialogPlugin(...))`, `FsPlugin(...)`, etc.
-
-// Native dialogs.
-await __SWIFT_PWA__.invoke('dialog.message',
-    { title: 'Heads up', message: 'Saved.', kind: 'info' });
-
-const { ok: confirmed } = await __SWIFT_PWA__.invoke('dialog.confirm',
-    { message: 'Discard changes?', okLabel: 'Discard', cancelLabel: 'Keep editing' });
-
-const { paths } = await __SWIFT_PWA__.invoke('dialog.openFile', {
-    filters: [{ name: 'Images', extensions: ['png', 'jpg'] }],
-    multiple: false,
-});
-
-// Filesystem (path comes from a picker or your own bookkeeping).
-await __SWIFT_PWA__.invoke('fs.writeText', { path: paths[0], contents: 'hi' });
-const { contents } = await __SWIFT_PWA__.invoke('fs.readText', { path: paths[0] });
-
-// Biometric (Touch / Face / Optic ID on Apple, Windows Hello on Windows,
-// stub on Linux — `available: false`). Cancel reports
-// `authenticated: false, error: "cancelled"` rather than throwing.
-const status = await __SWIFT_PWA__.invoke('biometric.canAuthenticate');
-if (status.available) {
-    const { authenticated } = await __SWIFT_PWA__.invoke('biometric.authenticate',
-        { reason: 'Unlock the journal' });
-    if (authenticated) { /* ... */ }
-}
+// JS — full reference: docs/javascript-api.md
+await __SWIFT_PWA__.invoke('window.setTitle', { title: 'Hello' });
+const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (e) => { /* ... */ });
 ```
 
-## Swift API
-
 ```swift
+// Swift — full reference: docs/swift-api.md
 import SwiftPWA
 
-@main
-struct HelloApp {
-    static func main() async throws {
-        let runtime = try SwiftPWA.runtime()
-        try runtime.run { ctx in
-            // Register a custom command
-            await ctx.registry.register("ping") { (_: EmptyArgs, _) in
-                "pong"
-            }
-
-            // Opt-in plugins. `WindowPlugin` and `ClipboardPlugin`
-            // are auto-installed; everything else is à la carte so
-            // apps that don't need a tray / file dialogs / biometrics
-            // don't pay the binary or runtime cost.
-            ctx.use(DialogPlugin(SystemDialog()))
-            ctx.use(FsPlugin(SystemFs()))
-            ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
-            // ctx.use(TrayPlugin(SystemTray()))
-            // ctx.use(NotificationsPlugin(SystemNotifications()))
-            // ctx.use(UpdaterPlugin(AppleUpdater(...)))
-
-            _ = try ctx.createWindow(.init(
-                title: "Hello",
-                size: .init(width: 1024, height: 768),
-                content: .bundled(Bundle.main.bundleURL.appendingPathComponent("web/index.html"))
-            ))
-        }
-    }
+let runtime = try SwiftPWA.runtime()
+try runtime.run { ctx in
+    ctx.use(DialogPlugin(SystemDialog()))   // opt-in plugins
+    ctx.use(FsPlugin(SystemFs()))
+    _ = try ctx.createWindow(.init(
+        title: "Hello",
+        size: .init(width: 1024, height: 768),
+        content: .bundled(Bundle.main.bundleURL.appendingPathComponent("web/index.html"))
+    ))
 }
 ```
 
 ## Bundling
 
 ```bash
-swift run swift-pwa build --target macos                 # → MyApp.app
+swift run swift-pwa build --target macos                              # → MyApp.app
 swift run swift-pwa build --target macos --sign "Developer ID Application: Acme"
-swift run swift-pwa build --target ios --simulator       # → unsigned .app for sim
-swift run swift-pwa build --target linux                 # → MyApp-x86_64.AppImage
-swift run swift-pwa build --target windows               # → build\MyApp\MyApp.exe (+ web/, pwa.json)
+swift run swift-pwa build --target ios --simulator                    # unsigned .app for sim
+swift run swift-pwa build --target linux                              # → MyApp-x86_64.AppImage
+swift run swift-pwa build --target windows                            # → portable folder bundle
 swift run swift-pwa build --target windows --package-format msix --sign <thumbprint>
-swift run swift-pwa build --target windows --bootstrap-webview2  # bundle the WebView2 Evergreen Bootstrapper
+swift run swift-pwa build --target windows --bootstrap-webview2       # bundle the Evergreen Bootstrapper
 ```
 
-The `pwa.json` manifest in your project root is the source of truth — `Info.plist`, `.desktop`, and icon assets are all generated from it.
+`pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup).
+
+The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md).
 
 ## Roadmap
 
-### Known limitations
+- **v0.4** — Dialog / fs / biometric-auth plugins and the `swift-pwa updater` CLI are landed on `main` (see [`[Unreleased]`](CHANGELOG.md) for the per-backend breakdown). Still queued: Android (swift-android + JNI), auto-updater runtime backends on Linux AppImage and Windows MSIX / portable, minisign-format key + signature parsing, MSIX `--arch arm64` for cross-arch packages, streaming download progress for the macOS updater.
+- **v0.5** — GTK4 tray (retire the GTK3-only `libayatana-appindicator` dep in favour of `libayatana-appindicator-glib` so the same shim works on both backends).
+- **v0.5+** — Typed JS↔Swift codegen layer, hot-reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
 
-- **`Window.position()` / `setPosition` are no-ops on the GTK4 backend.** Wayland refuses to give apps their own position, and CSD makes the concept ambiguous; GTK4 dropped the position APIs entirely. `position()` returns `.zero`, `setPosition` silently no-ops, and `.didMove` events are never emitted on GTK4. The GTK3 backend still supports all three.
-- **`TrayPlugin` is a no-op on iOS and on the GTK4 backend.** iOS has no system tray. GTK4 removed `GtkStatusIcon`, and the GTK3 path's `libayatana-appindicator3` can't be reused from a GTK4 process (a single process can't link both GTK3 and GTK4). On both platforms `SystemTray()` returns a stub that logs a one-shot warning so cross-platform code stays portable. Real GTK4 tray support is queued for v0.5 alongside the switch from `libayatana-appindicator` (GTK3-tied, deprecated) to `libayatana-appindicator-glib` (GTK-free, works for both backends) — see the Roadmap below.
-- **`TrayEvent.click` is macOS-only.** The freedesktop StatusNotifierItem spec gives the desktop panel ownership of click semantics on Linux; apps only see menu activations there.
-- **`NotificationsPlugin` requires a bundled, signed `.app` on Apple.** `UNUserNotificationCenter` raises an `NSException` when called from a process without a `CFBundleIdentifier`; the plugin pre-flights and throws a clean `BridgeError` instead of crashing, but actual banners only appear after `swift run swift-pwa build --target macos` (or via Xcode).
-- **Notarization is pass-through, not automated.** `--sign <identity>` invokes `codesign`; users still run `xcrun notarytool submit` manually.
-- **Windows toast persistence in Action Center requires a Start-menu shortcut.** The runtime sets a stable AppUserModelID (`SwiftPWA.<exe-stem>`) at process start which is enough for toasts to show, but Windows only keeps them in Action Center across reboots when the AUMID also matches a registered Start-menu `.lnk`. The MSIX bundler path takes care of this; portable bundles shipped outside an installer don't get persistence.
-- **Android bundler prints "not implemented".** Target is scaffolded; the actual `swift-pwa build --target android` build path is queued (see the Roadmap below).
-- **Auto-updates are Apple-only.** `AppleUpdater` covers macOS bundle swap and iOS enterprise / ad-hoc via `itms-services://`. Linux AppImage (atomic-rename onto the running mmap) and Windows MSIX / portable updater backends are queued, along with the `swift-pwa updater keygen / sign / manifest` CLI subcommands. macOS install fires no UI before the swap — apps that want a "Restart now / later" prompt should gate `updater.installAndRelaunch` behind their own dialog.
-- **`DialogPlugin.saveFile` is a stub on iOS.** iOS has no system save panel; apps export through `UIDocumentPickerViewController(forExporting:)` (which takes a *written* file URL) or `UIActivityViewController`, neither of which fits the cross-platform shape. The plugin returns `nil` and logs a one-shot stderr warning on first call.
-- **GTK4 dialogs require GTK 4.10+** for `GtkAlertDialog` / `GtkFileDialog`. Older 4.x distros need to upgrade or stick with the GTK3 backend (which does not have this constraint).
-- **`BiometricAuthPlugin` is unsupported on Linux.** No cross-distro biometric primitive exists — `libfprint` only covers a subset of fingerprint readers and isn't preinstalled, polkit gives root-style authorization, PAM is system configuration. The Linux `SystemBiometricAuth` always reports `available: false`; apps targeting Linux should fall back to a passphrase flow and treat `canAuthenticate().available == false` as the universal cue.
-- **Windows Hello consent prompt requires a foreground window.** The shim goes through `IUserConsentVerifierInterop::RequestVerificationForWindowAsync` (the desktop-app variant of the WinRT API) and anchors the dialog to `GetForegroundWindow()` — without this, the static WinRT entry point starts the verification (camera turns on) but never shows the prompt UI on unpackaged builds. Headless / background-only callers without a foreground window will see the OS fall through to the desktop-as-parent which is fine for the prompt rendering but won't restore focus afterwards.
-- **`FsPlugin` does not enforce a path scope.** Apps that need a sandbox should layer it themselves (typically by gating writes behind `dialog.openFile` so the user grants paths through the picker).
-
-### Planned
-
-- **v0.4** — Dialog / fs / biometric-auth plugins are landed on `main` (see [`Unreleased`](CHANGELOG.md) for the per-backend breakdown). Still queued: Android (swift-android + JNI), auto-updater on Linux AppImage + Windows MSIX/portable, `swift-pwa updater` CLI (keygen / sign / manifest), minisign-format key + signature parsing, MSIX `--arch arm64` for cross-arch packages, streaming `URLSessionDownloadDelegate`-driven progress for the macOS updater.
-- **v0.5** — GTK4 tray + retire deprecated `libayatana-appindicator` dep. The current C shim links GTK3-only `libayatana-appindicator3`, which prints `libayatana-appindicator is deprecated. Please use libayatana-appindicator-glib in newly written code.` at runtime. Switching to `libayatana-appindicator-glib` decouples the shim from GTK so it works on GTK3 and GTK4 (which currently has a no-op `SystemTray` stub), and silences the warning. The catch: the menu API changes from `GtkMenu` to `DbusmenuMenuitem`/`DbusmenuServer` (libdbusmenu), so it's a real shim rewrite, not a pkg-config swap. Bundling it with "GTK4 tray finally works" justifies the churn — doing the rewrite without the GTK4 win wouldn't.
-- **v0.5+** — Typed JS↔Swift codegen layer, hot reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
-
-See [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown of what's already shipped.
+Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.
 
 ## Platform setup
 

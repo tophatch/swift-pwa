@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-07
+
 ### Added
 
 - **`DialogPlugin` — cross-platform native dialogs.** New opt-in plugin exposing `dialog.message` (info / warning / error message box), `dialog.confirm` (Cancel / OK with optional custom labels), `dialog.openFile` (single or multi-select file picker), `dialog.saveFile`, and `dialog.openDirectory`. Each backend wires the platform's HIG dialog: macOS uses `NSAlert` for message + confirm and `NSOpenPanel` / `NSSavePanel` for files (rendered as window-modal sheets when `NSApp.keyWindow` is available, app-modal otherwise); iOS uses `UIAlertController` for message + confirm and `UIDocumentPickerViewController` for openFile / openDirectory; the GTK3 backend goes through `GtkMessageDialog` / `GtkFileChooserDialog` via a new shim that wraps the variadic C constructors and runs them with `gtk_dialog_run`; the GTK4 backend uses `GtkAlertDialog` / `GtkFileDialog` (added in GTK 4.10) with `GAsyncReadyCallback` continuations bridged into Swift checked continuations the same way the GTK4 clipboard does it; Windows uses `MessageBoxW` / `TaskDialogIndirect` plus `IFileOpenDialog` / `IFileSaveDialog` from a new `swiftpwa_dialog` C++/COM shim (the COM lifetime juggling is ~80 lines of C++ that would balloon to several hundred in Swift). Dialogs are parented to the originating window automatically — `DialogPlugin` reads `CommandContext.originWindow` and threads a `WindowID` through every method, which each backend resolves to the platform-native parent (sheet on macOS, transient-for on GTK, owner HWND on Windows). `MockDialog` in `_SwiftPWATestSupport` lets apps test their UI flow without showing native panels.

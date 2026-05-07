@@ -70,11 +70,19 @@ swiftpwa_biometric_verify_result map_verify(WSCU::UserConsentVerificationResult 
 
 bool ensure_apartment() {
     // The verifier APIs require a multithreaded apartment when called
-    // off the UI thread. We init MTA on first use; if the thread is
-    // already STA, RPC_E_CHANGED_MODE comes back and the existing
-    // apartment continues to work for these calls.
-    HRESULT hr = winrt::init_apartment(winrt::apartment_type::multi_threaded);
-    return SUCCEEDED(hr) || hr == RPC_E_CHANGED_MODE;
+    // off the UI thread. `winrt::init_apartment` returns *void* —
+    // unlike the C `RoInitialize`, the C++/WinRT projection throws
+    // `winrt::hresult_error` on failure. The "apartment already
+    // initialized in a different mode" case (RPC_E_CHANGED_MODE)
+    // never reaches the throw path: the WinRT runtime treats it as
+    // success because the existing apartment continues to work for
+    // these calls.
+    try {
+        winrt::init_apartment(winrt::apartment_type::multi_threaded);
+        return true;
+    } catch (...) {
+        return false;
+    }
 }
 
 } // namespace

@@ -15,6 +15,22 @@
 
 #include "swiftpwa_dialog.h"
 
+// Activate Common Controls v6 (the themed control set) by baking a
+// `manifestdependency` directive into the linked EXE's resource
+// manifest. Required by `TaskDialogIndirect`: comctl32.lib's import
+// resolves at load time against the v5 DLL by default — v5 has the
+// symbol stubbed by ordinal but not implemented, so the loader
+// surfaces it as `Ordinal 345 could not be located` at process
+// start. The manifest dependency tells the OS to load v6 instead,
+// which has the real implementation. Both `link.exe` and `lld-link`
+// (Swift-on-Windows uses the latter via clang-cl) honour the pragma.
+#if defined(_WIN32) || defined(_WIN64)
+#pragma comment(linker, "\"/manifestdependency:type='win32' " \
+    "name='Microsoft.Windows.Common-Controls' version='6.0.0.0' " \
+    "processorArchitecture='*' publicKeyToken='6595b64144ccf1df' " \
+    "language='*'\"")
+#endif
+
 #include <windows.h>
 #include <commctrl.h>     // TaskDialogIndirect
 #include <shobjidl.h>     // IFileOpenDialog / IFileSaveDialog

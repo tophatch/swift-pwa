@@ -428,6 +428,23 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   `Sources/CWebView2Shim/swiftpwa_biometric.cpp` (C++/WinRT, header-
   only) and links the same `WindowsApp.lib` we already pull in for
   toasts.
+- **Newly-added shim headers can stay stale across `swift build`.**
+  When a new `.h` lands in `Sources/CWebView2Shim/include/` (e.g.
+  `swiftpwa_dialog.h`, `swiftpwa_biometric.h`), an *incremental* Swift
+  build under `.build/x86_64-unknown-windows-msvc/release/` sometimes
+  doesn't regenerate the clang module map and the new symbols stay
+  invisible to Swift. Symptom: "no such module" or "use of unresolved
+  identifier `swiftpwa_<...>`" on a build that just compiled the
+  matching `.cpp` cleanly. Fix: delete the arch-qualified release
+  output (a full `.build` wipe is not needed):
+
+  ```powershell
+  Remove-Item -Recurse .build\x86_64-unknown-windows-msvc\release
+  ```
+
+  This is a SwiftPM cache-invalidation quirk, not a swift-pwa bug.
+  Drops out of every fresh checkout, so you'll only hit it after
+  pulling new header files into an already-built tree.
 - **`DialogPlugin.confirm` routes through `TaskDialogIndirect` only
   when labels are customised.** `MessageBoxW` is the simpler / more
   forgiving path (no `comctl32` v6 manifest dance, works on locked-

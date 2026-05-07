@@ -15,10 +15,12 @@ import Foundation
 /// (e.g. `dialog.confirm` after typing a password) and treat
 /// `canAuthenticate().available == false` as the universal cue.
 ///
-/// **Windows requires a packaged executable** (MSIX) for
-/// `RequestVerificationAsync` to succeed reliably. Unpackaged
-/// portable builds will see `available == true` but `authenticate`
-/// can fail with `DeviceNotPresent` / similar status codes — see the
+/// **Windows works on both packaged and unpackaged builds.** The
+/// shim uses the `IUserConsentVerifierInterop` desktop-app variant
+/// (`RequestVerificationForWindowAsync`), passing an explicit HWND
+/// parent so the consent prompt anchors to a real window. The
+/// static `RequestVerificationAsync` entry point assumes package
+/// identity and won't show its UI from a portable EXE — see the
 /// notes in [docs/windows-setup.md](docs/windows-setup.md).
 public protocol BiometricAuth: AnyObject, Sendable {
     /// Inspect the current host. The result is *advisory*: callers

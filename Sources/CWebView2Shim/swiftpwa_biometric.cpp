@@ -19,6 +19,13 @@
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Security.Credentials.UI.h>
+// Desktop-app interop interface for `UserConsentVerifier`. Required
+// by unpackaged Win32 EXEs — the static `RequestVerificationAsync`
+// entry point assumes package identity, kicks off the verification
+// (camera indicator turns on) but never shows the prompt UI, so the
+// IAsyncOperation hangs forever. The interop variant takes an
+// explicit HWND parent and brings up the dialog over our window.
+#include <UserConsentVerifierInterop.h>
 
 namespace WSCU = winrt::Windows::Security::Credentials::UI;
 namespace WF = winrt::Windows::Foundation;
@@ -127,7 +134,36 @@ void swiftpwa_biometric_request_verification(
     }
     try {
         winrt::hstring msg = message ? winrt::hstring{message} : winrt::hstring{L""};
-        auto op = WSCU::UserConsentVerifier::RequestVerificationAsync(msg);
+
+        // Pick a parent HWND for the consent dialog. `GetForegroundWindow`
+        // is the right choice in practice — it's whatever the user is
+        // looking at, which is by definition our app when they click
+        // the JS-side button. `GetActiveWindow` would only return our
+        // own thread's active window and miss the case where the call
+        // arrives on a non-UI worker. `GetDesktopWindow` is the
+        // last-resort fallback so we always pass *something* non-null.
+        HWND hwnd = GetForegroundWindow();
+        if (!hwnd) hwnd = GetDesktopWindow();
+
+        // The static `WSCU::UserConsentVerifier::RequestVerificationAsync`
+        // assumes package identity; from an unpackaged Win32 EXE it
+        // kicks off the verification (camera indicator turns on) but
+        // the prompt UI never displays, so the IAsyncOperation hangs
+        // forever and the JS side never gets a reply. The interop
+        // variant takes an explicit HWND parent and brings up the
+        // dialog as a modal over our window — this is the documented
+        // path for desktop apps.
+        auto factory = winrt::get_activation_factory<
+            WSCU::UserConsentVerifier, ::IUserConsentVerifierInterop>();
+
+        WF::IAsyncOperation<WSCU::UserConsentVerificationResult> op{nullptr};
+        winrt::check_hresult(factory->RequestVerificationForWindowAsync(
+            hwnd,
+            static_cast<HSTRING>(winrt::get_abi(msg)),
+            winrt::guid_of<WF::IAsyncOperation<WSCU::UserConsentVerificationResult>>(),
+            winrt::put_abi(op)
+        ));
+
         op.Completed([cb, user_data](
             const WF::IAsyncOperation<WSCU::UserConsentVerificationResult> &sender,
             WF::AsyncStatus status

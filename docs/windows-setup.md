@@ -411,6 +411,35 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   parent to exit, replaces the EXE, and relaunches. The `pwa.json`
   `updater.windows.install_mode` field (`passive` / `silent`) is
   reserved for that backend.
+- **`BiometricAuthPlugin` reliably succeeds only under MSIX identity.**
+  `Windows.Security.Credentials.UI.UserConsentVerifier::RequestVerificationAsync`
+  is the WinRT API the plugin wraps. On unpackaged portable
+  executables, it can return `DeviceNotPresent` even when Windows
+  Hello is configured for the current user — the documented behaviour
+  is "succeeds reliably only when the application has package
+  identity", and SwiftPM-built EXEs by default do not. Apps that
+  need biometrics to "just work" on every install should ship
+  MSIX (the bundler's `--package-format msix` path takes care of
+  the identity declaration in `AppxManifest.xml`). For unpackaged
+  builds, surface `BiometricAvailability.reason` to the user — the
+  raw status string makes the failure mode actionable. The plugin
+  itself has no link-time dependency on the WinRT projection
+  toolchain; the call surface lives in
+  `Sources/CWebView2Shim/swiftpwa_biometric.cpp` (C++/WinRT, header-
+  only) and links the same `WindowsApp.lib` we already pull in for
+  toasts.
+- **`DialogPlugin.confirm` routes through `TaskDialogIndirect` only
+  when labels are customised.** `MessageBoxW` is the simpler / more
+  forgiving path (no `comctl32` v6 manifest dance, works on locked-
+  down Server Core SKUs without the Desktop Experience), but its
+  buttons are fixed to system-localised "OK" / "Cancel". Whenever
+  the JS caller passes a non-`null` `okLabel` or `cancelLabel`, the
+  shim falls back to `TaskDialogIndirect` (themed, allows custom
+  text) — which depends on `comctl32.dll` (linked in the package
+  manifest) and the standard themed-controls activation context that
+  `swift-pwa`'s static linkage already provides. If you are running
+  on an SKU without `comctl32`, omit the labels and you'll get the
+  `MessageBoxW` path.
 - **`.build\release` symlink warning is cosmetic.** Without
   Developer Mode (Settings → For developers → Developer Mode) or
   Administrator privileges, SwiftPM can't create the

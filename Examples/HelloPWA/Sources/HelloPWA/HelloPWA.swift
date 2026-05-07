@@ -32,6 +32,24 @@ struct HelloPWAApp {
             // way of showing the bundling distinction.
             ctx.use(NotificationsPlugin(SystemNotifications()))
 
+            // Dialog plugin — native message / confirm / file pickers.
+            // Cross-platform: NSAlert / NSOpenPanel on macOS,
+            // UIAlertController / UIDocumentPickerViewController on
+            // iOS, GtkMessageDialog / GtkFileChooser on Linux,
+            // MessageBoxW / IFileOpenDialog on Windows.
+            ctx.use(DialogPlugin(SystemDialog()))
+
+            // Filesystem plugin — Foundation-backed, identical surface
+            // on every backend. Opt-in because filesystem access is
+            // the plugin most likely to be misused.
+            ctx.use(FsPlugin(SystemFs()))
+
+            // Biometric authentication. Apple LocalAuthentication
+            // (Touch ID / Face ID / Optic ID), Windows Hello via
+            // UserConsentVerifier; Linux is a stub that always
+            // reports unavailable.
+            ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
+
             // Drive a couple of menu items from Swift directly so users
             // can see backend-side reactions to tray events. JS also
             // subscribes via `tray.subscribe` and logs every event.

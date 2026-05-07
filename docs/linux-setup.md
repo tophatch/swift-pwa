@@ -228,6 +228,26 @@ remain:
 - **Swiftly's bundled toolchain prints noisy warnings** on Ubuntu
   (`libxml2.so.2: no version information available`, `prohibited
   flag(s): -pthread`). Cosmetic; ignore.
+- **`BiometricAuthPlugin` is unsupported on Linux.** There is no
+  cross-distro biometric primitive that maps cleanly onto a
+  per-app library: `libfprint` only covers a subset of fingerprint
+  readers and isn't preinstalled, polkit gives root-style
+  authorization rather than a "prove the user is here" prompt,
+  and PAM is system-level configuration that an app shouldn't
+  poke at. The Linux `SystemBiometricAuth` always reports
+  `available: false` (`reason: "biometric authentication is not
+  supported on Linux"`); `authenticate` returns `authenticated:
+  false` with the same string in the `error` field rather than
+  throwing — apps can fall back to a passphrase flow and treat
+  the `available` flag as the universal cue.
+- **GTK4 dialogs require GTK 4.10+.** `DialogPlugin` on the GTK4
+  backend is wired through `GtkAlertDialog` (message + confirm) and
+  `GtkFileDialog` (open / save / directory), both added in GTK 4.10.
+  Older GTK4 versions will fail at link time on the
+  `swiftpwa_alert_dialog_run` / `swiftpwa_file_dialog_run` symbols.
+  Either upgrade GTK or stick with the default GTK3 backend (which
+  uses `GtkMessageDialog` / `GtkFileChooserDialog` and has no version
+  floor beyond what WebKitGTK 4.1 itself requires).
 - **Auto-updater backend isn't implemented yet on Linux.**
   `UpdaterPlugin` and the cross-platform `Updater` protocol ship in
   v0.3 (Apple platforms only); the Linux AppImage backend lands in

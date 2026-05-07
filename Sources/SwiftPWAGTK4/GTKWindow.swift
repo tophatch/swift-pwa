@@ -42,6 +42,12 @@
             UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
         }
 
+        /// Internal accessor for sibling backend code (e.g. `SystemDialog`)
+        /// that needs to parent a transient dialog onto this window.
+        var nativeWindow: UnsafeMutablePointer<GtkWindow> {
+            window
+        }
+
         public init(config: WindowConfig, app: GTKAppContext) throws {
             guard let win = gtk_window_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "gtk_window_new failed")

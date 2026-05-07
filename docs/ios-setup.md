@@ -264,6 +264,15 @@ must be HTTPS — iOS rejects http manifests outright.
   enterprise distribution certificate or an ad-hoc profile that lists
   the device's UDID. A clean `BridgeError` is returned when the
   system declines to open the URL.
+- **`DialogPlugin.saveFile` returns `nil` on iOS.** iOS has no system
+  save panel. Apps that need a save flow should call
+  `UIDocumentPickerViewController(forExporting:)` directly (which takes
+  an already-written file URL) or present a `UIActivityViewController`
+  share sheet. The other dialog commands (`message`, `confirm`,
+  `openFile`, `openDirectory`) all work — `openFile` and
+  `openDirectory` are routed through `UIDocumentPickerViewController`
+  in opening / folder mode. `dialog.saveFile` logs a one-shot
+  stderr warning the first time it is called.
 - **`pwa.json.icon` only feeds the launch screen on iOS.** When
   set, the bundler generates a minimal `LaunchScreen.storyboard`
   with the icon centered on a black background and compiles it via

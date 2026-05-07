@@ -27,6 +27,12 @@
         public let webView: any PWAWebView
 
         private let hwnd: HWND
+
+        /// Internal accessor for sibling backend code (e.g. `SystemDialog`)
+        /// that needs to parent a Win32 dialog onto this window.
+        var nativeHwnd: HWND {
+            hwnd
+        }
         private let adapter: WebView2Adapter
         private let bridge: BridgeRuntime
         private weak var app: WindowsAppContext?

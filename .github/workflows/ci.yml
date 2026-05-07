@@ -72,6 +72,14 @@ jobs:
         # CI job, so without this step strict-concurrency / type-
         # inference regressions would slip past every push.
         run: swift build -v
+      - name: Build test targets
+        # `--build-tests` compiles the test bundles outside the test
+        # step's 5-min timer. Without it, `swift test` rebuilds the
+        # _SwiftPWATestSupport / *Tests modules from scratch — fast
+        # locally but slow enough on hosted runners (especially with
+        # swift-crypto's BoringSSL still settling) to push past the
+        # timer before any test actually runs.
+        run: swift build --build-tests
       - name: Test Core + CLI
         timeout-minutes: 5
         run: swift test --verbose --filter SwiftPWACoreTests --filter SwiftPWACLITests
@@ -106,6 +114,8 @@ jobs:
         # doesn't flag, plus pkg-config-resolution issues on the
         # GTK4 + WebKitGTK 6.0 system-library targets.
         run: swift build -v
+      - name: Build test targets
+        run: swift build --build-tests
       - name: Test Core + CLI
         timeout-minutes: 5
         run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
@@ -153,15 +163,15 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
       - name: Build (release)
         run: swift build -c release
-      - name: Build (debug, for tests)
+      - name: Build (debug + test targets)
         # `swift test` drops back to the debug configuration regardless
         # of the prior release build, which on Windows means a from-
         # scratch rebuild of swift-crypto's BoringSSL (~hundreds of
-        # clang invocations). Pulling the debug build into its own step
-        # keeps the test step's timeout focused on test time rather
-        # than the rebuild — without this, the test step kept hitting
-        # the 5-min cap mid-rebuild before any test actually ran.
-        run: swift build
+        # clang invocations). `--build-tests` compiles both the package
+        # libraries and the test bundles in one pass outside the test
+        # step's 5-min timer — without this, the test step kept hitting
+        # the timeout mid-rebuild before any test actually ran.
+        run: swift build --build-tests
       - name: Test (cross-platform suites)
         timeout-minutes: 5
         # SwiftPWAWindowsTests is a placeholder — we run the

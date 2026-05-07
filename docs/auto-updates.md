@@ -354,3 +354,14 @@ happens against the artifact bytes only.
   "Restart now / later" dialog should gate `updater.installAndRelaunch`
   behind their own prompt UI (the `readyToInstall` event from
   `updater.run` is the natural prompt point).
+
+## Pre-release verification
+
+Per-platform install machinery (`ditto` on macOS, atomic `rename(2)`
+on Linux, `Move-Item` / `Add-AppxPackage` on Windows,
+`itms-services://` on iOS) is the part of the updater that no test
+process can usefully exercise. Walk the **Updater** module of
+[manual-test-cases.md](manual-test-cases.md) before tagging — eight
+human-driven cases covering every install path, signature failure
+modes, the v0.4 MSIX post-install relaunch, and `minisign(1)`
+interop.

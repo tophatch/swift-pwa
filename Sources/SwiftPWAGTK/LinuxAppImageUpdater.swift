@@ -4,6 +4,16 @@
     import Glibc
     import SwiftPWACore
 
+    #if canImport(FoundationNetworking)
+        // swift-corelibs-foundation (Linux + Windows) ships URLSession via a
+        // separate module. The bundlers and the shared UpdaterDownload
+        // helper have this same conditional import — without it, the
+        // URLSession references below are unresolved on Linux despite the
+        // `#if os(Linux)` guard, because Swift's Foundation overlay only
+        // re-exports the networking surface on Apple.
+        import FoundationNetworking
+    #endif
+
     // NOTE: This file is duplicated verbatim in Sources/SwiftPWAGTK4/. The
     // GTK3 and GTK4 backends ship identical AppImage update logic — the
     // updater touches no GTK / WebKit symbols, so the only reason for the

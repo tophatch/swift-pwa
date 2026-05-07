@@ -6,10 +6,11 @@ in place, and the next launch is the new version. The same manifest
 format covers every platform — different artifacts under one
 `platforms` table.
 
-> **Status (v0.3):** macOS bundle swap and iOS enterprise / ad-hoc
-> (`itms-services://`) ship in `AppleUpdater`. Linux AppImage and
-> Windows MSIX / portable backends, plus the
-> `swift-pwa updater keygen / sign / manifest` CLI, are queued for v0.4.
+> **Status:** macOS bundle swap and iOS enterprise / ad-hoc
+> (`itms-services://`) ship in `AppleUpdater` (v0.3). The
+> `swift-pwa updater keygen / sign / manifest` CLI is landed on `main`
+> for the v0.4 release. Linux AppImage and Windows MSIX / portable
+> runtime backends are still queued for v0.4.
 
 ## Wiring the runtime
 
@@ -100,8 +101,9 @@ The format is byte-compatible with Tauri v1's updater manifest, so
 existing publishing tooling (e.g. `tauri-action`) can produce
 swift-pwa manifests as-is.
 
-You can pre-declare the same wiring in `pwa.json` for the future
-`swift-pwa updater manifest` CLI step (v0.4) to consume:
+You can pre-declare the same wiring in `pwa.json` so `keygen` can print
+a paste-ready block and the runtime side can read it from one source of
+truth:
 
 ```json
 "updater": {
@@ -110,6 +112,79 @@ You can pre-declare the same wiring in `pwa.json` for the future
   "pubkey_algorithm": "ed25519"
 }
 ```
+
+## Publishing — `swift-pwa updater` CLI
+
+Three subcommands cover the publishing pipeline. They emit the same
+wire format the runtime expects, so the round-trip is end-to-end
+verified against `AppleUpdater.verifyEd25519` in CI.
+
+### 1. `keygen` — one-time per app
+
+Generates an Ed25519 keypair. The private file is written `0600` so a
+stray `cat` from another shell on the dev box doesn't leak it; the
+public file is `0644` and is meant to ship in `pwa.json`.
+
+```bash
+swift run swift-pwa updater keygen \
+    --private-key key.priv \
+    --public-key key.pub
+```
+
+The command also prints a paste-ready `pwa.json` `updater` block with
+the public key already filled in. Pass `--force` to overwrite existing
+files.
+
+### 2. `sign` — per release artifact
+
+Signs an artifact with the private key. Default output is
+`<artifact>.sig`; pass `--stdout` to print the base64 signature
+instead, or `-o <path>` to write somewhere specific.
+
+```bash
+swift run swift-pwa updater sign \
+    --private-key key.priv \
+    ./build/HelloPWA-0.4.0-arm64.app.tar.gz
+# → wrote ./build/HelloPWA-0.4.0-arm64.app.tar.gz.sig
+```
+
+The signature is base64 of the raw 64-byte Ed25519 signature, byte-
+compatible with what `AppleUpdater.verifyEd25519` (and the future
+`LinuxAppImageUpdater` / `WindowsUpdater`) accepts.
+
+### 3. `manifest` — assemble the JSON the endpoint URL serves
+
+Each `--platform` spec is one of three forms — pick whichever fits
+your release flow. The CLI parser correctly reassembles trailing `==`
+base64 padding, so real Ed25519 signatures round-trip cleanly even
+though `=` is the field separator.
+
+| Form | When to use |
+| :--- | :--- |
+| `<target>=<artifact-path>=<download-url>` | One-shot — sign and embed in a single pass with `--private-key`. |
+| `<target>=<download-url>=<base64-signature>` | Pre-signed (e.g. signature came out of an earlier `swift-pwa updater sign`, or from CI artefact metadata). |
+| `<target>=<download-url>` | iOS enterprise / ad-hoc only — no signature, since `itms-services://` delegates trust to Apple. |
+
+```bash
+swift run swift-pwa updater manifest \
+    --version 0.4.0 \
+    --notes "Bug fixes and improvements." \
+    --private-key key.priv \
+    --platform darwin-aarch64=./build/HelloPWA-0.4.0-arm64.app.tar.gz=https://updates.example.com/HelloPWA-0.4.0-arm64.app.tar.gz \
+    --platform darwin-x86_64=./build/HelloPWA-0.4.0-x86_64.app.tar.gz=https://updates.example.com/HelloPWA-0.4.0-x86_64.app.tar.gz \
+    --platform ios-aarch64-enterprise=https://updates.example.com/HelloPWA-0.4.0-manifest.plist \
+    --output manifest.json
+```
+
+`--pub-date` defaults to the current UTC time in ISO-8601 form; pass
+it explicitly if you want the publication date pinned to your build's
+timestamp rather than the manifest's. Pass `--force` to overwrite an
+existing `manifest.json`.
+
+The CLI uses `swift-crypto`'s `Crypto` module rather than `CryptoKit`,
+so `keygen` and `sign` work on Linux and Windows release machines too;
+on Apple platforms `import Crypto` shadows CryptoKit so signatures
+produced under either toolchain are interchangeable.
 
 ## Per-platform notes
 
@@ -185,8 +260,6 @@ reserved for that backend.
   `updater.run` is the natural prompt point).
 - **Linux AppImage and Windows MSIX / portable backends** —
   `AppleUpdater` ships in v0.3; `LinuxAppImageUpdater` and
-  `WindowsUpdater` are queued for v0.4.
-- **CLI signing + manifest emission** — `swift-pwa updater keygen` /
-  `sign` / `manifest` lands in v0.4; for now sign and host manifests
-  with whatever tooling you prefer (Tauri v1 manifest format is
-  byte-compatible).
+  `WindowsUpdater` are queued for v0.4. The publishing CLI already
+  emits manifests for those targets — the missing piece is the
+  runtime side that consumes them.

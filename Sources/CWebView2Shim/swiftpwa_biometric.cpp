@@ -16,6 +16,16 @@
 #include "swiftpwa_biometric.h"
 
 #include <windows.h>
+// `WIN32_LEAN_AND_MEAN` excludes `<ole2.h>` (and therefore
+// `<unknwn.h>`) from the `<windows.h>` umbrella. C++/WinRT's
+// `guid_of<T>` specialization for classic COM interop interfaces
+// (e.g. `IUserConsentVerifierInterop` below) trips a `static_assert`
+// at template-instantiation time if `IUnknown` hasn't been declared
+// yet. Pull `<unknwn.h>` in explicitly between `<windows.h>` and
+// `<winrt/base.h>` to satisfy that requirement. See
+// `winrt/base.h:758` for the assertion text — surfaced on
+// Windows SDK 10.0.26100.0 builds of this shim.
+#include <unknwn.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Security.Credentials.UI.h>

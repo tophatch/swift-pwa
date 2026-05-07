@@ -213,7 +213,7 @@
         /// `Add-AppxPackage`.
         private func stage(
             info: UpdateInfo,
-            yield: @Sendable (UpdaterEvent) -> Void
+            yield: @escaping @Sendable (UpdaterEvent) -> Void
         ) async throws -> URL {
             let dir = try ensureVersionStagingDir(version: info.version)
             let suffix = installMode == .msix ? "msix" : "exe"

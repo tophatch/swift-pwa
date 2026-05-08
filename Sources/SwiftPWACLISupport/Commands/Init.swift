@@ -21,8 +21,26 @@ struct Init: AsyncParsableCommand {
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
         let root = path.map { URL(fileURLWithPath: $0) } ?? cwd.appendingPathComponent(name)
 
-        if fm.fileExists(atPath: root.path) {
-            throw ValidationError("Directory already exists: \(root.path)")
+        // Per-file conflict check rather than "directory exists": this lets
+        // `--path .` scaffold alongside an existing README / LICENSE / .git
+        // dir, while still refusing to silently clobber a real swift-pwa
+        // project's Package.swift / pwa.json.
+        let relPathsToWrite = [
+            "pwa.json",
+            "Package.swift",
+            "Sources/\(name)/App.swift",
+            "Sources/\(name)/AndroidEntry.swift",
+            "web/index.html",
+            ".gitignore"
+        ]
+        let conflicts = relPathsToWrite.filter {
+            fm.fileExists(atPath: root.appendingPathComponent($0).path)
+        }
+        if !conflicts.isEmpty {
+            throw ValidationError(
+                "Refusing to overwrite existing files in \(root.path):\n  - "
+                    + conflicts.joined(separator: "\n  - ")
+            )
         }
 
         let id = bundleId ?? "com.example.\(name.lowercased())"
@@ -100,7 +118,11 @@ struct Init: AsyncParsableCommand {
         )
 
         print("Created \(root.path)")
-        print("Next: cd \(name) && swift run swift-pwa build --target macos")
+        if root.standardizedFileURL == cwd.standardizedFileURL {
+            print("Next: swift run swift-pwa build --target macos")
+        } else {
+            print("Next: cd \(name) && swift run swift-pwa build --target macos")
+        }
     }
 }
 

@@ -68,6 +68,18 @@ struct Build: AsyncParsableCommand {
     )
     var crossCompileAndroid: Bool = false
 
+    @Flag(
+        help: """
+        Prune the bundled Swift runtime stdlib `.so` set to only what the app's `.so` actually \
+        depends on (transitive `DT_NEEDED` walk via `readelf -d`). Shrinks the APK from \
+        ~131 MB down to ~30 MB on a typical app — the wholesale stdlib bundle includes \
+        modules most apps never touch (`_Differentiation`, `_StringProcessing`, `RegexBuilder`, \
+        `Distributed`, etc.). Off by default while we let the on-device round-trip soak; \
+        opt in once you've verified your app boots and want the size win for distribution.
+        """
+    )
+    var pruneAndroidRuntime: Bool = false
+
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
@@ -142,7 +154,8 @@ struct Build: AsyncParsableCommand {
                 projectRoot: cwd,
                 outputDir: outputDir,
                 abis: abiList,
-                crossCompile: crossCompileAndroid
+                crossCompile: crossCompileAndroid,
+                pruneRuntime: pruneAndroidRuntime
             )
             let url = try await bundler.build()
             print("Built: \(url.path)")

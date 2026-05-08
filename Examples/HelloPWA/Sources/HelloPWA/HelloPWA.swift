@@ -27,18 +27,13 @@ func configure(_ ctx: any AppContext) throws {
         NowResult(iso: ISO8601DateFormatter().string(from: Date()))
     })
 
-    // System*-backed plugins live in the platform backend
-    // modules (SwiftPWAWebKit / SwiftPWAGTK / SwiftPWAWindows).
-    // The Android backend (v0.5 preview) doesn't ship its
-    // System* counterparts yet — Tray / Dialog / Notifications /
-    // BiometricAuth are queued for v0.5.x. Gate the
-    // registrations so the demo still builds for Android;
-    // the JS-side commands resolve to "command not registered"
-    // until the Android System* implementations land.
+    // Tray — only registered where a real surface exists. Android
+    // has no system-tray analogue (foreground-service notifications
+    // are a heavy and Android-specific UX), so we skip it there
+    // rather than register the no-op stub. The demo's capability
+    // gating greys the tray buttons out automatically based on
+    // `__platform.info.commands`.
     #if !os(Android)
-        // Tray demo — full implementation on macOS / GTK3, no-op
-        // on iOS / GTK4 (the SystemTray stub there logs a one-shot
-        // warning to stderr; commands resolve but display nothing).
         let tray = SystemTray()
         try? installTrayIcon(on: tray)
         tray.setTooltip("HelloPWA")
@@ -50,29 +45,6 @@ func configure(_ ctx: any AppContext) throws {
         ]))
         ctx.use(TrayPlugin(tray))
 
-        // Notifications plugin — auth + send. On Apple this needs
-        // a bundled app to actually surface banners; under
-        // `swift run` the JS-side `notifications.send` will return
-        // an "not allowed" error, which is the demo's own
-        // way of showing the bundling distinction.
-        ctx.use(NotificationsPlugin(SystemNotifications()))
-
-        // Dialog plugin — native message / confirm / file pickers.
-        // Cross-platform: NSAlert / NSOpenPanel on macOS,
-        // UIAlertController / UIDocumentPickerViewController on
-        // iOS, GtkMessageDialog / GtkFileChooser on Linux,
-        // MessageBoxW / IFileOpenDialog on Windows.
-        ctx.use(DialogPlugin(SystemDialog()))
-
-        // Biometric authentication. Apple LocalAuthentication
-        // (Touch ID / Face ID / Optic ID), Windows Hello via
-        // UserConsentVerifier; Linux is a stub that always
-        // reports unavailable.
-        ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
-
-        // Drive a couple of menu items from Swift directly so users
-        // can see backend-side reactions to tray events. JS also
-        // subscribes via `tray.subscribe` and logs every event.
         Task { @MainActor in
             for await event in tray.eventStream() {
                 if case let .menuItemClicked(id) = event, id == "quit" {
@@ -81,6 +53,17 @@ func configure(_ ctx: any AppContext) throws {
             }
         }
     #endif
+
+    // Notifications, Dialog, BiometricAuth — first-class on every
+    // backend including Android (v0.5.x), driven through the
+    // Swift→Kotlin RPC channel on Android and the platform-native
+    // APIs on the desktop backends. On Apple this needs a bundled
+    // app to surface notification banners; under `swift run` the
+    // JS-side `notifications.send` returns an "not allowed" error,
+    // which is the demo's own way of showing the bundling distinction.
+    ctx.use(NotificationsPlugin(SystemNotifications()))
+    ctx.use(DialogPlugin(SystemDialog()))
+    ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
 
     // Filesystem plugin — Foundation-backed, identical surface
     // on every backend (SystemFs lives in SwiftPWACore). Opt-in

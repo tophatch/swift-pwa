@@ -59,6 +59,7 @@ static jmethodID g_mid_set_title       = NULL;
 static jmethodID g_mid_evaluate_js     = NULL;
 static jmethodID g_mid_open_devtools   = NULL;
 static jmethodID g_mid_run_on_main     = NULL;
+static jmethodID g_mid_rpc_call        = NULL;
 
 // Inbound (Java -> Swift) callback registered by Swift.
 static swiftpwa_android_inbound_fn g_inbound_fn = NULL;
@@ -112,9 +113,14 @@ static int cache_method_ids(JNIEnv *env, jobject bridge) {
     g_mid_open_devtools = (*env)->GetMethodID(env, cls, "openDevTools","()V");
     // `runOnMain(long box)` — the box is the Swift-side closure pointer.
     g_mid_run_on_main   = (*env)->GetMethodID(env, cls, "runOnMain",   "(J)V");
+    // `rpcCall(String method, String argsJson, long callback, long user)`
+    // — generic dispatch entry point for the System* plugins.
+    g_mid_rpc_call      = (*env)->GetMethodID(env, cls, "rpcCall",
+                            "(Ljava/lang/String;Ljava/lang/String;JJ)V");
     (*env)->DeleteLocalRef(env, cls);
     return g_mid_post_to_page && g_mid_load_url && g_mid_set_title &&
-           g_mid_evaluate_js && g_mid_open_devtools && g_mid_run_on_main;
+           g_mid_evaluate_js && g_mid_open_devtools && g_mid_run_on_main &&
+           g_mid_rpc_call;
 }
 
 // ---------------------------------------------------------------------
@@ -383,6 +389,102 @@ void swiftpwa_android_open_devtools(void) {
 }
 
 // ---------------------------------------------------------------------
+// Generic RPC: Swift -> Kotlin -> Android API -> result JSON
+// ---------------------------------------------------------------------
+
+// Heap-boxed pair carried through `rpcCall`'s long arguments. Matches
+// the shape of `eval_box`; same lifecycle — the Kotlin side calls
+// `nativeRpcDone` exactly once per `rpcCall`, and that call frees the
+// box.
+struct rpc_box {
+    swiftpwa_android_rpc_done_fn done;
+    void *user;
+};
+
+void swiftpwa_android_rpc(const char *method_utf8,
+                          const char *args_json_utf8,
+                          swiftpwa_android_rpc_done_fn done,
+                          void *user) {
+    if (!method_utf8 || !done) {
+        if (done) done(NULL, "swiftpwa: invalid arguments to rpc()", user);
+        return;
+    }
+    jobject bridge = atomic_load(&g_bridge_ref);
+    if (!bridge || !g_mid_rpc_call) {
+        done(NULL, "swiftpwa: bridge not attached", user);
+        return;
+    }
+    int attached = 0;
+    JNIEnv *env = attach_env(&attached);
+    if (!env) {
+        done(NULL, "swiftpwa: failed to attach JNIEnv", user);
+        return;
+    }
+    struct rpc_box *box = (struct rpc_box *)malloc(sizeof(*box));
+    if (!box) {
+        done(NULL, "swiftpwa: out of memory", user);
+        detach_env(attached);
+        return;
+    }
+    box->done = done;
+    box->user = user;
+    jstring jmethod = (*env)->NewStringUTF(env, method_utf8);
+    jstring jargs = args_json_utf8 ? (*env)->NewStringUTF(env, args_json_utf8) : NULL;
+    if (!jmethod) {
+        free(box);
+        done(NULL, "swiftpwa: failed to allocate JNI method string", user);
+        detach_env(attached);
+        return;
+    }
+    (*env)->CallVoidMethod(env, bridge, g_mid_rpc_call,
+                           jmethod, jargs,
+                           (jlong)(uintptr_t)box,
+                           (jlong)0);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+        // The Kotlin side may not have invoked `nativeRpcDone` if the
+        // call faulted before reaching its own try/catch. Fail the
+        // continuation here so Swift doesn't hang. The Kotlin-side
+        // wrapper *does* try/catch and report errors via
+        // `nativeRpcDone`, so this branch is the safety net for
+        // pre-dispatch faults (NewStringUTF OOM in JVM, etc.).
+        free(box);
+        done(NULL, "swiftpwa: rpc dispatch threw a JVM exception", user);
+    }
+    if (jmethod) (*env)->DeleteLocalRef(env, jmethod);
+    if (jargs)   (*env)->DeleteLocalRef(env, jargs);
+    detach_env(attached);
+}
+
+// JNI entry: Kotlin invokes this exactly once per `rpcCall` to deliver
+// the result (or error) back to the Swift continuation.
+JNIEXPORT void JNICALL
+Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeRpcDone(JNIEnv *env,
+                                                       jobject self,
+                                                       jstring result_or_null,
+                                                       jstring error_or_null,
+                                                       jlong   box_ptr,
+                                                       jlong   user_ptr) {
+    (void)self;
+    (void)user_ptr;
+    struct rpc_box *box = (struct rpc_box *)(uintptr_t)box_ptr;
+    if (!box) return;
+    const char *result_utf = NULL;
+    const char *error_utf = NULL;
+    if (result_or_null) {
+        result_utf = (*env)->GetStringUTFChars(env, result_or_null, NULL);
+    }
+    if (error_or_null) {
+        error_utf = (*env)->GetStringUTFChars(env, error_or_null, NULL);
+    }
+    box->done(result_utf, error_utf, box->user);
+    if (result_utf) (*env)->ReleaseStringUTFChars(env, result_or_null, result_utf);
+    if (error_utf)  (*env)->ReleaseStringUTFChars(env, error_or_null, error_utf);
+    free(box);
+}
+
+// ---------------------------------------------------------------------
 // Main-thread dispatch
 // ---------------------------------------------------------------------
 
@@ -471,6 +573,10 @@ void swiftpwa_android_evaluate_js(const char *s, swiftpwa_android_eval_done_fn d
     (void)s;
 }
 void swiftpwa_android_open_devtools(void) {}
+void swiftpwa_android_rpc(const char *m, const char *a, swiftpwa_android_rpc_done_fn d, void *u) {
+    (void)m; (void)a;
+    if (d) d(NULL, "swiftpwa: not running on Android", u);
+}
 void swiftpwa_android_set_main_runner(swiftpwa_android_main_fn r) { (void)r; }
 void swiftpwa_android_post_main(void *b) { (void)b; }
 void swiftpwa_android_run_main_box(void *b) { (void)b; }

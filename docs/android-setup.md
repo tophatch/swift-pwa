@@ -9,7 +9,9 @@ emits a Gradle project that wraps the `.so`, your web bundle, and a
 generated `MainActivity` + `SwiftPWABridge`.
 
 > **Status: v0.5.x — plugin set caught up to desktop parity, verified
-> end-to-end on-device.** Full pipeline (`swift-pwa build --target
+> end-to-end on-device** (reproducible — see
+> [docs/android-on-device-testing.md](android-on-device-testing.md)
+> for the loop). Full pipeline (`swift-pwa build --target
 > android --cross-compile-android` → `./gradlew assembleDebug` →
 > `adb install` → launch) on a Samsung Galaxy Tab S10+ (Android 16,
 > arm64): `Examples/HelloPWA` loads, the WebView renders the demo

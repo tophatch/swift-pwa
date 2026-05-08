@@ -110,6 +110,87 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// human-readable `versionName` comes from the top-level
         /// `version`.
         public var versionCode: Int?
+        public init(
+            packageId: String? = nil,
+            minSdk: Int? = nil,
+            targetSdk: Int? = nil,
+            abis: [String]? = nil,
+            versionCode: Int? = nil,
+            signing: AndroidSigningSection? = nil
+        ) {
+            self.packageId = packageId
+            self.minSdk = minSdk
+            self.targetSdk = targetSdk
+            self.abis = abis
+            self.versionCode = versionCode
+            self.signing = signing
+        }
+
+        /// Release signing configuration. When set, the generated
+        /// `app/build.gradle.kts` declares a `signingConfigs.release`
+        /// block referencing this keystore + alias and applies it to
+        /// the `release` build type. Passwords are *not* stored here
+        /// — the generated Gradle script reads them from the
+        /// `SWIFT_PWA_ANDROID_STORE_PASSWORD` and
+        /// `SWIFT_PWA_ANDROID_KEY_PASSWORD` environment variables and
+        /// fails the configure step with a clear error if either is
+        /// missing. CI machines set the two env vars before invoking
+        /// `./gradlew assembleRelease`; dev machines can do the same
+        /// in their shell profile or under an `op run` / `direnv`
+        /// wrapper. See `docs/android-setup.md` for the wiring.
+        public var signing: AndroidSigningSection?
+    }
+
+    /// Release signing configuration referenced by the generated
+    /// Gradle scaffold. Holds only the *non-secret* fields: the
+    /// keystore path (relative to the project root, or absolute) and
+    /// the alias inside it. Passwords are deliberately out of scope —
+    /// `pwa.json` is checked in, so anything sensitive here would
+    /// leak.
+    public struct AndroidSigningSection: Codable, Sendable, Equatable {
+        /// Path to the keystore file. Relative paths are resolved
+        /// against the project root (the directory containing
+        /// `pwa.json`). The bundler bakes the resolved absolute path
+        /// into the generated `app/build.gradle.kts` so the Gradle
+        /// project — which lives under `build/<name>-android/` and is
+        /// regenerated on every `swift-pwa build` — doesn't need to
+        /// know where the keystore physically lives.
+        public var keystore: String
+        /// Alias of the key inside the keystore. Required by
+        /// `keytool -genkeypair` and matched verbatim by the generated
+        /// `signingConfigs.release.keyAlias = "..."` line.
+        public var keyAlias: String
+        /// Keystore format. Defaults to `"jks"`. `"pkcs12"` is the
+        /// `keytool` default since JDK 9 and is what most modern
+        /// pipelines produce; both are accepted by the AGP signing
+        /// task.
+        public var storeType: String?
+        /// Enable v1 (JAR) signature scheme. Defaults to true. Only
+        /// relevant for distributions that need to install on devices
+        /// older than API 24 (Android 7.0) — every newer Android
+        /// release also accepts v2/v3, which the AGP task adds in
+        /// parallel by default.
+        public var v1SigningEnabled: Bool?
+        /// Enable v2 (full APK) signature scheme. Defaults to true.
+        /// AGP would set this on automatically; the field exists so
+        /// pipelines that disable it for a niche reason (e.g. a third-
+        /// party signing tool that re-signs only with v3+) can express
+        /// that.
+        public var v2SigningEnabled: Bool?
+
+        public init(
+            keystore: String,
+            keyAlias: String,
+            storeType: String? = nil,
+            v1SigningEnabled: Bool? = nil,
+            v2SigningEnabled: Bool? = nil
+        ) {
+            self.keystore = keystore
+            self.keyAlias = keyAlias
+            self.storeType = storeType
+            self.v1SigningEnabled = v1SigningEnabled
+            self.v2SigningEnabled = v2SigningEnabled
+        }
     }
 
     /// Auto-updater configuration. Optional — apps that don't ship

@@ -105,14 +105,17 @@ enum AndroidTemplates {
                 jvmTarget = "17"
             }
 
-            packaging {
-                jniLibs {
-                    // Don't strip .so files; Swift's debug info is small
-                    // and the round-trip through `swift symbolicate` is
-                    // worth keeping symbols around for crash triage.
-                    keepDebugSymbols += setOf("**/lib\(soBaseName).so")
-                }
-            }
+            // No `keepDebugSymbols` override — we *want* AGP's strip pass
+            // to run on the app .so. Swift binaries are unusually large
+            // when unstripped (HelloPWA's `libHelloPWA.so` is ~20 MB
+            // unstripped vs ~4 MB stripped — a 4× delta), and the
+            // unstripped copy in `.build/<triple>/release/<Name>` stays
+            // on disk for `swift symbolicate` to consume during crash
+            // triage. Apps that need symbols *in* the APK (e.g. for
+            // breakpad-style on-device crash capture) can override this
+            // by adding `keepDebugSymbols += setOf("**/lib<name>.so")`
+            // in a sibling `app/build.gradle.kts.local` and applying it
+            // post-bundler.
 
             buildFeatures {
                 buildConfig = true

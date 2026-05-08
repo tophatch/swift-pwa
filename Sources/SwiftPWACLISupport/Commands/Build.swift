@@ -71,11 +71,13 @@ struct Build: AsyncParsableCommand {
     @Flag(
         help: """
         Prune the bundled Swift runtime stdlib `.so` set to only what the app's `.so` actually \
-        depends on (transitive `DT_NEEDED` walk via `readelf -d`). Shrinks the APK from \
-        ~131 MB down to ~30 MB on a typical app — the wholesale stdlib bundle includes \
-        modules most apps never touch (`_Differentiation`, `_StringProcessing`, `RegexBuilder`, \
-        `Distributed`, etc.). Off by default while we let the on-device round-trip soak; \
-        opt in once you've verified your app boots and want the size win for distribution.
+        depends on (transitive `DT_NEEDED` walk via `readelf -d`). Drops 10 unused stdlib \
+        modules on a typical app (`_Differentiation`, `_StringProcessing`, `RegexBuilder`, \
+        `Distributed`, `FoundationXML`, `Testing`, `XCTest`, `Observation`, `_Volatile`, \
+        `_SwiftOnoneSupport`). On `Examples/HelloPWA` this saves ~5 MB of APK on top of the \
+        ~50 MB the always-on strip pass already saves (final APK 80 MB → 76 MB with prune \
+        added). Off by default since the saving is small relative to the always-on strip — \
+        opt in for distribution builds where every megabyte counts.
         """
     )
     var pruneAndroidRuntime: Bool = false

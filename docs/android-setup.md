@@ -8,18 +8,23 @@ hosts a stock `android.webkit.WebView` (Chromium-backed since Android
 emits a Gradle project that wraps the `.so`, your web bundle, and a
 generated `MainActivity` + `SwiftPWABridge`.
 
-> **Status: v0.5 — on-device round-trip verified.** The Swift
-> backend, JNI shim, and Gradle scaffold are in place; the full
-> pipeline `swift-pwa build --target android --cross-compile-android`
-> → `./gradlew assembleDebug` → `adb install` puts the Samsung Galaxy
-> Tab S10+ (Android 16, arm64) into a working state where
-> `Examples/HelloPWA` loads, the WebView renders the demo from
-> `assets/web/`, and JS-side `__SWIFT_PWA__.invoke(...)` round-trips
-> through the runtime (verified via the "Server time" and "Rename
-> window" buttons). Window / Bridge / Filesystem / Updater plugins
-> are live; Clipboard / Tray / Dialog / Notifications / Biometrics
-> are queued for v0.5.x — the demo's capability gating greys those
-> buttons out automatically based on `__platform.info`.
+> **Status: v0.5.x — plugin set caught up to desktop parity, verified
+> end-to-end on-device.** Full pipeline (`swift-pwa build --target
+> android --cross-compile-android` → `./gradlew assembleDebug` →
+> `adb install` → launch) on a Samsung Galaxy Tab S10+ (Android 16,
+> arm64): `Examples/HelloPWA` loads, the WebView renders the demo
+> from `assets/web/`, and the Swift→Kotlin RPC channel round-trips
+> every new plugin — `clipboard.writeText` + `clipboard.readText`,
+> `dialog.confirm` (custom labels), `dialog.openFile` (SAF Documents
+> UI returning a `content://` URI), `notifications.send` (visible in
+> the system shade with the right channel + silent flag),
+> `biometric.canAuthenticate` and `biometric.authenticate` (system
+> prompt rendered, face unlock observed). Tray remains a no-op stub
+> (Android has no system-tray surface in the desktop sense). The
+> cross-compile + `assembleDebug` step additionally runs in CI via
+> the `android` job in `.github/workflows/ci.yml` — every push
+> surfaces toolchain or Gradle drift before it reaches a developer's
+> machine.
 
 ## 1. Toolchain
 
@@ -275,40 +280,88 @@ ways. These shape the public API surface and what to expect:
   a hint via `Log.i("swift-pwa", ...)` to make the call visibly
   effective.
 
-## 7. Known limitations (v0.5)
+## 6.1. System plugins — Android specifics
 
-- **On-device round-trip verified on Samsung Galaxy Tab S10+ (Android
-  16, arm64).** Full pipeline (`swift-pwa build --target android
-  --cross-compile-android` → `./gradlew assembleDebug` → `adb install`
-  → launch) puts `Examples/HelloPWA` on screen with a working JS↔Swift
-  bridge. What's *not* yet covered in CI: a non-Samsung OEM, an x86_64
-  emulator, and a release build (debug-only so far). Queued for the
-  v0.5.x cycle as we tighten up the loop.
-- **No Android `Updater` backend.** `WindowsUpdater` /
-  `LinuxAppImageUpdater` / `AppleUpdater` cover the desktop story;
-  the Android equivalent (signed AAB swap via
-  `PackageInstaller.Session`) needs an installer-permission UX
-  pass and is queued for v0.5.x.
-- **No Android-specific `Dialog` / `BiometricAuth` /
-  `Notifications` / `Tray` / `Clipboard` backends.** The `Plugin`
-  protocol is intact; the per-platform `System*` implementations
-  for Android haven't been written yet. Apps that pre-register
-  `DialogPlugin(SystemDialog())` and friends in their `configure`
-  closure will need to gate the registration on `#if !os(Android)`
-  for now.
+The `System*` plugins on Android are driven through a generic
+Swift→Kotlin RPC channel (`swiftpwa_android_rpc` on the C side,
+`SwiftPWABridge.rpcCall` + `SwiftPWASystemPlugins.dispatch` on the
+Kotlin side). One plugin = one `when` branch in
+`SwiftPWASystemPlugins.kt`; the bundler regenerates that file from
+the templates under `Sources/SwiftPWACLISupport/Bundlers/AndroidTemplates.swift`,
+so apps shouldn't edit it by hand.
+
+| Plugin                | Backing API                                                                                                                                          | Notes                                                                                                                                                                                                                                                                                              |
+|-----------------------|------------------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------|
+| `SystemClipboard`     | `ClipboardManager`                                                                                                                                   | `clear()` falls back to `setPrimaryClip(empty)` on API 26 / 27 (the explicit `clearPrimaryClip` only landed in P / API 28).                                                                                                                                                                        |
+| `SystemNotifications` | `NotificationManagerCompat` + a single `swift-pwa.default` channel                                                                                   | API 33+ requires the `POST_NOTIFICATIONS` runtime permission; `requestAuthorization` shows the system prompt the first time.                                                                                                                                                                       |
+| `SystemDialog`        | `AlertDialog.Builder` for message / confirm; Storage Access Framework (`OPEN_DOCUMENT` / `CREATE_DOCUMENT` / `OPEN_DOCUMENT_TREE`) for file pickers  | **SAF returns `content://` URIs, not filesystem paths.** Apps that need bytes should resolve via `ContentResolver`. `DialogFileFilter.extensions` map to MIME types via a small built-in table; unknown extensions fall back to `*/*`.                                                             |
+| `SystemBiometricAuth` | `androidx.biometric.BiometricPrompt`                                                                                                                 | The host `MainActivity` extends `AppCompatActivity` (a `FragmentActivity` subclass) so the prompt can attach. `BiometricKind` is always `.unknown` when available — Android's `BiometricManager` doesn't distinguish fingerprint / face / iris at the API level.                                  |
+| `AndroidUpdater`      | `PackageInstaller.Session`                                                                                                                           | Self-installing APKs requires the `REQUEST_INSTALL_PACKAGES` manifest permission **plus** the per-app "Install unknown apps" toggle — the system installer surfaces a dialog routing the user to settings if the toggle is off. The plugin still verifies Ed25519 over the artifact bytes itself. |
+| `SystemTray`          | — (no-op stub)                                                                                                                                       | Android has no system-tray surface analogous to macOS' menu bar / Windows' notification area.                                                                                                                                                                                                      |
+
+### 6.1.1. Wiring up
+
+```swift
+#if os(Android)
+    import SwiftPWA
+
+    // Inside your configure closure:
+    context.use(ClipboardPlugin(SystemClipboard()))
+    context.use(NotificationsPlugin(SystemNotifications()))
+    context.use(DialogPlugin(SystemDialog()))
+    context.use(BiometricAuthPlugin(SystemBiometricAuth()))
+    context.use(UpdaterPlugin(AndroidUpdater(
+        endpoint: URL(string: "https://example.com/updates/manifest.json")!,
+        publicKey: "<base64-ed25519-pubkey>",
+        currentVersion: "1.0.0"
+    )))
+#endif
+```
+
+The Gradle scaffold's `AndroidManifest.xml` declares all four
+permission strings (`POST_NOTIFICATIONS`, `USE_BIOMETRIC`,
+`USE_FINGERPRINT`, `REQUEST_INSTALL_PACKAGES`); apps that don't
+ship a particular plugin can drop the corresponding line in a
+manual post-bundler edit.
+
+## 7. Known limitations (v0.5.x)
+
+- **APK size.** A wholesale-stdlib bundle is ~131 MB uncompressed.
+  Pass `--prune-android-runtime` to `swift-pwa build` to walk the
+  app's `DT_NEEDED` chain via `readelf -d` and ship only the
+  runtime libs the binary actually loads — typical apps drop to
+  ~30 MB. Off by default while we let the on-device round-trip
+  soak; opt in once you've verified your app boots and want the
+  size win for distribution.
+- **SAF dialog results are `content://` URIs, not filesystem paths.**
+  See §6.1's `SystemDialog` row. Apps written against the
+  cross-platform `Dialog` API expecting `[String]` of paths will
+  receive URI strings on Android. Transparent URI → cache-file
+  resolution is queued for v0.5.x once the `Fs` plugin grows URI
+  support.
+- **Updater install result isn't observable.** `PackageInstaller.Session`
+  reports accept / reject via a `BroadcastReceiver`; the bundler's
+  receiver logs the result to logcat but doesn't surface it through
+  the `Updater` protocol's stream. `installAndRelaunch` returns once
+  the session has been committed; the user accepting / rejecting
+  the system prompt happens after this method returns. Apps that
+  need to act on success / failure should listen for
+  `PackageInstaller.STATUS_*` broadcasts via their own receiver.
 - **`swift-pwa init MyApp` doesn't generate the Android boilerplate.**
-  The `@_cdecl("Java_..._swiftPwaMain")` entry point is described in
-  this doc but not auto-emitted by `swift-pwa init`; v0.5.x will add
-  it.
+  The `@_cdecl("Java_..._swiftPwaMain")` entry point is described
+  in §3 but not auto-emitted by `swift-pwa init`; v0.5.x will add it.
 - **No code-signing wiring.** `--sign` is a Mac/iOS flag today.
   Android signing goes through Gradle's `signingConfigs`; until
   the bundler emits one, `assembleRelease` requires the user to
   edit `app/build.gradle.kts` and add their keystore manually.
-- **API 26 floor.** `WebViewAssetLoader` is the simplest virtual-host
-  story for bundled assets, and dropping below API 24 would
-  introduce branches we don't want to maintain. Apps that need to
-  ship to KitKat / Lollipop should pin to a different web-asset
-  scheme.
+- **API 28 floor.** Driven by the Swift Android SDK 6.2's
+  `targetTriples` map, which only declares triples for API 28–36.
+  See §1's "Why the API 28 floor" callout.
+- **Tray is a no-op stub.** Android has no system-tray surface
+  analogous to macOS' menu bar / Windows' notification area; the
+  closest equivalent (a foreground service with a persistent
+  notification) would be a heavy and Android-specific UX, not a
+  drop-in for the desktop tray API.
 
 ## 8. Troubleshooting
 

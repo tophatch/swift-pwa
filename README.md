@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.4.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.4.0) is the current release; macOS 15+, iOS 18+, Linux (GTK3 / GTK4), and Windows 11 (WebView2) are all first-class. **v0.5 is in flight on `main` and starts with Android** (Swift backend, JNI shim, Kotlin / Gradle scaffold, vendored Gradle 8.10.2 wrapper, `swift-pwa build --target android` → `./gradlew assembleDebug` → `adb install`, verified end-to-end on a Samsung Galaxy Tab S10+ — `Examples/HelloPWA` loads, the JS↔Swift bridge round-trips, and the Window / Bridge / Filesystem / Updater plugins all work; Clipboard / Tray / Dialog / Notifications / Biometrics System*-backends are queued for v0.5.x). See the [feature matrix](#feature-matrix) for what works where, [docs/android-setup.md](docs/android-setup.md) for the Android wiring, and [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown.
+> **Status:** [`v0.4.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.4.0) is the current release; macOS 15+, iOS 18+, Linux (GTK3 / GTK4), and Windows 11 (WebView2) are all first-class. **v0.5 is in flight on `main` and now ships the full Android plugin set** (Swift backend, JNI shim, Kotlin / Gradle scaffold, vendored Gradle 8.10.2 wrapper, `swift-pwa build --target android` → `./gradlew assembleDebug` → `adb install`, verified end-to-end on a Samsung Galaxy Tab S10+; **Clipboard / Notifications / Dialog / BiometricAuth / Updater System\*-backends are now live** through a Swift→Kotlin RPC channel, and CI runs the full cross-compile + `assembleDebug` pipeline on every push). See the [feature matrix](#feature-matrix) for what works where, [docs/android-setup.md](docs/android-setup.md) for the Android wiring, and [`CHANGELOG.md`](CHANGELOG.md) for the per-release breakdown.
 
 ## Why
 
@@ -133,13 +133,13 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | DevTools (`Cmd/Ctrl+Alt+J`)   | Yes                     | —                            | Yes                        | Yes                     | Yes                      | Remote⁹                  |
 | Per-Monitor V2 DPI            | —                       | —                            | —                          | —                       | Yes                      | —                        |
 | `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      | Partial⁸                 |
-| `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | v0.5.x                   |
-| `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      | v0.5.x                   |
+| `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Preview⁷                 |
+| `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      | Partial¹¹                |
 | `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Preview⁷                 |
 | `TrayPlugin`                  | Yes                     | —                            | Yes                        | —                       | Yes                      | —                        |
-| `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | v0.5.x                   |
-| `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | v0.5.x                   |
-| `UpdaterPlugin` (runtime)     | Untested⁶               | Untested⁶                    | Untested⁶                  | Untested⁶               | Untested⁶                | v0.5.x                   |
+| `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | Preview⁷                 |
+| `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | Fingerprint / Face¹²     |
+| `UpdaterPlugin` (runtime)     | Untested⁶               | Untested⁶                    | Untested⁶                  | Untested⁶               | Untested⁶                | Preview⁷ (PackageInstaller) |
 | `swift-pwa updater` CLI       | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | v0.5.x                   |
 | Bundler artifact              | `.app`                  | `.app` / `.ipa`              | `.AppImage`                | `.AppImage`             | Portable / MSIX          | Gradle project → APK/AAB |
 | Code-signing pass-through     | `codesign`              | `codesign`                   | —                          | —                       | `signtool`               | v0.5.x¹⁰                 |
@@ -154,6 +154,8 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 8. Multi-window on Android maps to Activity-per-window, which doesn't fit the desktop multi-window UX cleanly; queued for v0.5.x. Most `Window` APIs (`setSize`, `setPosition`, `minimize`, `maximize`, `focus`) are no-ops on Android because the platform owns those decisions; documented in [docs/android-setup.md](docs/android-setup.md).
 9. Android `WebView` exposes no programmatic DevTools window; remote debugging via `chrome://inspect` on a connected host is the only path. `webView.openDevTools()` logs an `adb`-friendly hint to make the call visibly effective.
 10. Android signing goes through Gradle's `signingConfigs`. The bundler doesn't emit one in v0.5.0; until it does, `assembleRelease` requires the user to edit `app/build.gradle.kts` and add their keystore manually.
+11. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths — that's the platform contract for scoped storage. Apps that need bytes should resolve via `ContentResolver`. See [docs/android-setup.md](docs/android-setup.md) §6.1 for the full plugin matrix and `DialogFileFilter` → MIME mapping.
+12. Android's `BiometricManager` doesn't distinguish fingerprint / face / iris at the API level — `BiometricKind` is reported as `.unknown` when biometrics are available. JS-side capability gating should branch on `available`, not `kind`.
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 
@@ -201,7 +203,7 @@ The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `s
 
 ## Roadmap
 
-- **v0.5** (in flight on `main`) — **Android backend kickoff:** `SwiftPWAAndroid` Swift target, JNI shim, Kotlin / Gradle scaffold, `swift-pwa build --target android`. Preview status until end-to-end device verification lands in v0.5.1 — see [docs/android-setup.md](docs/android-setup.md). Also queued: GTK4 tray (retire `libayatana-appindicator` for `libayatana-appindicator-glib` so the same shim works on both backends), Android `Updater` + dialog / clipboard / notifications / biometric backends.
+- **v0.5** (in flight on `main`) — **Android backend at desktop parity:** `SwiftPWAAndroid` Swift target, JNI shim, Kotlin / Gradle scaffold, `swift-pwa build --target android` with optional `--prune-android-runtime` (~131 MB → ~30 MB APK), and the full `Clipboard` / `Notifications` / `Dialog` / `BiometricAuth` / `Updater` (`PackageInstaller.Session`) plugin set behind a Swift→Kotlin RPC channel. CI runs the cross-compile + `assembleDebug` pipeline on every push. See [docs/android-setup.md](docs/android-setup.md). Still queued for the v0.5.x cycle: GTK4 tray (retire `libayatana-appindicator` for `libayatana-appindicator-glib` so the same shim works on both backends), Android codesigning wiring, `swift-pwa init` Android boilerplate.
 - **v0.5+** — Typed JS↔Swift codegen layer, hot-reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.

@@ -118,6 +118,31 @@ void swiftpwa_android_evaluate_js(const char *snippet_utf8,
 void swiftpwa_android_open_devtools(void);
 
 // ---------------------------------------------------------------------
+// Generic Swift -> Kotlin RPC for the System* plugins (clipboard,
+// notifications, dialog, biometrics, updater install).
+//
+// Method names are short identifiers like "clipboard.read" and
+// "dialog.confirm"; the Kotlin side dispatches on the string. Args
+// are JSON; result is JSON (or NULL); errors come back as a UTF-8
+// message string (NULL on success). The Kotlin side hops to the UI
+// thread internally where the underlying Android API requires it
+// (most do); Swift callers can invoke from any thread.
+//
+// One generic entry point keeps the JNI surface small — adding a new
+// plugin method is a one-case addition to the Kotlin dispatch
+// `when` rather than a new C function + JNI binding pair.
+// ---------------------------------------------------------------------
+
+typedef void (*swiftpwa_android_rpc_done_fn)(const char *result_json_or_null,
+                                             const char *error_or_null,
+                                             void *user);
+
+void swiftpwa_android_rpc(const char *method_utf8,
+                          const char *args_json_utf8,
+                          swiftpwa_android_rpc_done_fn done,
+                          void *user);
+
+// ---------------------------------------------------------------------
 // Main-thread dispatch hook. `MainThread.run` on Android calls
 // `swiftpwa_android_post_main`, which retains the boxed closure and
 // posts a runnable to `Handler(Looper.getMainLooper())`. The runnable's

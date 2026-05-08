@@ -15,7 +15,23 @@ let package = Package(
             dependencies: [
                 .product(name: "SwiftPWA", package: "swift-pwa"),
             ],
-            resources: [.copy("web")]
+            resources: [.copy("web")],
+            linkerSettings: [
+                // On Android, the Swift binary is loaded by the
+                // generated Kotlin Activity via `System.loadLibrary`,
+                // so it has to be a shared object (.so) rather than an
+                // ELF executable. SwiftPM doesn't expose a "build this
+                // executable target as a shared library" knob, so we
+                // inject the linker flags directly. `-no-pie` cancels
+                // the toolchain's default `-pie` (which is mutually
+                // exclusive with `-shared` under `lld`); `-shared`
+                // produces the actual .so. The lone Android-only
+                // invariant in this Package.swift.
+                .unsafeFlags(
+                    ["-Xlinker", "-no-pie", "-Xlinker", "-shared"],
+                    .when(platforms: [.android])
+                ),
+            ]
         ),
     ]
 )

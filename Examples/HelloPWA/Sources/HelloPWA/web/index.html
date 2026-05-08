@@ -55,6 +55,12 @@
             -webkit-tap-highlight-color: transparent;
         }
         button:active { opacity: 0.7; }
+        button:disabled,
+        button.disabled-by-platform {
+            background: color-mix(in srgb, var(--accent) 30%, transparent);
+            cursor: not-allowed;
+            opacity: 0.7;
+        }
         .actions {
             display: flex;
             flex-wrap: wrap;
@@ -224,9 +230,9 @@
                 <p>Title and size go through <code>WindowPlugin</code>'s
                 main-actor-hopping invokes.</p>
                 <div class="actions">
-                    <button id="rename">Rename window</button>
-                    <button id="resize" class="resize-only">Resize 800×600</button>
-                    <button id="reset" class="resize-only">Reset 1024×768</button>
+                    <button id="rename" data-requires="window.setTitle">Rename window</button>
+                    <button id="resize" class="resize-only" data-requires="window.setSize" data-disable-on="android,ios">Resize 800×600</button>
+                    <button id="reset" class="resize-only" data-requires="window.setSize" data-disable-on="android,ios">Reset 1024×768</button>
                 </div>
             </section>
 
@@ -236,7 +242,7 @@
                 <code>BridgeRuntime</code> — minimal proof the dispatcher
                 is alive.</p>
                 <div class="actions">
-                    <button id="now">Server time</button>
+                    <button id="now" data-requires="now">Server time</button>
                 </div>
             </section>
 
@@ -247,8 +253,8 @@
                 <code>UIPasteboard</code> on iOS, <code>GdkClipboard</code>
                 on Linux, the Win32 Clipboard API on Windows.</p>
                 <div class="actions">
-                    <button id="copy-title">Copy title</button>
-                    <button id="paste">Paste from clipboard</button>
+                    <button id="copy-title" data-requires="clipboard.writeText">Copy title</button>
+                    <button id="paste" data-requires="clipboard.readText">Paste from clipboard</button>
                 </div>
             </section>
 
@@ -259,8 +265,8 @@
                 on iOS, and <code>libayatana-appindicator3</code> can't
                 be reused from a GTK4 process.</p>
                 <div class="actions">
-                    <button id="cycle-tray">Cycle tray menu</button>
-                    <button id="toggle-tray">Hide tray</button>
+                    <button id="cycle-tray" data-requires="tray.setMenu">Cycle tray menu</button>
+                    <button id="toggle-tray" data-requires="tray.setVisible">Hide tray</button>
                 </div>
             </section>
 
@@ -277,10 +283,10 @@
                 <code>MessageBoxW</code> /
                 <code>IFileOpenDialog</code> on Windows.</p>
                 <div class="actions">
-                    <button id="dialog-confirm">Confirm</button>
-                    <button id="dialog-open">Open file</button>
-                    <button id="dialog-save">Save file</button>
-                    <button id="dialog-folder">Pick folder</button>
+                    <button id="dialog-confirm" data-requires="dialog.confirm">Confirm</button>
+                    <button id="dialog-open" data-requires="dialog.openFile">Open file</button>
+                    <button id="dialog-save" data-requires="dialog.saveFile">Save file</button>
+                    <button id="dialog-folder" data-requires="dialog.openDirectory">Pick folder</button>
                 </div>
             </section>
 
@@ -293,10 +299,10 @@
                 a temp file when cancelled. Foundation-backed, same
                 surface on every host.</p>
                 <div class="actions">
-                    <button id="fs-write">Save scratchpad</button>
-                    <button id="fs-read">Read it back</button>
-                    <button id="fs-meta">Stat it</button>
-                    <button id="fs-remove">Delete it</button>
+                    <button id="fs-write" data-requires="fs.writeText">Save scratchpad</button>
+                    <button id="fs-read" data-requires="fs.readText">Read it back</button>
+                    <button id="fs-meta" data-requires="fs.metadata">Stat it</button>
+                    <button id="fs-remove" data-requires="fs.remove">Delete it</button>
                 </div>
             </section>
 
@@ -307,8 +313,8 @@
                 Optic ID on Apple, Windows Hello on Windows, stub on
                 Linux (no clean cross-distro primitive).</p>
                 <div class="actions">
-                    <button id="bio-status">Check status</button>
-                    <button id="bio-auth">Authenticate</button>
+                    <button id="bio-status" data-requires="biometric.canAuthenticate">Check status</button>
+                    <button id="bio-auth" data-requires="biometric.authenticate">Authenticate</button>
                 </div>
             </section>
 
@@ -327,9 +333,9 @@
                     manifest.
                 </p>
                 <div class="actions">
-                    <button id="updater-check">Check for updates</button>
-                    <button id="updater-run">Run full flow</button>
-                    <button id="updater-install">Try install</button>
+                    <button id="updater-check" data-requires="updater.check">Check for updates</button>
+                    <button id="updater-run" data-requires="updater.run">Run full flow</button>
+                    <button id="updater-install" data-requires="updater.installAndRelaunch">Try install</button>
                 </div>
                 <progress id="updater-progress" value="0" max="1" hidden></progress>
             </section>
@@ -348,8 +354,8 @@
                     notification.
                 </p>
                 <div class="actions">
-                    <button id="notify">Send notification</button>
-                    <button id="toast">Send Windows toast</button>
+                    <button id="notify" data-requires="notifications.send">Send notification</button>
+                    <button id="toast" data-requires="notifications.send">Send Windows toast</button>
                 </div>
             </section>
         </div>
@@ -388,7 +394,12 @@
             if (!el) return;
             const platform = navigator.platform || "";
             let name = null;
-            if (window.chrome && window.chrome.webview) {
+            if (window.__SwiftPWA__post && !window.chrome?.webview && !window.webkit?.messageHandlers) {
+                // Android: the bridge object is registered via
+                // `addJavascriptInterface` and is the only one of
+                // the three native channels present on the page.
+                name = "android.webkit.WebView";
+            } else if (window.chrome && window.chrome.webview) {
                 name = "WebView2";
             } else if (window.webkit && window.webkit.messageHandlers) {
                 if (/iPhone|iPad|iPod/.test(platform)) {
@@ -400,6 +411,57 @@
                 }
             }
             if (name) el.textContent = name;
+        })();
+
+        // Capability gating — disable buttons whose backing command
+        // isn't registered on this backend, or whose backing command
+        // is registered but documented as a no-op on the current OS.
+        // Driven by `__platform.info` (returned by SwiftPWACore's
+        // built-in `PlatformInfoPlugin`, registered eagerly on every
+        // backend). Buttons declare requirements via `data-requires`
+        // (a command name that must be present in the registry) and
+        // optionally `data-disable-on` (a comma-separated list of
+        // OS names where the button should be disabled even though
+        // the command is technically registered — e.g. window.setSize
+        // is a no-op on Android because the platform's window manager
+        // owns sizes).
+        //
+        // Also stashes the resolved `__platform.info` payload as a
+        // module-scope `platformInfo` so action handlers can branch
+        // on `platformInfo.tempDir` etc. without re-issuing the
+        // invoke.
+        let platformInfo = null;
+        (async () => {
+            try {
+                const info = await __SWIFT_PWA__.invoke("__platform.info", {});
+                platformInfo = info;
+                const have = new Set(info.commands || []);
+                const os = info.os || "unknown";
+                document.querySelectorAll("button[data-requires]").forEach((btn) => {
+                    const need = btn.dataset.requires;
+                    const disableOn = (btn.dataset.disableOn || "")
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean);
+                    let reason = null;
+                    if (!have.has(need)) {
+                        reason = `${need} not registered on ${os}`;
+                    } else if (disableOn.includes(os)) {
+                        reason = `${need} is a no-op on ${os}`;
+                    }
+                    if (reason) {
+                        btn.disabled = true;
+                        btn.title = reason;
+                        btn.classList.add("disabled-by-platform");
+                    }
+                });
+            } catch (e) {
+                // `__platform.info` is unconditional on every shipped
+                // backend; if this throws we're running against a
+                // pre-PlatformInfoPlugin build. Leave buttons enabled
+                // in that case so users can still try them.
+                console.warn("swift-pwa: platform-info gating skipped:", e);
+            }
         })();
 
         // Two log streams: actions you triggered, and window events the
@@ -480,19 +542,39 @@
             // remove the same file. Default to a temp location so it
             // works without picking up the dialog plugin first.
             fsWrite: async () => {
-                if (!fsScratchPath) {
-                    const r = await __SWIFT_PWA__.invoke("dialog.saveFile", {
-                        title: "Where to save the scratchpad?",
-                        defaultName: "swift-pwa-scratch.txt",
+                try {
+                    if (!fsScratchPath) {
+                        // Prefer `dialog.saveFile` when the backend
+                        // ships a Dialog implementation. When it
+                        // doesn't (Android v0.5 preview), fall back
+                        // to `<tempDir>/swift-pwa-scratch.txt` from
+                        // `__platform.info` so the rest of the
+                        // filesystem demo (read / stat / remove)
+                        // still has a path to work against.
+                        if (platformInfo && platformInfo.commands.includes("dialog.saveFile")) {
+                            const r = await __SWIFT_PWA__.invoke("dialog.saveFile", {
+                                title: "Where to save the scratchpad?",
+                                defaultName: "swift-pwa-scratch.txt",
+                            });
+                            if (r.path == null) { log("save cancelled"); return; }
+                            fsScratchPath = r.path;
+                        } else if (platformInfo && platformInfo.tempDir) {
+                            fsScratchPath = platformInfo.tempDir + "/swift-pwa-scratch.txt";
+                            log("dialog.saveFile unavailable on " + platformInfo.os
+                                + " — falling back to " + fsScratchPath);
+                        } else {
+                            log("can't pick a scratch path: dialog.saveFile and tempDir both unavailable");
+                            return;
+                        }
+                    }
+                    await __SWIFT_PWA__.invoke("fs.writeText", {
+                        path: fsScratchPath,
+                        contents: "swift-pwa was here at " + new Date().toISOString() + "\n",
                     });
-                    if (r.path == null) { log("save cancelled"); return; }
-                    fsScratchPath = r.path;
+                    log("fs.writeText → " + fsScratchPath);
+                } catch (e) {
+                    log("fs.writeText failed: " + (e.message || e));
                 }
-                await __SWIFT_PWA__.invoke("fs.writeText", {
-                    path: fsScratchPath,
-                    contents: "swift-pwa was here at " + new Date().toISOString() + "\n",
-                });
-                log("fs.writeText → " + fsScratchPath);
             },
             fsRead: async () => {
                 if (!fsScratchPath) { log("nothing saved yet — Save first"); return; }

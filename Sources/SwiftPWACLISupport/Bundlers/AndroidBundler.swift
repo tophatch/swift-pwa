@@ -38,8 +38,16 @@ struct AndroidBundler {
     let crossCompile: Bool
     /// If true, prune the bundled Swift runtime stdlib to only what
     /// the app's `.so` actually requires via a transitive `DT_NEEDED`
-    /// walk (`readelf -d`). Drops APK size from ~131 MB to ~30 MB on
-    /// a typical app. See `stageSwiftRuntime` for the implementation.
+    /// walk (`readelf -d`). Drops the unstripped wholesale set from
+    /// 124 MB to 113 MB on `Examples/HelloPWA` (10 stdlib `.so` files
+    /// the binary doesn't actually pull in — `_Differentiation`,
+    /// `_StringProcessing`, `RegexBuilder`, `Distributed`,
+    /// `FoundationXML`, `Testing`, `XCTest`, `_Volatile`,
+    /// `Observation`, `_SwiftOnoneSupport`). After stripping is also
+    /// applied (which happens unconditionally in this bundler), the
+    /// effective APK delta of pruning is ~5 MB on top of the ~50 MB
+    /// strip already saves. See `stageSwiftRuntime` /
+    /// `prunedRuntimeSet` for the implementation.
     let pruneRuntime: Bool
 
     func build() async throws -> URL {
@@ -356,6 +364,20 @@ struct AndroidBundler {
                 try await stageSwiftRuntime(
                     into: abiDir, abi: abi, sdkBundleId: sdk, appSO: stagedAppSO
                 )
+                // Strip the staged .so files. Gradle's AGP would
+                // ordinarily run `stripDebugDebugSymbols` for us, but
+                // it resolves the strip tool from the SDK manager's
+                // NDK install (`$ANDROID_HOME/ndk/<version>/`) and
+                // gives up with `Unable to strip the following
+                // libraries, packaging them as they are: …` when only
+                // a standalone NDK at `$ANDROID_NDK_HOME` is present
+                // (the typical Swift-on-Android dev setup). Doing the
+                // strip ourselves bypasses that resolution dance and
+                // produces the same result the SDK-managed flow would.
+                // ~40% size win — `libHelloPWA.so` 20 MB → 4 MB,
+                // `libFoundation.so` 9 MB → 6 MB, `lib_FoundationICU.so`
+                // 39 MB → 37 MB on the v0.5 baseline.
+                try await stripELFs(in: abiDir)
             } catch {
                 failures.append("\(abi): \(error)")
             }
@@ -521,8 +543,16 @@ struct AndroidBundler {
     /// Run `readelf -d <path>` and parse out the `(NEEDED) Shared
     /// library: [<name>]` lines. Returns the bare basenames in
     /// declaration order.
+    ///
+    /// Looks for `readelf` first (Linux hosts have it via binutils), then
+    /// `llvm-readelf` (macOS hosts via the NDK's prebuilt LLVM, since
+    /// macOS doesn't ship binutils — `xcrun otool -L` would work too but
+    /// has a different output shape). The NDK install path is taken from
+    /// `ANDROID_NDK_HOME` so the same lookup also works under CI where
+    /// the env var is set explicitly.
     private func readDTNeeded(of so: URL) async throws -> [String] {
-        let stdout = try await Shell.capture("/usr/bin/env", ["readelf", "-d", so.path])
+        let tool = readelfTool()
+        let stdout = try await Shell.capture(tool, ["-d", so.path])
         var deps: [String] = []
         for line in stdout.split(whereSeparator: \.isNewline) {
             // Format: ` 0x...  (NEEDED)             Shared library: [libfoo.so]`
@@ -534,6 +564,114 @@ struct AndroidBundler {
             deps.append(name)
         }
         return deps
+    }
+
+    /// Resolve a `readelf` (or equivalent) binary on the host. Tries
+    /// `readelf` on PATH first, then `llvm-readelf` on PATH, then the
+    /// NDK's prebuilt `llvm-readelf` under `$ANDROID_NDK_HOME`.
+    /// Falls back to `/usr/bin/env readelf` (which will fail with a
+    /// clean error in `Shell.capture`) so the caller's `catch` can
+    /// surface the missing-tool diagnostic.
+    private func readelfTool() -> String {
+        ndkBinutilsTool(name: "readelf", llvmName: "llvm-readelf") ?? "/usr/bin/env"
+    }
+
+    /// Resolve `llvm-strip` (or `strip`) the same way as `readelfTool`.
+    /// Returns nil if no candidate is found — `stripELFs` skips the
+    /// strip pass with a printed warning rather than failing the
+    /// build.
+    private func stripTool() -> String? {
+        ndkBinutilsTool(name: "strip", llvmName: "llvm-strip")
+    }
+
+    private func ndkBinutilsTool(name: String, llvmName: String) -> String? {
+        let env = ProcessInfo.processInfo.environment
+        // Prefer the NDK's `llvm-*` over anything on PATH. macOS's
+        // `/usr/bin/strip` and `/usr/bin/readelf` (when present) are
+        // Mach-O-only and choke on ELF input — `llvm-strip` /
+        // `llvm-readelf` from the NDK handle ELF on every host.
+        if let ndk = env["ANDROID_NDK_HOME"], !ndk.isEmpty {
+            for host in ["darwin-x86_64", "darwin-arm64", "linux-x86_64", "windows-x86_64"] {
+                let path = "\(ndk)/toolchains/llvm/prebuilt/\(host)/bin/\(llvmName)"
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return path
+                }
+            }
+        }
+        let pathDirs = (env["PATH"] ?? "").split(separator: ":").map(String.init)
+        // Then prefer `llvm-<tool>` on PATH over the bare name — same
+        // ELF-vs-Mach-O reasoning. A bare `strip` / `readelf` on a
+        // Linux host is binutils and handles ELF, so this falls
+        // through to it correctly there.
+        for candidate in [llvmName, name] {
+            for dir in pathDirs {
+                let path = "\(dir)/\(candidate)"
+                if FileManager.default.isExecutableFile(atPath: path) {
+                    return path
+                }
+            }
+        }
+        return nil
+    }
+
+    /// Strip every `.so` file under `dir` with `llvm-strip
+    /// --strip-unneeded`. Done in-place; the unstripped `.build/`
+    /// copy stays on disk for `swift symbolicate` consumption.
+    /// Skips the pass with a one-line warning if no strip tool is
+    /// resolvable — pruning still gives the prune flag's win in
+    /// that case, just without the symbol-table cull.
+    private func stripELFs(in dir: URL) async throws {
+        guard let tool = stripTool() else {
+            print(
+                "note: no `strip` / `llvm-strip` found on PATH or under ANDROID_NDK_HOME; APK will ship unstripped .so files (~40% larger). Install the NDK and set ANDROID_NDK_HOME to enable."
+            )
+            return
+        }
+        let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
+        var before: Int64 = 0
+        var after: Int64 = 0
+        for name in entries where name.hasSuffix(".so") {
+            let path = dir.appendingPathComponent(name).path
+            let beforeSize = fileSize(path)
+            before += beforeSize
+            do {
+                _ = try await Shell.capture(tool, ["--strip-unneeded", path])
+            } catch {
+                // A failed strip on one file isn't fatal — the file
+                // just stays unstripped in the APK. Log and continue
+                // so a single corrupt input doesn't take the whole
+                // build down.
+                print("note: strip failed on \(name): \(error)")
+                after += beforeSize
+                continue
+            }
+            after += fileSize(path)
+        }
+        if before > 0 {
+            let saved = before - after
+            let pct = Int((Double(saved) / Double(before)) * 100.0)
+            print(
+                "stripped jniLibs in \(dir.lastPathComponent): \(formatBytes(before)) → \(formatBytes(after)) (saved \(formatBytes(saved)), \(pct)%)"
+            )
+        }
+    }
+
+    private func formatBytes(_ bytes: Int64) -> String {
+        let mb = Double(bytes) / (1024.0 * 1024.0)
+        return String(format: "%.0f MB", mb)
+    }
+
+    /// Read a file's size with the optional-chain unambiguous —
+    /// `FileManager.attributesOfItem(...)[.size]` returns
+    /// `Any?` boxing a numeric value, and the cast path through
+    /// `try?` + `as? Int64` interacts badly enough with Swift's
+    /// implicit optional flattening that an inline expression can
+    /// silently always-fail one side of the chain.
+    private func fileSize(_ path: String) -> Int64 {
+        guard let attrs = try? FileManager.default.attributesOfItem(atPath: path),
+              let size = attrs[.size] as? NSNumber
+        else { return 0 }
+        return size.int64Value
     }
 
     /// Is `name` a stock Android / NDK system library that the

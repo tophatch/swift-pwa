@@ -324,15 +324,53 @@ permission strings (`POST_NOTIFICATIONS`, `USE_BIOMETRIC`,
 ship a particular plugin can drop the corresponding line in a
 manual post-bundler edit.
 
+## 6.2. APK size
+
+Two bundler passes shrink the APK from a 131 MB unstripped wholesale
+build down to ~76 MB on `Examples/HelloPWA` (arm64-v8a, debug):
+
+| Configuration                                   | jniLibs   | APK     |
+|-------------------------------------------------|-----------|---------|
+| baseline (no prune, AGP can't strip)            | 124 MB    | 131 MB  |
+| `--prune-android-runtime` only                  | 113 MB    | 121 MB  |
+| **always-on strip (default)**                   | 73 MB     | 80 MB   |
+| **strip + `--prune-android-runtime` (default + opt-in)** | 68 MB | **76 MB** |
+
+The always-on strip step runs `llvm-strip --strip-unneeded` on every
+staged `.so` (the user's binary plus the bundled Swift runtime libs)
+inline before gradle sees them. The bundler resolves
+`llvm-strip` from `$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/<host>/bin/`
+— necessary because AGP's own `stripDebugDebugSymbols` task only finds
+the strip tool when an SDK-manager-installed NDK lives at
+`$ANDROID_HOME/ndk/<version>/`, and the Swift-on-Android dev setup
+pins a standalone NDK at `$ANDROID_NDK_HOME` instead. The unstripped
+binary stays in `.build/<triple>/release/<Name>` for `swift symbolicate`
+to consume during crash triage.
+
+The `--prune-android-runtime` flag drops 10 unused stdlib `.so`s
+(`_Differentiation`, `_StringProcessing` build artifacts not in the
+chain, `RegexBuilder`, `Distributed`, `FoundationXML`, `Testing`,
+`XCTest`, `Observation`, `_Volatile`, `_SwiftOnoneSupport`) from the
+26-file wholesale set. The marginal saving on top of strip is small
+(~5 MB) because the dominating size after stripping is the
+Foundation+ICU stack the binary genuinely pulls in:
+
+| File                         | Stripped size |
+|------------------------------|---------------|
+| `lib_FoundationICU.so`       | 37 MB (ICU i18n data — load-bearing for `URL` / `Locale`) |
+| `libswiftCore.so`            | 7 MB |
+| `libFoundation.so`           | 6 MB |
+| `libFoundationEssentials.so` | 6 MB |
+| `libHelloPWA.so` (app)       | 4 MB |
+| `libFoundationNetworking.so` | 3 MB |
+
+Apps that don't need internationalisation can in principle drop ICU
+(36 MB win) by avoiding any `Foundation` API path that touches
+`Locale` / `URL` parsing — that's a non-trivial refactor in practice
+and isn't something the bundler can prune automatically.
+
 ## 7. Known limitations (v0.5.x)
 
-- **APK size.** A wholesale-stdlib bundle is ~131 MB uncompressed.
-  Pass `--prune-android-runtime` to `swift-pwa build` to walk the
-  app's `DT_NEEDED` chain via `readelf -d` and ship only the
-  runtime libs the binary actually loads — typical apps drop to
-  ~30 MB. Off by default while we let the on-device round-trip
-  soak; opt in once you've verified your app boots and want the
-  size win for distribution.
 - **SAF dialog results are `content://` URIs, not filesystem paths.**
   See §6.1's `SystemDialog` row. Apps written against the
   cross-platform `Dialog` API expecting `[String]` of paths will

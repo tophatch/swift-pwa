@@ -15,6 +15,7 @@
             // clipboard.* JS commands work without the user having to
             // do it manually.
             use(WindowPlugin())
+            use(PlatformInfoPlugin())
             use(ClipboardPlugin(SystemClipboard()))
         }
 

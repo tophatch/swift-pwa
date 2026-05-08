@@ -48,6 +48,26 @@ struct Build: AsyncParsableCommand {
     )
     var bootstrapWebview2: Bool = false
 
+    @Option(
+        help: """
+        Comma-separated Android ABIs to include (e.g. arm64-v8a,x86_64). Overrides pwa.json's \
+        android.abis. The CLI cross-compiles one .so per ABI when --cross-compile is set; \
+        without it, the Gradle scaffold is generated and the developer is expected to drop \
+        the .so files in by hand.
+        """
+    )
+    var androidAbis: String?
+
+    @Flag(
+        help: """
+        Run `swift build --triple <android-abi>` for each requested Android ABI and stage the \
+        resulting .so files into the generated Gradle project. Off by default — most hosts \
+        won't have a Swift Android SDK installed, and we don't want the Gradle scaffold to \
+        fail to emit just because cross-compile didn't work.
+        """
+    )
+    var crossCompileAndroid: Bool = false
+
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
@@ -108,8 +128,25 @@ struct Build: AsyncParsableCommand {
             let url = try await bundler.build()
             print("Built: \(url.path)")
         case .android:
-            print("swift-pwa: Android bundler is a stub in v0.1. Planned for v0.3.")
-            throw ExitCode(2)
+            // Resolve the ABI list: --android-abis overrides pwa.json's
+            // android.abis, which falls back to the conventional pair.
+            let abiList: [String] = if let raw = androidAbis, !raw.isEmpty {
+                raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            } else if let configured = pwa.android?.abis, !configured.isEmpty {
+                configured
+            } else {
+                ["arm64-v8a", "x86_64"]
+            }
+            let bundler = AndroidBundler(
+                manifest: pwa,
+                projectRoot: cwd,
+                outputDir: outputDir,
+                abis: abiList,
+                crossCompile: crossCompileAndroid
+            )
+            let url = try await bundler.build()
+            print("Built: \(url.path)")
+            print("Next: cd '\(url.path)' && ./gradlew assembleDebug")
         }
     }
 }

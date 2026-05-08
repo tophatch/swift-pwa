@@ -14,6 +14,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var macos: MacOSSection?
     public var ios: IOSSection?
     public var linux: LinuxSection?
+    public var android: AndroidSection?
     public var updater: UpdaterSection?
 
     public struct WebSection: Codable, Sendable, Equatable {
@@ -61,6 +62,54 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public struct LinuxSection: Codable, Sendable, Equatable {
         public var desktopCategories: [String]? // e.g. ["Utility"]
         public var executableName: String? // defaults to top-level `id` last component
+    }
+
+    /// Android-specific configuration. Defaults are aggressive — the
+    /// generated Gradle scaffold targets API 34 (min 26) and includes
+    /// only the ABIs the host can build natively. Anything not set
+    /// falls back to a sensible value derived from the top-level
+    /// fields (package id from `id`, label from `name`, etc.).
+    ///
+    /// Example:
+    /// ```json
+    /// "android": {
+    ///   "package_id": "com.example.hello",
+    ///   "min_sdk": 26,
+    ///   "target_sdk": 34,
+    ///   "abis": ["arm64-v8a", "x86_64"],
+    ///   "version_code": 1
+    /// }
+    /// ```
+    public struct AndroidSection: Codable, Sendable, Equatable {
+        /// Java-style package id baked into `applicationId` and the
+        /// `package` attribute on the generated `AndroidManifest.xml`.
+        /// Defaults to the top-level `id` if it already looks like a
+        /// package id (contains a dot); otherwise to
+        /// `dev.swiftpwa.<id>`.
+        public var packageId: String?
+        /// Minimum SDK the generated Gradle scaffold accepts, *and*
+        /// the API level the cross-compile triple is built against.
+        /// Defaults to 28 (Android 9) — the floor of the Swift
+        /// Android SDK 6.2 distribution (the older API 24 floor was
+        /// dropped in that release). Values below 28 are clamped
+        /// when constructing the cross-compile triple, with a
+        /// printed warning, since SwiftPM would otherwise silently
+        /// resolve to the wrong-arch resource path.
+        public var minSdk: Int?
+        /// Target SDK declared in the manifest. Defaults to 34
+        /// (Android 14) — the current Play Store minimum.
+        public var targetSdk: Int?
+        /// ABIs to include in `jniLibs/`. Defaults to
+        /// `["arm64-v8a", "x86_64"]`. The CLI errors out if the host
+        /// toolchain can't produce a `.so` for any listed ABI; the
+        /// caller can drop entries to scope down to whatever they
+        /// have.
+        public var abis: [String]?
+        /// `versionCode` for the manifest. Defaults to 1 if unset;
+        /// production apps should bump this with each release. The
+        /// human-readable `versionName` comes from the top-level
+        /// `version`.
+        public var versionCode: Int?
     }
 
     /// Auto-updater configuration. Optional — apps that don't ship

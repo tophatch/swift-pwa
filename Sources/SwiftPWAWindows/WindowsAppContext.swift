@@ -27,6 +27,7 @@
 
         private init() {
             use(WindowPlugin())
+            use(PlatformInfoPlugin())
             use(ClipboardPlugin(SystemClipboard()))
         }
 

@@ -49,6 +49,14 @@ struct AndroidBundler {
     /// strip already saves. See `stageSwiftRuntime` /
     /// `prunedRuntimeSet` for the implementation.
     let pruneRuntime: Bool
+    /// CLI override for `pwa.json`'s `android.signing.keystore`. Path
+    /// to a `.jks` / `.keystore` / `.p12`; relative paths resolve
+    /// against `projectRoot`. When set with no `pwa.json` signing
+    /// section present, an alias is required via `keyAliasOverride`
+    /// (the bundler errors out otherwise).
+    let signKeystoreOverride: String?
+    /// CLI override for `pwa.json`'s `android.signing.key_alias`.
+    let keyAliasOverride: String?
 
     func build() async throws -> URL {
         let project = outputDir.appendingPathComponent("\(manifest.name)-android")
@@ -82,6 +90,7 @@ struct AndroidBundler {
         // App module.
         let app = project.appendingPathComponent("app")
         try FileManager.default.createDirectory(at: app, withIntermediateDirectories: true)
+        let signing = try resolveSigning()
         try AndroidTemplates.appBuildGradleKts(
             packageId: pkg,
             versionCode: versionCode,
@@ -89,11 +98,17 @@ struct AndroidBundler {
             minSdk: minSdk,
             targetSdk: targetSdk,
             abis: abis,
-            soBaseName: soBaseName()
+            soBaseName: soBaseName(),
+            signing: signing
         ).write(
             to: app.appendingPathComponent("build.gradle.kts"),
             atomically: true, encoding: .utf8
         )
+        if let signing {
+            print(
+                "configured release signing: keystore \(signing.keystoreAbsolutePath) (alias: \(signing.keyAlias)). Set SWIFT_PWA_ANDROID_STORE_PASSWORD and SWIFT_PWA_ANDROID_KEY_PASSWORD before `./gradlew assembleRelease`."
+            )
+        }
 
         // src/main layout.
         let main = app.appendingPathComponent("src/main")
@@ -731,6 +746,53 @@ struct AndroidBundler {
         return nil
     }
 
+    /// Merge the manifest's `android.signing` section with the CLI
+    /// overrides (`--sign <keystore>` and `--android-key-alias`) into
+    /// the resolved `AndroidTemplates.SigningConfig?` the template
+    /// understands. Returns `nil` if neither side configures signing
+    /// — the generated scaffold then matches the pre-v0.5.x behavior
+    /// (debug-only signing; `assembleRelease` would refuse without a
+    /// signingConfig). Throws if the configuration is partial — e.g.
+    /// `--sign` set but no alias resolvable from anywhere — since
+    /// silently dropping the option would surprise the user.
+    func resolveSigning() throws -> AndroidTemplates.SigningConfig? {
+        let manifestSigning = manifest.android?.signing
+        let keystoreRaw = signKeystoreOverride ?? manifestSigning?.keystore
+        let alias = keyAliasOverride ?? manifestSigning?.keyAlias
+        guard let keystoreRaw else { return nil }
+        guard let alias, !alias.isEmpty else {
+            throw AndroidBundlerError.signingMissingAlias
+        }
+        let keystoreAbs = resolveAbsolutePath(keystoreRaw)
+        let storeType = manifestSigning?.storeType?.lowercased() ?? "jks"
+        switch storeType {
+        case "jks", "pkcs12":
+            break
+        default:
+            throw AndroidBundlerError.signingUnknownStoreType(storeType)
+        }
+        return AndroidTemplates.SigningConfig(
+            keystoreAbsolutePath: keystoreAbs,
+            keyAlias: alias,
+            storeType: storeType,
+            v1SigningEnabled: manifestSigning?.v1SigningEnabled ?? true,
+            v2SigningEnabled: manifestSigning?.v2SigningEnabled ?? true
+        )
+    }
+
+    /// Turn a possibly-relative path into an absolute one, anchored
+    /// at `projectRoot`. The bundler resolves at scaffold time so the
+    /// generated `app/build.gradle.kts` (which lives a directory deeper
+    /// under `build/<name>-android/app/`) doesn't need to compute the
+    /// path itself — `file("absolute-path")` is unambiguous regardless
+    /// of where Gradle is invoked from.
+    private func resolveAbsolutePath(_ raw: String) -> String {
+        if raw.hasPrefix("/") || raw.contains(":\\") {
+            return raw // already absolute (POSIX or Windows)
+        }
+        return projectRoot.appendingPathComponent(raw).standardizedFileURL.path
+    }
+
     private func tripleFor(abi: String) -> String {
         // Swift Android SDK 6.2 supports API 28–36 (Android 9+); the
         // older API 24 floor was dropped in that release. Anything
@@ -752,6 +814,30 @@ struct AndroidBundler {
         case "x86_64": return "x86_64-unknown-linux-android\(api)"
         case "x86": return "i686-unknown-linux-android\(api)"
         default: return "aarch64-unknown-linux-android\(api)"
+        }
+    }
+}
+
+/// Errors the Android bundler raises when its inputs don't make
+/// sense. Kept narrow — most of the bundler's failure paths are
+/// printed-and-continue (`note:` lines for missing optional pieces),
+/// so reaching this enum means the user supplied a config that's
+/// actively contradictory and silent fallback would be worse than
+/// failing the build.
+enum AndroidBundlerError: Error, CustomStringConvertible {
+    case signingMissingAlias
+    case signingUnknownStoreType(String)
+
+    var description: String {
+        switch self {
+        case .signingMissingAlias:
+            """
+            swift-pwa: release signing was requested (--sign or pwa.json's \
+            android.signing.keystore is set) but no key alias is available. \
+            Set pwa.json's android.signing.key_alias or pass --android-key-alias.
+            """
+        case let .signingUnknownStoreType(t):
+            "swift-pwa: pwa.json's android.signing.store_type='\(t)' is not recognized; expected 'jks' or 'pkcs12'."
         }
     }
 }

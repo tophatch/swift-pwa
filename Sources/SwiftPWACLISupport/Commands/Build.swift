@@ -17,7 +17,14 @@ struct Build: AsyncParsableCommand {
     @Option(help: "Path to pwa.json. Defaults to ./pwa.json.")
     var manifest: String = "pwa.json"
 
-    @Option(help: "Code-signing identity (macOS/iOS only).")
+    @Option(
+        help: """
+        Code-signing identity. Interpretation is per-platform: macOS / iOS — codesign \
+        identity (e.g. "Developer ID Application: …"); Windows — signtool thumbprint or \
+        PFX path; Android — path to a keystore (.jks / .keystore / .pkcs12). When set for \
+        --target android, overrides pwa.json's android.signing.keystore.
+        """
+    )
     var sign: String?
 
     @Option(help: "Path to entitlements plist (macOS only).")
@@ -67,6 +74,16 @@ struct Build: AsyncParsableCommand {
         """
     )
     var crossCompileAndroid: Bool = false
+
+    @Option(
+        help: """
+        Android-only: alias of the key inside the keystore passed via --sign (or declared \
+        in pwa.json's android.signing.keystore). Overrides pwa.json's \
+        android.signing.key_alias when set. Required when --sign is used without a \
+        matching pwa.json signing section.
+        """
+    )
+    var androidKeyAlias: String?
 
     @Flag(
         help: """
@@ -157,7 +174,9 @@ struct Build: AsyncParsableCommand {
                 outputDir: outputDir,
                 abis: abiList,
                 crossCompile: crossCompileAndroid,
-                pruneRuntime: pruneAndroidRuntime
+                pruneRuntime: pruneAndroidRuntime,
+                signKeystoreOverride: sign,
+                keyAliasOverride: androidKeyAlias
             )
             let url = try await bundler.build()
             print("Built: \(url.path)")

@@ -30,6 +30,14 @@ struct Init: AsyncParsableCommand {
         try fm.createDirectory(at: root.appendingPathComponent("Sources/\(name)"), withIntermediateDirectories: true)
         try fm.createDirectory(at: root.appendingPathComponent("web"), withIntermediateDirectories: true)
 
+        let android = PWAManifest.AndroidSection(
+            packageId: id,
+            minSdk: 28,
+            targetSdk: 34,
+            abis: ["arm64-v8a", "x86_64"],
+            versionCode: 1
+        )
+
         let manifest = PWAManifest(
             id: id,
             name: name,
@@ -40,7 +48,8 @@ struct Init: AsyncParsableCommand {
             window: .init(title: name),
             macos: .init(bundleIdentifier: id, category: nil, minimumSystemVersion: "15.0"),
             ios: .init(bundleIdentifier: id, minimumSystemVersion: "18.0"),
-            linux: .init(desktopCategories: ["Utility"], executableName: nil)
+            linux: .init(desktopCategories: ["Utility"], executableName: nil),
+            android: android
         )
         try manifest.write(to: root.appendingPathComponent("pwa.json"))
 
@@ -54,12 +63,37 @@ struct Init: AsyncParsableCommand {
             atomically: true,
             encoding: .utf8
         )
+        try Templates.androidEntrySwift(name: name, packageId: id).write(
+            to: root.appendingPathComponent("Sources/\(name)/AndroidEntry.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
         try Templates.indexHTML(name: name).write(
             to: root.appendingPathComponent("web/index.html"),
             atomically: true,
             encoding: .utf8
         )
-        try ".build/\nDerivedData/\nbuild/\n*.app\n*.ipa\n*.AppImage\n".write(
+        // `.gitignore` covers the conventional Swift / bundling
+        // artifacts plus the Android signing material that should
+        // never be checked in. `*.jks` / `*.keystore` / `*.p12` cover
+        // the three keytool output formats; `keystore.properties`
+        // covers the convention some teams use to stash passwords on
+        // disk (we read passwords from env vars in the generated
+        // Gradle scaffold, but the file is still common in mixed
+        // toolchains).
+        try """
+        .build/
+        DerivedData/
+        build/
+        *.app
+        *.ipa
+        *.AppImage
+        *.jks
+        *.keystore
+        *.p12
+        keystore.properties
+
+        """.write(
             to: root.appendingPathComponent(".gitignore"),
             atomically: true,
             encoding: .utf8
@@ -87,6 +121,21 @@ enum Templates {
                     name: "\(name)",
                     dependencies: [
                         .product(name: "SwiftPWA", package: "swift-pwa"),
+                    ],
+                    linkerSettings: [
+                        // On Android, the Swift binary is loaded by the
+                        // generated Kotlin Activity via `System.loadLibrary`,
+                        // so it has to be a shared object (.so) rather than an
+                        // ELF executable. SwiftPM doesn't expose a "build this
+                        // executable target as a shared library" knob, so we
+                        // inject the linker flags directly. `-no-pie` cancels
+                        // the toolchain's default `-pie` (which is mutually
+                        // exclusive with `-shared` under `lld`); `-shared`
+                        // produces the actual .so.
+                        .unsafeFlags(
+                            ["-Xlinker", "-no-pie", "-Xlinker", "-shared"],
+                            .when(platforms: [.android])
+                        ),
                     ]
                 ),
             ]
@@ -99,20 +148,90 @@ enum Templates {
         import Foundation
         import SwiftPWA
 
+        // `@main` is the desktop entry point. On Android the .so is
+        // loaded by the generated Kotlin Activity via
+        // `System.loadLibrary`, and `AndroidEntry.swift`'s JNI shim
+        // calls `configure(_:)` directly — `main()` here is unreachable
+        // on Android but still emitted so SwiftPM's linker can resolve
+        // its `--defsym=main=...` indirection.
         @main
         struct \(name)App {
             static func main() async throws {
                 let runtime = try SwiftPWA.runtime()
-                try runtime.run { ctx in
-                    let webRoot = Bundle.main.bundleURL.appendingPathComponent("web")
-                    _ = try ctx.createWindow(.init(
-                        title: "\(name)",
-                        size: .init(width: 1024, height: 768),
-                        content: .bundled(directory: webRoot)
-                    ))
-                }
+                try runtime.run(configure)
             }
         }
+
+        @MainActor
+        func configure(_ ctx: any AppContext) throws {
+            // On Android the WebView resolves bundled assets via the
+            // virtual `https://swift-pwa.local/` host — see
+            // SwiftPWAAndroid's WebViewAssetLoader. On desktop the
+            // bundled web/ ships inside the resource bundle.
+            #if os(Android)
+                let content = WindowContent.bundled(directory: URL(fileURLWithPath: "/android_asset/web"))
+            #else
+                let content = WindowContent.bundled(directory: Bundle.main.bundleURL.appendingPathComponent("web"))
+            #endif
+
+            _ = try ctx.createWindow(WindowConfig(
+                title: "\(name)",
+                size: Size(width: 1024, height: 768),
+                content: content
+            ))
+        }
+        """
+    }
+
+    /// JNI entry-point boilerplate. The exported symbol's name has to
+    /// embed the user's Java package id (with dots replaced by
+    /// underscores) — SwiftPM doesn't know about the package id, so
+    /// this file lives in the user's project. Apps that change
+    /// `pwa.json`'s `android.package_id` after `init` must update the
+    /// `@_cdecl` string in lockstep — keep them in sync or the
+    /// Activity surfaces `UnsatisfiedLinkError: Native method not
+    /// found` at startup.
+    static func androidEntrySwift(name: String, packageId: String) -> String {
+        let mangled = packageId.replacingOccurrences(of: ".", with: "_")
+        return """
+        #if os(Android)
+            import Foundation
+            import SwiftPWA
+
+            /// JNI entry point for the generated `MainActivity.swiftPwaMain()`
+            /// Kotlin declaration. The symbol name is mangled per JNI's
+            /// rules (`Java_<package>_<class>_<method>`, dots → underscores)
+            /// and must stay in lockstep with `pwa.json`'s `android.package_id`.
+            ///
+            /// Called from the worker thread the activity spawns. The
+            /// Android backend's `run` blocks this thread on a semaphore
+            /// until `quit(exitCode:)` is invoked, so this function
+            /// never returns under normal operation.
+            @_cdecl("Java_\(mangled)_MainActivity_swiftPwaMain")
+            public func swiftpwa_\(name)_android_main(
+                _ env: OpaquePointer?,
+                _ thiz: OpaquePointer?
+            ) {
+                _ = env
+                _ = thiz
+
+                // `AppRuntime.run(_:)` is `@MainActor`-isolated by the
+                // protocol. On Android, MainActor is backed by libdispatch's
+                // main queue and `assumeIsolated` is strictly enforced via
+                // `dispatch_assert_queue(main)` — so we construct the
+                // concrete `AndroidAppRuntime` directly to use its
+                // `nonisolated` `run` declaration. Routing through
+                // `SwiftPWA.runtime()` would erase to `any AppRuntime` and
+                // pick the protocol's `@MainActor` witness, which then
+                // requires an actor hop the platform can't satisfy.
+                let runtime = AndroidAppRuntime()
+                do {
+                    try runtime.run(configure)
+                } catch {
+                    swiftPWALog("\(name): caught error during configure: \\(error)")
+                }
+            }
+        #endif
         """
     }
 

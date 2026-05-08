@@ -55,6 +55,18 @@ enum AndroidTemplates {
 
     // MARK: - app module
 
+    /// Resolved release-signing config the bundler hands to the
+    /// template. Holds the *absolute* keystore path so the generated
+    /// `app/build.gradle.kts` doesn't have to reason about its own
+    /// location relative to the user's project root.
+    struct SigningConfig {
+        var keystoreAbsolutePath: String
+        var keyAlias: String
+        var storeType: String // "jks" / "pkcs12"
+        var v1SigningEnabled: Bool
+        var v2SigningEnabled: Bool
+    }
+
     static func appBuildGradleKts(
         packageId: String,
         versionCode: Int,
@@ -62,10 +74,15 @@ enum AndroidTemplates {
         minSdk: Int,
         targetSdk: Int,
         abis: [String],
-        soBaseName: String
+        soBaseName: String,
+        signing: SigningConfig?
     ) -> String {
         let abiList = abis.map { "\"\($0)\"" }.joined(separator: ", ")
-        return """
+        let signingBlockText = signing.map(signingConfigsBlock(_:)) ?? ""
+        let releaseExtras = signing == nil
+            ? ""
+            : "            signingConfig = signingConfigs.getByName(\"release\")\n"
+        let head = """
         plugins {
             id("com.android.application")
             id("org.jetbrains.kotlin.android")
@@ -87,9 +104,14 @@ enum AndroidTemplates {
                 }
             }
 
+        """
+        let buildTypesOpen = """
             buildTypes {
                 release {
                     isMinifyEnabled = false
+
+        """
+        let buildTypesTail = """
                 }
                 debug {
                     // WebView remote-debug bridge is only useful in debug.
@@ -138,6 +160,45 @@ enum AndroidTemplates {
             implementation("androidx.biometric:biometric:1.1.0")
             implementation("androidx.activity:activity-ktx:1.9.0")
         }
+        """
+        return head + signingBlockText + buildTypesOpen + releaseExtras + buildTypesTail + "\n"
+    }
+
+    /// Render the `signingConfigs { create("release") { ... } }` block
+    /// for the generated `app/build.gradle.kts`. Indented to sit one
+    /// level inside the `android { }` block (4-space indent, matching
+    /// the surrounding `defaultConfig` / `buildTypes` siblings).
+    ///
+    /// Passwords are read from the environment at Gradle configure
+    /// time — `pwa.json` is checked in, so we deliberately keep the
+    /// secret values out of the manifest. The error message points at
+    /// the env var name rather than throwing a generic null deref so
+    /// the user knows what knob to set.
+    private static func signingConfigsBlock(_ s: SigningConfig) -> String {
+        // Kotlin string literals require backslash + double-quote
+        // escaping. Backslashes need doubling so a Windows path like
+        // `C:\Users\me\release.jks` survives the round-trip.
+        let escapedPath = s.keystoreAbsolutePath
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        let escapedAlias = s.keyAlias
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return """
+            signingConfigs {
+                create("release") {
+                    storeFile = java.io.File("\(escapedPath)")
+                    storeType = "\(s.storeType)"
+                    keyAlias = "\(escapedAlias)"
+                    storePassword = System.getenv("SWIFT_PWA_ANDROID_STORE_PASSWORD")
+                        ?: error("swift-pwa: SWIFT_PWA_ANDROID_STORE_PASSWORD not set; release signing requires it")
+                    keyPassword = System.getenv("SWIFT_PWA_ANDROID_KEY_PASSWORD")
+                        ?: error("swift-pwa: SWIFT_PWA_ANDROID_KEY_PASSWORD not set; release signing requires it")
+                    enableV1Signing = \(s.v1SigningEnabled)
+                    enableV2Signing = \(s.v2SigningEnabled)
+                }
+            }
+
         """
     }
 

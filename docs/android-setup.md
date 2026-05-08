@@ -161,8 +161,13 @@ the `@_cdecl` to match.
 
 > Why a manual `@_cdecl` instead of a generated wrapper? Because the
 > exported symbol's name has to embed the user's Java package id,
-> which the Swift target itself doesn't know about. Codegen for this
-> is on the v0.5.x roadmap; for now, the boilerplate is one file.
+> which the Swift target itself doesn't know about. `swift-pwa init`
+> emits this file pre-populated with the right mangled symbol for the
+> chosen `--bundle-id` (Sources/&lt;name&gt;/AndroidEntry.swift); apps
+> that change `pwa.json`'s `android.package_id` after the fact must
+> update the `@_cdecl` string in lockstep, since the Activity
+> surfaces `UnsatisfiedLinkError: Native method not found` at startup
+> if the two drift.
 
 ## 4. Cross-compile + bundle
 
@@ -371,7 +376,116 @@ Apps that don't need internationalisation can in principle drop ICU
 `Locale` / `URL` parsing — that's a non-trivial refactor in practice
 and isn't something the bundler can prune automatically.
 
-## 7. Known limitations (v0.5.x)
+## 7. Code signing
+
+`assembleDebug` builds with the Android-supplied debug keystore — fine
+for sideloading via `adb install`, but the Play Store and most enterprise
+distribution paths require a `release`-signed APK / AAB. The bundler
+wires release signing into the generated `app/build.gradle.kts` when
+configured; passwords are read from the environment, so `pwa.json`
+stays committable without leaking secrets.
+
+### 7.1. Generate a keystore
+
+`keytool` (bundled with JDK 17) produces a PKCS#12 keystore that AGP
+accepts directly:
+
+```bash
+keytool -genkeypair \
+    -keystore release.jks \
+    -alias upload-key \
+    -keyalg RSA -keysize 2048 -validity 36500 \
+    -storetype pkcs12
+# (prompt for store password and key password — keep them in a password
+#  manager; the generated Gradle scaffold reads them from env vars at
+#  build time, never from disk.)
+```
+
+Stash `release.jks` somewhere outside the project tree, or inside it
+behind `.gitignore` (`*.jks`, `*.keystore`, `*.p12`, `keystore.properties`
+— the entries `swift-pwa init` pre-populates). Lose this file and you
+**cannot push updates** to the Play Store under the same listing —
+Google's app-signing keys can be reset via support, but the upload key
+that signs *your* uploads is yours to manage.
+
+### 7.2. Wire it up
+
+Two surfaces, pick whichever matches your release pipeline.
+
+**`pwa.json` (recommended for one-keystore projects):**
+
+```json
+"android": {
+  "package_id": "com.example.myapp",
+  ...
+  "signing": {
+    "keystore": "release.jks",
+    "key_alias": "upload-key",
+    "store_type": "pkcs12"
+  }
+}
+```
+
+The bundler resolves `keystore` against the project root (the directory
+holding `pwa.json`), bakes the absolute path into the generated Gradle
+script, and applies `signingConfigs.release` to the release build type.
+`store_type` defaults to `"jks"`; set it to `"pkcs12"` if `keytool` was
+run with the modern format (the JDK 9+ default).
+
+**CLI overrides (recommended for CI matrices that vary the keystore per
+target):**
+
+```bash
+swift-pwa build --target android \
+    --sign /etc/secrets/release.jks \
+    --android-key-alias upload-key
+```
+
+`--sign` overrides `pwa.json`'s `android.signing.keystore`;
+`--android-key-alias` overrides `android.signing.key_alias`. Either
+flag without the corresponding `pwa.json` setting is sufficient as
+long as both keystore + alias resolve from somewhere.
+
+### 7.3. Run the release build
+
+Set the two password env vars and invoke `assembleRelease` (or
+`bundleRelease` for an AAB):
+
+```bash
+export SWIFT_PWA_ANDROID_STORE_PASSWORD=...
+export SWIFT_PWA_ANDROID_KEY_PASSWORD=...
+cd build/MyApp-android
+./gradlew assembleRelease
+# app/build/outputs/apk/release/app-release.apk
+```
+
+Either env var missing fails Gradle's configure step with a clear
+error pointing at the variable name — silent fallback to a debug-key
+or unsigned APK would be a pit of failure for distribution pipelines.
+
+### 7.4. CI patterns
+
+GitHub Actions / CircleCI / similar — store the keystore as a
+base64-encoded secret and decode it before the build:
+
+```yaml
+- name: Decode keystore
+  run: echo "$ANDROID_KEYSTORE_B64" | base64 -d > release.jks
+  env:
+    ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+- name: Build signed APK
+  run: ./gradlew assembleRelease
+  working-directory: build/MyApp-android
+  env:
+    SWIFT_PWA_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
+    SWIFT_PWA_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+```
+
+The `pwa.json` `android.signing.keystore` path resolves relative to
+the project root, so `release.jks` decoded into the project root works
+without further configuration.
+
+## 8. Known limitations (v0.5.x)
 
 - **SAF dialog results are `content://` URIs, not filesystem paths.**
   See §6.1's `SystemDialog` row. Apps written against the
@@ -387,13 +501,6 @@ and isn't something the bundler can prune automatically.
   the system prompt happens after this method returns. Apps that
   need to act on success / failure should listen for
   `PackageInstaller.STATUS_*` broadcasts via their own receiver.
-- **`swift-pwa init MyApp` doesn't generate the Android boilerplate.**
-  The `@_cdecl("Java_..._swiftPwaMain")` entry point is described
-  in §3 but not auto-emitted by `swift-pwa init`; v0.5.x will add it.
-- **No code-signing wiring.** `--sign` is a Mac/iOS flag today.
-  Android signing goes through Gradle's `signingConfigs`; until
-  the bundler emits one, `assembleRelease` requires the user to
-  edit `app/build.gradle.kts` and add their keystore manually.
 - **API 28 floor.** Driven by the Swift Android SDK 6.2's
   `targetTriples` map, which only declares triples for API 28–36.
   See §1's "Why the API 28 floor" callout.

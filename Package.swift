@@ -123,7 +123,14 @@ let package = Package(
         .library(name: "SwiftPWA", targets: ["SwiftPWA"]),
         .library(name: "SwiftPWACore", targets: ["SwiftPWACore"]),
         .library(name: "SwiftPWATestSupport", targets: ["_SwiftPWATestSupport"]),
-        .executable(name: "swift-pwa", targets: ["swift-pwa-cli"])
+        .executable(name: "swift-pwa", targets: ["swift-pwa-cli"]),
+        // CI-internal: the Windows test runner. See the matching
+        // executableTarget below for why a regular swift-testing target
+        // doesn't work on Windows. Surfaced as a product so it shows up
+        // in `swift package describe` / `products:` grep — a Windows
+        // reviewer hit the discoverability gap when only the target
+        // existed.
+        .executable(name: "SwiftPWAWindowsTestRunner", targets: ["SwiftPWAWindowsTestRunner"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),

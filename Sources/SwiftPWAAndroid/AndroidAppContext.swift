@@ -41,9 +41,10 @@
         public private(set) nonisolated(unsafe) var pendingExitCode: Int32?
         private nonisolated(unsafe) var installedPlugins: Set<String> = []
 
-        /// Most recently created window. Android is single-Activity
-        /// (multi-window via `Activity.startActivity` is a future
-        /// extension); inbound frames route here.
+        /// Most recently created window. The first `createWindow`
+        /// call wires the primary Activity's WebView; later calls
+        /// JNI-spawn a secondary Activity. Inbound JS frames route
+        /// to whichever AndroidWindow this points at.
         ///
         /// `nonisolated(unsafe)`: written from `createWindow`
         /// (MainActor, runs once during `configure`) and read from
@@ -67,26 +68,65 @@
             // since `use` short-circuits on already-installed plugins
             // by name.
             use(ClipboardPlugin(SystemClipboard()))
+
+            // Route `content://` URIs from SAF dialog results through
+            // the Kotlin `ContentResolver` so apps can hand a SAF-
+            // picker URI straight to `fs.readBinary` / `writeBinary` /
+            // `metadata` without special-casing. The resolver slot is
+            // process-wide; doing this here means `FsPlugin(SystemFs())`
+            // on Android transparently handles content URIs without
+            // any app-side setup.
+            SystemFs.setContentResolver(AndroidContentResolver())
         }
 
         @discardableResult
         public func createWindow(_ config: WindowConfig) throws -> any Window {
-            // On Android, the Activity *is* the window — the WebView
-            // it hosts is what we wrap. We don't physically create a
-            // new OS-level window here; we hand back an `AndroidWindow`
-            // that represents the existing Activity-hosted WebView and
-            // load the requested content into it.
-            //
-            // Calling `createWindow` more than once in a single
-            // `configure` is a programmer error on Android (no
-            // Activity-spawning support yet); the second call replaces
-            // the first window's content rather than creating a new
-            // OS-level window. Documented in `docs/android-setup.md`.
-            let win = AndroidWindow(config: config)
+            // First call binds to the primary Activity that's already
+            // running (the JNI entry-point Activity). Subsequent calls
+            // JNI-launch a fresh MainActivity instance carrying the
+            // configured content as an intent extra — the secondary
+            // Activity then becomes the foreground bridge until the
+            // user navigates back. The `AndroidWindow` returned in
+            // the secondary case is `.secondary`: it carries a stub
+            // `WebView` adapter that doesn't itself reach the spawned
+            // Activity's WebView, since the C shim's bridge ref is
+            // single-slot. Cross-Activity Swift→WebView calls are
+            // out of scope for v0.5.x; the spawned Activity owns its
+            // own JS runtime. Documented in `docs/android-setup.md`.
+            let isPrimary = windows.isEmpty
+            let win = AndroidWindow(config: config, role: isPrimary ? .primary : .secondary)
             windows[win.id] = win
             activeWindow = win
-            win.webView.load(config.content)
+            if isPrimary {
+                win.webView.load(config.content)
+            } else {
+                spawnSecondaryActivity(config: config)
+            }
             return win
+        }
+
+        /// Encode `config` as the JSON the Kotlin secondary-Activity
+        /// path expects (`{"url": String, "title": String?}`) and
+        /// JNI-call into the bridge to do the `startActivity`. The
+        /// URL is resolved through the same `AndroidWebViewAdapter`
+        /// resolver the primary uses so `.bundled` / `.remote` both
+        /// reach the right place.
+        private func spawnSecondaryActivity(config: WindowConfig) {
+            let url = AndroidWebViewAdapter.resolveURL(for: config.content)
+            // Build the JSON by hand — two fields, both strings, no
+            // escaping wrinkles beyond standard JSONEncoder coverage.
+            struct ConfigJSON: Encodable {
+                let url: String
+                let title: String?
+            }
+            let payload = ConfigJSON(url: url, title: config.title.isEmpty ? nil : config.title)
+            guard let data = try? JSONEncoder().encode(payload),
+                  let json = String(data: data, encoding: .utf8)
+            else {
+                swiftpwa_android_log("createWindow: failed to encode secondary config JSON")
+                return
+            }
+            json.withCString { swiftpwa_android_spawn_window($0) }
         }
 
         public func use(_ plugin: any Plugin) {

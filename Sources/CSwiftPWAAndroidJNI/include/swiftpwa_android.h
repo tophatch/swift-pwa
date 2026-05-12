@@ -99,6 +99,24 @@ void swiftpwa_android_load_url(const char *url_utf8);
 // hide the action bar via theme.
 void swiftpwa_android_set_title(const char *title_utf8);
 
+// Toggle immersive / fullscreen mode by hiding (or showing) the
+// system bars (status + navigation) via
+// `WindowInsetsControllerCompat`. `on != 0` hides the bars and lets
+// the WebView draw edge-to-edge; `on == 0` restores the default
+// fitted-system-windows layout. Hops to UI thread internally.
+void swiftpwa_android_set_fullscreen(int on);
+
+// Spawn a new Activity hosting a separate WebView seeded with the
+// content described by `config_json_utf8` (a JSON object with at
+// least a `url` field; optional `title`). The new Activity becomes
+// the foreground bridge — outbound calls reach the spawned WebView
+// until the user navigates back. The Kotlin side does the
+// `startActivity` with `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_MULTIPLE_TASK`
+// so each spawn gets its own task entry in the platform's recents
+// list. Hops to UI thread internally. No-op when no bridge is
+// attached (Activity hasn't reached `onCreate` yet).
+void swiftpwa_android_spawn_window(const char *config_json_utf8);
+
 // Run `WebView.evaluateJavascript(snippet, callback)`. The result
 // callback fires on UI thread; the shim trampolines it back to
 // `done` on whatever thread invoked the JVM (typically the binder
@@ -141,6 +159,31 @@ void swiftpwa_android_rpc(const char *method_utf8,
                           const char *args_json_utf8,
                           swiftpwa_android_rpc_done_fn done,
                           void *user);
+
+// ---------------------------------------------------------------------
+// Host event channel: Swift <- Kotlin (one-way push, no reply).
+//
+// Used by Kotlin code paths that observe asynchronous platform state
+// outside the JS bridge envelope or the request/response RPC shape —
+// most notably `BroadcastReceiver` callbacks for the updater
+// `PackageInstaller.STATUS_*` lifecycle. A single Swift-side
+// dispatcher is registered at runtime startup; it routes by the
+// `channel` field embedded in the JSON payload to whichever plugin
+// is interested.
+//
+// `json_utf8` is a NUL-terminated UTF-8 string owned by the JVM for
+// the duration of the call; copy if you need to retain it.
+// ---------------------------------------------------------------------
+
+typedef void (*swiftpwa_android_host_event_fn)(const char *json_utf8, void *user);
+
+void swiftpwa_android_set_host_event_handler(swiftpwa_android_host_event_fn handler,
+                                             void *user);
+
+// Called by Kotlin via JNI on a binder thread when a host-side
+// event needs to reach Swift. Routes through the registered handler;
+// no-op if nothing is registered.
+void swiftpwa_android_dispatch_host_event(const char *json_utf8);
 
 // ---------------------------------------------------------------------
 // Main-thread dispatch hook. `MainThread.run` on Android calls

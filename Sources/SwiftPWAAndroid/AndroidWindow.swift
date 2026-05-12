@@ -21,9 +21,13 @@
     ///   - `minimize()` / `maximize()`: no-op. Android has no concept
     ///     of "minimize" outside of `moveTaskToBack`, which we don't
     ///     wire up by default.
-    ///   - `setFullscreen(true)`: enters immersive mode via a JNI
-    ///     hop to the bridge (`enterImmersive`); `setFullscreen(false)`
-    ///     exits. Implemented in a v0.5.x follow-up.
+    ///   - `setFullscreen(true)`: hides the system status + navigation
+    ///     bars via `WindowInsetsControllerCompat` and lets the WebView
+    ///     draw edge-to-edge; transient bars on swipe stay enabled so
+    ///     the user can still reach system gestures. `setFullscreen(false)`
+    ///     restores the default fitted-system-windows layout. State
+    ///     mirrored in `fullscreenOn` so `isFullscreen()` works even
+    ///     before any JNI round-trip lands.
     ///   - `focus()`: no-op (Activity already has focus by virtue of
     ///     being foregrounded).
     ///   - `close()`: routes through `quit(exitCode: 0)` since on a
@@ -35,9 +39,30 @@
     /// thread as the canonical owner of this state during configure
     /// and route UI-bound work explicitly via `MainThread.run` (which
     /// hops to Android's UI thread).
+    /// How this `AndroidWindow` maps to the underlying Activity.
+    ///
+    /// - `.primary` — bound to the foreground Activity that the JNI
+    ///   runtime entry-point originally attached to. Window APIs
+    ///   reach the OS through the shared bridge ref.
+    /// - `.secondary` — represents an Activity spawned via
+    ///   `swiftpwa_android_spawn_window`. The Window protocol
+    ///   methods are intentionally lossy here: the C shim's bridge
+    ///   ref is single-slot, so cross-Activity calls from Swift
+    ///   would target whichever Activity is foreground rather than
+    ///   the spawned one. Calls that would silently target the
+    ///   wrong Activity (`setTitle`, `webView.evaluateJavaScript`)
+    ///   are downgraded to local-state updates so the API stays
+    ///   honest. Apps that need full per-window control should drive
+    ///   it from the JS side of the secondary Activity instead.
+    public enum AndroidWindowRole: Sendable {
+        case primary
+        case secondary
+    }
+
     public final nonisolated class AndroidWindow: Window, @unchecked Sendable {
         public let id: WindowID
         public let webView: any PWAWebView
+        public let role: AndroidWindowRole
 
         let adapter: AndroidWebViewAdapter
 
@@ -56,8 +81,9 @@
         private var lastKnownSize: Size = .zero
         private var fullscreenOn: Bool = false
 
-        init(config: WindowConfig) {
+        init(config: WindowConfig, role: AndroidWindowRole = .primary) {
             id = WindowID()
+            self.role = role
             currentTitle = config.title
             adapter = AndroidWebViewAdapter()
             webView = adapter
@@ -90,6 +116,13 @@
             // task-list label reflects the new value. Apps that hide
             // the action bar via theme will see the title change in
             // the recents list / task switcher only.
+            //
+            // Skipped for `.secondary` windows: the C shim's bridge
+            // ref is single-slot, so we'd be poking whichever
+            // Activity is currently foreground rather than the
+            // intended spawned one. Local title cache still updates
+            // so `title()` continues to report the requested value.
+            guard role == .primary else { return }
             title.withCString { swiftpwa_android_set_title($0) }
         }
 
@@ -127,9 +160,12 @@
 
         public func setFullscreen(_ on: Bool) {
             fullscreenOn = on
-            // TODO(v0.5.x): JNI-call into the Kotlin bridge to
-            // toggle `WindowInsetsControllerCompat.systemBarsBehavior`
-            // and hide the system bars. Cached locally for now.
+            // Same single-slot-bridge caveat as `setTitle`: skip the
+            // JNI hop on secondary windows so we don't accidentally
+            // flip the wrong Activity's bars. Local mirror still
+            // tracks the most-recent caller intent.
+            guard role == .primary else { return }
+            swiftpwa_android_set_fullscreen(on ? 1 : 0)
         }
 
         public func isFullscreen() -> Bool { fullscreenOn }
@@ -138,7 +174,13 @@
             eventContinuation.yield(.willClose)
             eventContinuation.yield(.didClose)
             eventContinuation.finish()
-            // Closing the window on Android == closing the app.
+            // Primary close = app quit. Secondary close from Swift
+            // is best-effort and currently a no-op beyond the event
+            // emission — finishing a specific spawned Activity from
+            // Swift would need an `Activity` handle the single-slot
+            // bridge ref doesn't preserve. The user can dismiss the
+            // spawned Activity with the system back gesture.
+            guard role == .primary else { return }
             AndroidAppContext.shared.quit(exitCode: 0)
         }
 

@@ -58,6 +58,24 @@ public protocol Fs: AnyObject, Sendable {
     func metadata(path: String) async throws -> FsMetadata
 }
 
+/// Backend hook for resolving `content://` URIs. Android's Storage
+/// Access Framework hands SAF picker results back as
+/// `content://authority/...` URIs rather than filesystem paths, so the
+/// otherwise platform-agnostic `SystemFs` defers URI-shaped paths to a
+/// resolver supplied by `SwiftPWAAndroid` (see `AndroidContentResolver`).
+///
+/// `mkdir` / `readDir` / `copy` / `rename` aren't part of the contract:
+/// SAF doesn't expose directory-style operations on content URIs in a
+/// shape that maps cleanly onto the POSIX-flavoured Fs surface, so
+/// those operations throw on a `content://` argument rather than
+/// silently misbehaving. `exists` is satisfied by a successful
+/// `metadata` call.
+public protocol FsContentResolver: Sendable {
+    func readBinary(uri: String) async throws -> Data
+    func writeBinary(uri: String, data: Data) async throws
+    func metadata(uri: String) async throws -> FsMetadata
+}
+
 // MARK: - DTOs
 
 public struct FsEntry: Sendable, Codable, Equatable {

@@ -140,7 +140,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | Preview⁷                 |
 | `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | Fingerprint / Face¹²     |
 | `UpdaterPlugin` (runtime)     | Untested⁶               | Untested⁶                    | Untested⁶                  | Untested⁶               | Untested⁶                | Preview⁷ (PackageInstaller) |
-| `swift-pwa updater` CLI       | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | v0.5.x                   |
+| `swift-pwa updater` CLI       | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | Bundler artifact              | `.app`                  | `.app` / `.ipa`              | `.AppImage`                | `.AppImage`             | Portable / MSIX          | Gradle project → APK/AAB |
 | Code-signing pass-through     | `codesign`              | `codesign`                   | —                          | —                       | `signtool`               | Gradle `signingConfigs`¹⁰ |
 
@@ -151,10 +151,10 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 5. Apple notifications require a bundled, signed `.app` (`UNUserNotificationCenter` rejects unsigned processes).
 6. Runtime backends are unit-tested but the per-OS install hand-off is preview until [docs/manual-test-cases.md](docs/manual-test-cases.md) is walked. The publishing CLI is fully tested. Full breakdown: [docs/auto-updates.md](docs/auto-updates.md).
 7. End-to-end verified on a Galaxy Tab S10+; backend wiring + boilerplate in [docs/android-setup.md](docs/android-setup.md), the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md).
-8. Most `Window` shape APIs (`setSize`, `setPosition`, `minimize`, etc.) are no-ops — the platform owns those decisions; multi-window via Activity-per-window queued for v0.5.x. Detail: [docs/android-setup.md](docs/android-setup.md) §6.
+8. Most `Window` shape APIs (`setSize`, `setPosition`, `minimize`, etc.) are no-ops — the platform owns those decisions. Multi-window spawns a new Activity per `createWindow`; cross-Activity Swift→OS calls (`setTitle` / `setFullscreen` / `close()` on a non-foreground window) are intentionally limited. Detail: [docs/android-setup.md](docs/android-setup.md) §6.
 9. Android `WebView` has no programmatic DevTools window; debug via `chrome://inspect` on a connected host. `webView.openDevTools()` logs an `adb`-friendly hint.
 10. Driven by `pwa.json`'s `android.signing` (or `--sign` / `--android-key-alias` CLI overrides) with passwords from environment variables. Full wiring + CI pattern: [docs/android-setup.md](docs/android-setup.md) §7.
-11. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths. Detail: [docs/android-setup.md](docs/android-setup.md) §6.1.
+11. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths. The `Fs` plugin handles those URIs transparently (`fs.readBinary` / `writeBinary` / `metadata` / `exists` route through `ContentResolver`); directory-style operations on URIs reject with a clear error. Detail: [docs/android-setup.md](docs/android-setup.md) §6.1.
 12. Android's `BiometricManager` doesn't distinguish fingerprint / face / iris — `BiometricKind` is `.unknown` when available. Gate JS on `available`, not `kind`.
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
@@ -203,8 +203,8 @@ The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `s
 
 ## Roadmap
 
-- **v0.5** (in flight on `main`) — Android backend at desktop parity: Swift target, JNI shim, Kotlin / Gradle scaffold, full plugin set, end-to-end verified on a Galaxy Tab S10+. CI runs the cross-compile + `assembleDebug` pipeline on every push. Wiring lives in [docs/android-setup.md](docs/android-setup.md); the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md); per-feature breakdown in [`CHANGELOG.md`](CHANGELOG.md). Still queued for the v0.5.x cycle: GTK4 tray.
-- **v0.5+** — Typed JS↔Swift codegen layer, hot-reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
+- **v0.5** (in flight on `main`) — Android backend at desktop parity: Swift target, JNI shim, Kotlin / Gradle scaffold, full plugin set, end-to-end verified on a Galaxy Tab S10+. CI runs the cross-compile + `assembleDebug` pipeline on every push. Wiring lives in [docs/android-setup.md](docs/android-setup.md); the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md); per-feature breakdown in [`CHANGELOG.md`](CHANGELOG.md).
+- **v0.5+** — GTK4 tray (bundled with the `libayatana-appindicator-glib` shim migration), typed JS↔Swift codegen layer, hot-reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.
 

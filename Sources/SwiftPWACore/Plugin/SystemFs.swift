@@ -13,6 +13,51 @@ import Foundation
 public final class SystemFs: Fs, @unchecked Sendable {
     public init() {}
 
+    // MARK: - Content URI resolver (Android SAF)
+
+    /// Prefix used to recognise an Android SAF / content-provider URI
+    /// in the otherwise filesystem-path-shaped `Fs` surface.
+    static let contentURIScheme = "content://"
+
+    private static let resolverLock = NSLock()
+    private nonisolated(unsafe) static var sharedContentResolver: (any FsContentResolver)?
+
+    /// Install a process-wide resolver for `content://` URIs.
+    /// `SwiftPWAAndroid.AndroidAppContext` registers an
+    /// `AndroidContentResolver` on init; other backends never call
+    /// this and the slot stays nil.
+    public static func setContentResolver(_ resolver: (any FsContentResolver)?) {
+        resolverLock.withLock { sharedContentResolver = resolver }
+    }
+
+    /// Look up the resolver under lock; nil on non-Android (or before
+    /// the Android backend registers one).
+    static func contentResolver() -> (any FsContentResolver)? {
+        resolverLock.withLock { sharedContentResolver }
+    }
+
+    /// Whether `path` should route through the content-URI resolver.
+    static func isContentURI(_ path: String) -> Bool {
+        path.hasPrefix(contentURIScheme)
+    }
+
+    private func requireContentResolver(_ op: String) throws -> any FsContentResolver {
+        guard let r = Self.contentResolver() else {
+            throw BridgeError(
+                code: BridgeError.handler,
+                message: "\(op): content:// URIs require AndroidContentResolver — only the Android backend supplies one"
+            )
+        }
+        return r
+    }
+
+    private func contentURIOperationUnsupported(_ op: String, path: String) -> BridgeError {
+        BridgeError(
+            code: BridgeError.handler,
+            message: "\(op): not supported on a content:// URI (\(path)) — SAF doesn't expose this operation"
+        )
+    }
+
     public func readText(path: String) async throws -> String {
         let data = try await readBinary(path: path)
         guard let str = String(data: data, encoding: .utf8) else {
@@ -29,6 +74,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func readBinary(path: String) async throws -> Data {
+        if Self.isContentURI(path) {
+            return try await requireContentResolver("fs.readBinary").readBinary(uri: path)
+        }
         let url = URL(fileURLWithPath: path)
         // `FileManager.contents(atPath:)` is more reliable than
         // `Data(contentsOf:)` on swift-corelibs-foundation under
@@ -41,6 +89,10 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func writeBinary(path: String, data: Data) async throws {
+        if Self.isContentURI(path) {
+            try await requireContentResolver("fs.writeBinary").writeBinary(uri: path, data: data)
+            return
+        }
         let url = URL(fileURLWithPath: path)
         do {
             try data.write(to: url, options: [.atomic])
@@ -53,10 +105,26 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func exists(path: String) async throws -> Bool {
-        FileManager.default.fileExists(atPath: path)
+        if Self.isContentURI(path) {
+            // A content URI "exists" if the resolver can produce
+            // metadata for it. SAF doesn't have a cheaper presence
+            // probe — `query()` with a single projected column is
+            // the minimum the platform supports.
+            guard let r = Self.contentResolver() else { return false }
+            do {
+                _ = try await r.metadata(uri: path)
+                return true
+            } catch {
+                return false
+            }
+        }
+        return FileManager.default.fileExists(atPath: path)
     }
 
     public func mkdir(path: String, recursive: Bool) async throws {
+        if Self.isContentURI(path) {
+            throw contentURIOperationUnsupported("fs.mkdir", path: path)
+        }
         do {
             try FileManager.default.createDirectory(
                 atPath: path,
@@ -72,6 +140,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func remove(path: String, recursive: Bool) async throws {
+        if Self.isContentURI(path) {
+            throw contentURIOperationUnsupported("fs.remove", path: path)
+        }
         let fm = FileManager.default
         var isDir: ObjCBool = false
         guard fm.fileExists(atPath: path, isDirectory: &isDir) else {
@@ -103,6 +174,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func readDir(path: String) async throws -> [FsEntry] {
+        if Self.isContentURI(path) {
+            throw contentURIOperationUnsupported("fs.readDir", path: path)
+        }
         let fm = FileManager.default
         let entries: [String]
         do {
@@ -132,6 +206,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func copy(from: String, to: String) async throws {
+        if Self.isContentURI(from) || Self.isContentURI(to) {
+            throw contentURIOperationUnsupported("fs.copy", path: "\(from) → \(to)")
+        }
         do {
             try FileManager.default.copyItem(atPath: from, toPath: to)
         } catch {
@@ -143,6 +220,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func rename(from: String, to: String) async throws {
+        if Self.isContentURI(from) || Self.isContentURI(to) {
+            throw contentURIOperationUnsupported("fs.rename", path: "\(from) → \(to)")
+        }
         do {
             try FileManager.default.moveItem(atPath: from, toPath: to)
         } catch {
@@ -154,6 +234,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func metadata(path: String) async throws -> FsMetadata {
+        if Self.isContentURI(path) {
+            return try await requireContentResolver("fs.metadata").metadata(uri: path)
+        }
         let fm = FileManager.default
         let attrs: [FileAttributeKey: Any]
         do {

@@ -64,8 +64,9 @@ It's a hard build dep of the GTK3 backend even if you don't use
 > use libayatana-appindicator-glib in newly written code.` to stderr
 > at startup. Soft deprecation, not a removal — the library still
 > works on every distro that has it. Migrating the shim to the GTK-
-> free `libayatana-appindicator-glib` is queued for v0.5 (bundled with
-> finally enabling the GTK4 tray); see the [README Roadmap](../README.md#roadmap).
+> free `libayatana-appindicator-glib` is queued for v0.5+ (bundled
+> with finally enabling the GTK4 tray); see the
+> [README Roadmap](../README.md#roadmap).
 
 Sanity-check the headers are findable:
 

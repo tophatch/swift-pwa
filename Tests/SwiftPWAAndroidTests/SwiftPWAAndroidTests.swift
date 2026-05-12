@@ -49,5 +49,57 @@
             win.setPosition(Point(x: 50, y: 50))
             #expect(win.position() == .zero)
         }
+
+        @MainActor
+        @Test func secondaryWindowSkipsCrossActivityJNI() throws {
+            // A `.secondary` AndroidWindow represents an Activity
+            // spawned via `swiftpwa_android_spawn_window`. The C
+            // shim's bridge ref is single-slot, so cross-Activity
+            // Swift→OS calls would silently target the wrong
+            // Activity. `setTitle` / `setFullscreen` / `close()` on a
+            // secondary window stay local-only; `title()` /
+            // `isFullscreen()` still report the requested values
+            // from the caller's perspective.
+            let cfg = try WindowConfig(
+                title: "secondary",
+                size: Size(width: 100, height: 100),
+                content: .remote(#require(URL(string: "https://example.com")))
+            )
+            let win = AndroidWindow(config: cfg, role: .secondary)
+            #expect(win.role == .secondary)
+            // Title cache updates, JNI hop is skipped (no crash
+            // testing required — the cache visibility is the
+            // observable behaviour).
+            win.setTitle("renamed")
+            #expect(win.title() == "renamed")
+            // Fullscreen mirror flips locally.
+            win.setFullscreen(true)
+            #expect(win.isFullscreen() == true)
+            // close() on a secondary doesn't quit the app — it just
+            // emits the lifecycle events for the AndroidWindow's
+            // own stream consumers.
+            win.close()
+        }
+
+        @MainActor
+        @Test func setFullscreenTracksState() {
+            // `setFullscreen` JNI-calls into the bridge to drive
+            // `WindowInsetsControllerCompat`; the call is a no-op if
+            // no bridge is attached (typical for a unit test). The
+            // local mirror still flips so `isFullscreen()` is honest
+            // about the most-recent caller intent before the JNI
+            // round-trip lands.
+            let cfg = WindowConfig(
+                title: "x",
+                size: Size(width: 100, height: 100),
+                content: .bundled(directory: URL(fileURLWithPath: "/tmp/web"))
+            )
+            let win = AndroidWindow(config: cfg)
+            #expect(win.isFullscreen() == false)
+            win.setFullscreen(true)
+            #expect(win.isFullscreen() == true)
+            win.setFullscreen(false)
+            #expect(win.isFullscreen() == false)
+        }
     }
 #endif

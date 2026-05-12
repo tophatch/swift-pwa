@@ -56,6 +56,8 @@ static _Atomic(jobject) g_bridge_ref = NULL;
 static jmethodID g_mid_post_to_page    = NULL;
 static jmethodID g_mid_load_url        = NULL;
 static jmethodID g_mid_set_title       = NULL;
+static jmethodID g_mid_set_fullscreen  = NULL;
+static jmethodID g_mid_spawn_window    = NULL;
 static jmethodID g_mid_evaluate_js     = NULL;
 static jmethodID g_mid_open_devtools   = NULL;
 static jmethodID g_mid_run_on_main     = NULL;
@@ -71,6 +73,10 @@ static void *g_quit_user = NULL;
 
 // Main-thread runner registered by Swift.
 static swiftpwa_android_main_fn g_main_fn = NULL;
+
+// Host event channel (Kotlin -> Swift, no reply) registered by Swift.
+static swiftpwa_android_host_event_fn g_host_event_fn = NULL;
+static void *g_host_event_user = NULL;
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -105,6 +111,8 @@ static int cache_method_ids(JNIEnv *env, jobject bridge) {
     g_mid_post_to_page  = (*env)->GetMethodID(env, cls, "postToPage",  "(Ljava/lang/String;)V");
     g_mid_load_url      = (*env)->GetMethodID(env, cls, "loadUrl",     "(Ljava/lang/String;)V");
     g_mid_set_title     = (*env)->GetMethodID(env, cls, "setTitle",    "(Ljava/lang/String;)V");
+    g_mid_set_fullscreen = (*env)->GetMethodID(env, cls, "setFullscreen", "(Z)V");
+    g_mid_spawn_window  = (*env)->GetMethodID(env, cls, "spawnWindow",  "(Ljava/lang/String;)V");
     // `evaluateJs(String snippet, long callback, long user)` — the two
     // longs carry a function pointer and an opaque user pointer that
     // the Java side hands back to us when it invokes
@@ -119,8 +127,8 @@ static int cache_method_ids(JNIEnv *env, jobject bridge) {
                             "(Ljava/lang/String;Ljava/lang/String;JJ)V");
     (*env)->DeleteLocalRef(env, cls);
     return g_mid_post_to_page && g_mid_load_url && g_mid_set_title &&
-           g_mid_evaluate_js && g_mid_open_devtools && g_mid_run_on_main &&
-           g_mid_rpc_call;
+           g_mid_set_fullscreen && g_mid_spawn_window && g_mid_evaluate_js &&
+           g_mid_open_devtools && g_mid_run_on_main && g_mid_rpc_call;
 }
 
 // ---------------------------------------------------------------------
@@ -287,6 +295,39 @@ void swiftpwa_android_set_title(const char *title_utf8) {
     jstring jstr = (*env)->NewStringUTF(env, title_utf8);
     if (jstr) {
         (*env)->CallVoidMethod(env, bridge, g_mid_set_title, jstr);
+        if ((*env)->ExceptionCheck(env)) {
+            (*env)->ExceptionDescribe(env);
+            (*env)->ExceptionClear(env);
+        }
+        (*env)->DeleteLocalRef(env, jstr);
+    }
+    detach_env(attached);
+}
+
+void swiftpwa_android_set_fullscreen(int on) {
+    jobject bridge = atomic_load(&g_bridge_ref);
+    if (!bridge || !g_mid_set_fullscreen) return;
+    int attached = 0;
+    JNIEnv *env = attach_env(&attached);
+    if (!env) return;
+    (*env)->CallVoidMethod(env, bridge, g_mid_set_fullscreen, on ? JNI_TRUE : JNI_FALSE);
+    if ((*env)->ExceptionCheck(env)) {
+        (*env)->ExceptionDescribe(env);
+        (*env)->ExceptionClear(env);
+    }
+    detach_env(attached);
+}
+
+void swiftpwa_android_spawn_window(const char *config_json_utf8) {
+    if (!config_json_utf8) return;
+    jobject bridge = atomic_load(&g_bridge_ref);
+    if (!bridge || !g_mid_spawn_window) return;
+    int attached = 0;
+    JNIEnv *env = attach_env(&attached);
+    if (!env) return;
+    jstring jstr = (*env)->NewStringUTF(env, config_json_utf8);
+    if (jstr) {
+        (*env)->CallVoidMethod(env, bridge, g_mid_spawn_window, jstr);
         if ((*env)->ExceptionCheck(env)) {
             (*env)->ExceptionDescribe(env);
             (*env)->ExceptionClear(env);
@@ -485,6 +526,36 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeRpcDone(JNIEnv *env,
 }
 
 // ---------------------------------------------------------------------
+// Host event channel (Kotlin -> Swift, one-way)
+// ---------------------------------------------------------------------
+
+void swiftpwa_android_set_host_event_handler(swiftpwa_android_host_event_fn handler,
+                                             void *user) {
+    g_host_event_fn = handler;
+    g_host_event_user = user;
+}
+
+void swiftpwa_android_dispatch_host_event(const char *json_utf8) {
+    if (g_host_event_fn && json_utf8) {
+        g_host_event_fn(json_utf8, g_host_event_user);
+    }
+}
+
+// JNI entry: Kotlin's `SwiftPWABridge.nativeHostEvent(String json)`
+// lands here from a binder / broadcast-receiver thread.
+JNIEXPORT void JNICALL
+Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeHostEvent(JNIEnv *env,
+                                                          jobject self,
+                                                          jstring json) {
+    (void)self;
+    if (!json) return;
+    const char *utf = (*env)->GetStringUTFChars(env, json, NULL);
+    if (!utf) return;
+    swiftpwa_android_dispatch_host_event(utf);
+    (*env)->ReleaseStringUTFChars(env, json, utf);
+}
+
+// ---------------------------------------------------------------------
 // Main-thread dispatch
 // ---------------------------------------------------------------------
 
@@ -568,6 +639,8 @@ int  swiftpwa_android_bridge_is_attached(void) { return 0; }
 void swiftpwa_android_post_to_page(const char *j) { (void)j; }
 void swiftpwa_android_load_url(const char *u) { (void)u; }
 void swiftpwa_android_set_title(const char *t) { (void)t; }
+void swiftpwa_android_set_fullscreen(int o) { (void)o; }
+void swiftpwa_android_spawn_window(const char *c) { (void)c; }
 void swiftpwa_android_evaluate_js(const char *s, swiftpwa_android_eval_done_fn d, void *u) {
     if (d) d(NULL, "swiftpwa: not running on Android", u);
     (void)s;
@@ -582,5 +655,9 @@ void swiftpwa_android_post_main(void *b) { (void)b; }
 void swiftpwa_android_run_main_box(void *b) { (void)b; }
 void swiftpwa_android_set_quit_handler(swiftpwa_android_quit_fn h, void *u) { (void)h; (void)u; }
 void swiftpwa_android_dispatch_quit(int c) { (void)c; }
+void swiftpwa_android_set_host_event_handler(swiftpwa_android_host_event_fn h, void *u) {
+    (void)h; (void)u;
+}
+void swiftpwa_android_dispatch_host_event(const char *j) { (void)j; }
 
 #endif // __ANDROID__

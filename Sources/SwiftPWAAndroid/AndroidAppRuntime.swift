@@ -76,6 +76,17 @@
                 AndroidAppContext.shared.completeRun(exitCode: Int32(exitCode))
             }, nil)
 
+            // Host events: Kotlin-side asynchronous pushes that don't
+            // fit the JS bridge envelope or the RPC request/response
+            // shape — `BroadcastReceiver` payloads, lifecycle hooks,
+            // etc. The router dispatches by `channel`; plugins
+            // (currently `AndroidUpdater`) subscribe at init time.
+            swiftpwa_android_set_host_event_handler({ jsonPtr, _ in
+                guard let jsonPtr else { return }
+                let json = String(cString: jsonPtr)
+                AndroidHostEventRouter.dispatch(jsonString: json)
+            }, nil)
+
             // The configure closure is declared `@MainActor` by the
             // protocol, but here we're already nonisolated. We invoke
             // it via `unsafeBitCast` to a same-shape non-isolated

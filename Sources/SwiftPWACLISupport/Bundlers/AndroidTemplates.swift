@@ -292,12 +292,15 @@ enum AndroidTemplates {
         /// first biometric / file-picker call.
         class MainActivity : AppCompatActivity() {
             private lateinit var bridge: SwiftPWABridge
+            private var isSecondary: Boolean = false
 
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
                 // Load the Swift-compiled .so. The base name matches
                 // the SwiftPM target name; the loader prepends `lib`
-                // and appends `.so`.
+                // and appends `.so`. Calling System.loadLibrary again
+                // on a secondary Activity is harmless — Android's
+                // loader dedupes on the underlying library handle.
                 System.loadLibrary("\(soBaseName)")
 
                 val webView = WebView(this)
@@ -321,13 +324,53 @@ enum AndroidTemplates {
                 bridge = SwiftPWABridge(this, webView, assetLoader)
                 bridge.attach()
 
-                // Hand control to the Swift runtime on a worker thread.
-                // The runtime blocks until `quit()` is invoked; running
-                // on the UI thread would deadlock the WebView's own
-                // event pump.
-                thread(name = "swift-pwa-runtime", isDaemon = false) {
-                    swiftPwaMain()
+                // Secondary-window mode is signalled by the
+                // `swift-pwa.config-json` intent extra, set by
+                // `SwiftPWABridge.spawnWindow` when the Swift side
+                // calls `context.createWindow` a second time. The
+                // JSON carries at least a `url` field (the content
+                // the new Activity should load) and an optional
+                // `title`. Secondary Activities don't spawn the
+                // Swift runtime thread — there's only one runtime per
+                // process; the primary owns it.
+                val configJson = intent.getStringExtra("swift-pwa.config-json")
+                isSecondary = configJson != null
+                if (isSecondary) {
+                    try {
+                        val cfg = org.json.JSONObject(configJson!!)
+                        if (cfg.has("title")) {
+                            setTitle(cfg.getString("title"))
+                        }
+                        webView.loadUrl(cfg.getString("url"))
+                    } catch (t: Throwable) {
+                        android.util.Log.e(
+                            "swift-pwa",
+                            "secondary Activity could not parse config JSON: ${t.message}"
+                        )
+                        finish()
+                    }
+                } else {
+                    // Hand control to the Swift runtime on a worker
+                    // thread. The runtime blocks until `quit()` is
+                    // invoked; running on the UI thread would
+                    // deadlock the WebView's own event pump.
+                    thread(name = "swift-pwa-runtime", isDaemon = false) {
+                        swiftPwaMain()
+                    }
                 }
+            }
+
+            override fun onResume() {
+                super.onResume()
+                // Re-attach in case a sibling Activity took the
+                // single-slot bridge ref while we were paused. The
+                // C shim's `nativeAttach` is idempotent — atomic
+                // exchange of the global ref — so calling it on
+                // every resume is cheap and correct. Without this
+                // re-attach, returning from a secondary Activity
+                // would leave the primary Activity's outbound JNI
+                // calls hitting a null bridge ref (silent no-op).
+                bridge.attach()
             }
 
             override fun onDestroy() {
@@ -354,7 +397,11 @@ enum AndroidTemplates {
     import android.webkit.WebResourceResponse
     import android.webkit.WebView
     import android.webkit.WebViewClient
+    import android.content.Intent
     import androidx.appcompat.app.AppCompatActivity
+    import androidx.core.view.WindowCompat
+    import androidx.core.view.WindowInsetsCompat
+    import androidx.core.view.WindowInsetsControllerCompat
     import androidx.webkit.WebViewAssetLoader
     import androidx.webkit.WebViewCompat
     import androidx.webkit.WebViewFeature
@@ -374,7 +421,7 @@ enum AndroidTemplates {
         assetLoader: WebViewAssetLoader
     ) {
         private val main = Handler(Looper.getMainLooper())
-        private val systemPlugins: SwiftPWASystemPlugins = SwiftPWASystemPlugins(activity)
+        private val systemPlugins: SwiftPWASystemPlugins = SwiftPWASystemPlugins(activity, this)
 
         init {
             // bridge.js needs to run *before* any page script —
@@ -471,6 +518,60 @@ enum AndroidTemplates {
         }
 
         @Suppress("unused")
+        fun spawnWindow(configJson: String) {
+            // Launch a fresh MainActivity instance with the config
+            // JSON in an intent extra. The new Activity's onCreate
+            // reads the extra, recognises it as a secondary, loads
+            // the configured URL into its own WebView, and skips the
+            // Swift runtime spawn. No special flags — the secondary
+            // pushes onto the current task's back stack so the system
+            // back button returns to the originating Activity, which
+            // is the platform-native "open detail / settings view"
+            // UX. Multi-instance launching across tasks (separate
+            // entries in recents) would need
+            // `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_MULTIPLE_TASK`
+            // plus `documentLaunchMode` on the manifest — out of
+            // scope for the v0.5.x multi-window cut.
+            main.post {
+                val intent = Intent(activity, activity.javaClass)
+                    .putExtra("swift-pwa.config-json", configJson)
+                try {
+                    activity.startActivity(intent)
+                } catch (t: Throwable) {
+                    android.util.Log.e(
+                        "swift-pwa",
+                        "spawnWindow failed: ${t.javaClass.simpleName}: ${t.message}"
+                    )
+                }
+            }
+        }
+
+        @Suppress("unused")
+        fun setFullscreen(on: Boolean) {
+            // Toggles immersive / edge-to-edge layout. The
+            // `WindowInsetsControllerCompat` flavour is the
+            // forward-compatible replacement for the deprecated
+            // `View.setSystemUiVisibility` flag set; it works on every
+            // supported API (28+) and adapts to the new behaviour on
+            // API 30+ without per-version branching.
+            main.post {
+                val window = activity.window ?: return@post
+                WindowCompat.setDecorFitsSystemWindows(window, !on)
+                val controller = WindowInsetsControllerCompat(window, window.decorView)
+                if (on) {
+                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                    // Transient bars on swipe: matches the platform
+                    // default for media / game immersive flows and
+                    // keeps system gestures reachable.
+                    controller.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    controller.show(WindowInsetsCompat.Type.systemBars())
+                }
+            }
+        }
+
+        @Suppress("unused")
         fun evaluateJs(snippet: String, callback: Long, user: Long) {
             main.post {
                 webView.evaluateJavascript(snippet) { result ->
@@ -557,6 +658,12 @@ enum AndroidTemplates {
             callback: Long,
             user: Long
         )
+        // Host events (Kotlin -> Swift, one-way) — for asynchronous
+        // pushes that don't fit the request/response RPC shape:
+        // PackageInstaller status broadcasts and (future) lifecycle
+        // hooks. Payload is a JSON string with a `channel` field the
+        // Swift `AndroidHostEventRouter` dispatches on.
+        external fun nativeHostEvent(json: String)
         @Suppress("unused")
         private external fun nativeQuit(exitCode: Int)
     }
@@ -579,7 +686,9 @@ enum AndroidTemplates {
     import android.content.pm.PackageInstaller
     import android.net.Uri
     import android.os.Build
+    import android.provider.DocumentsContract
     import android.provider.OpenableColumns
+    import android.util.Base64
     import androidx.activity.result.ActivityResultLauncher
     import androidx.activity.result.contract.ActivityResultContracts
     import androidx.appcompat.app.AppCompatActivity
@@ -607,7 +716,7 @@ enum AndroidTemplates {
     /// dropped, so async paths (file pickers, biometric prompt) take
     /// extra care to wire success / cancel / error to the same
     /// callback.
-    class SwiftPWASystemPlugins(private val activity: Activity) {
+    class SwiftPWASystemPlugins(private val activity: Activity, private val bridge: SwiftPWABridge) {
         private val appActivity: AppCompatActivity = activity as AppCompatActivity
 
         private var notificationsChannelInstalled = false
@@ -701,6 +810,9 @@ enum AndroidTemplates {
                 "biometric.canAuthenticate" -> biometricCanAuthenticate(done)
                 "biometric.authenticate" -> biometricAuthenticate(json, done)
                 "updater.installApk" -> updaterInstallApk(json, done)
+                "fs.readContentUri" -> fsReadContentUri(json, done)
+                "fs.writeContentUri" -> fsWriteContentUri(json, done)
+                "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
                 else -> done(null, "swift-pwa: unknown rpc method $method")
             }
         }
@@ -1072,9 +1184,11 @@ enum AndroidTemplates {
                                 )
                             }
                         }
+                        pushInstallEvent("PENDING_USER_ACTION", null)
                     } else {
                         val msg = intent.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE)
                         android.util.Log.i("swift-pwa", "package install status=$status msg=$msg")
+                        pushInstallEvent(installStatusName(status), msg)
                     }
                 }
             }
@@ -1084,6 +1198,144 @@ enum AndroidTemplates {
             } else {
                 @Suppress("UnspecifiedRegisterReceiverFlag")
                 activity.registerReceiver(receiver, filter)
+            }
+        }
+
+        // Stable status-code → name mapping for the install-event
+        // payload. Mirrors `PackageInstaller.STATUS_*` constants;
+        // unknown / negative codes round-trip as their raw integer so
+        // the Swift side can still surface them as
+        // `STATUS_UNKNOWN_<code>` rather than swallowing the signal.
+        private fun installStatusName(status: Int): String = when (status) {
+            PackageInstaller.STATUS_SUCCESS              -> "SUCCESS"
+            PackageInstaller.STATUS_FAILURE              -> "FAILURE"
+            PackageInstaller.STATUS_FAILURE_ABORTED      -> "FAILURE_ABORTED"
+            PackageInstaller.STATUS_FAILURE_BLOCKED      -> "FAILURE_BLOCKED"
+            PackageInstaller.STATUS_FAILURE_CONFLICT     -> "FAILURE_CONFLICT"
+            PackageInstaller.STATUS_FAILURE_INCOMPATIBLE -> "FAILURE_INCOMPATIBLE"
+            PackageInstaller.STATUS_FAILURE_INVALID      -> "FAILURE_INVALID"
+            PackageInstaller.STATUS_FAILURE_STORAGE      -> "FAILURE_STORAGE"
+            else                                         -> "UNKNOWN_$status"
+        }
+
+        private fun pushInstallEvent(status: String, message: String?) {
+            val payload = JSONObject()
+                .put("channel", "updater.install")
+                .put("status", status)
+            if (message != null) payload.put("message", message)
+            try {
+                bridge.nativeHostEvent(payload.toString())
+            } catch (t: Throwable) {
+                android.util.Log.e(
+                    "swift-pwa",
+                    "failed to push install event: ${t.message}"
+                )
+            }
+        }
+
+        // -----------------------------------------------------------
+        // Fs — content:// URI support
+        //
+        // SAF dialog results are `content://` URIs that
+        // SystemFs.readBinary / writeBinary / metadata route through
+        // here instead of trying to open them as filesystem paths.
+        // Each entry point is I/O — push to the background executor
+        // so the UI thread isn't blocked on a media-store read.
+        // -----------------------------------------------------------
+
+        private fun fsReadContentUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uri = json.optString("uri", "")
+            if (uri.isEmpty()) {
+                done(null, "swift-pwa: fs.readContentUri: uri is empty")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val parsed = Uri.parse(uri)
+                    val bytes = activity.contentResolver.openInputStream(parsed)?.use {
+                        it.readBytes()
+                    } ?: run {
+                        done(null, "swift-pwa: fs.readContentUri: ContentResolver could not open $uri")
+                        return@execute
+                    }
+                    val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+                    val result = JSONObject().put("dataBase64", b64).toString()
+                    done(result, null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.readContentUri failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun fsWriteContentUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uri = json.optString("uri", "")
+            val b64 = json.optString("dataBase64", "")
+            if (uri.isEmpty()) {
+                done(null, "swift-pwa: fs.writeContentUri: uri is empty")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val bytes = Base64.decode(b64, Base64.DEFAULT)
+                    val parsed = Uri.parse(uri)
+                    // Mode "rwt" truncates the existing document
+                    // before writing — matches the desktop semantics
+                    // of `writeBinary` overwriting in place. SAF
+                    // requires the URI to have been issued by
+                    // OpenDocument / CreateDocument; arbitrary
+                    // content:// authorities can refuse "w" mode.
+                    val out = activity.contentResolver.openOutputStream(parsed, "rwt")
+                        ?: run {
+                            done(null, "swift-pwa: fs.writeContentUri: ContentResolver could not open $uri for writing")
+                            return@execute
+                        }
+                    out.use { it.write(bytes) }
+                    done(null, null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.writeContentUri failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun fsContentUriMetadata(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uri = json.optString("uri", "")
+            if (uri.isEmpty()) {
+                done(null, "swift-pwa: fs.contentUriMetadata: uri is empty")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val parsed = Uri.parse(uri)
+                    // OpenableColumns.SIZE is universally supported
+                    // for openable content URIs; LAST_MODIFIED comes
+                    // from DocumentsContract.Document and is
+                    // available for SAF-issued document URIs but may
+                    // be missing on legacy providers. Both columns
+                    // are queried in one cursor pass.
+                    val projection = arrayOf(
+                        OpenableColumns.SIZE,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                    )
+                    var size: Long = -1L
+                    var modified: Long? = null
+                    activity.contentResolver.query(parsed, projection, null, null, null)?.use { cursor ->
+                        if (cursor.moveToFirst()) {
+                            val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
+                            if (sizeIdx >= 0 && !cursor.isNull(sizeIdx)) {
+                                size = cursor.getLong(sizeIdx)
+                            }
+                            val modIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+                            if (modIdx >= 0 && !cursor.isNull(modIdx)) {
+                                modified = cursor.getLong(modIdx)
+                            }
+                        }
+                    }
+                    val payload = JSONObject().put("size", if (size < 0) 0 else size)
+                    if (modified != null) payload.put("modified", modified)
+                    done(payload.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.contentUriMetadata failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
             }
         }
     }

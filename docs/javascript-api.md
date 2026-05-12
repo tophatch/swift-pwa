@@ -186,10 +186,25 @@ const unsub = __SWIFT_PWA__.subscribe('updater.run', null, (event) => {
         case 'error':            /* event.code, event.message */ break;
     }
 });
+
+// Streaming install — surfaces the platform's post-commit lifecycle.
+// On desktop backends the stream finishes silently (the running
+// process is replaced before any event could be observed); on
+// Android it relays `PackageInstaller.STATUS_*` broadcasts.
+const unsubInstall = __SWIFT_PWA__.subscribe('updater.install', null, (event) => {
+    switch (event.type) {
+        case 'installCommitted': /* OS install prompt is on screen */ break;
+        case 'installSucceeded': /* very brief on Android — system replaces process */ break;
+        case 'installFailed':    /* event.code (e.g. "STATUS_FAILURE_ABORTED"), event.message */ break;
+        case 'error':            /* the commit itself failed */ break;
+    }
+});
 ```
 
 See [docs/auto-updates.md](auto-updates.md) for the manifest format
-and the runtime install path on each backend.
+and the runtime install path on each backend, and
+[docs/android-setup.md §6.1.2](android-setup.md#612-observing-the-updater-install-result)
+for the Android-specific `updater.install` lifecycle.
 
 ## Custom commands
 

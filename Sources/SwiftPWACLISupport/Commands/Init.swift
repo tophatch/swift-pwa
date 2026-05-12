@@ -21,6 +21,23 @@ struct Init: AsyncParsableCommand {
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
         let root = path.map { URL(fileURLWithPath: $0) } ?? cwd.appendingPathComponent(name)
 
+        // The argument we got is what the user wants to *see* (window
+        // title, About panel). But it also has to double as a SwiftPM
+        // target name and a Swift type name — `Package.swift`'s
+        // `name:`, the `Sources/<name>/` directory, the `@main struct`,
+        // and `pwa.json`'s `name` (which the bundler uses to locate
+        // `.build/release/<name>` and produce `<name>.app`) all share
+        // one string today. So normalise the user input to a valid
+        // Swift identifier for those four uses, and keep the original
+        // as a display string for the window title.
+        let identifier = try Self.sanitizeIdentifier(name)
+        if identifier != name {
+            print(
+                "note: normalised project name '\(name)' → '\(identifier)' (Swift identifiers can't contain '-' / spaces)"
+            )
+        }
+        let displayName = name
+
         // Per-file conflict check rather than "directory exists": this lets
         // `--path .` scaffold alongside an existing README / LICENSE / .git
         // dir, while still refusing to silently clobber a real swift-pwa
@@ -28,8 +45,8 @@ struct Init: AsyncParsableCommand {
         let relPathsToWrite = [
             "pwa.json",
             "Package.swift",
-            "Sources/\(name)/App.swift",
-            "Sources/\(name)/AndroidEntry.swift",
+            "Sources/\(identifier)/App.swift",
+            "Sources/\(identifier)/AndroidEntry.swift",
             "web/index.html",
             ".gitignore"
         ]
@@ -43,9 +60,12 @@ struct Init: AsyncParsableCommand {
             )
         }
 
-        let id = bundleId ?? "com.example.\(name.lowercased())"
+        let id = bundleId ?? "com.example.\(identifier.lowercased())"
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
-        try fm.createDirectory(at: root.appendingPathComponent("Sources/\(name)"), withIntermediateDirectories: true)
+        try fm.createDirectory(
+            at: root.appendingPathComponent("Sources/\(identifier)"),
+            withIntermediateDirectories: true
+        )
         try fm.createDirectory(at: root.appendingPathComponent("web"), withIntermediateDirectories: true)
 
         let android = PWAManifest.AndroidSection(
@@ -56,14 +76,19 @@ struct Init: AsyncParsableCommand {
             versionCode: 1
         )
 
+        // `manifest.name` doubles as the SwiftPM target name today: the
+        // bundlers locate `.build/release/<manifest.name>` and produce
+        // `<manifest.name>.app`. So it has to track `identifier`, not
+        // the user's display string. The window title is the place that
+        // surfaces the original.
         let manifest = PWAManifest(
             id: id,
-            name: name,
+            name: identifier,
             version: "0.1.0",
             description: nil,
             icon: nil,
             web: .init(directory: "web", entry: "index.html"),
-            window: .init(title: name),
+            window: .init(title: displayName),
             macos: .init(bundleIdentifier: id, category: nil, minimumSystemVersion: "15.0"),
             ios: .init(bundleIdentifier: id, minimumSystemVersion: "18.0"),
             linux: .init(desktopCategories: ["Utility"], executableName: nil),
@@ -71,22 +96,22 @@ struct Init: AsyncParsableCommand {
         )
         try manifest.write(to: root.appendingPathComponent("pwa.json"))
 
-        try Templates.packageSwift(name: name).write(
+        try Templates.packageSwift(name: identifier).write(
             to: root.appendingPathComponent("Package.swift"),
             atomically: true,
             encoding: .utf8
         )
-        try Templates.mainSwift(name: name).write(
-            to: root.appendingPathComponent("Sources/\(name)/App.swift"),
+        try Templates.mainSwift(name: identifier, displayName: displayName).write(
+            to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
             atomically: true,
             encoding: .utf8
         )
-        try Templates.androidEntrySwift(name: name, packageId: id).write(
-            to: root.appendingPathComponent("Sources/\(name)/AndroidEntry.swift"),
+        try Templates.androidEntrySwift(name: identifier, packageId: id).write(
+            to: root.appendingPathComponent("Sources/\(identifier)/AndroidEntry.swift"),
             atomically: true,
             encoding: .utf8
         )
-        try Templates.indexHTML(name: name).write(
+        try Templates.indexHTML(name: displayName).write(
             to: root.appendingPathComponent("web/index.html"),
             atomically: true,
             encoding: .utf8
@@ -121,8 +146,38 @@ struct Init: AsyncParsableCommand {
         if root.standardizedFileURL == cwd.standardizedFileURL {
             print("Next: swift run swift-pwa build --target macos")
         } else {
-            print("Next: cd \(name) && swift run swift-pwa build --target macos")
+            print("Next: cd \(root.lastPathComponent) && swift run swift-pwa build --target macos")
         }
+    }
+
+    /// Convert the user's project name into a valid Swift identifier
+    /// for use as a SwiftPM target / source directory / `@main` struct.
+    /// Splits on any non-alphanumeric character and joins back as
+    /// camelCase: `test-app` → `testApp`, `my cool app` → `myCoolApp`.
+    /// A leading digit prefixes an underscore (`3d-viewer` → `_3dViewer`).
+    /// Errors out if there are no alphanumeric characters at all
+    /// (`---`) rather than silently producing the empty string.
+    static func sanitizeIdentifier(_ raw: String) throws -> String {
+        let pieces = raw
+            .split(whereSeparator: { !$0.isLetter && !$0.isNumber })
+            .map(String.init)
+        guard !pieces.isEmpty else {
+            throw ValidationError(
+                "Project name '\(raw)' contains no letters or digits — pick something usable as a Swift identifier."
+            )
+        }
+        var result = pieces[0]
+        // Preserve the user's original case on the first piece (so
+        // `MyApp` doesn't get re-cased), only lowercasing it if it
+        // starts with something that's not already a valid Swift
+        // identifier head (currently just leading-digit handling).
+        if let first = result.first, first.isNumber {
+            result = "_" + result
+        }
+        for piece in pieces.dropFirst() {
+            result += piece.prefix(1).uppercased() + piece.dropFirst()
+        }
+        return result
     }
 }
 
@@ -165,8 +220,15 @@ enum Templates {
         """
     }
 
-    static func mainSwift(name: String) -> String {
-        """
+    static func mainSwift(name: String, displayName: String) -> String {
+        // Escape the display string for safe embedding in the
+        // generated Swift source. The CLI only sanitises `name` to a
+        // valid identifier; `displayName` is whatever the user typed,
+        // which can legitimately contain quotes / backslashes.
+        let titleLiteral = displayName
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        return """
         import Foundation
         import SwiftPWA
 
@@ -189,17 +251,34 @@ enum Templates {
             // On Android the WebView resolves bundled assets via the
             // virtual `https://swift-pwa.local/` host — see
             // SwiftPWAAndroid's WebViewAssetLoader. On desktop the
-            // bundled web/ ships inside the resource bundle.
+            // bundled web/ ships inside the resource bundle:
+            //   - macOS: <App>.app/Contents/Resources/web
+            //   - iOS:   <App>.app/web
+            //   - Linux: usr/share/<exe>/web (AppImage; not Bundle-resolvable)
+            //   - Windows: alongside the .exe
+            // `resourceURL` is the cross-platform answer for Apple
+            // (it points at `Contents/Resources/` on macOS and at the
+            // bundle root on iOS); fall back to `bundleURL` for hosts
+            // where corelibs-foundation doesn't synthesise one.
             #if os(Android)
-                let content = WindowContent.bundled(directory: URL(fileURLWithPath: "/android_asset/web"))
+                let webRoot = URL(fileURLWithPath: "/android_asset/web")
             #else
-                let content = WindowContent.bundled(directory: Bundle.main.bundleURL.appendingPathComponent("web"))
+                let webRoot = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+                    .appendingPathComponent("web")
+                if !FileManager.default.fileExists(atPath: webRoot.path) {
+                    // Fail loudly rather than hand a blank window to the
+                    // user: the WKWebView / WebKitGTK / WebView2 schemes
+                    // all surface "missing index.html" as a silently
+                    // blank page, which is the hardest possible thing
+                    // to debug.
+                    fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
+                }
             #endif
 
             _ = try ctx.createWindow(WindowConfig(
-                title: "\(name)",
+                title: "\(titleLiteral)",
                 size: Size(width: 1024, height: 768),
-                content: content
+                content: WindowContent.bundled(directory: webRoot)
             ))
         }
         """
@@ -258,16 +337,23 @@ enum Templates {
     }
 
     static func indexHTML(name: String) -> String {
-        """
+        // HTML-escape the user's display string so a project name like
+        // `Foo & <Bar>` doesn't produce broken markup.
+        let escaped = name
+            .replacingOccurrences(of: "&", with: "&amp;")
+            .replacingOccurrences(of: "<", with: "&lt;")
+            .replacingOccurrences(of: ">", with: "&gt;")
+            .replacingOccurrences(of: "\"", with: "&quot;")
+        return """
         <!doctype html>
         <html><head><meta charset="utf-8" />
-        <title>\(name)</title>
+        <title>\(escaped)</title>
         <style>
           body { font-family: -apple-system, system-ui, sans-serif; margin: 2rem; }
           button { padding: .5rem 1rem; }
         </style></head>
         <body>
-        <h1>Hello, \(name)</h1>
+        <h1>Hello, \(escaped)</h1>
         <p>Powered by <a href="https://github.com/tophatch/swift-pwa">swift-pwa</a>.</p>
         <button id="rename">Rename window</button>
         <pre id="log"></pre>

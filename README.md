@@ -178,7 +178,7 @@ try runtime.run { ctx in
     _ = try ctx.createWindow(.init(
         title: "Hello",
         size: .init(width: 1024, height: 768),
-        content: .bundled(Bundle.main.bundleURL.appendingPathComponent("web/index.html"))
+        content: .bundled((Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("web"))
     ))
 }
 ```

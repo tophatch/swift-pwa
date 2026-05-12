@@ -15,23 +15,22 @@
 
 #include "swiftpwa_dialog.h"
 
-// `TaskDialogIndirect` requires Common Controls v6. The standard
-// way to opt into v6 is a `<dependentAssembly>` manifest dependency
-// embedded in the EXE's resource section.
+// `TaskDialogIndirect` requires Common Controls v6.
 //
-// We do *not* emit it here via
-//   #pragma comment(linker, "/manifestdependency:...")
-// because Swift-on-Windows links via `clang-cl` + `lld-link`, and
-// lld-link silently drops the pragma at .obj-merge time. The
-// resulting EXE has no resource section and the loader resolves
-// the import against comctl32 v5 — which has the symbol stubbed by
-// ordinal but not implemented, surfacing as
-// "Ordinal 345 could not be located" at process start.
+// We load it dynamically via GetProcAddress rather than calling it
+// directly. The direct call would create a static ordinal-345 import
+// against comctl32.dll; the System32 copy is v5 which doesn't export
+// that ordinal, causing STATUS_ORDINAL_NOT_FOUND at process start
+// whenever the EXE has no v6 manifest embedded — including test-runner
+// builds and plain `swift build` without the CLI bundler.
 //
-// The manifest is embedded post-build by the CLI bundler instead:
-// `WindowsBundler.embedComCtl6Manifest` runs `mt.exe -manifest ...
-// -outputresource:<exe>;#1` after `swift build` completes. See
-// `Sources/SwiftPWACLISupport/Bundlers/WindowsBundler.swift`.
+// Dynamic loading sidesteps this: if comctl32 v6 is active (the EXE
+// carries the Common-Controls dependentAssembly manifest that the CLI
+// bundler embeds via `WindowsBundler.embedComCtl6Manifest`), the
+// GetProcAddress succeeds and we get the themed TaskDialog UI. If v6 is
+// not active, GetProcAddress returns nullptr and we fall back to
+// MessageBoxW at the call site — same behaviour as before, but without
+// crashing the loader.
 
 #include <windows.h>
 #include <commctrl.h>     // TaskDialogIndirect
@@ -73,6 +72,20 @@ PCWSTR task_dialog_icon(swiftpwa_dialog_kind kind) {
         case SWIFTPWA_DIALOG_ERROR:   return TD_ERROR_ICON;
         default:                      return TD_INFORMATION_ICON;
     }
+}
+
+// Dynamic loader — avoids a static ordinal-345 import from comctl32 v5.
+typedef HRESULT (WINAPI *PFN_TaskDialogIndirect)(
+    const TASKDIALOGCONFIG *, int *, int *, BOOL *);
+
+static PFN_TaskDialogIndirect resolve_task_dialog_indirect() {
+    // Prefer GetModuleHandle so we don't bump the refcount if comctl32
+    // is already mapped (it almost always is in GUI processes).
+    HMODULE hMod = GetModuleHandleW(L"comctl32.dll");
+    if (!hMod) hMod = LoadLibraryW(L"comctl32.dll");
+    if (!hMod) return nullptr;
+    return reinterpret_cast<PFN_TaskDialogIndirect>(
+        GetProcAddress(hMod, "TaskDialogIndirect"));
 }
 
 // COM apartment scope guard. CoInitializeEx is per-thread; we initialize
@@ -187,7 +200,9 @@ int32_t swiftpwa_dialog_confirm(
     cfg.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION;
 
     int chosen = 0;
-    HRESULT hr = TaskDialogIndirect(&cfg, &chosen, nullptr, nullptr);
+    auto fn = resolve_task_dialog_indirect();
+    if (!fn) return 0; // v6 not active — MessageBoxW path handles the fallback
+    HRESULT hr = fn(&cfg, &chosen, nullptr, nullptr);
     if (FAILED(hr)) return 0;
     return chosen == 100 ? 1 : 0;
 }

@@ -37,32 +37,34 @@
         // MARK: - PWAWebView
 
         public func load(_ content: WindowContent) {
+            AndroidWebViewAdapter.resolveURL(for: content).withCString { c in
+                swiftpwa_android_load_url(c)
+            }
+        }
+
+        /// Map a `WindowContent` to the URL string the Kotlin
+        /// `WebViewAssetLoader` understands.
+        ///
+        /// - `.bundled` resolves to `https://swift-pwa.local/web/<entry>`.
+        ///   The Kotlin bridge maps `https://swift-pwa.local/<path>`
+        ///   onto `assets/<path>` (same shape as WebView2's
+        ///   `SetVirtualHostNameToFolderMapping`); the `web/` URL
+        ///   prefix picks up the bundler's `assets/web/` subdir,
+        ///   since `AssetsPathHandler`'s public constructor takes
+        ///   only `Context` (no base-path argument). The `directory`
+        ///   URL is informational on Android — the build-time bundle
+        ///   has already copied its contents into the APK.
+        /// - `.remote` is passed through unchanged.
+        ///
+        /// Exposed `internal` so `AndroidAppContext.createWindow` can
+        /// use the same resolver when seeding a spawned Activity's
+        /// content URL.
+        static func resolveURL(for content: WindowContent) -> String {
             switch content {
-            case let .bundled(directory, entry):
-                // Bundled content on Android lives under
-                // `assets/web/` in the APK. The Kotlin bridge maps
-                // `https://swift-pwa.local/<path>` onto
-                // `assets/<path>` via `WebViewAssetLoader` — same
-                // shape as WebView2's
-                // `SetVirtualHostNameToFolderMapping`. We include the
-                // `web/` URL prefix here so the asset loader picks
-                // up the bundler's `assets/web/` subdir (the host
-                // can't pass a base path to `AssetsPathHandler` —
-                // its public constructor takes only `Context`).
-                //
-                // `directory` is informational on Android (the
-                // build-time bundle copies its contents into
-                // `assets/web/`), so we don't thread the absolute
-                // path through JNI.
-                _ = directory
-                let urlString = "https://swift-pwa.local/web/\(entry)"
-                urlString.withCString { c in
-                    swiftpwa_android_load_url(c)
-                }
+            case let .bundled(_, entry):
+                "https://swift-pwa.local/web/\(entry)"
             case let .remote(url):
-                url.absoluteString.withCString { c in
-                    swiftpwa_android_load_url(c)
-                }
+                url.absoluteString
             }
         }
 

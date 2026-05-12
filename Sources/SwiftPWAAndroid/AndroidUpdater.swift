@@ -40,17 +40,27 @@
     /// signed with the same dev key. We require Ed25519 over the bytes
     /// regardless to pin the artifact identity.
     ///
-    /// **First-cut limitations** (tracked in `docs/android-setup.md`
-    /// "Known limitations (v0.5)"):
+    /// **JS-visible flow.** Two entry points cover the install step:
     ///
-    /// - The install confirmation UI is system-driven; we don't track
-    ///   the install result. `installAndRelaunch` returns once the
-    ///   session has been committed; the user accepting / rejecting
-    ///   the prompt happens after this method returns. Apps that need
-    ///   to act on success / failure should listen for
-    ///   `PackageInstaller.STATUS_*` broadcasts via their own
-    ///   `BroadcastReceiver` (or wait for v0.5.x to surface this
-    ///   through a `subscribe` stream).
+    /// - `updater.installAndRelaunch` (invoke) — fire-and-forget, kept
+    ///   for cross-platform parity. Returns once the
+    ///   `PackageInstaller.Session` has been committed; the user
+    ///   accept/reject prompt that follows is asynchronous and isn't
+    ///   observed.
+    /// - `updater.install` (subscribe) — streams the install
+    ///   lifecycle: `installCommitted` once the session commits,
+    ///   followed by `installSucceeded` or
+    ///   `installFailed(code, message)` once the system's
+    ///   `PackageInstaller.STATUS_*` broadcast arrives. The stream
+    ///   terminates on the first terminal event. Apps that care
+    ///   about the install result (a "Tap install in the prompt to
+    ///   continue" hint, retry on `STATUS_FAILURE_ABORTED`, …)
+    ///   should subscribe to this stream instead of rolling their
+    ///   own `BroadcastReceiver`.
+    ///
+    /// **First-cut limitations** (tracked in `docs/android-setup.md`
+    /// "Known limitations"):
+    ///
     /// - Delta / split APKs are not supported. Only single-APK
     ///   updates work; AAB / split-by-density is queued.
     public final class AndroidUpdater: Updater, @unchecked Sendable {
@@ -64,6 +74,18 @@
         private let lock = NSLock()
         private var stagedArtifactPath: URL?
         private var stagedInfo: UpdateInfo?
+
+        /// In-flight install stream's continuation, populated by
+        /// `install()` and resolved by host-event broadcasts. Single
+        /// slot: a second concurrent `install()` replaces the first's
+        /// continuation (terminating the prior stream), matching the
+        /// single-Activity Android backend's broader assumptions.
+        private var installContinuation: AsyncThrowingStream<UpdaterEvent, any Error>.Continuation?
+
+        /// Channel name the Kotlin `PackageInstaller` `BroadcastReceiver`
+        /// pushes status updates on. Mirrored in the generated
+        /// `SwiftPWABridge.kt` (search for `updater.install`).
+        static let installEventChannel = "updater.install"
 
         /// - Parameters:
         ///   - endpoint: URL of the JSON manifest. May contain
@@ -95,6 +117,14 @@
             self.target = target ?? UpdaterTarget.current(packageFormat: "apk")
             self.urlSession = urlSession
             self.stagingRoot = stagingRoot ?? Self.defaultStagingRoot()
+
+            AndroidHostEventRouter.subscribe(channel: Self.installEventChannel) { [weak self] data in
+                self?.handleInstallEvent(data: data)
+            }
+        }
+
+        deinit {
+            AndroidHostEventRouter.unsubscribe(channel: Self.installEventChannel)
         }
 
         // MARK: - check
@@ -209,6 +239,104 @@
             // app once the APK has been written — `exit()` here would
             // race the install commit. The Activity stays up until
             // the system tears it down on package replacement.
+        }
+
+        // MARK: - install (streaming)
+
+        /// Streaming install that surfaces the
+        /// `PackageInstaller.STATUS_*` broadcast events. See the
+        /// type-level docstring for the lifecycle. Overrides the
+        /// default protocol impl (which is `installAndRelaunch` +
+        /// immediate finish) — that default would lose all post-commit
+        /// signal on Android.
+        public func install() -> AsyncThrowingStream<UpdaterEvent, any Error> {
+            AsyncThrowingStream { continuation in
+                // Single-slot: terminate any prior in-flight stream
+                // before installing the new continuation. The router
+                // delivers each broadcast to whichever continuation is
+                // current at delivery time.
+                lock.withLock {
+                    installContinuation?.finish()
+                    installContinuation = continuation
+                }
+                continuation.onTermination = { [weak self] _ in
+                    self?.lock.withLock { self?.installContinuation = nil }
+                }
+                let staged = lock.withLock { stagedArtifactPath }
+                guard let staged else {
+                    lock.withLock { installContinuation = nil }
+                    let err = BridgeError(
+                        code: BridgeError.handler,
+                        message: "no staged update — call updater.run (or updater.download) first"
+                    )
+                    continuation.yield(.error(code: err.code, message: err.message))
+                    continuation.finish(throwing: err)
+                    return
+                }
+                Task { [self] in
+                    do {
+                        _ = try await AndroidRPC.call(
+                            "updater.installApk",
+                            InstallApkArgs(path: staged.path),
+                            as: NoResult.self
+                        )
+                        // Commit succeeded; the system install prompt
+                        // is (or shortly will be) visible. Don't
+                        // finish — wait for the terminal broadcast.
+                        continuation.yield(.installCommitted)
+                    } catch let bridge as BridgeError {
+                        self.lock.withLock { self.installContinuation = nil }
+                        continuation.yield(.error(code: bridge.code, message: bridge.message))
+                        continuation.finish(throwing: bridge)
+                    } catch {
+                        lock.withLock { self.installContinuation = nil }
+                        continuation.yield(.error(code: BridgeError.handler, message: "\(error)"))
+                        continuation.finish(throwing: error)
+                    }
+                }
+            }
+        }
+
+        /// Handler the `AndroidHostEventRouter` calls when the Kotlin
+        /// `PackageInstaller` `BroadcastReceiver` pushes a status
+        /// frame. Translates the raw status string into an
+        /// `UpdaterEvent` and yields it into whichever `install()`
+        /// stream is currently in-flight. Terminal statuses
+        /// (`SUCCESS`, any `FAILURE_*`) finish the stream.
+        private func handleInstallEvent(data: Data) {
+            struct Frame: Decodable {
+                let channel: String
+                let status: String
+                let message: String?
+            }
+            guard let frame = try? JSONDecoder().decode(Frame.self, from: data) else { return }
+            let event: UpdaterEvent
+            let terminal: Bool
+            switch frame.status {
+            case "SUCCESS":
+                event = .installSucceeded
+                terminal = true
+            case "PENDING_USER_ACTION":
+                // The system needs the user to acknowledge before the
+                // confirmation activity launches. Kotlin handles the
+                // re-launch; we don't surface a JS event for this
+                // intermediate state (no actionable signal apps can
+                // do anything with).
+                return
+            default:
+                event = .installFailed(
+                    code: "STATUS_\(frame.status)",
+                    message: frame.message
+                )
+                terminal = true
+            }
+            let continuation = lock.withLock { () -> AsyncThrowingStream<UpdaterEvent, any Error>.Continuation? in
+                let c = installContinuation
+                if terminal { installContinuation = nil }
+                return c
+            }
+            continuation?.yield(event)
+            if terminal { continuation?.finish() }
         }
 
         // MARK: - helpers

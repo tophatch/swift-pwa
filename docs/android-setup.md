@@ -270,15 +270,33 @@ ways. These shape the public API surface and what to expect:
 - **`MainThread.run` hops through `Handler(Looper.getMainLooper()).post`.**
   Same shape as Windows' message-only dispatcher window and GTK's
   `g_idle_add` — defined in `AndroidAppRuntime.installMainThreadHook`.
-- **Multi-window is not supported in v0.5.** Android's
-  Activity-per-window model doesn't map cleanly onto desktop multi-
-  window UX, and `Activity.startActivity` plumbing is queued for
-  v0.5.x. Calling `context.createWindow` more than once replaces the
-  active window's content rather than spawning a second Activity.
+- **Multi-window via Activity-per-window.** The first
+  `context.createWindow(...)` call binds to the foreground Activity
+  the JNI runtime entry-point already owns. Subsequent calls
+  JNI-launch a fresh `MainActivity` instance with the configured
+  content URL in an `swift-pwa.config-json` intent extra — the
+  spawned Activity loads that URL into its own WebView and pushes
+  onto the current task's back stack, so the system back gesture
+  returns to the originating Activity (Android-native "open detail
+  view" UX). Each Activity has its own `SwiftPWABridge` and its own
+  JS runtime; the C shim's single-slot bridge ref always points at
+  whichever Activity is foreground (managed via `onResume` /
+  `onPause` re-attach in the generated `MainActivity`). The
+  `AndroidWindow` returned for a secondary spawn has
+  `role == .secondary`: `setTitle`, `setFullscreen`, and `close()`
+  intentionally don't reach across Activities (they'd target
+  whichever Activity is foreground instead of the spawned one), so
+  cross-Activity Swift→OS calls aren't supported — apps that need
+  to mutate a secondary window should do it from JS inside that
+  Activity. `title()` / `isFullscreen()` continue to report the
+  most-recent caller intent for the returned `Window`.
 - **Most `Window` shape APIs are no-ops** (`setSize`, `setPosition`,
   `minimize`, `maximize`, `focus`). The platform owns those decisions
-  on Android. `Window.setFullscreen(true)` is a stub — wiring
-  `WindowInsetsControllerCompat` is on the v0.5.x list. See
+  on Android. `Window.setFullscreen(true)` hides the system status +
+  navigation bars via `WindowInsetsControllerCompat` and lets the
+  WebView draw edge-to-edge, with transient bars on swipe so system
+  gestures stay reachable; `setFullscreen(false)` restores the
+  default fitted-system-windows layout. See
   [AndroidWindow.swift](../Sources/SwiftPWAAndroid/AndroidWindow.swift)
   for the full list.
 - **DevTools is remote-only.** Android WebView has no programmatic
@@ -303,7 +321,7 @@ so apps shouldn't edit it by hand.
 | `SystemNotifications` | `NotificationManagerCompat` + a single `swift-pwa.default` channel                                                                                   | API 33+ requires the `POST_NOTIFICATIONS` runtime permission; `requestAuthorization` shows the system prompt the first time.                                                                                                                                                                       |
 | `SystemDialog`        | `AlertDialog.Builder` for message / confirm; Storage Access Framework (`OPEN_DOCUMENT` / `CREATE_DOCUMENT` / `OPEN_DOCUMENT_TREE`) for file pickers  | **SAF returns `content://` URIs, not filesystem paths.** Apps that need bytes should resolve via `ContentResolver`. `DialogFileFilter.extensions` map to MIME types via a small built-in table; unknown extensions fall back to `*/*`.                                                             |
 | `SystemBiometricAuth` | `androidx.biometric.BiometricPrompt`                                                                                                                 | The host `MainActivity` extends `AppCompatActivity` (a `FragmentActivity` subclass) so the prompt can attach. `BiometricKind` is always `.unknown` when available — Android's `BiometricManager` doesn't distinguish fingerprint / face / iris at the API level.                                  |
-| `AndroidUpdater`      | `PackageInstaller.Session`                                                                                                                           | Self-installing APKs requires the `REQUEST_INSTALL_PACKAGES` manifest permission **plus** the per-app "Install unknown apps" toggle — the system installer surfaces a dialog routing the user to settings if the toggle is off. The plugin still verifies Ed25519 over the artifact bytes itself. |
+| `AndroidUpdater`      | `PackageInstaller.Session` + `BroadcastReceiver` for install status                                                                                  | Self-installing APKs requires the `REQUEST_INSTALL_PACKAGES` manifest permission **plus** the per-app "Install unknown apps" toggle — the system installer surfaces a dialog routing the user to settings if the toggle is off. The plugin still verifies Ed25519 over the artifact bytes itself. The streaming `updater.install` JS command surfaces the platform's `STATUS_*` broadcasts as `installCommitted` / `installSucceeded` / `installFailed` events — see §6.3. |
 | `SystemTray`          | — (no-op stub)                                                                                                                                       | Android has no system-tray surface analogous to macOS' menu bar / Windows' notification area.                                                                                                                                                                                                      |
 
 ### 6.1.1. Wiring up
@@ -330,6 +348,58 @@ permission strings (`POST_NOTIFICATIONS`, `USE_BIOMETRIC`,
 `USE_FINGERPRINT`, `REQUEST_INSTALL_PACKAGES`); apps that don't
 ship a particular plugin can drop the corresponding line in a
 manual post-bundler edit.
+
+### 6.1.2. Observing the updater install result
+
+The cross-platform `updater.installAndRelaunch` invoke commits a
+`PackageInstaller.Session` and returns. The user accept / reject UI
+that follows is *asynchronous* — on desktop platforms the running
+process is replaced before the call returns, so there's nothing to
+observe; on Android the system installer's confirmation prompt fires
+later via a `BroadcastReceiver`, which `installAndRelaunch` cannot
+wait on without changing the cross-platform contract.
+
+The streaming `updater.install` subscription surfaces that lifecycle.
+The Kotlin scaffold's receiver pushes each `PackageInstaller.STATUS_*`
+intent into the `AndroidHostEventRouter`, which routes it to the
+in-flight stream:
+
+```js
+const unsub = __SWIFT_PWA__.subscribe("updater.install", null, (event) => {
+    switch (event.type) {
+        case "installCommitted":
+            // Session committed; the OS install prompt is on screen.
+            showHint("Tap Install in the system prompt to continue.");
+            break;
+        case "installSucceeded":
+            // Fires only briefly before the system replaces the
+            // running app — useful mostly for telemetry, not UI.
+            break;
+        case "installFailed":
+            // event.code is the platform constant name, e.g.
+            // "STATUS_FAILURE_ABORTED" when the user rejected the
+            // prompt, "STATUS_FAILURE_STORAGE" when there's no room,
+            // "STATUS_FAILURE_BLOCKED" when policy denies the install.
+            // event.message is the system reason string if present.
+            showError(`Install blocked: ${event.code} (${event.message ?? "no detail"})`);
+            break;
+        case "error":
+            // The commit itself failed (no staged APK, I/O error
+            // copying bytes into the session, etc.).
+            showError(`Install commit failed: ${event.message}`);
+            break;
+    }
+});
+```
+
+Stream lifetime: the first terminal event (`installSucceeded` or
+`installFailed`) finishes the stream. Apps that need to retry after
+a failure should re-`subscribe` rather than expecting the prior
+stream to deliver further events.
+
+A separate `updater.installAndRelaunch` invoke is still wired —
+existing call sites keep working — but only `updater.install`
+reaches the broadcast result.
 
 ## 6.2. APK size
 
@@ -488,27 +558,39 @@ without further configuration.
 ## 8. Known limitations (v0.5.x)
 
 - **SAF dialog results are `content://` URIs, not filesystem paths.**
-  See §6.1's `SystemDialog` row. Apps written against the
-  cross-platform `Dialog` API expecting `[String]` of paths will
-  receive URI strings on Android. Transparent URI → cache-file
-  resolution is queued for v0.5.x once the `Fs` plugin grows URI
-  support.
-- **Updater install result isn't observable.** `PackageInstaller.Session`
-  reports accept / reject via a `BroadcastReceiver`; the bundler's
-  receiver logs the result to logcat but doesn't surface it through
-  the `Updater` protocol's stream. `installAndRelaunch` returns once
-  the session has been committed; the user accepting / rejecting
-  the system prompt happens after this method returns. Apps that
-  need to act on success / failure should listen for
-  `PackageInstaller.STATUS_*` broadcasts via their own receiver.
+  The cross-platform `Dialog` API returns these URI strings in the
+  same `[String]` slot the desktop backends fill with paths. **The
+  `Fs` plugin handles them transparently** — `fs.readBinary` /
+  `writeBinary` / `metadata` / `exists` route URI-shaped paths
+  through `AndroidContentResolver` (a `FsContentResolver` registered
+  process-wide by `AndroidAppContext`), so apps can pass a
+  `dialog.openFile` result straight to `fs.readBinary` without
+  branching on prefix. `fs.mkdir` / `remove` / `readDir` / `copy` /
+  `rename` deliberately reject `content://` URIs with a clear error
+  (`SAF doesn't expose this operation`) rather than silently
+  misbehaving — SAF doesn't have directory-style POSIX semantics for
+  content providers. Apps that need to walk a tree URI from
+  `OpenDocumentTree` should drive the `DocumentFile` /
+  `DocumentsContract` API directly (out of scope for the cross-
+  platform `Fs` surface).
+- **Delta / split APKs not supported.** Only single-APK updates
+  work through `AndroidUpdater`; AAB / split-by-density support is
+  on the roadmap. The Ed25519 signature pins the artifact identity
+  separately from the platform's same-key check on the APK signing
+  cert (see `AndroidUpdater`'s type docstring for why both).
 - **API 28 floor.** Driven by the Swift Android SDK 6.2's
   `targetTriples` map, which only declares triples for API 28–36.
   See §1's "Why the API 28 floor" callout.
-- **Tray is a no-op stub.** Android has no system-tray surface
-  analogous to macOS' menu bar / Windows' notification area; the
-  closest equivalent (a foreground service with a persistent
+- **Tray is unimplemented, indefinitely.** Android has no system-tray
+  surface analogous to macOS' menu bar / Windows' notification area;
+  the closest equivalent (a foreground service with a persistent
   notification) would be a heavy and Android-specific UX, not a
-  drop-in for the desktop tray API.
+  drop-in for the desktop tray API. Revisit if Android's rumored
+  ChromeOS crossover lands and brings a real desktop shell with it.
+  Until then `TrayPlugin` isn't registered on Android — calls to
+  `tray.*` reject with `E_NO_HANDLER`. Cross-platform code should
+  gate on `__platform.info.commands` (see `Examples/HelloPWA`'s
+  `data-requires="tray.setMenu"` capability gating for the pattern).
 
 ## 8. Troubleshooting
 

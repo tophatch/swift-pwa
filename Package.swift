@@ -268,6 +268,21 @@ let package = Package(
             swiftSettings: swiftSettings
         ),
 
+        // Windows-only test runner. Replaces what would normally be a
+        // `swift-testing` test target — SwiftPM's discovery build plugin
+        // emits 0-byte stubs for every suite on Windows (Swift 6.1.2 +
+        // 6.3.1, both x64 and arm64), so the test bundle finds zero tests
+        // and `swift test` exits 1 with no output. See
+        // docs/windows-setup.md "Known limitations".
+        .executableTarget(
+            name: "SwiftPWAWindowsTestRunner",
+            dependencies: [
+                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows]))
+            ],
+            swiftSettings: swiftSettings
+        ),
+
         // MARK: - Tests
 
         .testTarget(
@@ -288,15 +303,6 @@ let package = Package(
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
-                "_SwiftPWATestSupport"
-            ],
-            swiftSettings: swiftSettings
-        ),
-        .testTarget(
-            name: "SwiftPWAWindowsTests",
-            dependencies: [
-                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
-                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings

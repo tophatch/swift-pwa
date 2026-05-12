@@ -60,8 +60,13 @@
         private let stagingRoot: URL
         private let executablePathOverride: URL?
 
-        let msixIdentityName: String?
-        let applicationID: String
+        // `package`-access rather than `internal` so the in-package test
+        // runner `SwiftPWAWindowsTestRunner` can assert on them without
+        // needing `@testable import` — release builds (which CI runs
+        // before the test step) don't set `-enable-testing`, so the
+        // `@testable` path fails to compile there.
+        package let msixIdentityName: String?
+        package let applicationID: String
 
         private let lock = NSLock()
         private var stagedArtifactPath: URL?
@@ -322,11 +327,14 @@
             try spawnDetachedPowerShell(script: script)
         }
 
-        // MARK: - helpers (internal so tests can exercise them directly)
+        // MARK: - helpers (`package`-access so the in-package test runner
+
+        // can exercise them directly without `@testable import` — which
+        // would require `-enable-testing`, off in release builds).
 
         /// Resolve the running EXE's path. Returns the constructor
         /// override if set, otherwise reads `GetModuleFileNameW(NULL)`.
-        func currentExecutablePath() -> URL? {
+        package func currentExecutablePath() -> URL? {
             if let override = executablePathOverride { return override }
             var buf = [WCHAR](repeating: 0, count: 1024)
             let len = buf.withUnsafeMutableBufferPointer { ptr -> DWORD in
@@ -341,7 +349,7 @@
         /// configured public key. For `.msix` with no public key
         /// configured (and no signature in the manifest entry), skips
         /// verification and trusts the OS Authenticode chain.
-        func verifySignature(at staged: URL, info: UpdateInfo) throws {
+        package func verifySignature(at staged: URL, info: UpdateInfo) throws {
             if installMode == .msix, publicKey == nil, info.signature.isEmpty {
                 // Explicit opt-out for MSIX: rely on `Add-AppxPackage`'s
                 // chain validation. The portable path doesn't get this
@@ -360,7 +368,7 @@
         /// shape. Throws a bridge error with a clear message on every
         /// failure mode (missing key, malformed key / signature,
         /// signature mismatch).
-        func verifyEd25519(data: Data, signature: String) throws {
+        package func verifyEd25519(data: Data, signature: String) throws {
             guard let publicKey else {
                 throw BridgeError(
                     code: BridgeError.handler,

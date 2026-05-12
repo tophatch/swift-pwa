@@ -176,21 +176,34 @@ jobs:
         # scratch rebuild of swift-crypto's BoringSSL (~hundreds of
         # clang invocations). `--build-tests` compiles both the package
         # libraries and the test bundles in one pass outside the test
-        # step's 5-min timer — without this, the test step kept hitting
-        # the timeout mid-rebuild before any test actually ran.
+        # step's 5-min timer.
+        #
+        # We keep `--build-tests` even though we don't *run* SwiftPM's
+        # test bundles on Windows (see next step) — it's still the
+        # cheapest way to compile-check the cross-platform test suites
+        # against the Windows toolchain.
         run: swift build --build-tests
-      - name: Test (cross-platform suites)
-        # See linux-gtk3 for the rationale on 12-minute timeout —
-        # `swift test --filter` still does an incremental link pass
-        # even after `--build-tests` produced the bundles, and Windows
-        # runners are slow enough that 5 min wasn't enough headroom.
+      - name: Test (SwiftPWAWindowsTestRunner)
+        # Why an executable instead of `swift test`: SwiftPM's
+        # swift-testing discovery build plugin emits 0-byte stubs for
+        # every suite on Windows (verified locally on Swift 6.1.2 and
+        # 6.3.1, both x64 and arm64), so the test bundle finds zero
+        # tests at runtime and `swift test` exits 1 with no stderr.
+        # `--list-tests` / `--dump-tests-json` hang on the same path,
+        # which is what surfaced as `error: abnormal(312)` in CI when
+        # `--filter` was in play. `--disable-xctest` doesn't help: the
+        # swift-testing pass also finds zero tests because the
+        # discovery sections aren't populated.
+        #
+        # SwiftPWAWindowsTestRunner re-expresses the WindowsUpdater
+        # coverage as a plain executable with a small assertion harness
+        # so we get real signal on every push. See
+        # docs/windows-setup.md "Known limitations" for the long form.
+        # 12-min timeout matches the linux-gtk3 rationale: even after
+        # `--build-tests`, `swift run` still does an incremental link
+        # pass and Windows runners are slow.
         timeout-minutes: 12
-        # SwiftPWAWindowsTests is a placeholder — we run the
-        # cross-platform suites here. Real Windows runtime tests
-        # (window lifecycle, bridge round-trip on WebView2) are a
-        # follow-up once we figure out a headless WebView2 strategy
-        # on hosted runners.
-        run: swift test --verbose --filter SwiftPWACoreTests --filter SwiftPWACLITests
+        run: swift run SwiftPWAWindowsTestRunner
 
   lint:
     runs-on: macos-15

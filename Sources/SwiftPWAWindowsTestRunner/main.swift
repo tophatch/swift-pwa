@@ -14,7 +14,15 @@
     import Crypto
     import Foundation
     import SwiftPWACore
-    @testable import SwiftPWAWindows
+
+    // Plain `import`, not `@testable`: SwiftPM only sets `-enable-testing`
+    // on debug-config builds with a test-target dependent. The CI Windows
+    // job runs `swift build -c release` first, which compiles this target
+    // in release where `@testable` fails. The members we used to reach via
+    // `@testable` (`verifyEd25519`, `verifySignature`, `currentExecutablePath`,
+    // `msixIdentityName`, `applicationID`) are now `package`-access on
+    // `WindowsUpdater` instead.
+    import SwiftPWAWindows
 
     // MARK: - Harness
 

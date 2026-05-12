@@ -123,7 +123,14 @@ let package = Package(
         .library(name: "SwiftPWA", targets: ["SwiftPWA"]),
         .library(name: "SwiftPWACore", targets: ["SwiftPWACore"]),
         .library(name: "SwiftPWATestSupport", targets: ["_SwiftPWATestSupport"]),
-        .executable(name: "swift-pwa", targets: ["swift-pwa-cli"])
+        .executable(name: "swift-pwa", targets: ["swift-pwa-cli"]),
+        // CI-internal: the Windows test runner. See the matching
+        // executableTarget below for why a regular swift-testing target
+        // doesn't work on Windows. Surfaced as a product so it shows up
+        // in `swift package describe` / `products:` grep — a Windows
+        // reviewer hit the discoverability gap when only the target
+        // existed.
+        .executable(name: "SwiftPWAWindowsTestRunner", targets: ["SwiftPWAWindowsTestRunner"])
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
@@ -268,6 +275,21 @@ let package = Package(
             swiftSettings: swiftSettings
         ),
 
+        // Windows-only test runner. Replaces what would normally be a
+        // `swift-testing` test target — SwiftPM's discovery build plugin
+        // emits 0-byte stubs for every suite on Windows (Swift 6.1.2 +
+        // 6.3.1, both x64 and arm64), so the test bundle finds zero tests
+        // and `swift test` exits 1 with no output. See
+        // docs/windows-setup.md "Known limitations".
+        .executableTarget(
+            name: "SwiftPWAWindowsTestRunner",
+            dependencies: [
+                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows]))
+            ],
+            swiftSettings: swiftSettings
+        ),
+
         // MARK: - Tests
 
         .testTarget(
@@ -288,15 +310,6 @@ let package = Package(
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
-                "_SwiftPWATestSupport"
-            ],
-            swiftSettings: swiftSettings
-        ),
-        .testTarget(
-            name: "SwiftPWAWindowsTests",
-            dependencies: [
-                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
-                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings

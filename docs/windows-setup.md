@@ -515,3 +515,19 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   don't try to detect this state from the runtime side because
   there's no signal beyond the same `COREWEBVIEW2_E_RUNTIME_NOT_FOUND`
   HRESULT a clean-uninstalled box returns.
+- **`swift test` doesn't work on Windows; tests run via a dedicated
+  executable.** SwiftPM's swift-testing discovery build plugin emits
+  0-byte stubs for every suite on Windows (verified on Swift 6.1.2 and
+  6.3.1, x64 and arm64), so the test bundle finds zero tests at
+  runtime and `swift test` exits 1 with no stderr. `--list-tests` /
+  `--dump-tests-json` hang on the same path, which was the source of
+  the `error: abnormal(312)` CI signature when `--filter` was used.
+  `--disable-xctest` doesn't help — the swift-testing pass also finds
+  zero tests because the discovery sections aren't populated.
+  Windows test coverage therefore lives in
+  [Sources/SwiftPWAWindowsTestRunner/main.swift](../Sources/SwiftPWAWindowsTestRunner/main.swift),
+  a plain executable that re-expresses the `WindowsUpdater` assertions
+  with a small harness. Run it with `swift run SwiftPWAWindowsTestRunner`;
+  CI does the same. The other suites (`SwiftPWACoreTests` etc.) get
+  compile-checked on Windows via `swift build --build-tests` but can't
+  be *run* until SwiftPM's Windows discovery is fixed upstream.

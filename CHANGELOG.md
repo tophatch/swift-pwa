@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI: `android` job's swiftly toolchain install no longer fails on ubuntu-24.04.** `swiftly install 6.2.0` exits non-zero when `libcurl4-openssl-dev` isn't present, and the runner image dropped it from the default set — the toolchain extracted fine but the step failed before the NDK install / cross-compile / `assembleDebug` could run. New "Install Swift toolchain runtime deps" step in `.github/workflows/ci.yml` apt-installs the package before swiftly runs.
+
 ## [0.5.0] - 2026-05-12
 
 ### Added

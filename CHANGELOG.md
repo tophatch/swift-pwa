@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **CI: `android` job's swiftly toolchain install no longer fails on ubuntu-24.04.** `swiftly install 6.2.0` exits non-zero when `libcurl4-openssl-dev` isn't present, and the runner image dropped it from the default set — the toolchain extracted fine but the step failed before the NDK install / cross-compile / `assembleDebug` could run. New "Install Swift toolchain runtime deps" step in `.github/workflows/ci.yml` apt-installs the package before swiftly runs.
+- **CI: `android` job locates `setup-android-sdk.sh` via `find` instead of two hard-coded paths.** Previous fallback chain checked `~/Library/org.swift.swiftpm/swift-sdks/...` (macOS) and `~/.swiftpm/swift-sdks/...` (incorrect Linux guess). On Linux runners, SwiftPM installs SDKs under `$XDG_DATA_HOME/swiftpm/swift-sdks` (`~/.local/share/swiftpm/swift-sdks/` by default), so both fallbacks missed and the step exited 127. The `find` lookup is host-agnostic and prints a diagnostic listing if the script genuinely isn't there.
 
 ## [0.5.0] - 2026-05-12
 

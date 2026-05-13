@@ -25,7 +25,7 @@ If you write Swift, today's options for shipping a thin-client app are uncomfort
 | Linux            | Yes            | Yes      | Yes      | Yes      |
 | Windows          | Yes            | Yes      | Yes      | Yes      |
 | iOS              | Yes            | Yes      | No       | No       |
-| Android          | Preview (v0.5) | Yes      | No       | No       |
+| Android          | Yes            | Yes      | No       | No       |
 
 ## Quickstart
 
@@ -122,27 +122,27 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 
 ## Feature matrix
 
-`Yes` = first-class. `Partial` = works with documented caveats (footnoted; per-platform detail in the matching [docs/&lt;platform&gt;-setup.md](docs/)). `Preview` = code-complete and host-buildable, not yet verified end-to-end on the platform. `—` = not applicable.
+`Yes` = first-class. `Partial` = works with documented caveats (footnoted; per-platform detail in the matching [docs/&lt;platform&gt;-setup.md](docs/)). `—` = not applicable.
 
 | Capability                    | macOS                   | iOS                          | Linux GTK3                 | Linux GTK4              | Windows                  | Android                  |
 | ----------------------------- | :---------------------: | :--------------------------: | :------------------------: | :---------------------: | :----------------------: | :----------------------: |
 | Webview                       | WKWebView               | WKWebView                    | WebKitGTK 4.1              | WebKitGTK 6.0           | WebView2 (Edge)          | android.webkit.WebView   |
-| Min OS / runtime              | macOS 15                | iOS 18                       | Ubuntu 22.04+ / Fedora 36+ | GTK 4.10+               | Win10 21H2+ + WebView2   | API 26 (Android 8.0)     |
-| JS↔Swift bridge               | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Preview⁷                 |
-| Multi-window                  | Yes                     | Partial¹                     | Yes                        | Yes                     | Yes                      | —⁸                       |
-| DevTools (`Cmd/Ctrl+Alt+J`)   | Yes                     | —                            | Yes                        | Yes                     | Yes                      | Remote⁹                  |
+| Min OS / runtime              | macOS 15                | iOS 18                       | Ubuntu 22.04+ / Fedora 36+ | GTK 4.10+               | Win10 21H2+ + WebView2   | API 28 (Android 9)       |
+| JS↔Swift bridge               | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
+| Multi-window                  | Yes                     | Partial¹                     | Yes                        | Yes                     | Yes                      | —⁷                       |
+| DevTools (`Cmd/Ctrl+Alt+J`)   | Yes                     | —                            | Yes                        | Yes                     | Yes                      | Remote⁸                  |
 | Per-Monitor V2 DPI            | —                       | —                            | —                          | —                       | Yes                      | —                        |
-| `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      | Partial⁸                 |
-| `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Preview⁷                 |
-| `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      | Partial¹¹                |
-| `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Preview⁷                 |
+| `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      | Partial⁷                 |
+| `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
+| `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      | Partial¹⁰                |
+| `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `TrayPlugin`                  | Yes                     | —                            | Yes                        | —                       | Yes                      | —                        |
-| `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | Preview⁷                 |
-| `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | Fingerprint / Face¹²     |
-| `UpdaterPlugin` (runtime)     | Untested⁶               | Untested⁶                    | Untested⁶                  | Untested⁶               | Untested⁶                | Preview⁷ (PackageInstaller) |
+| `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | Yes                      |
+| `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | Fingerprint / Face¹¹     |
+| `UpdaterPlugin` (runtime)     | Untested⁶               | Untested⁶                    | Untested⁶                  | Untested⁶               | Untested⁶                | Yes (PackageInstaller)   |
 | `swift-pwa updater` CLI       | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | Bundler artifact              | `.app`                  | `.app` / `.ipa`              | `.AppImage`                | `.AppImage`             | Portable / MSIX          | Gradle project → APK/AAB |
-| Code-signing pass-through     | `codesign`              | `codesign`                   | —                          | —                       | `signtool`               | Gradle `signingConfigs`¹⁰ |
+| Code-signing pass-through     | `codesign`              | `codesign`                   | —                          | —                       | `signtool`               | Gradle `signingConfigs`⁹ |
 
 1. iOS UIScene single scene polished, multi-scene scaffolded.
 2. `Window.position()` / `setPosition` / `.didMove` are no-ops on GTK4 (Wayland refuses to give apps their own position).
@@ -150,12 +150,11 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 4. GTK4 dialogs require GTK 4.10+ (`GtkAlertDialog` / `GtkFileDialog`).
 5. Apple notifications require a bundled, signed `.app` (`UNUserNotificationCenter` rejects unsigned processes).
 6. Runtime backends are unit-tested but the per-OS install hand-off is preview until [docs/manual-test-cases.md](docs/manual-test-cases.md) is walked. The publishing CLI is fully tested. Full breakdown: [docs/auto-updates.md](docs/auto-updates.md).
-7. End-to-end verified on a Galaxy Tab S10+; backend wiring + boilerplate in [docs/android-setup.md](docs/android-setup.md), the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md).
-8. Most `Window` shape APIs (`setSize`, `setPosition`, `minimize`, etc.) are no-ops — the platform owns those decisions; multi-window spawns a new Activity per `createWindow`. Detail: [docs/android-setup.md](docs/android-setup.md) §6.
-9. Android `WebView` has no programmatic DevTools window; debug via `chrome://inspect` on a connected host. `webView.openDevTools()` logs an `adb`-friendly hint.
-10. Driven by `pwa.json`'s `android.signing` (or `--sign` / `--android-key-alias` CLI overrides) with passwords from environment variables. Full wiring + CI pattern: [docs/android-setup.md](docs/android-setup.md) §7.
-11. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths; `Fs` routes those URIs through `ContentResolver` transparently. Detail: [docs/android-setup.md](docs/android-setup.md) §6.1.
-12. Android's `BiometricManager` doesn't distinguish fingerprint / face / iris — `BiometricKind` is `.unknown` when available. Gate JS on `available`, not `kind`.
+7. Most `Window` shape APIs (`setSize`, `setPosition`, `minimize`, etc.) are no-ops — the platform owns those decisions; multi-window spawns a new Activity per `createWindow`. Detail: [docs/android-setup.md](docs/android-setup.md) §6.
+8. Android `WebView` has no programmatic DevTools window; debug via `chrome://inspect` on a connected host. `webView.openDevTools()` logs an `adb`-friendly hint.
+9. Driven by `pwa.json`'s `android.signing` (or `--sign` / `--android-key-alias` CLI overrides) with passwords from environment variables. Full wiring + CI pattern: [docs/android-setup.md](docs/android-setup.md) §7.
+10. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths; `Fs` routes those URIs through `ContentResolver` transparently. Detail: [docs/android-setup.md](docs/android-setup.md) §6.1.
+11. Android's `BiometricManager` doesn't distinguish fingerprint / face / iris — `BiometricKind` is `.unknown` when available. Gate JS on `available`, not `kind`.
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 
@@ -193,7 +192,7 @@ swift run swift-pwa build --target linux                              # → MyAp
 swift run swift-pwa build --target windows                            # → portable folder bundle
 swift run swift-pwa build --target windows --package-format msix --arch arm64 --sign <thumbprint>
 swift run swift-pwa build --target windows --bootstrap-webview2       # bundle the Evergreen Bootstrapper
-swift run swift-pwa build --target android                            # → MyApp-android/ Gradle project (preview)
+swift run swift-pwa build --target android                            # → MyApp-android/ Gradle project
 swift run swift-pwa build --target android --cross-compile-android --android-abis arm64-v8a,x86_64
 ```
 

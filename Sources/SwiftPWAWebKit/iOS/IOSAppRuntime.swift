@@ -56,6 +56,7 @@
 
         public init() {
             use(WindowPlugin())
+            use(PlatformInfoPlugin())
             use(ClipboardPlugin(SystemClipboard()))
         }
 

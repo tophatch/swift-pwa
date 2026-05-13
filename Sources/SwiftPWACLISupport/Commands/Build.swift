@@ -17,7 +17,14 @@ struct Build: AsyncParsableCommand {
     @Option(help: "Path to pwa.json. Defaults to ./pwa.json.")
     var manifest: String = "pwa.json"
 
-    @Option(help: "Code-signing identity (macOS/iOS only).")
+    @Option(
+        help: """
+        Code-signing identity. Interpretation is per-platform: macOS / iOS — codesign \
+        identity (e.g. "Developer ID Application: …"); Windows — signtool thumbprint or \
+        PFX path; Android — path to a keystore (.jks / .keystore / .pkcs12). When set for \
+        --target android, overrides pwa.json's android.signing.keystore.
+        """
+    )
     var sign: String?
 
     @Option(help: "Path to entitlements plist (macOS only).")
@@ -47,6 +54,50 @@ struct Build: AsyncParsableCommand {
         help: "Drop the WebView2 Evergreen Bootstrapper (~1.7 MB) into the Windows bundle."
     )
     var bootstrapWebview2: Bool = false
+
+    @Option(
+        help: """
+        Comma-separated Android ABIs to include (e.g. arm64-v8a,x86_64). Overrides pwa.json's \
+        android.abis. The CLI cross-compiles one .so per ABI when --cross-compile is set; \
+        without it, the Gradle scaffold is generated and the developer is expected to drop \
+        the .so files in by hand.
+        """
+    )
+    var androidAbis: String?
+
+    @Flag(
+        help: """
+        Run `swift build --triple <android-abi>` for each requested Android ABI and stage the \
+        resulting .so files into the generated Gradle project. Off by default — most hosts \
+        won't have a Swift Android SDK installed, and we don't want the Gradle scaffold to \
+        fail to emit just because cross-compile didn't work.
+        """
+    )
+    var crossCompileAndroid: Bool = false
+
+    @Option(
+        help: """
+        Android-only: alias of the key inside the keystore passed via --sign (or declared \
+        in pwa.json's android.signing.keystore). Overrides pwa.json's \
+        android.signing.key_alias when set. Required when --sign is used without a \
+        matching pwa.json signing section.
+        """
+    )
+    var androidKeyAlias: String?
+
+    @Flag(
+        help: """
+        Prune the bundled Swift runtime stdlib `.so` set to only what the app's `.so` actually \
+        depends on (transitive `DT_NEEDED` walk via `readelf -d`). Drops 10 unused stdlib \
+        modules on a typical app (`_Differentiation`, `_StringProcessing`, `RegexBuilder`, \
+        `Distributed`, `FoundationXML`, `Testing`, `XCTest`, `Observation`, `_Volatile`, \
+        `_SwiftOnoneSupport`). On `Examples/HelloPWA` this saves ~5 MB of APK on top of the \
+        ~50 MB the always-on strip pass already saves (final APK 80 MB → 76 MB with prune \
+        added). Off by default since the saving is small relative to the always-on strip — \
+        opt in for distribution builds where every megabyte counts.
+        """
+    )
+    var pruneAndroidRuntime: Bool = false
 
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
@@ -108,8 +159,28 @@ struct Build: AsyncParsableCommand {
             let url = try await bundler.build()
             print("Built: \(url.path)")
         case .android:
-            print("swift-pwa: Android bundler is a stub in v0.1. Planned for v0.3.")
-            throw ExitCode(2)
+            // Resolve the ABI list: --android-abis overrides pwa.json's
+            // android.abis, which falls back to the conventional pair.
+            let abiList: [String] = if let raw = androidAbis, !raw.isEmpty {
+                raw.split(separator: ",").map { $0.trimmingCharacters(in: .whitespaces) }
+            } else if let configured = pwa.android?.abis, !configured.isEmpty {
+                configured
+            } else {
+                ["arm64-v8a", "x86_64"]
+            }
+            let bundler = AndroidBundler(
+                manifest: pwa,
+                projectRoot: cwd,
+                outputDir: outputDir,
+                abis: abiList,
+                crossCompile: crossCompileAndroid,
+                pruneRuntime: pruneAndroidRuntime,
+                signKeystoreOverride: sign,
+                keyAliasOverride: androidKeyAlias
+            )
+            let url = try await bundler.build()
+            print("Built: \(url.path)")
+            print("Next: cd '\(url.path)' && ./gradlew assembleDebug")
         }
     }
 }

@@ -1,82 +1,100 @@
 import Foundation
 import SwiftPWA
 
+// `@main` is the desktop entry point; on Android it's still defined
+// so SwiftPM's linker can resolve its `--defsym=main=HelloPWA_main`
+// indirection, but the .so is loaded by the JVM via
+// `System.loadLibrary` and the JNI entry point in
+// `AndroidEntry.swift` drives the runtime instead — `main()` here
+// is unreachable on Android.
 @main
 struct HelloPWAApp {
     static func main() async throws {
         let runtime = try SwiftPWA.runtime()
-        try runtime.run { ctx in
-            // Register a custom command that returns the current time.
-            ctx.registry.register("now", typed: { (_: EmptyArgs, _) -> NowResult in
-                NowResult(iso: ISO8601DateFormatter().string(from: Date()))
-            })
+        try runtime.run(configure)
+    }
+}
 
-            // Tray demo — full implementation on macOS / GTK3, no-op
-            // on iOS / GTK4 (the SystemTray stub there logs a one-shot
-            // warning to stderr; commands resolve but display nothing).
-            let tray = SystemTray()
-            try? installTrayIcon(on: tray)
-            tray.setTooltip("HelloPWA")
-            tray.setMenu(TrayMenu(items: [
-                TrayMenuItem(id: "ping", label: "Server ping"),
-                TrayMenuItem(id: "rename", label: "Rename window"),
-                .separator(),
-                TrayMenuItem(id: "quit", label: "Quit HelloPWA")
-            ]))
-            ctx.use(TrayPlugin(tray))
+/// The cross-platform configure closure. Called from `HelloPWAApp.main`
+/// on desktop and from the JNI entry in `AndroidEntry.swift` on
+/// Android. `@MainActor` to match the protocol's
+/// `@escaping @MainActor @Sendable (any AppContext) throws -> Void`
+/// signature.
+@MainActor
+func configure(_ ctx: any AppContext) throws {
+    // Register a custom command that returns the current time.
+    ctx.registry.register("now", typed: { (_: EmptyArgs, _) -> NowResult in
+        NowResult(iso: ISO8601DateFormatter().string(from: Date()))
+    })
 
-            // Notifications plugin — auth + send. On Apple this needs
-            // a bundled app to actually surface banners; under
-            // `swift run` the JS-side `notifications.send` will return
-            // an "not allowed" error, which is the demo's own
-            // way of showing the bundling distinction.
-            ctx.use(NotificationsPlugin(SystemNotifications()))
+    // Tray — only registered where a real surface exists. Android
+    // has no system-tray analogue (foreground-service notifications
+    // are a heavy and Android-specific UX), so we skip it there
+    // rather than register the no-op stub. The demo's capability
+    // gating greys the tray buttons out automatically based on
+    // `__platform.info.commands`.
+    #if !os(Android)
+        let tray = SystemTray()
+        try? installTrayIcon(on: tray)
+        tray.setTooltip("HelloPWA")
+        tray.setMenu(TrayMenu(items: [
+            TrayMenuItem(id: "ping", label: "Server ping"),
+            TrayMenuItem(id: "rename", label: "Rename window"),
+            .separator(),
+            TrayMenuItem(id: "quit", label: "Quit HelloPWA")
+        ]))
+        ctx.use(TrayPlugin(tray))
 
-            // Dialog plugin — native message / confirm / file pickers.
-            // Cross-platform: NSAlert / NSOpenPanel on macOS,
-            // UIAlertController / UIDocumentPickerViewController on
-            // iOS, GtkMessageDialog / GtkFileChooser on Linux,
-            // MessageBoxW / IFileOpenDialog on Windows.
-            ctx.use(DialogPlugin(SystemDialog()))
-
-            // Filesystem plugin — Foundation-backed, identical surface
-            // on every backend. Opt-in because filesystem access is
-            // the plugin most likely to be misused.
-            ctx.use(FsPlugin(SystemFs()))
-
-            // Biometric authentication. Apple LocalAuthentication
-            // (Touch ID / Face ID / Optic ID), Windows Hello via
-            // UserConsentVerifier; Linux is a stub that always
-            // reports unavailable.
-            ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
-
-            // Auto-updater. The real backends — `AppleUpdater`,
-            // `LinuxAppImageUpdater`, `WindowsUpdater` — only do
-            // useful things from inside a bundled artifact pointing
-            // at a real signed manifest, so the demo stands one in
-            // with `DemoUpdater` (below) which synthesises a visible
-            // progress arc and lets users exercise the streaming
-            // event surface end-to-end.
-            ctx.use(UpdaterPlugin(DemoUpdater()))
-
-            // Drive a couple of menu items from Swift directly so users
-            // can see backend-side reactions to tray events. JS also
-            // subscribes via `tray.subscribe` and logs every event.
-            Task { @MainActor in
-                for await event in tray.eventStream() {
-                    if case let .menuItemClicked(id) = event, id == "quit" {
-                        ctx.quit(exitCode: 0)
-                    }
+        Task { @MainActor in
+            for await event in tray.eventStream() {
+                if case let .menuItemClicked(id) = event, id == "quit" {
+                    ctx.quit(exitCode: 0)
                 }
             }
-
-            _ = try ctx.createWindow(WindowConfig(
-                title: "Hello, swift-pwa",
-                size: Size(width: 1024, height: 768),
-                content: .bundled(directory: locateWebRoot())
-            ))
         }
-    }
+    #endif
+
+    // Notifications, Dialog, BiometricAuth — first-class on every
+    // backend including Android (v0.5.x), driven through the
+    // Swift→Kotlin RPC channel on Android and the platform-native
+    // APIs on the desktop backends. On Apple this needs a bundled
+    // app to surface notification banners; under `swift run` the
+    // JS-side `notifications.send` returns an "not allowed" error,
+    // which is the demo's own way of showing the bundling distinction.
+    ctx.use(NotificationsPlugin(SystemNotifications()))
+    ctx.use(DialogPlugin(SystemDialog()))
+    ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
+
+    // Filesystem plugin — Foundation-backed, identical surface
+    // on every backend (SystemFs lives in SwiftPWACore). Opt-in
+    // because filesystem access is the plugin most likely to be
+    // misused.
+    ctx.use(FsPlugin(SystemFs()))
+
+    // Auto-updater. The real backends — `AppleUpdater`,
+    // `LinuxAppImageUpdater`, `WindowsUpdater` — only do
+    // useful things from inside a bundled artifact pointing
+    // at a real signed manifest, so the demo stands one in
+    // with `DemoUpdater` (below) which synthesises a visible
+    // progress arc and lets users exercise the streaming
+    // event surface end-to-end.
+    ctx.use(UpdaterPlugin(DemoUpdater()))
+
+    // Window content: bundled `web/` for desktop (resolved from the
+    // app's resource bundle), or `https://swift-pwa.local/web/...`
+    // for Android (the AndroidWebViewAdapter ignores the directory
+    // path and routes through the WebViewAssetLoader instead).
+    #if os(Android)
+        let content = WindowContent.bundled(directory: URL(fileURLWithPath: "/android_asset/web"))
+    #else
+        let content = WindowContent.bundled(directory: locateWebRoot())
+    #endif
+
+    _ = try ctx.createWindow(WindowConfig(
+        title: "Hello, swift-pwa",
+        size: Size(width: 1024, height: 768),
+        content: content
+    ))
 }
 
 struct NowResult: Codable, Sendable {

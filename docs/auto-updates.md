@@ -61,9 +61,12 @@ try runtime.run { ctx in
 
 `{{target}}` expands to `darwin-aarch64` / `darwin-x86_64` /
 `ios-aarch64-enterprise` / `windows-x86_64-msix` /
-`linux-x86_64-appimage`; `{{current_version}}` expands to the value of
-`CFBundleShortVersionString` in the running bundle (override via the
-`currentVersion:` arg).
+`windows-x86_64-portable` / `linux-x86_64-appimage` /
+`linux-aarch64-appimage` / `android-aarch64-apk` /
+`android-x86_64-apk`; `{{current_version}}` expands to the value of
+`CFBundleShortVersionString` (or the equivalent per-platform version
+string — `BuildConfig.versionName` on Android, override via the
+`currentVersion:` arg on every backend).
 
 ## JS surface
 
@@ -198,8 +201,15 @@ swift run swift-pwa updater manifest \
     --platform darwin-aarch64=./build/HelloPWA-0.4.0-arm64.app.tar.gz=https://updates.example.com/HelloPWA-0.4.0-arm64.app.tar.gz \
     --platform darwin-x86_64=./build/HelloPWA-0.4.0-x86_64.app.tar.gz=https://updates.example.com/HelloPWA-0.4.0-x86_64.app.tar.gz \
     --platform ios-aarch64-enterprise=https://updates.example.com/HelloPWA-0.4.0-manifest.plist \
+    --platform android-aarch64-apk=./build/HelloPWA-android/app/build/outputs/apk/release/app-release.apk=https://updates.example.com/HelloPWA-0.4.0-arm64.apk \
     --output manifest.json
 ```
+
+The CLI itself doesn't validate target names — any string the
+publisher uses must match what the runtime's `Updater` implementation
+computes via `UpdaterTarget.current(packageFormat:)`. Use the keys
+listed in §`{{target}}` above; bespoke target strings are fine as
+long as both sides agree.
 
 `--pub-date` defaults to the current UTC time in ISO-8601 form; pass
 it explicitly if you want the publication date pinned to your build's

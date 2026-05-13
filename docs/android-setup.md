@@ -8,7 +8,7 @@ hosts a stock `android.webkit.WebView` (Chromium-backed since Android
 emits a Gradle project that wraps the `.so`, your web bundle, and a
 generated `MainActivity` + `SwiftPWABridge`.
 
-> **Status: v0.5.x — plugin set caught up to desktop parity, verified
+> **Status: v0.5.0 — plugin set at desktop parity, verified
 > end-to-end on-device** (reproducible — see
 > [docs/android-on-device-testing.md](android-on-device-testing.md)
 > for the loop). Full pipeline (`swift-pwa build --target
@@ -555,7 +555,7 @@ The `pwa.json` `android.signing.keystore` path resolves relative to
 the project root, so `release.jks` decoded into the project root works
 without further configuration.
 
-## 8. Known limitations (v0.5.x)
+## 8. Known limitations
 
 - **SAF dialog results are `content://` URIs, not filesystem paths.**
   The cross-platform `Dialog` API returns these URI strings in the

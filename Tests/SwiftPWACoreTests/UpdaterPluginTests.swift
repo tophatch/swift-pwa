@@ -135,6 +135,68 @@ struct UpdaterPluginTests {
         #expect(err.message.contains("no staged update"))
     }
 
+    // MARK: - install (streaming variant)
+
+    @Test("updater.install finishes silently on default-impl backends (happy path)")
+    func installDefaultHappyPath() async throws {
+        let (app, updater) = makeApp()
+        let events = try await collectInstall(app: app)
+        // MockUpdater inherits the default protocol impl, which just
+        // calls installAndRelaunch() and finishes. No events are
+        // expected on the wire — matches the desktop-backend story
+        // where install replaces the running process.
+        #expect(events.isEmpty)
+        #expect(updater.actions == [.installAndRelaunch])
+    }
+
+    @Test("updater.install surfaces commit-time errors as a trailing .error event")
+    func installDefaultError() async throws {
+        let (app, updater) = makeApp()
+        updater.nextInstallError = BridgeError(code: BridgeError.handler, message: "no staged update")
+        let events = try await collectInstall(app: app, expectError: true)
+        guard case let .error(code, message) = events.last else {
+            Issue.record("expected trailing .error event, got \(String(describing: events.last))")
+            return
+        }
+        #expect(code == BridgeError.handler)
+        #expect(message.contains("no staged update"))
+    }
+
+    // MARK: - Event codec (round-trip the new install-lifecycle cases)
+
+    @Test("installCommitted / installSucceeded / installFailed round-trip through Codable")
+    func installEventCodec() throws {
+        let cases: [UpdaterEvent] = [
+            .installCommitted,
+            .installSucceeded,
+            .installFailed(code: "STATUS_FAILURE_ABORTED", message: "user cancelled"),
+            .installFailed(code: "STATUS_FAILURE_STORAGE", message: nil)
+        ]
+        for event in cases {
+            let data = try JSONEncoder().encode(event)
+            let decoded = try JSONDecoder().decode(UpdaterEvent.self, from: data)
+            #expect(decoded == event, "round-trip mismatch for \(event)")
+        }
+    }
+
+    @Test("installFailed wire shape matches the documented JS contract")
+    func installFailedWire() throws {
+        let event = UpdaterEvent.installFailed(code: "STATUS_FAILURE_ABORTED", message: "user cancelled")
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(event)) as? [String: Any]
+        #expect(json?["type"] as? String == "installFailed")
+        #expect(json?["code"] as? String == "STATUS_FAILURE_ABORTED")
+        #expect(json?["message"] as? String == "user cancelled")
+    }
+
+    @Test("installFailed with a nil message omits the key on the wire")
+    func installFailedNilMessage() throws {
+        let event = UpdaterEvent.installFailed(code: "STATUS_FAILURE_STORAGE", message: nil)
+        let json = try JSONSerialization.jsonObject(with: JSONEncoder().encode(event)) as? [String: Any]
+        #expect(json?["type"] as? String == "installFailed")
+        #expect(json?["code"] as? String == "STATUS_FAILURE_STORAGE")
+        #expect(json?["message"] == nil, "nil message should be omitted, not serialized as null")
+    }
+
     // MARK: - helpers
 
     private func collectRun(
@@ -142,11 +204,27 @@ struct UpdaterPluginTests {
         args: String,
         expectError: Bool = false
     ) async throws -> [UpdaterEvent] {
-        let inv = Invocation(id: 1, command: "updater.run", payload: Data(args.utf8))
+        try await collectStream(app: app, command: "updater.run", args: args, expectError: expectError)
+    }
+
+    private func collectInstall(
+        app: MockAppContext,
+        expectError: Bool = false
+    ) async throws -> [UpdaterEvent] {
+        try await collectStream(app: app, command: "updater.install", args: "{}", expectError: expectError)
+    }
+
+    private func collectStream(
+        app: MockAppContext,
+        command: String,
+        args: String,
+        expectError: Bool
+    ) async throws -> [UpdaterEvent] {
+        let inv = Invocation(id: 1, command: command, payload: Data(args.utf8))
         let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .stream(stream) = result else {
-            Issue.record("expected stream result")
+            Issue.record("expected stream result for \(command)")
             return []
         }
         var collected: [UpdaterEvent] = []

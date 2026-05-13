@@ -39,6 +39,19 @@ import Foundation
 ///         case "error": /* surface event.code + event.message */ break;
 ///     }
 /// });
+///
+/// // Streaming install variant — gives Android apps a hook into the
+/// // `PackageInstaller.STATUS_*` broadcasts. On other backends the
+/// // stream finishes silently (the process is replaced before any
+/// // event could be observed).
+/// const unsubInstall = __SWIFT_PWA__.subscribe("updater.install", null, (event) => {
+///     switch (event.type) {
+///         case "installCommitted": /* system prompt visible */ break;
+///         case "installSucceeded": /* never observed in practice */ break;
+///         case "installFailed":    /* event.code + event.message */ break;
+///         case "error":            /* commit itself failed */ break;
+///     }
+/// });
 /// ```
 public struct UpdaterPlugin: Plugin {
     public static let pluginName = "updater"
@@ -107,6 +120,13 @@ public struct UpdaterPlugin: Plugin {
             typed: { (_: EmptyArgs, _) async throws -> EmptyResult in
                 try await updater.installAndRelaunch()
                 return EmptyResult()
+            }
+        )
+
+        registry.registerStream(
+            "updater.install",
+            typed: { (_: EmptyArgs, _) -> AsyncThrowingStream<UpdaterEvent, any Error> in
+                updater.install()
             }
         )
     }

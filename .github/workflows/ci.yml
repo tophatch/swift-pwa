@@ -205,6 +205,123 @@ jobs:
         timeout-minutes: 12
         run: swift run SwiftPWAWindowsTestRunner
 
+  android:
+    # Android cross-compile + Gradle `assembleDebug` smoke test. Uses
+    # the Examples/HelloPWA app as the bring-up subject — the same
+    # path the v0.5 on-device round-trip was verified against.
+    #
+    # The job is split into clearly-bounded steps so a failure in any
+    # one (toolchain install, SDK install, cross-compile, gradle
+    # build) is immediately attributable. Failures fall through to
+    # subsequent steps — the bundler still emits the Gradle scaffold
+    # even when cross-compile fails, and a manifest of `app-debug.apk`
+    # at the end is the canonical "did it actually build?" check.
+    runs-on: ubuntu-24.04
+    needs: macos
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Swift toolchain runtime deps
+        # `ubuntu-24.04` images don't preinstall libcurl4-openssl-dev,
+        # and swiftly's post-install dependency check exits non-zero
+        # without it — even though the toolchain itself extracts fine.
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+      - name: Install Swiftly
+        # Swiftly is the canonical way to install pinned Swift
+        # toolchains on Linux — `swift-actions/setup-swift` doesn't
+        # publish 6.2.x point-releases, and the Swift Android SDK 6.2
+        # requires the matching 6.2.0 compiler (.swiftmodule format
+        # isn't ABI-stable across patch releases yet).
+        run: |
+          curl -fsSL https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz | tar -xz
+          ./swiftly init --quiet-shell-followup --assume-yes --skip-install
+          echo "$HOME/.local/share/swiftly/bin" >> $GITHUB_PATH
+      - name: Install Swift 6.2.0
+        run: |
+          swiftly install 6.2.0
+          swiftly use 6.2.0
+          swift --version
+      - name: Install Android NDK r27d
+        run: |
+          mkdir -p $HOME/android
+          curl -fsSLo /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
+          unzip -q /tmp/ndk.zip -d $HOME/android
+          echo "ANDROID_NDK_HOME=$HOME/android/android-ndk-r27d" >> $GITHUB_ENV
+      - name: Install Swift Android SDK 6.2
+        # The artifactbundle is published at
+        # https://github.com/swift-android-sdk/swift-android-sdk/releases/tag/6.2
+        # — pin the URL rather than tracking-latest so a future SDK
+        # release that breaks our build doesn't take the workflow
+        # offline silently. The checksum is computed from the
+        # download (rather than hard-coded) so the workflow keeps
+        # working when the upstream rebuilds the artifact with a new
+        # checksum but the same version label.
+        env:
+          SDK_URL: https://github.com/swift-android-sdk/swift-android-sdk/releases/download/6.2/swift-6.2-RELEASE-android-0.1.artifactbundle.tar.gz
+        run: |
+          curl -fsSLo /tmp/swift-android-sdk.tar.gz "$SDK_URL"
+          SDK_SHA=$(sha256sum /tmp/swift-android-sdk.tar.gz | cut -d' ' -f1)
+          echo "Computed SDK checksum: $SDK_SHA"
+          # Install from the local file (avoids a second download) —
+          # `swift sdk install` accepts a path or URL; the checksum
+          # check matches against either.
+          swift sdk install /tmp/swift-android-sdk.tar.gz --checksum "$SDK_SHA"
+          swift sdk list
+      - name: Run setup-android-sdk script
+        # SwiftPM's swift-sdks root is platform-dependent —
+        # ~/Library/org.swift.swiftpm/swift-sdks on macOS,
+        # ${XDG_DATA_HOME:-~/.local/share}/swiftpm/swift-sdks on Linux —
+        # so resolve the script path with `find` rather than hard-coding
+        # a host-specific tree. Errors out clearly if the script can't
+        # be located, instead of falling through with an empty path.
+        run: |
+          export ANDROID_NDK_HOME=$HOME/android/android-ndk-r27d
+          SETUP_SH=$(find "$HOME" -path '*/swift-sdks/*/swift-android/scripts/setup-android-sdk.sh' -type f 2>/dev/null | head -1)
+          if [ -z "$SETUP_SH" ]; then
+            echo "::error::setup-android-sdk.sh not found under \$HOME — swift sdk install may have changed its layout"
+            find "$HOME" -path '*swift-sdks*' -maxdepth 8 -print 2>/dev/null | head -50
+            exit 1
+          fi
+          echo "Using $SETUP_SH"
+          "$SETUP_SH"
+      - name: Set up JDK 17
+        # AGP 8.5 requires JDK 17 (Java 21 trips a "no toolchain
+        # found" warning under AGP 8.5; AGP 8.7+ relaxes the
+        # constraint, but we pin AGP 8.5 in the scaffold so the
+        # workflow follows that pin).
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build swift-pwa CLI (host toolchain)
+        # Host build for the CLI; cross-compile happens via
+        # `--cross-compile-android` in the next step.
+        run: swift build --product swift-pwa
+      - name: Cross-compile Examples/HelloPWA + emit Gradle scaffold
+        run: |
+          cd Examples/HelloPWA
+          swift run --package-path ../.. swift-pwa build \
+            --target android \
+            --cross-compile-android \
+            --android-abis arm64-v8a
+      - name: Run gradle assembleDebug
+        # The vendored Gradle wrapper bootstraps Gradle 8.10.2 on
+        # first run; subsequent runs are cache hits. JAVA_HOME is
+        # picked up from the setup-java step.
+        run: |
+          cd Examples/HelloPWA/build/HelloPWA-android
+          ./gradlew --no-daemon assembleDebug
+      - name: Verify APK exists
+        run: |
+          APK=Examples/HelloPWA/build/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
+          test -f "$APK" || (echo "no APK at $APK" && exit 1)
+          ls -lh "$APK"
+      - name: Upload APK as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HelloPWA-debug-apk
+          path: Examples/HelloPWA/build/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
+
   lint:
     runs-on: macos-15
     steps:

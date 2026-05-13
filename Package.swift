@@ -173,6 +173,58 @@ let package = Package(
         webkitSystemLibraryTarget,
         gtkBackendTarget
     ] + (appIndicatorSystemLibraryTarget.map { [$0] } ?? []) + [
+        // MARK: - Android backend (android.webkit.WebView via a JNI C shim)
+
+        //
+        // Android's UI thread is owned by the JVM. Our Swift code
+        // compiles to a shared object loaded by a Kotlin `Activity`
+        // via `System.loadLibrary`. The C shim is the JNI boundary:
+        //   - inbound: Java calls JNI funcs that hand JSON frames to
+        //     Swift (`swiftpwa_android_ingest`).
+        //   - outbound: Swift calls C wrappers that re-enter the JVM
+        //     to drive `WebView.evaluateJavascript`, `WebView.loadUrl`,
+        //     and `Handler.post(Looper.getMainLooper())` for the
+        //     `MainThread.run` hook.
+        //
+        // The shim is a regular C target. NDK headers come from the
+        // Android Swift SDK install (Swift 6.1+); the build is
+        // gated to Android via `.when(platforms: [.android])`. On
+        // host platforms (macOS, Linux, Windows) the .swift sources
+        // are `#if os(Android)`-guarded so they compile to empty
+        // objects.
+
+        .target(
+            name: "CSwiftPWAAndroidJNI",
+            path: "Sources/CSwiftPWAAndroidJNI",
+            publicHeadersPath: "include",
+            cSettings: [
+                .define("_GNU_SOURCE", .when(platforms: [.android]))
+            ],
+            linkerSettings: [
+                // `liblog` carries `__android_log_print`, used by the
+                // shim's diagnostics. `libandroid` exposes `ANativeWindow`
+                // and friends (we don't use them yet in v0.5 but they're
+                // routinely needed by webview-adjacent code; pulling
+                // the link dep in now keeps follow-up work cheap).
+                .linkedLibrary("log", .when(platforms: [.android])),
+                .linkedLibrary("android", .when(platforms: [.android]))
+            ]
+        ),
+
+        .target(
+            name: "SwiftPWAAndroid",
+            dependencies: [
+                "SwiftPWACore",
+                // swift-crypto's `Crypto` module — same conditional
+                // wiring as the GTK / Windows backends, available
+                // for an Android updater backend in a future v0.5.x
+                // (not implemented yet).
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.android])),
+                .target(name: "CSwiftPWAAndroidJNI", condition: .when(platforms: [.android]))
+            ],
+            swiftSettings: swiftSettings
+        ),
+
         // MARK: - Windows backend (WebView2 via a C++ COM shim)
 
         //
@@ -238,7 +290,8 @@ let package = Package(
                 "SwiftPWACore",
                 .target(name: "SwiftPWAWebKit", condition: .when(platforms: [.macOS, .iOS])),
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
-                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows]))
+                .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
+                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
             ],
             swiftSettings: swiftSettings
         ),
@@ -262,6 +315,20 @@ let package = Package(
                 "SwiftPWACore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Crypto", package: "swift-crypto")
+            ],
+            // Vendored Gradle 8.10.2 wrapper that the Android bundler
+            // emits alongside the generated `MainActivity.kt` /
+            // `build.gradle.kts` so users can run `./gradlew
+            // assembleDebug` straight after `swift-pwa build --target
+            // android` — no separate Gradle install required. The
+            // four files (gradlew shell script, gradlew.bat, the
+            // version-pinning gradle-wrapper.jar, and
+            // gradle-wrapper.properties) are what `gradle wrapper`
+            // emits; we vendor them so the scaffold is offline-
+            // complete and the user doesn't need a system Gradle to
+            // bootstrap.
+            resources: [
+                .copy("Bundlers/AndroidWrapperResources")
             ],
             swiftSettings: swiftSettings
         ),
@@ -310,6 +377,14 @@ let package = Package(
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+                "_SwiftPWATestSupport"
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAAndroidTests",
+            dependencies: [
+                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings

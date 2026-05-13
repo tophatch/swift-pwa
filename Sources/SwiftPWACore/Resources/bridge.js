@@ -18,7 +18,7 @@
     const subscribes = new Map();   // id -> {onChunk, onError, onEnd}
 
     function post(frame) {
-        // Three native message channels, picked by what the platform
+        // Four native message channels, picked by what the platform
         // exposes:
         //   - WKWebView (macOS/iOS):
         //     window.webkit.messageHandlers.__SwiftPWA__post.postMessage(json)
@@ -28,11 +28,19 @@
         //   - WebView2 (Windows):
         //     window.chrome.webview.postMessage(json)
         //     (the inbound side of WebView2's host<->web message channel)
+        //   - android.webkit.WebView (Android):
+        //     window.__SwiftPWA__post.postMessage(json)
+        //     (an `@JavascriptInterface`-annotated object the Kotlin
+        //     SwiftPWABridge registers via addJavascriptInterface).
         const json = JSON.stringify(frame);
         const mh = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.__SwiftPWA__post;
         if (mh) { mh.postMessage(json); return; }
         if (window.chrome && window.chrome.webview && typeof window.chrome.webview.postMessage === "function") {
             window.chrome.webview.postMessage(json);
+            return;
+        }
+        if (window.__SwiftPWA__post && typeof window.__SwiftPWA__post.postMessage === "function") {
+            window.__SwiftPWA__post.postMessage(json);
             return;
         }
         throw new Error("swift-pwa bridge: native message handler unavailable");

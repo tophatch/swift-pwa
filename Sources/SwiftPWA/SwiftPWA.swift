@@ -12,13 +12,15 @@
     @_exported import SwiftPWAGTK
 #elseif os(Windows)
     @_exported import SwiftPWAWindows
+#elseif os(Android)
+    @_exported import SwiftPWAAndroid
 #endif
 
 import Foundation
 
 public enum SwiftPWA {
     /// Returns the platform-appropriate `AppRuntime`. Throws on
-    /// unsupported platforms (Android remains a stub through v0.3).
+    /// unsupported platforms.
     public static func runtime() throws -> any AppRuntime {
         #if canImport(WebKit) && (os(macOS) || os(iOS))
             return WebKitAppRuntime()
@@ -26,6 +28,8 @@ public enum SwiftPWA {
             return GTKAppRuntime()
         #elseif os(Windows)
             return WindowsAppRuntime()
+        #elseif os(Android)
+            return AndroidAppRuntime()
         #else
             throw BridgeError(
                 code: BridgeError.unimplemented,

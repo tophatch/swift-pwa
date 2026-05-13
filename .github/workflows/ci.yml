@@ -267,10 +267,22 @@ jobs:
           swift sdk install /tmp/swift-android-sdk.tar.gz --checksum "$SDK_SHA"
           swift sdk list
       - name: Run setup-android-sdk script
+        # SwiftPM's swift-sdks root is platform-dependent —
+        # ~/Library/org.swift.swiftpm/swift-sdks on macOS,
+        # ${XDG_DATA_HOME:-~/.local/share}/swiftpm/swift-sdks on Linux —
+        # so resolve the script path with `find` rather than hard-coding
+        # a host-specific tree. Errors out clearly if the script can't
+        # be located, instead of falling through with an empty path.
         run: |
           export ANDROID_NDK_HOME=$HOME/android/android-ndk-r27d
-          ~/Library/org.swift.swiftpm/swift-sdks/swift-6.2-RELEASE-android-0.1.artifactbundle/swift-android/scripts/setup-android-sdk.sh \
-            || $HOME/.swiftpm/swift-sdks/swift-6.2-RELEASE-android-0.1.artifactbundle/swift-android/scripts/setup-android-sdk.sh
+          SETUP_SH=$(find "$HOME" -path '*/swift-sdks/*/swift-android/scripts/setup-android-sdk.sh' -type f 2>/dev/null | head -1)
+          if [ -z "$SETUP_SH" ]; then
+            echo "::error::setup-android-sdk.sh not found under \$HOME — swift sdk install may have changed its layout"
+            find "$HOME" -path '*swift-sdks*' -maxdepth 8 -print 2>/dev/null | head -50
+            exit 1
+          fi
+          echo "Using $SETUP_SH"
+          "$SETUP_SH"
       - name: Set up JDK 17
         # AGP 8.5 requires JDK 17 (Java 21 trips a "no toolchain
         # found" warning under AGP 8.5; AGP 8.7+ relaxes the

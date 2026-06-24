@@ -85,13 +85,86 @@ struct InitTests {
         // The window title preserves the user's original string.
         #expect(appSwift.contains("title: \"test-app\""))
 
-        // pwa.json's `name` is the bundler's binary-lookup key, so it
-        // tracks the identifier; the human-facing display lives in
-        // window.title.
-        let manifestData = try Data(contentsOf: target.appendingPathComponent("pwa.json"))
-        let manifest = try JSONDecoder().decode(PWAManifest.self, from: manifestData)
-        #expect(manifest.name == "testApp")
+        // `name` is the human-facing display string (preserved verbatim);
+        // `executable_name` is the sanitized SwiftPM target the bundler
+        // locates under `.build/release/`. The two only diverge when
+        // sanitization changed something, as here.
+        let manifest = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
+        #expect(manifest.name == "test-app")
+        #expect(manifest.executableName == "testApp")
+        #expect(manifest.binaryName == "testApp")
         #expect(manifest.window.title == "test-app")
+    }
+
+    @Test("an identifier-safe name leaves executable_name unset")
+    func identifierSafeNameOmitsExecutableName() async throws {
+        let parent = tmpDir()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+
+        let target = parent.appendingPathComponent("MyApp")
+        try await Init.parse(["MyApp", "--path", target.path]).run()
+
+        let manifest = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
+        // "MyApp" is already a valid identifier, so there's no redundant
+        // executable_name — binaryName falls back to name.
+        #expect(manifest.name == "MyApp")
+        #expect(manifest.executableName == nil)
+        #expect(manifest.binaryName == "MyApp")
+    }
+
+    @Test("--in-place adopts an existing web app: merges pwa.json, keeps web/, adds only the shell")
+    func inPlaceAdoptsExistingApp() async throws {
+        let target = tmpDir()
+        defer { try? FileManager.default.removeItem(at: target) }
+        let fm = FileManager.default
+        try fm.createDirectory(at: target.appendingPathComponent("web"), withIntermediateDirectories: true)
+        try "<!doctype html><h1>existing</h1>".write(
+            to: target.appendingPathComponent("web/index.html"), atomically: true, encoding: .utf8
+        )
+        // Hand-written manifest with a custom window + a non-schema field.
+        try """
+        {
+          "id": "com.acme.game",
+          "name": "My Cool Game",
+          "version": "2.1.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "My Cool Game", "width": 800, "height": 600, "resizable": false, "fullscreen": false },
+          "customTeamField": "keep-me"
+        }
+        """.write(to: target.appendingPathComponent("pwa.json"), atomically: true, encoding: .utf8)
+
+        try await Init.parse(["My Cool Game", "--path", target.path, "--in-place"]).run()
+
+        // Native shell added.
+        #expect(fm.fileExists(atPath: target.appendingPathComponent("Package.swift").path))
+        #expect(fm.fileExists(atPath: target.appendingPathComponent("Sources/MyCoolGame/App.swift").path))
+
+        // Existing frontend untouched.
+        let web = try String(contentsOf: target.appendingPathComponent("web/index.html"), encoding: .utf8)
+        #expect(web == "<!doctype html><h1>existing</h1>")
+
+        // pwa.json merged, not overwritten: user values preserved, the
+        // non-schema field survives, missing sections filled, and
+        // executable_name pinned to the generated SwiftPM target.
+        let merged = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
+        #expect(merged.id == "com.acme.game")
+        #expect(merged.name == "My Cool Game")
+        #expect(merged.version == "2.1.0")
+        #expect(merged.window.width == 800)
+        #expect(merged.window.resizable == false)
+        #expect(merged.executableName == "MyCoolGame")
+        #expect(merged.android != nil) // section added by the merge
+        let rawMerged = try String(contentsOf: target.appendingPathComponent("pwa.json"), encoding: .utf8)
+        #expect(rawMerged.contains("customTeamField"))
+
+        // App.swift reflects the *existing* window block (800×600, not the
+        // 1024×768 default), proving the merge feeds the template.
+        let appSwift = try String(
+            contentsOf: target.appendingPathComponent("Sources/MyCoolGame/App.swift"), encoding: .utf8
+        )
+        #expect(appSwift.contains("Size(width: 800, height: 600)"))
+        #expect(appSwift.contains("resizable: false"))
     }
 
     @Test("sanitizeIdentifier covers the common name shapes")
@@ -123,29 +196,74 @@ struct InitTests {
         #expect(!appSwift.contains("Bundle.main.bundleURL.appendingPathComponent(\"web\")"))
     }
 
-    @Test("refuses to clobber an existing scaffolded project")
-    func refusesConflicts() async throws {
+    @Test("auto-adopts in place when a pwa.json already exists (no flag needed)")
+    func autoAdoptsOnExistingManifest() async throws {
         let target = tmpDir()
         defer { try? FileManager.default.removeItem(at: target) }
-        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
-        try "{}".write(
-            to: target.appendingPathComponent("pwa.json"),
-            atomically: true,
-            encoding: .utf8
+        let fm = FileManager.default
+        try fm.createDirectory(at: target, withIntermediateDirectories: true)
+        try """
+        { "id": "com.acme.app", "name": "Acme App", "version": "3.0.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "Acme App", "width": 640, "height": 480, "resizable": true, "fullscreen": false } }
+        """.write(to: target.appendingPathComponent("pwa.json"), atomically: true, encoding: .utf8)
+
+        // No --in-place flag: the existing pwa.json should trigger adoption.
+        try await Init.parse(["AcmeApp", "--path", target.path]).run()
+
+        #expect(fm.fileExists(atPath: target.appendingPathComponent("Package.swift").path))
+        // Existing manifest merged, not clobbered: user values kept, target pinned.
+        let merged = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
+        #expect(merged.id == "com.acme.app")
+        #expect(merged.version == "3.0.0")
+        #expect(merged.window.width == 640)
+        #expect(merged.executableName == "AcmeApp")
+    }
+
+    @Test("auto-adopts in place when only a web/ directory exists")
+    func autoAdoptsOnExistingWebDir() async throws {
+        let target = tmpDir()
+        defer { try? FileManager.default.removeItem(at: target) }
+        let fm = FileManager.default
+        try fm.createDirectory(at: target.appendingPathComponent("web"), withIntermediateDirectories: true)
+        try "<!doctype html><h1>mine</h1>".write(
+            to: target.appendingPathComponent("web/index.html"), atomically: true, encoding: .utf8
+        )
+
+        try await Init.parse(["MyApp", "--path", target.path]).run()
+
+        // Native shell added, a fresh pwa.json written, the frontend left alone.
+        #expect(fm.fileExists(atPath: target.appendingPathComponent("Package.swift").path))
+        #expect(fm.fileExists(atPath: target.appendingPathComponent("pwa.json").path))
+        let web = try String(contentsOf: target.appendingPathComponent("web/index.html"), encoding: .utf8)
+        #expect(web == "<!doctype html><h1>mine</h1>")
+    }
+
+    @Test("refuses to clobber an already-adopted project (native shell present)")
+    func refusesWhenAlreadyAdopted() async throws {
+        let target = tmpDir()
+        defer { try? FileManager.default.removeItem(at: target) }
+        let fm = FileManager.default
+        try fm.createDirectory(
+            at: target.appendingPathComponent("Sources/MyApp"), withIntermediateDirectories: true
+        )
+        // A pre-existing native shell (App.swift) marks an adopted project;
+        // re-running init must refuse rather than overwrite it.
+        try "// existing".write(
+            to: target.appendingPathComponent("Sources/MyApp/App.swift"), atomically: true, encoding: .utf8
         )
 
         let cmd = try Init.parse(["MyApp", "--path", target.path])
         do {
             try await cmd.run()
-            Issue.record("expected init to refuse overwriting pwa.json")
+            Issue.record("expected init to refuse overwriting an existing App.swift")
         } catch {
-            #expect(String(describing: error).contains("pwa.json"))
+            #expect(String(describing: error).contains("App.swift"))
         }
-        // Pre-existing pwa.json untouched.
+        // Pre-existing native shell untouched.
         let original = try String(
-            contentsOf: target.appendingPathComponent("pwa.json"),
-            encoding: .utf8
+            contentsOf: target.appendingPathComponent("Sources/MyApp/App.swift"), encoding: .utf8
         )
-        #expect(original == "{}")
+        #expect(original == "// existing")
     }
 }

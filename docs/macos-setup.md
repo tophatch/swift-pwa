@@ -87,6 +87,15 @@ The bundler:
 6. If `pwa.json.description` is set, writes a `Credits.html` so the
    description shows up as the body of the standard About panel.
 
+The bundle filename and the `CFBundleName` / `CFBundleDisplayName`
+Finder/dock label come from `name` (which may contain spaces, e.g.
+"My App.app"), while the executable inside `Contents/MacOS/` and
+`CFBundleExecutable` come from `executable_name` — the SwiftPM target
+name, which can't contain spaces. Set `executable_name` whenever `name`
+has a space; omit it when `name` is already identifier-safe and it falls
+back to `name`. See the [README](../README.md#configuring-pwajson) for
+the full rationale.
+
 ### About panel
 
 The bundler wires the standard About panel up automatically from

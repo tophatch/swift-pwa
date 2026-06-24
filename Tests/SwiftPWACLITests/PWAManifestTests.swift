@@ -28,4 +28,32 @@ struct PWAManifestTests {
         let decoded = try PWAManifest.load(from: tmp)
         #expect(decoded == original)
     }
+
+    @Test("executable_name round-trips and drives binaryName; otherwise falls back to name")
+    func executableNameRoundTrips() throws {
+        var m = PWAManifest(
+            id: "com.example.hi",
+            name: "Field Notes",
+            version: "1.0.0",
+            description: nil,
+            icon: nil,
+            web: .init(directory: "web"),
+            window: .init(title: "Field Notes")
+        )
+        // No executable_name yet → binaryName falls back to the display name.
+        #expect(m.binaryName == "Field Notes")
+
+        m.executableName = "FieldNotes"
+        #expect(m.binaryName == "FieldNotes")
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pwa-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try m.write(to: tmp)
+        let raw = try String(contentsOf: tmp, encoding: .utf8)
+        #expect(raw.contains("executable_name"))
+        let decoded = try PWAManifest.load(from: tmp)
+        #expect(decoded.executableName == "FieldNotes")
+        #expect(decoded.binaryName == "FieldNotes")
+    }
 }

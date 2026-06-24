@@ -1,6 +1,16 @@
 import ArgumentParser
 import Foundation
 
+/// Single source of truth for the swift-pwa version string. Stamped into
+/// the CLI's `--version` output so it matches the `SwiftPWA` library a
+/// generated project resolves (both come from the same release). Bump
+/// this in lockstep with the git tag / the `CHANGELOG.md` heading when
+/// cutting a release — there's no SwiftPM hook to inject the package
+/// version into a host-tool build, so it lives here by hand.
+public enum SwiftPWAVersion {
+    public static let current = "0.5.1"
+}
+
 /// Root command for the `swift-pwa` CLI. Lives in the
 /// `SwiftPWACLISupport` library rather than the `swift-pwa-cli`
 /// executable target so the test target can depend on the library
@@ -20,7 +30,7 @@ public struct SwiftPWACLIRoot: AsyncParsableCommand {
     public static let configuration = CommandConfiguration(
         commandName: "swift-pwa",
         abstract: "Build, run, and bundle Swift-native PWA apps.",
-        version: "0.1.0",
+        version: SwiftPWAVersion.current,
         subcommands: [Init.self, Dev.self, Build.self, Updater.self],
         defaultSubcommand: nil
     )

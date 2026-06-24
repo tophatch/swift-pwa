@@ -25,12 +25,18 @@ struct MacAppBundler {
         let binDir = projectRoot
             .appendingPathComponent(".build")
             .appendingPathComponent("release")
-        let binary = binDir.appendingPathComponent(manifest.name)
+        // The built binary is named after the SwiftPM target
+        // (`manifest.binaryName`), which may differ from the human-facing
+        // display `name` used for the `.app` filename / CFBundleName.
+        let exe = manifest.binaryName
+        let binary = binDir.appendingPathComponent(exe)
         guard FileManager.default.fileExists(atPath: binary.path) else {
-            throw BundlerError.binaryMissing(binary)
+            throw BundlerError.binaryMissing(binary, expectedName: exe)
         }
 
-        // 2. .app skeleton
+        // 2. .app skeleton — the bundle filename is the display `name`
+        // (spaces allowed: "Field Notes.app"), the executable inside it
+        // is `exe` (the SwiftPM target).
         let app = outputDir.appendingPathComponent("\(manifest.name).app")
         if FileManager.default.fileExists(atPath: app.path) {
             try FileManager.default.removeItem(at: app)
@@ -39,7 +45,7 @@ struct MacAppBundler {
         let resourcesDir = app.appendingPathComponent("Contents/Resources")
         try FileManager.default.createDirectory(at: macOSDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: resourcesDir, withIntermediateDirectories: true)
-        try FileManager.default.copyItem(at: binary, to: macOSDir.appendingPathComponent(manifest.name))
+        try FileManager.default.copyItem(at: binary, to: macOSDir.appendingPathComponent(exe))
 
         // 3. Info.plist
         let plist = InfoPlistGenerator.macOS(manifest: manifest)
@@ -114,14 +120,27 @@ struct MacAppBundler {
 }
 
 enum BundlerError: Error, CustomStringConvertible {
-    case binaryMissing(URL)
+    case binaryMissing(URL, expectedName: String)
     case toolMissing(String)
     case shell(Int32, String)
     case iosSimulatorRuntimeMissing
 
     var description: String {
         switch self {
-        case let .binaryMissing(url): "expected built binary at \(url.path)"
+        case let .binaryMissing(url, name):
+            // The overwhelmingly common cause is a mismatch between the
+            // name the bundler looks for (pwa.json `name` /
+            // `executable_name`) and the SwiftPM target that actually
+            // built — point straight at it rather than just reporting the
+            // missing path.
+            """
+            expected built binary at \(url.path)
+            The build succeeded but produced no executable named '\(name)'. This usually means \
+            pwa.json's `name` (or `executable_name`) doesn't match the SwiftPM target name in \
+            Package.swift. The target name can't contain spaces; set pwa.json `name` to your \
+            human-facing label and `executable_name` to the SwiftPM target name (the value after \
+            `name:` in Package.swift).
+            """
         case let .toolMissing(name): "required tool not on PATH: \(name)"
         case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
         case .iosSimulatorRuntimeMissing:

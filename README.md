@@ -64,6 +64,15 @@ MyApp/
     └── index.html             # your frontend's entry point
 ```
 
+`build` operates on this scaffold — it runs `swift build` against `Package.swift`, so `pwa.json` + `web/` on their own aren't buildable. Already have a web app? `init` adopts it automatically — run it from a directory that already has a `web/` or `pwa.json` and it adds only the native shell (`Package.swift` + `Sources/`), leaves your `web/` untouched, and merges any missing fields into an existing `pwa.json` rather than overwriting it:
+
+```bash
+cd my-existing-web-app   # has web/ (or a hand-written pwa.json) already
+swift-pwa init MyApp     # detects the existing app and adopts it in place
+```
+
+Pass `--in-place` to force this for a frontend in a non-standard layout (e.g. a custom `dist/` with no `pwa.json` yet).
+
 ### Where the web source goes
 
 Anything in `web/` is your PWA frontend — plain HTML/CSS/JS, or the build output of React/Vue/Svelte/whatever. The bundler copies the directory verbatim into the app and serves it through a custom `pwa://localhost/` scheme so relative URLs resolve cleanly without needing a local dev server.
@@ -81,13 +90,14 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
 ```json
 {
     "id": "com.example.myapp",
-    "name": "MyApp",
+    "name": "My App",
+    "executable_name": "MyApp",
     "version": "0.1.0",
     "description": "An optional one-liner.",
     "icon": "icon.png",
     "web": { "directory": "web", "entry": "index.html" },
     "window": {
-        "title": "MyApp",
+        "title": "My App",
         "width": 1024,
         "height": 768,
         "resizable": true,
@@ -111,12 +121,18 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
 
 Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `linux` sections are optional — omit any platform you don't ship to. `icon` should be a 1024×1024 PNG; on macOS it's converted to `.icns`, on Linux it's embedded in the AppImage. `category` on macOS is the `LSApplicationCategoryType` UTI shown in the App Store / Finder. `description` and `macos.copyright` populate the **About** panel (the description becomes the body text, the copyright shows under the version).
 
+**`name` vs `executable_name`.** `name` is the human-facing label — the `.app` filename, `CFBundleName` / `CFBundleDisplayName`, the `.desktop` `Name=` — and is allowed to contain spaces. The built binary, though, is `.build/release/<target>` where `<target>` is the SwiftPM target name in `Package.swift`, which **can't** contain spaces. Set `executable_name` to that target name whenever `name` has a space (`init` does this for you). When `name` is already identifier-safe, omit `executable_name` and it falls back to `name`. (`linux.executable_name` still overrides this for the Linux backend specifically.)
+
+**`window` is build-time metadata, not the runtime config.** The generated `Sources/<name>/App.swift` builds the window from a `WindowConfig` literal, and *that* is what the running app uses. `init` seeds the literal from `pwa.json`'s `window` block, but editing `pwa.json`'s `window.*` afterwards has **no runtime effect** — change the window in `App.swift` (or keep the two in sync by hand). The fields here drive bundle metadata and the initial scaffold only.
+
 ### Build and run
 
 ```bash
-swift run swift-pwa build --target macos
+swift run swift-pwa build          # --target defaults to the host (macos/linux/windows)
 open ./build/MyApp.app
 ```
+
+`--target` defaults to the desktop platform you're building on, so you can omit it for a host build; pass it explicitly for cross-targets (`--target ios`, `--target android`) or to bundle for another desktop OS.
 
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 

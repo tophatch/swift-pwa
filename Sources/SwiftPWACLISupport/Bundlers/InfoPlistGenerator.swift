@@ -6,7 +6,10 @@ enum InfoPlistGenerator {
         var plist = InfoPlist()
         plist["CFBundleDevelopmentRegion"] = "en"
         plist["CFBundleDisplayName"] = manifest.name
-        plist["CFBundleExecutable"] = manifest.name
+        // CFBundleExecutable must match the on-disk binary in
+        // Contents/MacOS — that's the SwiftPM target name, which may
+        // differ from the human-facing display `name`.
+        plist["CFBundleExecutable"] = manifest.binaryName
         plist["CFBundleIdentifier"] = manifest.macos?.bundleIdentifier ?? manifest.id
         plist["CFBundleInfoDictionaryVersion"] = "6.0"
         plist["CFBundleName"] = manifest.name
@@ -32,7 +35,7 @@ enum InfoPlistGenerator {
         var plist = InfoPlist()
         plist["CFBundleDevelopmentRegion"] = "en"
         plist["CFBundleDisplayName"] = manifest.name
-        plist["CFBundleExecutable"] = manifest.name
+        plist["CFBundleExecutable"] = manifest.binaryName
         plist["CFBundleIdentifier"] = manifest.ios?.bundleIdentifier ?? manifest.id
         plist["CFBundleInfoDictionaryVersion"] = "6.0"
         plist["CFBundleName"] = manifest.name

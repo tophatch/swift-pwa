@@ -33,7 +33,7 @@ jobs:
         run: |
           mkdir dist
           cp .build/release/swift-pwa dist/${{ matrix.artifact }}
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: dist/${{ matrix.artifact }}
@@ -56,8 +56,10 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          branch: swift-6.1.2-release
-          tag: 6.1.2-RELEASE
+          # `swift-version` / `swift-build` replaced the deprecated
+          # `branch` / `tag` inputs; values are unchanged.
+          swift-version: swift-6.1.2-release
+          swift-build: 6.1.2-RELEASE
       - name: Install WebView2 SDK + WIL (NuGet)
         shell: pwsh
         run: |
@@ -78,7 +80,7 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item -Path .build\release\swift-pwa.exe -Destination dist\swift-pwa-windows-x86_64.exe
-      - uses: actions/upload-artifact@v5
+      - uses: actions/upload-artifact@v7
         with:
           name: swift-pwa-windows-x86_64
           path: dist/swift-pwa-windows-x86_64.exe
@@ -90,7 +92,7 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/download-artifact@v6
+      - uses: actions/download-artifact@v8
         with:
           path: dist
       - name: Create GitHub Release

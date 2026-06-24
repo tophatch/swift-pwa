@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-06-24
+
 ### Added
 
 - **`swift-pwa dev` now runs a built-in live-reload server — no JS framework or external dev server required.** With no `--server`, it serves the project's `web/` directory over `http://127.0.0.1:<port>` (hand-rolled POSIX socket HTTP server, no dependency), injects a one-line SSE live-reload client into HTML responses, watches the directory tree, and refreshes the app on any file change. `--server <url>` keeps the previous behavior (point at your own Vite/etc. with its own HMR). Both set `PWA_DEV_SERVER`, and the generated `App.swift` now honors it — loading the dev URL when set, falling back to the bundled assets otherwise (previously `PWA_DEV_SERVER` was documented but unread, so `dev` was a no-op). The built-in server is macOS/Linux only for now; Windows still needs `--server`. Replaces the v0.5 "`dev` just sets an env var" behavior.

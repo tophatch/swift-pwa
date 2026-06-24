@@ -202,8 +202,12 @@ enum AndroidTemplates {
         """
     }
 
-    static func androidManifestXml(packageId: String, label: String) -> String {
-        """
+    static func androidManifestXml(packageId: String, label: String, hasIcon: Bool) -> String {
+        // When the project ships an icon, reference the launcher mipmap the
+        // bundler drops into res/mipmap/. aapt/Gradle handle density scaling
+        // from the single source PNG at build time — no pre-resizing needed.
+        let iconAttr = hasIcon ? "\n            android:icon=\"@mipmap/ic_launcher\"" : ""
+        return """
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"
                   xmlns:tools="http://schemas.android.com/tools">
@@ -233,7 +237,7 @@ enum AndroidTemplates {
             <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
 
             <application
-                android:label="\(label)"
+                android:label="\(label)"\(iconAttr)
                 android:allowBackup="true"
                 android:supportsRtl="true"
                 android:usesCleartextTraffic="false"

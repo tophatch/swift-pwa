@@ -49,6 +49,15 @@ struct AndroidBundlerUnitTests {
 
     // MARK: - Template render
 
+    @Test("AndroidManifest references the launcher mipmap only when an icon is present")
+    func manifestIconAttribute() {
+        let withIcon = AndroidTemplates.androidManifestXml(packageId: "com.example.hi", label: "Hi", hasIcon: true)
+        #expect(withIcon.contains("android:icon=\"@mipmap/ic_launcher\""))
+
+        let withoutIcon = AndroidTemplates.androidManifestXml(packageId: "com.example.hi", label: "Hi", hasIcon: false)
+        #expect(!withoutIcon.contains("android:icon"))
+    }
+
     @Test("appBuildGradleKts without signing skips the signingConfigs block")
     func gradleNoSigning() {
         let kts = AndroidTemplates.appBuildGradleKts(

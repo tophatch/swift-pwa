@@ -69,9 +69,10 @@ struct WindowsBundler {
                 cwd: projectRoot,
                 envOverrides: resolvePackageEnvOverrides()
             )
-            // The .exe is named after the SwiftPM target (`binaryName`),
-            // which may differ from the human-facing display `name`.
-            let exeName = manifest.binaryName + ".exe"
+            // The .exe is named after the SwiftPM target, resolved from
+            // the package rather than guessed from the display `name`.
+            let resolvedExe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
+            let exeName = resolvedExe + ".exe"
             let buildDir = projectRoot.appendingPathComponent(".build")
             // SwiftPM creates `.build/release` as a symlink to the
             // arch-qualified output directory (e.g.

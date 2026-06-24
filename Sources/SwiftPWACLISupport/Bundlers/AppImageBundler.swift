@@ -20,12 +20,15 @@ struct AppImageBundler {
             ["swift", "build", "-c", "release"],
             cwd: projectRoot
         )
+        // SwiftPM target / product name, resolved from the package
+        // rather than guessed from the display `name`.
+        let resolvedExe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
         let binary = projectRoot
             .appendingPathComponent(".build")
             .appendingPathComponent("release")
-            .appendingPathComponent(manifest.binaryName)
+            .appendingPathComponent(resolvedExe)
         guard FileManager.default.fileExists(atPath: binary.path) else {
-            throw BundlerError.binaryMissing(binary, expectedName: manifest.binaryName)
+            throw BundlerError.binaryMissing(binary, expectedName: resolvedExe)
         }
 
         // 2. Lay out an AppDir.
@@ -43,9 +46,8 @@ struct AppImageBundler {
         )
 
         // `linux.executable_name` wins for the Linux backend specifically;
-        // otherwise fall back to the cross-platform `binaryName`
-        // (`executable_name` ?? `name`).
-        let exeName = manifest.linux?.executableName ?? manifest.binaryName
+        // otherwise use the resolved SwiftPM product name.
+        let exeName = manifest.linux?.executableName ?? resolvedExe
         let installedBin = appDir.appendingPathComponent("usr/bin/\(exeName)")
         try FileManager.default.copyItem(at: binary, to: installedBin)
 

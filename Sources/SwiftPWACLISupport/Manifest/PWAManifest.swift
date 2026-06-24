@@ -6,26 +6,21 @@ import Foundation
 public struct PWAManifest: Codable, Sendable, Equatable {
     public var id: String // reverse-DNS, e.g. "com.example.hello"
     public var name: String // human-readable display name; may contain spaces
-    /// The executable / SwiftPM target name. Optional — when unset,
-    /// the bundlers fall back to `name` (the historical behavior).
+    /// Explicit override for the executable / SwiftPM target name the
+    /// bundlers look for. **Usually unnecessary** — the bundlers discover
+    /// the built executable's name from the package itself (via `swift
+    /// package describe`), so a `name` with spaces ("Field Notes") works
+    /// even though the SwiftPM target ("FieldNotes") can't contain them.
     ///
-    /// This exists because `name` is the *human-facing display* string
-    /// (`CFBundleName` / `CFBundleDisplayName`, the `.app` filename, the
-    /// `.desktop` `Name=`) and is allowed to contain spaces, while the
-    /// built binary is `.build/release/<target>` where `<target>` is the
-    /// SwiftPM target name from `Package.swift` — which *cannot* contain
-    /// spaces (it has to be a valid module identifier). Setting `name`
-    /// to "Field Notes" with no `executable_name` makes the bundler
-    /// look for `.build/release/Field Notes` (the target is still
-    /// `FieldNotes`) and fail late with a confusing "binary missing".
-    ///
-    /// So: set `name` to the label you want in Finder / the dock, and
-    /// `executable_name` to your SwiftPM target name. When `name` is
-    /// already identifier-safe (no spaces), `executable_name` can be
-    /// omitted. Honored on every platform (macOS / iOS `.app` +
-    /// `CFBundleExecutable` + xcodebuild scheme, Linux AppImage binary).
-    /// `linux.executable_name`, when set, still overrides this for the
-    /// Linux backend specifically.
+    /// Set this only when automatic discovery can't pick a single answer
+    /// — chiefly a package that declares **more than one executable
+    /// product** (so the bundler can't tell which one is the app). It
+    /// must exactly match a SwiftPM target name in `Package.swift` (no
+    /// whitespace). When set, it takes precedence over discovery on every
+    /// platform (macOS / iOS `.app` + `CFBundleExecutable` + xcodebuild
+    /// scheme, Linux AppImage binary, Windows `.exe`, Android
+    /// `lib<name>.so`). `linux.executable_name`, when set, still overrides
+    /// this for the Linux backend specifically.
     public var executableName: String?
     public var version: String // e.g. "1.0.0"
     public var description: String?
@@ -38,10 +33,10 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var android: AndroidSection?
     public var updater: UpdaterSection?
 
-    /// The name of the built executable / SwiftPM target the bundlers
-    /// look for under `.build/release/`. `executableName` when set,
-    /// otherwise `name` (the historical behavior). Note `linux`-specific
-    /// overrides still apply on top of this in `AppImageBundler`.
+    /// Last-resort fallback for the executable name: `executableName`
+    /// when set, otherwise `name`. The bundlers prefer
+    /// `ExecutableNameResolver` (which asks SwiftPM for the real product
+    /// name); this is used only when that probe can't run.
     public var binaryName: String {
         executableName ?? name
     }

@@ -91,7 +91,6 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
 {
     "id": "com.example.myapp",
     "name": "My App",
-    "executable_name": "MyApp",
     "version": "0.1.0",
     "description": "An optional one-liner.",
     "icon": "icon.png",
@@ -121,7 +120,7 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
 
 Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `linux` sections are optional — omit any platform you don't ship to. `icon` should be a 1024×1024 PNG; on macOS it's converted to `.icns`, on Linux it's embedded in the AppImage. `category` on macOS is the `LSApplicationCategoryType` UTI shown in the App Store / Finder. `description` and `macos.copyright` populate the **About** panel (the description becomes the body text, the copyright shows under the version).
 
-**`name` vs `executable_name`.** `name` is the human-facing label — the `.app` filename, `CFBundleName` / `CFBundleDisplayName`, the `.desktop` `Name=` — and is allowed to contain spaces. The built binary, though, is `.build/release/<target>` where `<target>` is the SwiftPM target name in `Package.swift`, which **can't** contain spaces. Set `executable_name` to that target name whenever `name` has a space (`init` does this for you). When `name` is already identifier-safe, omit `executable_name` and it falls back to `name`. (`linux.executable_name` still overrides this for the Linux backend specifically.)
+**`name` is the human-facing label** — the `.app` filename, `CFBundleName` / `CFBundleDisplayName`, the `.desktop` `Name=` — and may contain spaces (`"My App"`). The built binary, by contrast, is named after the SwiftPM target in `Package.swift`, which **can't** contain spaces. You don't have to reconcile the two: the bundlers discover the real target name from the package itself (via `swift package describe`), so `"name": "My App"` just works even though the target is `MyApp`. The optional **`executable_name`** is an override for the rare case where discovery is ambiguous — chiefly a package with **more than one executable product**; set it to the target you want bundled. (`linux.executable_name` still overrides this for the Linux backend specifically.)
 
 **`window` is build-time metadata, not the runtime config.** The generated `Sources/<name>/App.swift` builds the window from a `WindowConfig` literal, and *that* is what the running app uses. `init` seeds the literal from `pwa.json`'s `window` block, but editing `pwa.json`'s `window.*` afterwards has **no runtime effect** — change the window in `App.swift` (or keep the two in sync by hand). The fields here drive bundle metadata and the initial scaffold only.
 

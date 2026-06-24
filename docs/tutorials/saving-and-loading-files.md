@@ -67,14 +67,9 @@ your-app/
     …
 ```
 
-### A quick word on names
+### A quick word on the app name
 
-In `pwa.json` you'll see two name fields, and it's worth knowing the difference:
-
-- **`name`** is the friendly label people see — in the window title, the dock, the Finder. It can have spaces: `"Field Notes"`.
-- **`executable_name`** is the internal program name the build system uses. It **can't** have spaces: `"FieldNotes"`.
-
-`init` fills both in for you. If your name has no spaces to begin with, you'll only see `name` — that's fine.
+In `pwa.json`, **`name`** is the friendly label people see — the window title, the dock, the Finder. It can have spaces: `"Field Notes"`. You don't have to do anything special for that; swift-pwa figures out the internal program name from your project automatically. (There's an optional `executable_name` field, but you only need it in the unusual case of a project that builds more than one app — ignore it otherwise.)
 
 ---
 

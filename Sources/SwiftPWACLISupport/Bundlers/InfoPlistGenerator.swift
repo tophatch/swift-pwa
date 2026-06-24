@@ -2,14 +2,14 @@ import Foundation
 
 /// Generates `Info.plist` content for macOS / iOS bundles from a `PWAManifest`.
 enum InfoPlistGenerator {
-    static func macOS(manifest: PWAManifest) -> InfoPlist {
+    static func macOS(manifest: PWAManifest, executableName: String) -> InfoPlist {
         var plist = InfoPlist()
         plist["CFBundleDevelopmentRegion"] = "en"
         plist["CFBundleDisplayName"] = manifest.name
         // CFBundleExecutable must match the on-disk binary in
         // Contents/MacOS — that's the SwiftPM target name, which may
         // differ from the human-facing display `name`.
-        plist["CFBundleExecutable"] = manifest.binaryName
+        plist["CFBundleExecutable"] = executableName
         plist["CFBundleIdentifier"] = manifest.macos?.bundleIdentifier ?? manifest.id
         plist["CFBundleInfoDictionaryVersion"] = "6.0"
         plist["CFBundleName"] = manifest.name
@@ -31,11 +31,11 @@ enum InfoPlistGenerator {
         return plist
     }
 
-    static func iOS(manifest: PWAManifest, launchStoryboardName: String? = nil) -> InfoPlist {
+    static func iOS(manifest: PWAManifest, executableName: String, launchStoryboardName: String? = nil) -> InfoPlist {
         var plist = InfoPlist()
         plist["CFBundleDevelopmentRegion"] = "en"
         plist["CFBundleDisplayName"] = manifest.name
-        plist["CFBundleExecutable"] = manifest.binaryName
+        plist["CFBundleExecutable"] = executableName
         plist["CFBundleIdentifier"] = manifest.ios?.bundleIdentifier ?? manifest.id
         plist["CFBundleInfoDictionaryVersion"] = "6.0"
         plist["CFBundleName"] = manifest.name

@@ -38,14 +38,28 @@ struct BuildPreflightTests {
         }
     }
 
-    @Test("a name with whitespace and no executable_name is rejected up front")
-    func whitespaceNameRejected() throws {
+    @Test("a name with whitespace is fine on its own (the package probe resolves the real target)")
+    func whitespaceNameAllowed() throws {
+        let root = try tmpDir()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try "// pkg".write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
+        // No executable_name: a spaced display name must NOT be rejected —
+        // the bundler discovers the SwiftPM target name from the package.
+        try Build.preflight(manifest: manifest(name: "Field Notes"), projectRoot: root)
+    }
+
+    @Test("an explicit executable_name with whitespace is rejected up front")
+    func whitespaceExecutableNameRejected() throws {
         let root = try tmpDir()
         defer { try? FileManager.default.removeItem(at: root) }
         try "// pkg".write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
         do {
-            try Build.preflight(manifest: manifest(name: "Field Notes"), projectRoot: root)
-            Issue.record("expected preflight to reject a whitespace executable name")
+            // executable_name must name a SwiftPM target — whitespace can't.
+            try Build.preflight(
+                manifest: manifest(name: "Field Notes", executableName: "Field Notes"),
+                projectRoot: root
+            )
+            Issue.record("expected preflight to reject a whitespace executable_name")
         } catch {
             #expect(String(describing: error).contains("executable_name"))
         }
@@ -56,8 +70,6 @@ struct BuildPreflightTests {
         let root = try tmpDir()
         defer { try? FileManager.default.removeItem(at: root) }
         try "// pkg".write(to: root.appendingPathComponent("Package.swift"), atomically: true, encoding: .utf8)
-        // Should not throw: display name has a space, but the SwiftPM
-        // target name (executable_name) doesn't.
         try Build.preflight(
             manifest: manifest(name: "Field Notes", executableName: "FieldNotes"),
             projectRoot: root

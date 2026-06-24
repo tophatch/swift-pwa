@@ -219,7 +219,17 @@ The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `s
 ## Roadmap
 
 - **v0.5** (released) — Android backend at desktop parity: Swift target, JNI shim, Kotlin / Gradle scaffold, full plugin set including streaming `updater.install` events, `setFullscreen` via `WindowInsetsControllerCompat`, multi-window via Activity-per-window, and transparent SAF `content://` URI handling in `Fs`. CI runs the cross-compile + `assembleDebug` pipeline on every push. Wiring lives in [docs/android-setup.md](docs/android-setup.md); the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md).
-- **v0.6+** — GTK4 tray, typed JS↔Swift codegen layer, hot-reload dev server, notarization automation, delta updates, mandatory-update kill-switch (`min_supported_version`).
+- **v0.5.1** (released) — CLI developer-experience pass for adopting an existing web app: `pwa.json` `executable_name` (decouple display name from the SwiftPM target), `swift-pwa init` in-place adoption (auto-detected), host-default `--target`, `App.swift` seeded from the manifest `window` block, and actionable `build` preflight errors.
+
+Next up, in priority order:
+
+1. **Verify + harden the desktop runtime updater.** The `UpdaterPlugin` runtime is marked **Untested** on all five desktop platforms (see the feature-matrix footnote 6) — only Android's `PackageInstaller` path is exercised end-to-end. The publishing side (`swift-pwa updater keygen` / `sign` / `manifest`, Ed25519, the manifest format) is solid; what's unverified is each backend's `Updater.installAndRelaunch` (download → signature-verify → atomic swap → relaunch). Goal: drive a real check→download→install→relaunch on macOS / Windows / Linux (AppImage), flip those matrix cells to `Yes`, and add integration coverage. This unblocks the two updater items below. Context: [docs/auto-updates.md](docs/auto-updates.md).
+2. **GTK4 tray.** `TrayPlugin` is the last plugin-parity gap — `Yes` on GTK3, `—` on GTK4 (matrix). GTK4 dropped `GtkStatusIcon`; needs a `StatusNotifierItem` (libayatana-appindicator / SNI D-Bus) implementation behind the existing `SystemTray` protocol so the cross-platform API is unchanged. Document any Wayland caveats in [docs/linux-setup.md](docs/linux-setup.md).
+3. **Delta updates** — ship binary diffs instead of full artifacts to cut update download size. Builds on (1); extend the publishing CLI to emit per-version patches and the runtime to apply them.
+4. **Mandatory-update kill-switch (`min_supported_version`)** — let a manifest force-upgrade clients below a floor. Called out as a known gap in [docs/auto-updates.md](docs/auto-updates.md); also builds on (1).
+5. **Notarization automation.** The macOS bundler currently only *prints* the `xcrun notarytool` command ([docs/macos-setup.md](docs/macos-setup.md) §5) — automate submit → poll → staple behind a `swift-pwa build` flag.
+6. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
+7. **Hot-reload dev server** — have `swift-pwa dev` watch the `web/` directory and live-reload the webview on change.
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.
 

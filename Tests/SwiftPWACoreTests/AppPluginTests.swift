@@ -56,6 +56,32 @@ struct AppPluginTests {
         _ = try JSONDecoder().decode(StringResult.self, from: data)
     }
 
+    @Test("app.dataDir returns a created, writable directory path")
+    func dataDir() async throws {
+        let app = makeApp()
+        let result = await dispatch("app.dataDir", payload: Data("{}".utf8), on: app)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        let out = try JSONDecoder().decode(StringResult.self, from: data)
+        #expect(!out.value.isEmpty)
+        var isDir: ObjCBool = false
+        #expect(FileManager.default.fileExists(atPath: out.value, isDirectory: &isDir))
+        #expect(isDir.boolValue)
+    }
+
+    @Test("app.cacheDir returns a created directory path, distinct from dataDir")
+    func cacheDir() async throws {
+        let app = makeApp()
+        let dataResult = await dispatch("app.dataDir", payload: Data("{}".utf8), on: app)
+        let cacheResult = await dispatch("app.cacheDir", payload: Data("{}".utf8), on: app)
+        guard case let .ok(dataData) = dataResult, case let .ok(cacheData) = cacheResult else {
+            Issue.record("expected ok"); return
+        }
+        let dataPath = try JSONDecoder().decode(StringResult.self, from: dataData).value
+        let cachePath = try JSONDecoder().decode(StringResult.self, from: cacheData).value
+        #expect(FileManager.default.fileExists(atPath: cachePath))
+        #expect(dataPath != cachePath)
+    }
+
     @Test("AppPlugin reports its own name on install")
     func pluginName() {
         let app = makeApp()

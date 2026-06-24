@@ -128,7 +128,14 @@ jobs:
         run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
 
   windows:
-    runs-on: windows-latest
+    # Pinned to windows-2022 (matching release.yml) rather than
+    # windows-latest. The newer runner image ships MSVC 14.51 (VS18),
+    # whose STL hard-errors with `STL1000: Unexpected compiler version,
+    # expected Clang 20 or newer` against the older Clang bundled in
+    # Swift 6.1.2 — it fails the CWebView2Shim C++ compile before any
+    # Swift builds. Stay on 2022's MSVC until the pinned Swift toolchain
+    # ships a Clang the latest MSVC STL accepts.
+    runs-on: windows-2022
     # The Windows backend (`SwiftPWAWindows` + `CWebView2Shim`) needs:
     #   1. The MSVC dev environment (CRT headers / libs on INCLUDE / LIB).
     #   2. Swift for Windows.

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-06-24
+
 ### Changed
 
 - **The bundlers now discover the executable name from the package itself, so `executable_name` is rarely needed.** Previously the binary the bundler looked for at `.build/release/<X>` was derived from `pwa.json` (`executable_name ?? name`), which meant a `name` with spaces *required* an `executable_name` override or the build failed late. Now a new `ExecutableNameResolver` runs `swift package describe --type json` and uses the package's sole executable product as `<X>` — so `"name": "My App"` builds correctly with no `executable_name` at all (verified end-to-end: a spaced-name project with no override produces `My App.app` containing `Contents/MacOS/MyApp`, `CFBundleExecutable = MyApp`). `executable_name` is now an *override*, needed only when discovery is ambiguous (a package declaring more than one executable product); it still wins when set, and `linux.executable_name` still overrides for Linux. Applied across all five bundlers (macOS `.app`/`CFBundleExecutable`, iOS xcodebuild `-scheme`/`CFBundleExecutable`, Linux AppImage, Windows `.exe`, Android `lib<name>.so`). Falls back to the old `executable_name ?? name` if the probe can't run.

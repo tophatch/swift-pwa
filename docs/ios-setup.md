@@ -273,15 +273,18 @@ must be HTTPS — iOS rejects http manifests outright.
   `openDirectory` are routed through `UIDocumentPickerViewController`
   in opening / folder mode. `dialog.saveFile` logs a one-shot
   stderr warning the first time it is called.
-- **`pwa.json.icon` only feeds the launch screen on iOS.** When
-  set, the bundler generates a minimal `LaunchScreen.storyboard`
-  with the icon centered on a black background and compiles it via
-  `ibtool` — that handles the launch frame. The home-screen icon
-  still falls back to iOS's generic placeholder; full asset-catalog
-  generation (sized App Icons, alternate-icon support, dark/tinted
-  variants) is queued. To customize the launch screen
-  beyond "icon on black", drop your own compiled `LaunchScreen.storyboardc`
-  into `<App>.app/` after the build for now.
+- **`pwa.json.icon` drives both the home-screen App Icon and the
+  launch screen.** From the single 1024×1024 PNG the bundler compiles
+  a real `AppIcon` via `actool` (a single "universal" asset — Xcode
+  generates the full size set — and the resulting `CFBundleIcons*` keys
+  are merged into `Info.plist`), and also generates a minimal
+  `LaunchScreen.storyboard` with the icon centered on a black background
+  (compiled via `ibtool`). App-icon generation is best-effort: if the
+  icon is missing / not a PNG, or `actool` can't run, the build falls
+  back to the system default rather than failing. Alternate-icon support
+  and dark/tinted icon variants are still queued. To customize the
+  launch screen beyond "icon on black", drop your own compiled
+  `LaunchScreen.storyboardc` into `<App>.app/` after the build for now.
 
 ## Reporting issues
 

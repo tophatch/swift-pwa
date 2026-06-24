@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-`swift-pwa` is a Swift-native thin-client PWA wrapper around system webviews — a Tauri/Wails analogue for the Swift world. One Swift package, one JS API (`__SWIFT_PWA__.invoke()` / `subscribe()`), one CLI (`swift-pwa`) that produces `.app`, `.ipa`, `.AppImage`, and Windows portable / MSIX from the same source. Status: v0.3 in flight on `main` (Windows WinRT toasts, Per-Monitor V2 DPI, MSIX packaging, opt-in WebView2 Evergreen Bootstrapper, Windows release-matrix binary); last tagged release is v0.2.0.
+`swift-pwa` is a Swift-native thin-client PWA wrapper around system webviews — a Tauri/Wails analogue for the Swift world. One Swift package, one JS API (`__SWIFT_PWA__.invoke()` / `subscribe()`), one CLI (`swift-pwa`) that produces `.app`, `.ipa`, `.AppImage`, and Windows portable / MSIX from the same source. Status: last tagged release is v0.5.2 (all five platforms first-class). An unreleased CLI "friendliness wave" is on `main`: `init` scaffolds a GitHub Actions release workflow (+ a `generate-ci` subcommand), one `pwa.json` icon PNG becomes the iOS + Android app icon (not just macOS), `swift-pwa doctor` checks per-target toolchain prerequisites, `build --target macos --notarize` automates notarization, and `swift-pwa dev` runs a built-in live-reload server (POSIX). `executable_name` is now auto-discovered from the package via `swift package describe` (rarely needed).
 
 ## Common commands
 

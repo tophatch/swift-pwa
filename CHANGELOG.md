@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-06-24
+
 ### Added
 
 - **`pwa.json` `build.prebuild` — a declared pre-bundle command.** `swift-pwa build` copies `web/` into the bundle wholesale, but there was no declared place to run a step that *produces* part of `web/` first (a codegen index, an esbuild / Tailwind pass, a sprite-atlas packer). Projects bolted it on outside the tool and the generated CI workflow didn't know about it — so cloud releases silently shipped whatever generated artifact was committed, a footgun teams had to document by hand. Now `"build": { "prebuild": "node scripts/build-index.mjs" }` runs from the project root before `web/` is staged, on *every* `swift-pwa build` — and because the generated `release.yml` just calls `swift-pwa build`, cloud releases stay correct with no hand-maintained "regenerate before tagging" ritual. A non-zero exit aborts the build (a half-generated `web/` never ships). It runs through the platform shell (`/bin/sh -c`, `cmd /c` on Windows). `build --skip-prebuild` bypasses it for fast local iteration; the generated workflow's header notes that a prebuild needing a toolchain (Node, etc.) wants a matching setup step. Documented in [README.md](README.md).

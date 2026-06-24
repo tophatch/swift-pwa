@@ -75,6 +75,23 @@ commit), substitute `swift run --package-path /path/to/swift-pwa
 swift-pwa …` for the `swift-pwa` invocations above. The rest of the
 flags are the same.
 
+### Updating the CLI
+
+```bash
+swift-pwa self-update              # → latest release
+swift-pwa self-update --version v0.6.2
+```
+
+Prefer this over `cp`-ing a fresh binary over the installed one. On
+macOS, overwriting in place reuses the file's inode, and the kernel
+caches a code-signing validation against that path/inode — so the new
+binary's adhoc signature no longer matches the cache and the process is
+`Killed: 9` on first run (it looks exactly like a corrupt download).
+`self-update` installs with an atomic rename onto a fresh inode, which
+sidesteps the trap; if you must replace the binary by hand, `rm` it
+first, then copy (so the new file gets a new inode). If `swift-pwa`
+lives somewhere root-owned (e.g. `/usr/local/bin`), run it with `sudo`.
+
 The bundler:
 
 1. Runs `swift build -c release`.

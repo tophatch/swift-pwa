@@ -281,6 +281,10 @@ cd MyApp
 swift-pwa build --target windows                       # → build\MyApp\MyApp.exe (+ web/, pwa.json)
 ```
 
+To update the CLI later, re-run the `Invoke-WebRequest` above with the
+new release. (`swift-pwa self-update` is macOS / Linux only — Windows
+can't replace a running `.exe`, so it just prints these manual steps.)
+
 Or build the CLI from a swift-pwa checkout (useful when you're
 hacking on the bundler itself — same dance as the iOS / macOS docs):
 

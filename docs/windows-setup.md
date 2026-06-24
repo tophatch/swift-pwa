@@ -394,6 +394,12 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 
 ## Known limitations (Windows-specific)
 
+- **The portable `.exe` has no embedded icon.** `pwa.json`'s `icon`
+  becomes the MSIX tile (`Square150x150Logo.png`), but the portable
+  bundle's `.exe` still shows the default Windows icon in Explorer /
+  the taskbar — embedding a generated `.ico` into the PE is queued
+  (roadmap). macOS / iOS / Linux / Android all turn that one PNG into a
+  real app icon today.
 - **Action Center persistence requires a Start-menu shortcut.** The
   runtime sets a stable AppUserModelID at process start
   (`SwiftPWA.<exe-stem>`) which is enough for toasts to *show*, but

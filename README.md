@@ -127,6 +127,14 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 
 **`window` is build-time metadata, not the runtime config.** The generated `Sources/<name>/App.swift` builds the window from a `WindowConfig` literal, and *that* is what the running app uses. `init` seeds the literal from `pwa.json`'s `window` block, but editing `pwa.json`'s `window.*` afterwards has **no runtime effect** — change the window in `App.swift` (or keep the two in sync by hand). The fields here drive bundle metadata and the initial scaffold only.
 
+### Develop with live reload
+
+```bash
+swift-pwa dev                      # serves web/ with live reload, launches the app
+```
+
+`swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed. Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
+
 ### Build and run
 
 ```bash
@@ -240,8 +248,8 @@ Next up, in priority order:
 3. **Delta updates** — ship binary diffs instead of full artifacts to cut update download size. Builds on (1); extend the publishing CLI to emit per-version patches and the runtime to apply them.
 4. **Mandatory-update kill-switch (`min_supported_version`)** — let a manifest force-upgrade clients below a floor. Called out as a known gap in [docs/auto-updates.md](docs/auto-updates.md); also builds on (1).
 5. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
-6. **Hot-reload dev server** — have `swift-pwa dev` watch the `web/` directory and live-reload the webview on change.
-7. **Windows `.exe` icon** — embed an `.ico` generated from the `pwa.json` icon (the one platform the icon pipeline doesn't yet cover).
+6. **Windows `.exe` icon** — embed an `.ico` generated from the `pwa.json` icon (the one platform the icon pipeline doesn't yet cover).
+7. **Built-in live reload on Windows** — the `swift-pwa dev` server is POSIX-only today (macOS / Linux); Windows still needs `--server <url>`.
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.
 

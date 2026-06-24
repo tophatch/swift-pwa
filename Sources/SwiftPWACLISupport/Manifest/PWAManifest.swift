@@ -32,6 +32,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var linux: LinuxSection?
     public var android: AndroidSection?
     public var updater: UpdaterSection?
+    public var build: BuildSection?
 
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
@@ -278,6 +279,34 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             /// time). Reserved for the Linux updater backend (pending
             /// in v0.4).
             public var appimageStrategy: String?
+        }
+    }
+
+    /// Build-lifecycle configuration. Optional — apps with no codegen /
+    /// asset step leave it out.
+    ///
+    /// Example:
+    /// ```json
+    /// "build": { "prebuild": "node scripts/build-packs-index.mjs" }
+    /// ```
+    public struct BuildSection: Codable, Sendable, Equatable {
+        /// A command run from the project root *before* `web/` is staged
+        /// into the bundle, on every `swift-pwa build` (and therefore on
+        /// every cloud release that calls it). Use it for the step that
+        /// produces part of `web/` — a sprite-atlas packer, an esbuild /
+        /// Tailwind pass, a generated index file. A non-zero exit aborts
+        /// the build, so a half-baked `web/` never ships.
+        ///
+        /// It runs through the platform shell (`/bin/sh -c` on macOS /
+        /// Linux, `cmd /c` on Windows), so the string can use pipes /
+        /// redirection / `&&`. That also means it's host-shell-divergent:
+        /// keep it to a portable invocation (`node …`, `npm run build`)
+        /// if the same `pwa.json` drives a cross-platform CI matrix.
+        /// Skip it for a fast local iteration with `build --skip-prebuild`.
+        public var prebuild: String?
+
+        public init(prebuild: String? = nil) {
+            self.prebuild = prebuild
         }
     }
 

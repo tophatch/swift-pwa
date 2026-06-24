@@ -69,6 +69,14 @@ struct Build: AsyncParsableCommand {
     @Flag(help: "Build for the iOS simulator (skips signing).")
     var simulator: Bool = false
 
+    @Flag(
+        help: """
+        Skip the pwa.json `build.prebuild` command. For fast local iteration when you know \
+        the generated web/ assets are current — CI / release builds should never set this.
+        """
+    )
+    var skipPrebuild: Bool = false
+
     @Option(help: "Output directory for the bundled artifact. Defaults to ./build.")
     var output: String = "build"
 
@@ -142,6 +150,8 @@ struct Build: AsyncParsableCommand {
         let pwa = try PWAManifest.load(from: manifestURL)
 
         try Self.preflight(manifest: pwa, projectRoot: cwd)
+
+        try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
@@ -220,6 +230,46 @@ struct Build: AsyncParsableCommand {
             let url = try await bundler.build()
             print("Built: \(url.path)")
             print("Next: cd '\(url.path)' && ./gradlew assembleDebug")
+        }
+    }
+
+    /// Run `pwa.json`'s `build.prebuild` command (if any) from the project
+    /// root, before any `web/` staging. This is the declared place for a
+    /// codegen / asset step that produces part of `web/` — and because
+    /// every `swift-pwa build` runs it, the generated release workflow
+    /// (which just calls `swift-pwa build`) stays correct without a
+    /// hand-maintained "regenerate before tagging" ritual. A non-zero exit
+    /// aborts the build so a half-baked `web/` never ships.
+    ///
+    /// Runs through the platform shell so the string can use pipes /
+    /// redirection / `&&`: `/bin/sh -c` on macOS / Linux, `cmd /c` on
+    /// Windows. Stdio is inherited, so the command's output streams live.
+    static func runPrebuild(manifest: PWAManifest, projectRoot: URL, skip: Bool) async throws {
+        guard let command = manifest.build?.prebuild, !command.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return }
+        if skip {
+            print("swift-pwa: skipping build.prebuild (--skip-prebuild): \(command)")
+            return
+        }
+        print("swift-pwa: running build.prebuild: \(command)")
+        #if os(Windows)
+            let shell = "cmd"
+            let shellArgs = ["/c", command]
+        #else
+            let shell = "/bin/sh"
+            let shellArgs = ["-c", command]
+        #endif
+        do {
+            try await Shell.run(shell, shellArgs, cwd: projectRoot)
+        } catch {
+            throw ValidationError(
+                """
+                build.prebuild failed: \(command)
+                The prebuild step exited non-zero, so the build was aborted before staging web/ \
+                (shipping a half-generated web/ is worse than failing). Fix the command above, or \
+                pass --skip-prebuild to bypass it for a local iteration.
+                """
+            )
         }
     }
 

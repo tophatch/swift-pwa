@@ -107,6 +107,11 @@ public enum ArchiveError: Error, Equatable {
     case tooManyEntries(limit: Int)
     case uncompressedTooLarge(limit: Int64)
     case compressionRatioExceeded(entry: String, ratio: Double, limit: Double)
+    /// The current platform has no extraction backend (ZIPFoundation
+    /// doesn't build on Windows — clang-cl rejects its `#import <zlib.h>`
+    /// shim and Windows ships no system zlib). A Windows-native extractor
+    /// is a tracked follow-up; until then `ZIPExtractor` throws this there.
+    case unsupportedPlatform(String)
 }
 
 /// Path-safety helpers shared by every `ArchiveExtractor` so the

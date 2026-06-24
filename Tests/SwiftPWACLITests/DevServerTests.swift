@@ -1,4 +1,9 @@
-#if canImport(Darwin) || canImport(Glibc)
+// Apple-only: these tests drive the server through `URLSession` (incl. the
+// async `bytes` SSE stream), which isn't available on swift-corelibs-
+// foundation. `DevServer` itself is platform-identical POSIX socket code,
+// so this macOS coverage exercises the same implementation that runs on
+// Linux. (Linux execution would need a hand-rolled socket client.)
+#if canImport(Darwin)
 
     import Foundation
     @testable import SwiftPWACLISupport

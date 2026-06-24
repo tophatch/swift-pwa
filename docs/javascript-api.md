@@ -72,12 +72,23 @@ await __SWIFT_PWA__.invoke('app.quit');              // clean exit (code 0)
 await __SWIFT_PWA__.invoke('app.quit', { exitCode: 1 });
 const { value: name }    = await __SWIFT_PWA__.invoke('app.name');
 const { value: version } = await __SWIFT_PWA__.invoke('app.version');
+
+const { value: dataDir }  = await __SWIFT_PWA__.invoke('app.dataDir');
+const { value: cacheDir } = await __SWIFT_PWA__.invoke('app.cacheDir');
 ```
 
 `app.name` / `app.version` read the bundle's `Info.plist`
 (`CFBundleDisplayName` / `CFBundleShortVersionString`). `name` falls back
 to the process name when no bundle is present; `version` is the empty
 string on hosts without an `Info.plist` (Linux / Android).
+
+`app.dataDir` / `app.cacheDir` return the platform's per-app **persistent**
+and **disposable** writable directories (created on first call) —
+`~/Library/Application Support/<bundle-id>` and `~/Library/Caches/<bundle-id>`
+on macOS, the XDG data/cache dirs on Linux, `%APPDATA%` / `%LOCALAPPDATA%`
+on Windows, the Activity `filesDir` / `cacheDir` on Android. `dataDir` is
+where you extract a downloaded content pack (see `fs.extractZip`); the OS
+may evict `cacheDir` at any time, so only put regenerable artifacts there.
 
 ### `clipboard.*`
 

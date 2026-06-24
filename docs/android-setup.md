@@ -87,6 +87,7 @@ build/
             ├── java/<package>/MainActivity.kt          # generated
             ├── java/dev/swiftpwa/runtime/SwiftPWABridge.kt
             ├── jniLibs/<abi>/libMyApp.so               # from `swift build --triple ...`
+            ├── res/mipmap/ic_launcher.png              # from pwa.json `icon` (if a PNG)
             └── assets/
                 ├── web/                                # copied from ../web/
                 └── swift_pwa/bridge.js                 # injected at page-start
@@ -94,6 +95,12 @@ build/
 
 The `swift_pwa` namespace is reserved — don't put your own assets in
 it; the bundler manages it.
+
+When `pwa.json`'s `icon` is a PNG, the bundler copies it to
+`res/mipmap/ic_launcher.png` and wires `android:icon="@mipmap/ic_launcher"`
+into the manifest; aapt/Gradle scale it per density at build time (a
+single source PNG is enough). Without an icon, the platform default
+launcher icon is used.
 
 ## 3. Building your app's `.so`
 

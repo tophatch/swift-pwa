@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.5.0`](https://github.com/tophatch/swift-pwa/releases/tag/v0.5.0) is the current release — macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class. See the [feature matrix](#feature-matrix), the per-platform [setup docs](docs/), and [`CHANGELOG.md`](CHANGELOG.md).
+> **Status:** [`v0.5.2`](https://github.com/tophatch/swift-pwa/releases/tag/v0.5.2) is the current release — macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class. See the [feature matrix](#feature-matrix), the per-platform [setup docs](docs/), and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Why
 
@@ -133,7 +133,7 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 swift-pwa dev                      # serves web/ with live reload, launches the app
 ```
 
-`swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed. Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
+`swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed (macOS / Linux; on Windows pass `--server`). Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
 
 ### Build and run
 

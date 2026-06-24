@@ -144,27 +144,31 @@ spctl --assess --type execute --verbose build/MyApp.app
 
 ## 6. Notarization
 
-The bundler doesn't run notarization itself — you have to invoke it
-separately on the signed `.app`. Set up a notary keychain profile
-once with `xcrun notarytool store-credentials`, then per build:
+The bundler can notarize for you. Set up a notary keychain profile once:
 
 ```bash
-# Zip the .app for submission (notarytool wants a flat archive).
-ditto -c -k --sequesterRsrc --keepParent build/MyApp.app build/MyApp.zip
-
-# Submit and wait for the verdict.
-xcrun notarytool submit build/MyApp.zip \
-    --keychain-profile "<your-profile-name>" \
-    --wait
-
-# On success, staple the ticket into the .app so Gatekeeper
-# accepts it offline.
-xcrun stapler staple build/MyApp.app
-xcrun stapler validate build/MyApp.app
+xcrun notarytool store-credentials "<your-profile-name>" \
+    --apple-id "you@example.com" --team-id "<TEAMID>"   # prompts for an app-specific password
 ```
 
-Stapled `.app`s pass `spctl --assess` on first launch on a fresh
-machine.
+Then pass `--notarize` (alongside `--sign`) and the build signs with a
+hardened runtime, submits to Apple, waits for the verdict, and staples
+the ticket — all in one step:
+
+```bash
+swift-pwa build --target macos \
+    --sign "Developer ID Application: Your Name (TEAMID)" \
+    --notarize "<your-profile-name>"
+```
+
+A rejected submission fails the build. Stapled `.app`s pass
+`spctl --assess` on first launch on a fresh machine. (`--notarize`
+without `--sign` errors up front — Apple only accepts Developer
+ID-signed apps.)
+
+If you'd rather drive it yourself, the manual loop is `ditto -c -k
+--keepParent`, `xcrun notarytool submit … --wait`, `xcrun stapler
+staple`.
 
 ## 7. Auto-updates
 
@@ -213,9 +217,6 @@ returns a clean error explaining how to bundle first.
   parsing (Tauri's preferred form) is queued. For now, the manifest's
   `public_key` is base64 of the raw 32-byte Ed25519 key and per-target
   `signature` is base64 of the raw 64-byte signature.
-- **Notarization is pass-through, not automated.** The bundler stops
-  at codesign. Wire the `notarytool` step into your release script
-  or CI.
 - **No Mac App Store flow.** The bundler doesn't build a `.pkg` or
   prepare the App Sandbox / `embedded.provisionprofile` layout that
   Mac App Store submissions require. `--sign` + `--entitlements` is

@@ -305,6 +305,13 @@ jobs:
         # Host build for the CLI; cross-compile happens via
         # `--cross-compile-android` in the next step.
         run: swift build --product swift-pwa
+      - name: Cross-compile SwiftPWAArchive (ZIPFoundation) for Android
+        # The optional content-pack ZIP engine isn't a dependency of the
+        # umbrella, so the HelloPWA cross-compile below never exercises it.
+        # Build the target directly against the Android SDK to confirm
+        # ZIPFoundation + its zlib system library resolve under the Swift
+        # Android SDK (the open de-risk for the content-packs feature).
+        run: swift build -c release --swift-sdk aarch64-unknown-linux-android28 --target SwiftPWAArchive
       - name: Cross-compile Examples/HelloPWA + emit Gradle scaffold
         run: |
           cd Examples/HelloPWA

@@ -198,6 +198,12 @@ try runtime.run { ctx in
 }
 ```
 
+## Tutorials
+
+Copy-paste-friendly, Swift-optional walkthroughs for common features live in [docs/tutorials/](docs/tutorials/):
+
+- [Saving and loading files (Export / Import)](docs/tutorials/saving-and-loading-files.md) — native Save / Open dialogs over `dialog.*` + `fs.*`, with an automatic browser fallback so one codebase runs everywhere.
+
 ## Bundling
 
 ```bash

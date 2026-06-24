@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`docs/tutorials/` — a new copy-paste-friendly, Swift-optional tutorial series.** First entry: [docs/tutorials/saving-and-loading-files.md](docs/tutorials/saving-and-loading-files.md), a walkthrough of native Save / Open (Export / Import) over the `dialog.*` + `fs.*` plugins with an automatic browser fallback, written for web devs (e.g. indie game devs) wrapping an existing app who don't want to learn Swift first. Adapted from adopter-contributed material; every `invoke` command / payload shape was verified against `DialogPlugin` / `FsPlugin`. Indexed in [docs/tutorials/README.md](docs/tutorials/README.md) and linked from the README.
+
 ## [0.5.1] - 2026-06-24
 
 ### Added

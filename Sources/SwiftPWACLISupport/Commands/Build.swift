@@ -57,6 +57,15 @@ struct Build: AsyncParsableCommand {
     @Option(help: "Path to entitlements plist (macOS only).")
     var entitlements: String?
 
+    @Option(
+        help: """
+        macOS only: notarize the signed .app and staple the ticket, using this `notarytool` \
+        keychain-profile name (create one once with `xcrun notarytool store-credentials`). \
+        Requires --sign. Automates submit → wait → staple.
+        """
+    )
+    var notarize: String?
+
     @Flag(help: "Build for the iOS simulator (skips signing).")
     var simulator: Bool = false
 
@@ -143,7 +152,8 @@ struct Build: AsyncParsableCommand {
                 projectRoot: cwd,
                 outputDir: outputDir,
                 signIdentity: sign,
-                entitlements: entitlements.map { URL(fileURLWithPath: $0) }
+                entitlements: entitlements.map { URL(fileURLWithPath: $0) },
+                notarizeProfile: notarize
             )
             let url = try await bundler.build()
             print("Built: \(url.path)")

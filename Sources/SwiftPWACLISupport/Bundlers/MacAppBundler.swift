@@ -14,6 +14,10 @@ struct MacAppBundler {
     let outputDir: URL
     let signIdentity: String?
     let entitlements: URL?
+    /// `notarytool` keychain profile name. When set, the signed `.app` is
+    /// submitted to Apple's notary service and the ticket stapled to it,
+    /// fully automating submit → wait → staple. nil skips notarization.
+    var notarizeProfile: String?
 
     func build() async throws -> URL {
         // 1. swift build -c release
@@ -93,14 +97,55 @@ struct MacAppBundler {
             if let ent = entitlements {
                 args.append(contentsOf: ["--entitlements", ent.path])
             }
+            // Notarization requires a hardened-runtime signature.
+            if notarizeProfile != nil {
+                args.append(contentsOf: ["--options", "runtime", "--timestamp"])
+            }
             args.append(app.path)
             try await Shell.run("/usr/bin/env", args)
         } else {
             print("note: not signed. Pass --sign <identity> for a signed build.")
-            print("      For notarization, run: xcrun notarytool submit \(app.path) --keychain-profile <profile>")
+            print("      For notarization, also pass --notarize <keychain-profile>.")
+        }
+
+        // 8. Notarize + staple (opt-in, macOS distribution).
+        if let profile = notarizeProfile {
+            try await notarize(app: app, profile: profile)
         }
 
         return app
+    }
+
+    /// Submit the signed `.app` to Apple's notary service and staple the
+    /// resulting ticket — the submit → wait → staple loop the bundler used
+    /// to only *print*. Requires a code-signing identity (the app must be
+    /// Developer ID-signed with a hardened runtime first) and a
+    /// `notarytool` keychain profile created once via
+    /// `xcrun notarytool store-credentials`.
+    private func notarize(app: URL, profile: String) async throws {
+        guard signIdentity != nil else {
+            throw BundlerError.notarizeUnsigned
+        }
+        // notarytool takes a zip/pkg/dmg, not a bare .app — zip with ditto
+        // so the bundle layout (symlinks) survives the round-trip.
+        let zip = app.deletingPathExtension().appendingPathExtension("zip")
+        if FileManager.default.fileExists(atPath: zip.path) {
+            try FileManager.default.removeItem(at: zip)
+        }
+        try await Shell.run("/usr/bin/env", [
+            "ditto", "-c", "-k", "--keepParent", app.path, zip.path
+        ])
+        print("Submitting to Apple's notary service (this can take a few minutes)…")
+        // `--wait` blocks until Apple finishes; a rejected submission exits
+        // non-zero, which propagates as a build failure.
+        try await Shell.run("/usr/bin/env", [
+            "xcrun", "notarytool", "submit", zip.path,
+            "--keychain-profile", profile, "--wait"
+        ])
+        // Staple the ticket onto the .app so it validates offline.
+        try await Shell.run("/usr/bin/env", ["xcrun", "stapler", "staple", app.path])
+        try? FileManager.default.removeItem(at: zip)
+        print("Notarized and stapled: \(app.path)")
     }
 
     private static func creditsHTML(description: String) -> String {
@@ -125,9 +170,15 @@ enum BundlerError: Error, CustomStringConvertible {
     case toolMissing(String)
     case shell(Int32, String)
     case iosSimulatorRuntimeMissing
+    case notarizeUnsigned
 
     var description: String {
         switch self {
+        case .notarizeUnsigned:
+            """
+            --notarize requires a signed app. Pass --sign "Developer ID Application: …" too.
+            Apple's notary service only accepts Developer ID-signed apps with a hardened runtime.
+            """
         case let .binaryMissing(url, name):
             // The bundler resolves the executable name from the package
             // (`swift package describe`) or an explicit `executable_name`,

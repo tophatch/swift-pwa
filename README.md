@@ -230,7 +230,8 @@ The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `s
 ## Roadmap
 
 - **v0.5** (released) — Android backend at desktop parity: Swift target, JNI shim, Kotlin / Gradle scaffold, full plugin set including streaming `updater.install` events, `setFullscreen` via `WindowInsetsControllerCompat`, multi-window via Activity-per-window, and transparent SAF `content://` URI handling in `Fs`. CI runs the cross-compile + `assembleDebug` pipeline on every push. Wiring lives in [docs/android-setup.md](docs/android-setup.md); the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md).
-- **v0.5.1** (released) — CLI developer-experience pass for adopting an existing web app: `pwa.json` `executable_name` (decouple display name from the SwiftPM target), `swift-pwa init` in-place adoption (auto-detected), host-default `--target`, `App.swift` seeded from the manifest `window` block, and actionable `build` preflight errors.
+- **v0.5.1 / v0.5.2** (released) — CLI developer-experience pass for adopting an existing web app: `pwa.json` `executable_name` (now auto-discovered from the package, rarely needed), `swift-pwa init` in-place adoption (auto-detected), host-default `--target`, `App.swift` seeded from the manifest `window` block, actionable `build` preflight errors, and a [docs/tutorials/](docs/tutorials/) series.
+- **Friendliness wave** (on `main`, unreleased) — making "package a web app cross-platform" require minimal setup: `swift-pwa init` scaffolds a **GitHub Actions release workflow** (tag → all desktop platforms built in the cloud; `swift-pwa generate-ci` for existing projects); one `pwa.json` `icon` PNG now becomes the **iOS + Android app icon** too (not just macOS); **`swift-pwa doctor`** checks per-target toolchain prerequisites; and `build --target macos --notarize` **automates notarization** (submit → wait → staple).
 
 Next up, in priority order:
 
@@ -238,9 +239,9 @@ Next up, in priority order:
 2. **GTK4 tray.** `TrayPlugin` is the last plugin-parity gap — `Yes` on GTK3, `—` on GTK4 (matrix). GTK4 dropped `GtkStatusIcon`; needs a `StatusNotifierItem` (libayatana-appindicator / SNI D-Bus) implementation behind the existing `SystemTray` protocol so the cross-platform API is unchanged. Document any Wayland caveats in [docs/linux-setup.md](docs/linux-setup.md).
 3. **Delta updates** — ship binary diffs instead of full artifacts to cut update download size. Builds on (1); extend the publishing CLI to emit per-version patches and the runtime to apply them.
 4. **Mandatory-update kill-switch (`min_supported_version`)** — let a manifest force-upgrade clients below a floor. Called out as a known gap in [docs/auto-updates.md](docs/auto-updates.md); also builds on (1).
-5. **Notarization automation.** The macOS bundler currently only *prints* the `xcrun notarytool` command ([docs/macos-setup.md](docs/macos-setup.md) §5) — automate submit → poll → staple behind a `swift-pwa build` flag.
-6. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
-7. **Hot-reload dev server** — have `swift-pwa dev` watch the `web/` directory and live-reload the webview on change.
+5. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
+6. **Hot-reload dev server** — have `swift-pwa dev` watch the `web/` directory and live-reload the webview on change.
+7. **Windows `.exe` icon** — embed an `.ico` generated from the `pwa.json` icon (the one platform the icon pipeline doesn't yet cover).
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.
 

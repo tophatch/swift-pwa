@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`swift-pwa init` scaffolds a GitHub Actions release workflow (`.github/workflows/release.yml`), and a new `swift-pwa generate-ci` adds it to an existing project.** This is the "ship cross-platform from one machine" path: pushing a `v*` tag builds macOS / Linux / Windows in the cloud — each job downloads the prebuilt `swift-pwa` CLI (pinned to the scaffolding version) and runs the platform bundler, with toolchain-setup steps mirrored from swift-pwa's own validated CI — and attaches the artifacts to a GitHub Release. No local Swift / MSVC / GTK toolchains required. iOS and Android ship as commented, opt-in stub jobs (they need signing material / a cross-compile SDK that can't be wired up generically). `init` writes it by default (skipped if one already exists; opt out with `--no-ci-workflow`); `generate-ci` covers already-scaffolded projects and refuses to clobber an existing workflow without `--force`.
+
 ## [0.5.2] - 2026-06-24
 
 ### Changed

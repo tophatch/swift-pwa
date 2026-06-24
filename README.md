@@ -57,12 +57,15 @@ You get a self-contained SwiftPM project:
 
 ```text
 MyApp/
-├── Package.swift              # depends on SwiftPWA
-├── pwa.json                   # source of truth — generates Info.plist / .desktop / bundle metadata
-├── Sources/MyApp/App.swift    # @main entry point; creates a window pointing at web/
+├── Package.swift                      # depends on SwiftPWA
+├── pwa.json                           # source of truth — generates Info.plist / .desktop / bundle metadata
+├── Sources/MyApp/App.swift            # @main entry point; creates a window pointing at web/
+├── .github/workflows/release.yml      # push a tag → build every desktop platform in CI
 └── web/
-    └── index.html             # your frontend's entry point
+    └── index.html                     # your frontend's entry point
 ```
+
+That `release.yml` means you can ship cross-platform from any machine: `git tag v1.0.0 && git push --tags` builds macOS, Linux, and Windows in GitHub Actions and attaches them to a Release — no local Swift / MSVC / GTK toolchains needed. (iOS / Android are included as opt-in stubs since they need signing / a cross-compile SDK.) Opt out with `init --no-ci-workflow`; add it to an existing project later with `swift-pwa generate-ci`.
 
 `build` operates on this scaffold — it runs `swift build` against `Package.swift`, so `pwa.json` + `web/` on their own aren't buildable. Already have a web app? `init` adopts it automatically — run it from a directory that already has a `web/` or `pwa.json` and it adds only the native shell (`Package.swift` + `Sources/`), leaves your `web/` untouched, and merges any missing fields into an existing `pwa.json` rather than overwriting it:
 

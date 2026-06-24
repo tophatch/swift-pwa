@@ -387,32 +387,44 @@ enum Templates {
 
         @MainActor
         func configure(_ ctx: any AppContext) throws {
-            // On Android the WebView resolves bundled assets via the
-            // virtual `https://swift-pwa.local/` host — see
-            // SwiftPWAAndroid's WebViewAssetLoader. On desktop the
-            // bundled web/ ships inside the resource bundle:
-            //   - macOS: <App>.app/Contents/Resources/web
-            //   - iOS:   <App>.app/web
-            //   - Linux: usr/share/<exe>/web (AppImage; not Bundle-resolvable)
-            //   - Windows: alongside the .exe
-            // `resourceURL` is the cross-platform answer for Apple
-            // (it points at `Contents/Resources/` on macOS and at the
-            // bundle root on iOS); fall back to `bundleURL` for hosts
-            // where corelibs-foundation doesn't synthesise one.
-            #if os(Android)
-                let webRoot = URL(fileURLWithPath: "/android_asset/web")
-            #else
-                let webRoot = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
-                    .appendingPathComponent("web")
-                if !FileManager.default.fileExists(atPath: webRoot.path) {
-                    // Fail loudly rather than hand a blank window to the
-                    // user: the WKWebView / WebKitGTK / WebView2 schemes
-                    // all surface "missing index.html" as a silently
-                    // blank page, which is the hardest possible thing
-                    // to debug.
-                    fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
-                }
-            #endif
+            let content: WindowContent
+            if let dev = ProcessInfo.processInfo.environment["PWA_DEV_SERVER"],
+               let devURL = URL(string: dev) {
+                // `swift-pwa dev` runs a live-reload server over your web/
+                // (or you can point it at your own Vite/etc. with --server)
+                // and sets PWA_DEV_SERVER — load that so edits show up live
+                // without a rebuild. Falls through to the bundled assets in
+                // a normal build.
+                content = .remote(devURL)
+            } else {
+                // On Android the WebView resolves bundled assets via the
+                // virtual `https://swift-pwa.local/` host — see
+                // SwiftPWAAndroid's WebViewAssetLoader. On desktop the
+                // bundled web/ ships inside the resource bundle:
+                //   - macOS: <App>.app/Contents/Resources/web
+                //   - iOS:   <App>.app/web
+                //   - Linux: usr/share/<exe>/web (AppImage; not Bundle-resolvable)
+                //   - Windows: alongside the .exe
+                // `resourceURL` is the cross-platform answer for Apple
+                // (it points at `Contents/Resources/` on macOS and at the
+                // bundle root on iOS); fall back to `bundleURL` for hosts
+                // where corelibs-foundation doesn't synthesise one.
+                #if os(Android)
+                    let webRoot = URL(fileURLWithPath: "/android_asset/web")
+                #else
+                    let webRoot = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+                        .appendingPathComponent("web")
+                    if !FileManager.default.fileExists(atPath: webRoot.path) {
+                        // Fail loudly rather than hand a blank window to the
+                        // user: the WKWebView / WebKitGTK / WebView2 schemes
+                        // all surface "missing index.html" as a silently
+                        // blank page, which is the hardest possible thing
+                        // to debug.
+                        fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
+                    }
+                #endif
+                content = .bundled(directory: webRoot)
+            }
 
             // This WindowConfig is the *runtime* source of truth for the
             // window — pwa.json's `window` block only seeds these values
@@ -424,7 +436,7 @@ enum Templates {
                 size: Size(width: \(width), height: \(height)),
                 resizable: \(window.resizable),
                 fullscreen: \(window.fullscreen),
-                content: WindowContent.bundled(directory: webRoot)
+                content: content
             ))
         }
         """

@@ -274,7 +274,7 @@ struct AndroidBundler {
     /// configured to build a shared object (see
     /// `docs/android-setup.md`).
     private func soBaseName() -> String {
-        manifest.name
+        manifest.binaryName
     }
 
     private func stageJniLibs(into appModule: URL) async throws {

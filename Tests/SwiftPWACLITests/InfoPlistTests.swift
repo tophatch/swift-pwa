@@ -45,6 +45,28 @@ struct InfoPlistTests {
         #expect(parsed["NSHumanReadableCopyright"] as? String == "© 2026 Acme Corp.")
     }
 
+    @Test("CFBundleExecutable uses executable_name while display keys use name")
+    func executableNameDecoupledFromDisplay() throws {
+        var m = manifest
+        m.name = "Field Notes" // display, has a space
+        m.executableName = "FieldNotes" // SwiftPM target
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.macOS(manifest: m).encode(), options: [], format: nil
+        ) as? [String: Any])
+        // The executable key must match the on-disk binary (the target).
+        #expect(parsed["CFBundleExecutable"] as? String == "FieldNotes")
+        // The human-facing keys carry the display name (spaces allowed).
+        #expect(parsed["CFBundleName"] as? String == "Field Notes")
+        #expect(parsed["CFBundleDisplayName"] as? String == "Field Notes")
+
+        // iOS mirrors the same split.
+        let ios = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: m).encode(), options: [], format: nil
+        ) as? [String: Any])
+        #expect(ios["CFBundleExecutable"] as? String == "FieldNotes")
+        #expect(ios["CFBundleDisplayName"] as? String == "Field Notes")
+    }
+
     @Test("iOS plist declares a UIScene configuration")
     func ios() throws {
         let plist = InfoPlistGenerator.iOS(manifest: manifest)

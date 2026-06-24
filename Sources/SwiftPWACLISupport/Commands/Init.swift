@@ -16,10 +16,35 @@ struct Init: AsyncParsableCommand {
     @Option(help: "Directory to create the project in. Defaults to current dir + name.")
     var path: String?
 
+    @Flag(
+        help: """
+        Force adopt-in-place: add only the native shell (Package.swift + Sources/), leave an \
+        existing web/ untouched, and merge missing fields into an existing pwa.json instead of \
+        refusing to overwrite it. This is auto-detected when the target directory already has a \
+        pwa.json or web/ — pass the flag to force it for a frontend in a non-standard layout.
+        """
+    )
+    var inPlace: Bool = false
+
     func run() async throws {
         let fm = FileManager.default
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
-        let root = path.map { URL(fileURLWithPath: $0) } ?? cwd.appendingPathComponent(name)
+
+        // Resolve where the project lives. An explicit --path is used
+        // verbatim. Otherwise, if the *current directory* already looks
+        // like a web app (a pwa.json or web/ is present), adopt it in
+        // place — the natural "cd into my web app, run init" flow — rather
+        // than nesting a <name>/ subdirectory inside it. Only a directory
+        // with neither gets the fresh-project <name>/ subdir default.
+        let root: URL = if let explicitPath = path {
+            URL(fileURLWithPath: explicitPath)
+        } else if fm.fileExists(atPath: cwd.appendingPathComponent("pwa.json").path)
+            || fm.fileExists(atPath: cwd.appendingPathComponent("web").path)
+        {
+            cwd
+        } else {
+            cwd.appendingPathComponent(name)
+        }
 
         // The argument we got is what the user wants to *see* (window
         // title, About panel). But it also has to double as a SwiftPM
@@ -38,52 +63,125 @@ struct Init: AsyncParsableCommand {
         }
         let displayName = name
 
-        // Per-file conflict check rather than "directory exists": this lets
-        // `--path .` scaffold alongside an existing README / LICENSE / .git
-        // dir, while still refusing to silently clobber a real swift-pwa
-        // project's Package.swift / pwa.json.
-        let relPathsToWrite = [
-            "pwa.json",
+        let id = bundleId ?? "com.example.\(identifier.lowercased())"
+
+        // Adopt-in-place when the target directory already looks like a web
+        // app — a pwa.json or a web/ already there means the user is
+        // wrapping an existing frontend, not scaffolding a blank project.
+        // The `--in-place` flag forces the same mode for a frontend in a
+        // non-standard layout (e.g. a custom `dist/` with no pwa.json yet).
+        let pwaURL = root.appendingPathComponent("pwa.json")
+        let hasExistingManifest = fm.fileExists(atPath: pwaURL.path)
+        let hasExistingWeb = fm.fileExists(atPath: root.appendingPathComponent("web").path)
+        let adopt = inPlace || hasExistingManifest || hasExistingWeb
+        if adopt, !inPlace {
+            let signal = hasExistingManifest ? "pwa.json" : "web/"
+            print("note: found existing \(signal) in \(root.path) — adopting in place (adding only the native shell).")
+        }
+
+        // The native shell — Package.swift + the Swift sources — is what
+        // `init` always owns. pwa.json / web/ / .gitignore are "soft": when
+        // adopting we merge / leave them alone rather than treating a
+        // pre-existing one as a fatal conflict, so an adopted web app keeps
+        // its frontend and hand-tuned manifest. Otherwise every file is a
+        // conflict (the original behavior), which still lets `--path .`
+        // scaffold next to an existing README / .git.
+        let nativeShellPaths = [
             "Package.swift",
             "Sources/\(identifier)/App.swift",
-            "Sources/\(identifier)/AndroidEntry.swift",
-            "web/index.html",
-            ".gitignore"
+            "Sources/\(identifier)/AndroidEntry.swift"
         ]
-        let conflicts = relPathsToWrite.filter {
+        let softPaths = ["pwa.json", "web/index.html", ".gitignore"]
+        let conflicts = (adopt ? nativeShellPaths : nativeShellPaths + softPaths).filter {
             fm.fileExists(atPath: root.appendingPathComponent($0).path)
         }
         if !conflicts.isEmpty {
             throw ValidationError(
                 "Refusing to overwrite existing files in \(root.path):\n  - "
                     + conflicts.joined(separator: "\n  - ")
+                    + (adopt ? "\n(adopt-in-place adds only the native shell; remove the above to re-scaffold.)" : "")
             )
         }
 
-        let id = bundleId ?? "com.example.\(identifier.lowercased())"
         try fm.createDirectory(at: root, withIntermediateDirectories: true)
         try fm.createDirectory(
             at: root.appendingPathComponent("Sources/\(identifier)"),
             withIntermediateDirectories: true
         )
-        try fm.createDirectory(at: root.appendingPathComponent("web"), withIntermediateDirectories: true)
 
-        let android = PWAManifest.AndroidSection(
-            packageId: id,
-            minSdk: 28,
-            targetSdk: 34,
-            abis: ["arm64-v8a", "x86_64"],
-            versionCode: 1
+        // Resolve the manifest that drives the generated App.swift window
+        // config + Package.swift target name. When adopting an existing
+        // pwa.json we merge into the user's file (preserving everything
+        // they set) rather than overwriting it; otherwise we write a fresh
+        // one.
+        let manifest: PWAManifest
+        if adopt, hasExistingManifest {
+            manifest = try Self.mergeIntoExistingManifest(
+                at: pwaURL, identifier: identifier, displayName: displayName, id: id
+            )
+            print("Merged missing fields into existing \(pwaURL.lastPathComponent) (existing values kept).")
+        } else {
+            manifest = Self.freshManifest(identifier: identifier, displayName: displayName, id: id)
+            try manifest.write(to: pwaURL)
+        }
+
+        try Templates.packageSwift(name: identifier).write(
+            to: root.appendingPathComponent("Package.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try Templates.mainSwift(structName: identifier, window: manifest.window).write(
+            to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
+            atomically: true,
+            encoding: .utf8
+        )
+        try Templates.androidEntrySwift(name: identifier, packageId: manifest.android?.packageId ?? id).write(
+            to: root.appendingPathComponent("Sources/\(identifier)/AndroidEntry.swift"),
+            atomically: true,
+            encoding: .utf8
         )
 
-        // `manifest.name` doubles as the SwiftPM target name today: the
-        // bundlers locate `.build/release/<manifest.name>` and produce
-        // `<manifest.name>.app`. So it has to track `identifier`, not
-        // the user's display string. The window title is the place that
-        // surfaces the original.
-        let manifest = PWAManifest(
+        // web/ + starter index.html: only when we're not adopting an
+        // existing frontend. An existing web/ (the --in-place case) is
+        // left exactly as-is; if there's no web/ at all we still drop a
+        // starter page so `build` has something to bundle.
+        let webDir = root.appendingPathComponent(manifest.web.directory)
+        if !fm.fileExists(atPath: webDir.path) {
+            try fm.createDirectory(at: webDir, withIntermediateDirectories: true)
+            try Templates.indexHTML(name: displayName).write(
+                to: webDir.appendingPathComponent(manifest.web.entry),
+                atomically: true,
+                encoding: .utf8
+            )
+        }
+
+        // `.gitignore` covers the conventional Swift / bundling artifacts
+        // plus the Android signing material that should never be checked
+        // in. Don't clobber an existing one (common in an adopted repo).
+        let gitignoreURL = root.appendingPathComponent(".gitignore")
+        if !fm.fileExists(atPath: gitignoreURL.path) {
+            try Self.gitignoreTemplate.write(to: gitignoreURL, atomically: true, encoding: .utf8)
+        }
+
+        print(adopt ? "Added native shell to \(root.path)" : "Created \(root.path)")
+        if root.standardizedFileURL == cwd.standardizedFileURL {
+            print("Next: swift run swift-pwa build --target macos")
+        } else {
+            print("Next: cd \(root.lastPathComponent) && swift run swift-pwa build --target macos")
+        }
+    }
+
+    /// The default manifest for a brand-new project. `name` is the
+    /// human-facing display string (window title / Finder label) and may
+    /// contain spaces; `executableName` is the SwiftPM target name (the
+    /// sanitized identifier) and is only emitted when it differs from
+    /// `name`, so an all-identifier-safe name like "MyApp" produces a
+    /// clean manifest with no redundant `executable_name`.
+    static func freshManifest(identifier: String, displayName: String, id: String) -> PWAManifest {
+        PWAManifest(
             id: id,
-            name: identifier,
+            name: displayName,
+            executableName: identifier == displayName ? nil : identifier,
             version: "0.1.0",
             description: nil,
             icon: nil,
@@ -92,63 +190,83 @@ struct Init: AsyncParsableCommand {
             macos: .init(bundleIdentifier: id, category: nil, minimumSystemVersion: "15.0"),
             ios: .init(bundleIdentifier: id, minimumSystemVersion: "18.0"),
             linux: .init(desktopCategories: ["Utility"], executableName: nil),
-            android: android
+            android: .init(
+                packageId: id,
+                minSdk: 28,
+                targetSdk: 34,
+                abis: ["arm64-v8a", "x86_64"],
+                versionCode: 1
+            )
         )
-        try manifest.write(to: root.appendingPathComponent("pwa.json"))
-
-        try Templates.packageSwift(name: identifier).write(
-            to: root.appendingPathComponent("Package.swift"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try Templates.mainSwift(name: identifier, displayName: displayName).write(
-            to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try Templates.androidEntrySwift(name: identifier, packageId: id).write(
-            to: root.appendingPathComponent("Sources/\(identifier)/AndroidEntry.swift"),
-            atomically: true,
-            encoding: .utf8
-        )
-        try Templates.indexHTML(name: displayName).write(
-            to: root.appendingPathComponent("web/index.html"),
-            atomically: true,
-            encoding: .utf8
-        )
-        // `.gitignore` covers the conventional Swift / bundling
-        // artifacts plus the Android signing material that should
-        // never be checked in. `*.jks` / `*.keystore` / `*.p12` cover
-        // the three keytool output formats; `keystore.properties`
-        // covers the convention some teams use to stash passwords on
-        // disk (we read passwords from env vars in the generated
-        // Gradle scaffold, but the file is still common in mixed
-        // toolchains).
-        try """
-        .build/
-        DerivedData/
-        build/
-        *.app
-        *.ipa
-        *.AppImage
-        *.jks
-        *.keystore
-        *.p12
-        keystore.properties
-
-        """.write(
-            to: root.appendingPathComponent(".gitignore"),
-            atomically: true,
-            encoding: .utf8
-        )
-
-        print("Created \(root.path)")
-        if root.standardizedFileURL == cwd.standardizedFileURL {
-            print("Next: swift run swift-pwa build --target macos")
-        } else {
-            print("Next: cd \(root.lastPathComponent) && swift run swift-pwa build --target macos")
-        }
     }
+
+    /// Shallow-merge the defaults a fresh project would get into the
+    /// user's existing `pwa.json`, *adding only top-level keys that are
+    /// absent* — everything the user already set is preserved verbatim,
+    /// including any keys outside our schema. Operates on the raw JSON
+    /// object (not a Codable round-trip) precisely so unknown / hand-added
+    /// fields survive.
+    ///
+    /// One field is force-set rather than merge-if-absent:
+    /// `executable_name`. `init` generates `Package.swift` with the
+    /// SwiftPM target named after `identifier`, so the bundler must look
+    /// for `.build/release/<identifier>`. If the user's existing `name`
+    /// isn't that identifier (e.g. it has spaces), we pin
+    /// `executable_name` to `identifier` so the two can't silently drift.
+    /// Writes the merged object back and returns it decoded.
+    static func mergeIntoExistingManifest(
+        at url: URL, identifier: String, displayName: String, id: String
+    ) throws -> PWAManifest {
+        let existingData = try Data(contentsOf: url)
+        guard var object = try JSONSerialization.jsonObject(with: existingData) as? [String: Any] else {
+            throw ValidationError("\(url.path) is not a JSON object — can't merge --in-place.")
+        }
+
+        let defaults = freshManifest(identifier: identifier, displayName: displayName, id: id)
+        let defaultsData = try {
+            let encoder = JSONEncoder()
+            encoder.keyEncodingStrategy = .convertToSnakeCase
+            return try encoder.encode(defaults)
+        }()
+        let defaultsObject = try (JSONSerialization.jsonObject(with: defaultsData) as? [String: Any]) ?? [:]
+
+        for (key, value) in defaultsObject where object[key] == nil {
+            object[key] = value
+        }
+
+        // Pin executable_name to the generated SwiftPM target name unless
+        // the user already declared one or their `name` is already exactly
+        // the identifier (in which case binaryName == name == identifier).
+        if object["executable_name"] == nil, (object["name"] as? String) != identifier {
+            object["executable_name"] = identifier
+        }
+
+        let merged = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])
+        try merged.write(to: url)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        return try decoder.decode(PWAManifest.self, from: merged)
+    }
+
+    /// `.gitignore` body. `*.jks` / `*.keystore` / `*.p12` cover the three
+    /// keytool output formats; `keystore.properties` covers the convention
+    /// some teams use to stash passwords on disk (we read passwords from
+    /// env vars in the generated Gradle scaffold, but the file is still
+    /// common in mixed toolchains).
+    static let gitignoreTemplate = """
+    .build/
+    DerivedData/
+    build/
+    *.app
+    *.ipa
+    *.AppImage
+    *.jks
+    *.keystore
+    *.p12
+    keystore.properties
+
+    """
 
     /// Convert the user's project name into a valid Swift identifier
     /// for use as a SwiftPM target / source directory / `@main` struct.
@@ -191,7 +309,7 @@ enum Templates {
             name: "\(name)",
             platforms: [.macOS(.v15), .iOS(.v18)],
             dependencies: [
-                .package(url: "https://github.com/tophatch/swift-pwa", from: "0.1.0"),
+                .package(url: "https://github.com/tophatch/swift-pwa", from: "\(SwiftPWAVersion.current)"),
             ],
             targets: [
                 .executableTarget(
@@ -220,14 +338,17 @@ enum Templates {
         """
     }
 
-    static func mainSwift(name: String, displayName: String) -> String {
-        // Escape the display string for safe embedding in the
-        // generated Swift source. The CLI only sanitises `name` to a
-        // valid identifier; `displayName` is whatever the user typed,
-        // which can legitimately contain quotes / backslashes.
-        let titleLiteral = displayName
+    static func mainSwift(structName: String, window: PWAManifest.WindowSection) -> String {
+        // Escape the window title for safe embedding in the generated
+        // Swift source. `window.title` is whatever the user typed, which
+        // can legitimately contain quotes / backslashes.
+        let titleLiteral = window.title
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
+        // Drop a trailing `.0` so 1024.0 reads as 1024 in the source.
+        let width = String(format: "%g", window.width)
+        let height = String(format: "%g", window.height)
+        let name = structName
         return """
         import Foundation
         import SwiftPWA
@@ -275,9 +396,16 @@ enum Templates {
                 }
             #endif
 
+            // This WindowConfig is the *runtime* source of truth for the
+            // window — pwa.json's `window` block only seeds these values
+            // at `swift-pwa init` time and is otherwise build metadata, so
+            // editing pwa.json later has no effect on the running app.
+            // Change the window here, or keep the two in sync by hand.
             _ = try ctx.createWindow(WindowConfig(
                 title: "\(titleLiteral)",
-                size: Size(width: 1024, height: 768),
+                size: Size(width: \(width), height: \(height)),
+                resizable: \(window.resizable),
+                fullscreen: \(window.fullscreen),
                 content: WindowContent.bundled(directory: webRoot)
             ))
         }

@@ -23,9 +23,9 @@ struct AppImageBundler {
         let binary = projectRoot
             .appendingPathComponent(".build")
             .appendingPathComponent("release")
-            .appendingPathComponent(manifest.name)
+            .appendingPathComponent(manifest.binaryName)
         guard FileManager.default.fileExists(atPath: binary.path) else {
-            throw BundlerError.binaryMissing(binary)
+            throw BundlerError.binaryMissing(binary, expectedName: manifest.binaryName)
         }
 
         // 2. Lay out an AppDir.
@@ -42,7 +42,10 @@ struct AppImageBundler {
             withIntermediateDirectories: true
         )
 
-        let exeName = manifest.linux?.executableName ?? manifest.name
+        // `linux.executable_name` wins for the Linux backend specifically;
+        // otherwise fall back to the cross-platform `binaryName`
+        // (`executable_name` ?? `name`).
+        let exeName = manifest.linux?.executableName ?? manifest.binaryName
         let installedBin = appDir.appendingPathComponent("usr/bin/\(exeName)")
         try FileManager.default.copyItem(at: binary, to: installedBin)
 

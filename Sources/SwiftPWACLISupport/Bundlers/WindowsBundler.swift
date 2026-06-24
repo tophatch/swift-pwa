@@ -69,7 +69,9 @@ struct WindowsBundler {
                 cwd: projectRoot,
                 envOverrides: resolvePackageEnvOverrides()
             )
-            let exeName = manifest.name + ".exe"
+            // The .exe is named after the SwiftPM target (`binaryName`),
+            // which may differ from the human-facing display `name`.
+            let exeName = manifest.binaryName + ".exe"
             let buildDir = projectRoot.appendingPathComponent(".build")
             // SwiftPM creates `.build/release` as a symlink to the
             // arch-qualified output directory (e.g.
@@ -101,11 +103,11 @@ struct WindowsBundler {
                     .appendingPathComponent("release")
                     .appendingPathComponent(exeName)
                 guard FileManager.default.fileExists(atPath: candidate.path) else {
-                    throw BundlerError.binaryMissing(symlinkBinary)
+                    throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
                 }
                 binary = candidate
             } else {
-                throw BundlerError.binaryMissing(symlinkBinary)
+                throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
             }
 
             let bundleDir = outputDir.appendingPathComponent(manifest.name)

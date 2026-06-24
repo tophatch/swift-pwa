@@ -3,16 +3,43 @@ import Foundation
 
 enum BuildTarget: String, ExpressibleByArgument, CaseIterable {
     case macos, ios, linux, windows, android
+
+    /// The desktop target that matches the machine running the CLI, used
+    /// as the default when `--target` is omitted. Only the three desktop
+    /// hosts qualify — iOS / Android are cross-builds with no "this is my
+    /// host" meaning, so they're always explicit.
+    static var host: BuildTarget {
+        #if os(macOS)
+            .macos
+        #elseif os(Linux)
+            .linux
+        #elseif os(Windows)
+            .windows
+        #else
+            .macos
+        #endif
+    }
 }
 
 struct Build: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "build",
-        abstract: "Bundle the app for the chosen platform."
+        abstract: "Bundle the app for the chosen platform.",
+        discussion: """
+        Runs against the SwiftPM scaffold created by `swift-pwa init` — it invokes `swift build` \
+        (or `xcodebuild` for iOS) on the project's Package.swift, so it must be run from a project \
+        root that has one. `pwa.json` + `web/` on their own aren't buildable; if you're adopting an \
+        existing web app, run `swift-pwa init <Name> --in-place` first to add the native shell.
+        """
     )
 
-    @Option(help: "Target platform: \(BuildTarget.allCases.map(\.rawValue).joined(separator: ", "))")
-    var target: BuildTarget
+    @Option(
+        help: """
+        Target platform: \(BuildTarget.allCases.map(\.rawValue).joined(separator: ", ")). \
+        Defaults to the host machine (\(BuildTarget.host.rawValue)) when omitted.
+        """
+    )
+    var target: BuildTarget = .host
 
     @Option(help: "Path to pwa.json. Defaults to ./pwa.json.")
     var manifest: String = "pwa.json"
@@ -105,6 +132,8 @@ struct Build: AsyncParsableCommand {
         let outputDir = cwd.appendingPathComponent(output)
         let pwa = try PWAManifest.load(from: manifestURL)
 
+        try Self.preflight(manifest: pwa, projectRoot: cwd)
+
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
         switch target {
@@ -181,6 +210,51 @@ struct Build: AsyncParsableCommand {
             let url = try await bundler.build()
             print("Built: \(url.path)")
             print("Next: cd '\(url.path)' && ./gradlew assembleDebug")
+        }
+    }
+
+    /// swift-pwa-level checks that run before any bundler shells out to
+    /// `swift build` / `xcodebuild`, so failures surface as actionable
+    /// guidance rather than a raw toolchain error after a long compile.
+    static func preflight(manifest: PWAManifest, projectRoot: URL) throws {
+        // 1. Every target builds the SwiftPM scaffold (`swift build` /
+        // `xcodebuild` against the package). Without `Package.swift` the
+        // underlying tool prints a generic "Could not find Package.swift"
+        // that gives a newcomer no hint that swift-pwa projects need the
+        // `init` scaffold — see the README quickstart.
+        let packageSwift = projectRoot.appendingPathComponent("Package.swift")
+        guard FileManager.default.fileExists(atPath: packageSwift.path) else {
+            throw ValidationError(
+                """
+                No Package.swift found in \(projectRoot.path).
+                swift-pwa apps need the SwiftPM scaffold (Package.swift + Sources/) that wraps your \
+                web/ in a native shell — pwa.json + web/ alone isn't buildable. To create it:
+                  - new project:      swift-pwa init <Name>
+                  - existing web app: swift-pwa init <Name> --in-place
+                Then run `swift-pwa build` from that project root.
+                """
+            )
+        }
+
+        // 2. The bundler locates the built binary at
+        // `.build/release/<binaryName>`, and `<binaryName>` is the SwiftPM
+        // target name, which can't contain whitespace. If `name` has a
+        // space and no `executable_name` override was set, the build would
+        // compile fine (the target name comes from Package.swift) and then
+        // fail *late* at the bundling step looking for a binary that can't
+        // exist. Catch it up front with the fix.
+        let binaryName = manifest.binaryName
+        if binaryName.contains(where: \.isWhitespace) {
+            throw ValidationError(
+                """
+                pwa.json: the executable name '\(binaryName)' contains whitespace, but it has to \
+                match a SwiftPM target name (the value after `name:` in Package.swift), which can't.
+                `name` is the human-facing label (Finder / dock / window title) and is allowed to \
+                contain spaces. Set a separate `executable_name` to your SwiftPM target name, e.g.:
+                  { "name": "\(binaryName)", "executable_name": "\(binaryName.split(whereSeparator: \.isWhitespace)
+                    .joined())", ... }
+                """
+            )
         }
     }
 }

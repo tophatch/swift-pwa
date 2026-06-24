@@ -32,7 +32,9 @@ struct IPABundler {
 
         var args = [
             "xcodebuild",
-            "-scheme", manifest.name,
+            // The scheme is the SwiftPM target / product name, which may
+            // differ from the human-facing display `name`.
+            "-scheme", manifest.binaryName,
             "-workspace", projectRoot.path,
             "-destination", destination,
             "-configuration", configuration,
@@ -58,9 +60,9 @@ struct IPABundler {
         let productsDir = derived
             .appendingPathComponent("Build/Products")
             .appendingPathComponent("\(configuration)-\(suffix)")
-        let binary = productsDir.appendingPathComponent(manifest.name)
+        let binary = productsDir.appendingPathComponent(manifest.binaryName)
         guard FileManager.default.fileExists(atPath: binary.path) else {
-            throw BundlerError.binaryMissing(binary)
+            throw BundlerError.binaryMissing(binary, expectedName: manifest.binaryName)
         }
 
         let app = try await assembleApp(binary: binary, productsDir: productsDir)
@@ -111,7 +113,10 @@ struct IPABundler {
             try fm.removeItem(at: app)
         }
         try fm.createDirectory(at: app, withIntermediateDirectories: true)
-        try fm.copyItem(at: binary, to: app.appendingPathComponent(manifest.name))
+        // The binary inside the .app must match CFBundleExecutable (the
+        // SwiftPM target name), even though the .app filename above uses
+        // the human-facing display `name`.
+        try fm.copyItem(at: binary, to: app.appendingPathComponent(manifest.binaryName))
 
         // Launch screen: if the manifest has a PNG icon, compile a
         // storyboard that centers it on a black background. Otherwise

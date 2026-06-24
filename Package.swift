@@ -179,7 +179,17 @@ let package = Package(
             name: "SwiftPWAArchive",
             dependencies: [
                 "SwiftPWACore",
-                .product(name: "ZIPFoundation", package: "ZIPFoundation")
+                // ZIPFoundation doesn't build on Windows (its CZLib shim
+                // uses `#import <zlib.h>`, which clang-cl rejects, and
+                // Windows ships no system zlib). Gate the dependency off
+                // Windows; `ZIPExtractor` is a throwing stub there until a
+                // Windows-native extractor lands. macOS / iOS / Linux /
+                // Android link it normally.
+                .product(
+                    name: "ZIPFoundation",
+                    package: "ZIPFoundation",
+                    condition: .when(platforms: [.macOS, .iOS, .linux, .android])
+                )
             ],
             swiftSettings: swiftSettings
         ),

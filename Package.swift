@@ -426,7 +426,18 @@ let package = Package(
         ),
         .testTarget(
             name: "SwiftPWAArchiveTests",
-            dependencies: ["SwiftPWAArchive", "SwiftPWACore"],
+            dependencies: [
+                "SwiftPWAArchive",
+                "SwiftPWACore",
+                // Same Windows gate as the target — the round-trip tests
+                // drive ZIPFoundation directly, which doesn't build on
+                // Windows. The test file is `#if canImport(ZIPFoundation)`.
+                .product(
+                    name: "ZIPFoundation",
+                    package: "ZIPFoundation",
+                    condition: .when(platforms: [.macOS, .iOS, .linux, .android])
+                )
+            ],
             swiftSettings: swiftSettings
         ),
         .testTarget(

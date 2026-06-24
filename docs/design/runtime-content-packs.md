@@ -329,7 +329,19 @@ carry their own value (dir API, faster bundle streaming).
    dependency-free. The command is registered only when an extractor is injected
    (`FsPlugin(SystemFs(extractor: ZIPExtractor()))` or a `.withZip()` convenience), so
    apps that don't import packs link neither ZIPFoundation nor the command. **Not a new
-   plugin.**
+   plugin.** *(Implemented in Phase 0a.)*
+
+   **Windows finding + decision (from the Phase 0a CI de-risk):** ZIPFoundation does
+   **not** build on Windows — its `CZLib` shim uses `#import <zlib.h>`, which clang-cl
+   rejects (the MSVC `#import`-typelib feature), and Windows ships no system zlib. So
+   ZIPFoundation is gated off Windows (the `ZIPExtractor` is a throwing
+   `unsupportedPlatform` stub there today). **Decision: keep full parity** — Phase C
+   ships a `WindowsZIPExtractor` that shells to bundled `bsdtar` (`tar.exe`, present on
+   Windows 10 1803+). The same `ArchiveExtractor` contract applies; the traversal /
+   symlink / zip-bomb guards are enforced by a pre-extract listing pass (`tar -tvf`)
+   since `tar` won't enforce our limits. macOS / iOS / Linux / Android keep
+   ZIPFoundation. (Android confirmed indirectly: Linux — same clang + sysroot-zlib
+   shape — builds it; a direct check lands with the Phase C HelloPWA wiring.)
 2. **Mount prefix → fully app-chosen.** No reserved name; the router enforces only
    non-collision with bundle paths. Android's build-time constraint is handled by the
    `pwa.json` `build.serve` declaration (above), not by reserving a fixed prefix.

@@ -59,10 +59,10 @@ JSON-compatible shape works.
 
 ## Built-in plugins
 
-`WindowPlugin` and `ClipboardPlugin` are auto-installed on every
-backend — apps don't need to opt in. Everything else is à la carte so
-apps that don't need a tray / file dialogs / biometrics don't pay the
-binary or runtime cost.
+`WindowPlugin`, `AppPlugin` (`app.quit` / `app.name` / `app.version`),
+and `ClipboardPlugin` are auto-installed on every backend — apps don't
+need to opt in. Everything else is à la carte so apps that don't need a
+tray / file dialogs / biometrics don't pay the binary or runtime cost.
 
 ```swift
 try runtime.run { ctx in

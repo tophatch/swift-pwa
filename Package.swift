@@ -122,6 +122,11 @@ let package = Package(
     products: [
         .library(name: "SwiftPWA", targets: ["SwiftPWA"]),
         .library(name: "SwiftPWACore", targets: ["SwiftPWACore"]),
+        // Optional ZIP-extraction engine for `fs.extractZip`. Apps that
+        // import content packs add this product and inject
+        // `ZIPExtractor()` into `FsPlugin`; everyone else links neither it
+        // nor ZIPFoundation.
+        .library(name: "SwiftPWAArchive", targets: ["SwiftPWAArchive"]),
         .library(name: "SwiftPWATestSupport", targets: ["_SwiftPWATestSupport"]),
         .executable(name: "swift-pwa", targets: ["swift-pwa-cli"]),
         // CI-internal: the Windows test runner. See the matching
@@ -140,7 +145,12 @@ let package = Package(
         // swift-crypto presents an API-compatible surface across
         // platforms (and on Apple it just shadows CryptoKit). The CLI
         // is the only consumer; the runtime side stays on CryptoKit.
-        .package(url: "https://github.com/apple/swift-crypto", "3.0.0" ..< "5.0.0")
+        .package(url: "https://github.com/apple/swift-crypto", "3.0.0" ..< "5.0.0"),
+        // ZIPFoundation backs the optional `SwiftPWAArchive` target (the
+        // `fs.extractZip` engine). It's isolated in its own target so apps
+        // that don't import content packs never link it — `SwiftPWACore`
+        // stays free of third-party runtime dependencies.
+        .package(url: "https://github.com/weichsel/ZIPFoundation", from: "0.9.0")
     ],
     targets: [
         // MARK: - Platform-agnostic core
@@ -156,6 +166,21 @@ let package = Package(
         .target(
             name: "_SwiftPWATestSupport",
             dependencies: ["SwiftPWACore"],
+            swiftSettings: swiftSettings
+        ),
+
+        // MARK: - Optional ZIP-extraction engine (fs.extractZip)
+
+        // Isolated so the ZIPFoundation dependency is linked only by apps
+        // that opt into content-pack import. `SwiftPWACore` defines the
+        // `ArchiveExtractor` protocol; this target provides the concrete
+        // `ZIPExtractor`. The umbrella deliberately does NOT depend on it.
+        .target(
+            name: "SwiftPWAArchive",
+            dependencies: [
+                "SwiftPWACore",
+                .product(name: "ZIPFoundation", package: "ZIPFoundation")
+            ],
             swiftSettings: swiftSettings
         ),
 
@@ -387,6 +412,11 @@ let package = Package(
                 .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
                 "_SwiftPWATestSupport"
             ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAArchiveTests",
+            dependencies: ["SwiftPWAArchive", "SwiftPWACore"],
             swiftSettings: swiftSettings
         ),
         .testTarget(

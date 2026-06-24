@@ -72,6 +72,11 @@ struct InitTests {
         #expect(yml.contains("v\(SwiftPWAVersion.current)"))
         #expect(yml.contains("--target windows"))
         #expect(yml.contains("softprops/action-gh-release"))
+        // The CLI version lives in a single workflow-level env var that the
+        // three download URLs reference — not hardcoded three times.
+        #expect(yml.contains("SWIFT_PWA_CLI_VERSION: \"v\(SwiftPWAVersion.current)\""))
+        #expect(yml.contains("$SWIFT_PWA_CLI_VERSION/swift-pwa-macos-arm64"))
+        #expect(yml.contains("$env:SWIFT_PWA_CLI_VERSION/swift-pwa-windows-x86_64.exe"))
 
         let noCI = parent.appendingPathComponent("NoCI")
         try await Init.parse(["NoCI", "--path", noCI.path, "--no-ci-workflow"]).run()
@@ -217,6 +222,20 @@ struct InitTests {
         // `<App>.app/web` on macOS where the bundler doesn't put it.
         #expect(appSwift.contains("Bundle.main.resourceURL"))
         #expect(!appSwift.contains("Bundle.main.bundleURL.appendingPathComponent(\"web\")"))
+    }
+
+    @Test("stamps the generated App.swift with the CLI version so doctor can flag drift")
+    func appSwiftCarriesVersionStamp() async throws {
+        let parent = tmpDir()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+
+        let target = parent.appendingPathComponent("MyApp")
+        try await Init.parse(["MyApp", "--path", target.path]).run()
+
+        let appSwift = try String(contentsOf: target.appendingPathComponent("Sources/MyApp/App.swift"), encoding: .utf8)
+        #expect(appSwift.contains("// swift-pwa-generated: v\(SwiftPWAVersion.current)"))
+        #expect(Doctor.stampedVersion(in: appSwift) == SwiftPWAVersion.current)
     }
 
     @Test("auto-adopts in place when a pwa.json already exists (no flag needed)")

@@ -62,6 +62,7 @@
         private init() {
             use(WindowPlugin())
             use(PlatformInfoPlugin())
+            use(AppPlugin())
             // Auto-register `ClipboardPlugin` so apps don't have to —
             // every other backend's `AppContext` does the same. Apps
             // can override with their own `ctx.use(ClipboardPlugin(...))`

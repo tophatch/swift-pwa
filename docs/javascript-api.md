@@ -20,6 +20,16 @@ The wire envelope (`{v, kind, id, cmd, payload}`) is identical across
 WKWebView, WebKitGTK, and WebView2 — same JS code runs unchanged on
 every backend.
 
+To discover what's actually wired up at runtime — which opt-in plugins
+the Swift side installed, plus any custom commands — call `__platform.info`.
+It returns the live command list so the page can feature-detect instead
+of guessing:
+
+```js
+const { os, commands, tempDir } = await __SWIFT_PWA__.invoke('__platform.info');
+if (commands.includes('biometric.authenticate')) { /* show the unlock button */ }
+```
+
 ## Built-in plugins (auto-installed on every backend)
 
 ### `window.*`
@@ -30,13 +40,13 @@ const { ids }    = await __SWIFT_PWA__.invoke('window.list');
 await __SWIFT_PWA__.invoke('window.setTitle',      { title: 'Hello' });
 const { title }  = await __SWIFT_PWA__.invoke('window.title');
 await __SWIFT_PWA__.invoke('window.setSize',       { width: 1024, height: 768 });
-const { size }   = await __SWIFT_PWA__.invoke('window.size');
+const { width, height } = await __SWIFT_PWA__.invoke('window.size');
 await __SWIFT_PWA__.invoke('window.setPosition',   { x: 100, y: 100 });
-const { pos }    = await __SWIFT_PWA__.invoke('window.position');
+const { x, y }   = await __SWIFT_PWA__.invoke('window.position');
 await __SWIFT_PWA__.invoke('window.focus');
 await __SWIFT_PWA__.invoke('window.minimize');
 await __SWIFT_PWA__.invoke('window.maximize');
-await __SWIFT_PWA__.invoke('window.setFullscreen', { fullscreen: true });
+await __SWIFT_PWA__.invoke('window.setFullscreen', { on: true });
 const { isFullscreen } = await __SWIFT_PWA__.invoke('window.isFullscreen');
 await __SWIFT_PWA__.invoke('window.close');
 
@@ -49,6 +59,25 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
 
 `Window.position()` / `setPosition` / `.didMove` are no-ops on the GTK4
 backend (Wayland refuses to give apps their own position).
+
+### `app.*`
+
+Process-level lifecycle and identity — the things `window.*` deliberately
+doesn't cover. `window.close` closes a *window*; `app.quit` exits the
+whole process (on macOS, closing the last window leaves the app alive in
+the menu bar, so a "Quit" button wants `app.quit`).
+
+```js
+await __SWIFT_PWA__.invoke('app.quit');              // clean exit (code 0)
+await __SWIFT_PWA__.invoke('app.quit', { exitCode: 1 });
+const { value: name }    = await __SWIFT_PWA__.invoke('app.name');
+const { value: version } = await __SWIFT_PWA__.invoke('app.version');
+```
+
+`app.name` / `app.version` read the bundle's `Info.plist`
+(`CFBundleDisplayName` / `CFBundleShortVersionString`). `name` falls back
+to the process name when no bundle is present; `version` is the empty
+string on hosts without an `Info.plist` (Linux / Android).
 
 ### `clipboard.*`
 
@@ -94,17 +123,17 @@ or `UIActivityViewController` instead). GTK4 dialogs require GTK 4.10+.
 await __SWIFT_PWA__.invoke('fs.writeText',   { path, contents: 'hi' });
 const { contents } = await __SWIFT_PWA__.invoke('fs.readText', { path });
 
-await __SWIFT_PWA__.invoke('fs.writeBinary', { path, base64: '...' });
-const { base64 } = await __SWIFT_PWA__.invoke('fs.readBinary', { path });
+await __SWIFT_PWA__.invoke('fs.writeBinary', { path, dataBase64: '...' });
+const { dataBase64 } = await __SWIFT_PWA__.invoke('fs.readBinary', { path });
 
 const { exists } = await __SWIFT_PWA__.invoke('fs.exists',   { path });
 await __SWIFT_PWA__.invoke('fs.mkdir',    { path, recursive: true });
 await __SWIFT_PWA__.invoke('fs.remove',   { path, recursive: true });
 const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path });
-await __SWIFT_PWA__.invoke('fs.copy',     { src, dst });
-await __SWIFT_PWA__.invoke('fs.rename',   { src, dst });
+await __SWIFT_PWA__.invoke('fs.copy',     { from, to });
+await __SWIFT_PWA__.invoke('fs.rename',   { from, to });
 const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
-// → { size, isDir, isFile, modifiedMillis }
+// → { size, isDir, isFile, modified }   // modified: ms since epoch, may be null
 ```
 
 `FsPlugin` does not enforce a path scope. Apps that need a sandbox
@@ -115,10 +144,11 @@ should layer it themselves — typically by gating writes behind
 
 ```js
 await __SWIFT_PWA__.invoke('tray.setIcon',    { path: '/path/to/icon.png' });
-await __SWIFT_PWA__.invoke('tray.setTooltip', { tooltip: 'My app' });
+await __SWIFT_PWA__.invoke('tray.setTooltip', { text: 'My app' });
 await __SWIFT_PWA__.invoke('tray.setMenu',    { items: [
-    { id: 'show',  label: 'Show window'  },
-    { id: 'quit',  label: 'Quit', accelerator: 'Cmd+Q' },
+    { id: 'show', label: 'Show window' },
+    { id: '',     label: '', separator: true },
+    { id: 'quit', label: 'Quit', enabled: true },
 ]});
 await __SWIFT_PWA__.invoke('tray.setVisible', { visible: true });
 
@@ -137,7 +167,7 @@ spec gives the desktop panel ownership of click semantics on Linux.
 const { granted } = await __SWIFT_PWA__.invoke('notifications.requestAuthorization');
 if (granted) {
     await __SWIFT_PWA__.invoke('notifications.send', {
-        title: 'Build complete', body: 'Done in 4.3s', sound: 'default',
+        title: 'Build complete', body: 'Done in 4.3s', sound: true,
     });
 }
 ```

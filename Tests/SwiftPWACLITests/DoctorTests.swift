@@ -15,4 +15,20 @@ struct DoctorTests {
         let cmd = try Doctor.parse([])
         #expect(cmd.target == nil)
     }
+
+    @Test("reads the generated-shell version stamp")
+    func readsStamp() {
+        let stamped = "// swift-pwa-generated: v1.2.3\nimport SwiftPWA\n"
+        #expect(Doctor.stampedVersion(in: stamped) == "1.2.3")
+    }
+
+    @Test("tolerates a stamp without the leading v")
+    func stampWithoutV() {
+        #expect(Doctor.stampedVersion(in: "// swift-pwa-generated: 0.9.0\n") == "0.9.0")
+    }
+
+    @Test("returns nil for an unstamped source")
+    func noStamp() {
+        #expect(Doctor.stampedVersion(in: "import SwiftPWA\nstruct App {}\n") == nil)
+    }
 }

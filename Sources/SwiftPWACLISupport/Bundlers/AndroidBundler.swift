@@ -116,7 +116,13 @@ struct AndroidBundler {
         // src/main layout.
         let main = app.appendingPathComponent("src/main")
         try FileManager.default.createDirectory(at: main, withIntermediateDirectories: true)
-        try AndroidTemplates.androidManifestXml(packageId: pkg, label: label).write(
+
+        // Launcher icon: drop the source PNG into res/mipmap/ic_launcher.png
+        // and reference it from the manifest. aapt/Gradle scale it per
+        // density at build time, so a single PNG is enough — no pre-resize.
+        let iconStaged = try stageLauncherIcon(into: main)
+
+        try AndroidTemplates.androidManifestXml(packageId: pkg, label: label, hasIcon: iconStaged).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
             atomically: true, encoding: .utf8
         )
@@ -276,6 +282,26 @@ struct AndroidBundler {
     /// `lib<TargetName>.so` once the user's package is configured to
     /// build a shared object (see `docs/android-setup.md`); `soBaseName`
     /// is that `<TargetName>`, resolved by `ExecutableNameResolver`.
+    /// Copy the manifest's PNG icon to `res/mipmap/ic_launcher.png`.
+    /// Returns whether an icon was staged (drives the manifest's
+    /// `android:icon` attribute). Best-effort: a missing or non-PNG icon
+    /// just yields the platform-default launcher icon, same as before.
+    private func stageLauncherIcon(into main: URL) throws -> Bool {
+        guard let icon = manifest.icon else { return false }
+        let src = projectRoot.appendingPathComponent(icon)
+        guard src.pathExtension.lowercased() == "png",
+              FileManager.default.fileExists(atPath: src.path)
+        else { return false }
+        let mipmap = main.appendingPathComponent("res/mipmap")
+        try FileManager.default.createDirectory(at: mipmap, withIntermediateDirectories: true)
+        let dst = mipmap.appendingPathComponent("ic_launcher.png")
+        if FileManager.default.fileExists(atPath: dst.path) {
+            try FileManager.default.removeItem(at: dst)
+        }
+        try FileManager.default.copyItem(at: src, to: dst)
+        return true
+    }
+
     private func stageJniLibs(into appModule: URL, soBaseName: String) async throws {
         let jniLibs = appModule.appendingPathComponent("src/main/jniLibs")
         try FileManager.default.createDirectory(at: jniLibs, withIntermediateDirectories: true)

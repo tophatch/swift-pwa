@@ -127,12 +127,21 @@ struct IPABundler {
         // fall back to the system-default empty UILaunchScreen.
         let storyboardName = await compileLaunchScreen(into: app)
 
-        try InfoPlistGenerator.iOS(
+        // App icon: compile the single source PNG into a real AppIcon via
+        // `actool` (which generates every size + the Assets.car). Returns
+        // the CFBundleIcons* keys actool emits, which we merge into the
+        // Info.plist we write ourselves.
+        let iconPlistKeys = await compileAppIcon(into: app)
+
+        var plist = InfoPlistGenerator.iOS(
             manifest: manifest,
             executableName: executableName,
             launchStoryboardName: storyboardName
         )
-        .write(to: app.appendingPathComponent("Info.plist"))
+        for (key, value) in iconPlistKeys {
+            plist[key] = value
+        }
+        try plist.write(to: app.appendingPathComponent("Info.plist"))
 
         // SwiftPM resource bundles (e.g. swift-pwa_SwiftPWACore.bundle holding bridge.js).
         for entry in (try? fm.contentsOfDirectory(atPath: productsDir.path)) ?? []
@@ -178,6 +187,66 @@ struct IPABundler {
             throw BundlerError.iosSimulatorRuntimeMissing
         }
     }
+
+    /// Best-effort: compile `manifest.icon` (a single 1024×1024 PNG) into a
+    /// real iOS app icon via `actool`, which generates every required size,
+    /// writes `Assets.car` + the icon files into the `.app`, and emits a
+    /// partial Info.plist with the `CFBundleIcons*` keys. We return those
+    /// keys to merge into the Info.plist we write. A single "universal"
+    /// 1024 icon is the modern (Xcode 14+) single-size app-icon form.
+    /// Skips quietly (no icon, not a failed build) if the icon is missing /
+    /// not a PNG / `actool` errors.
+    private func compileAppIcon(into app: URL) async -> [String: Any] {
+        guard let iconPath = manifest.icon else { return [:] }
+        let iconURL = projectRoot.appendingPathComponent(iconPath)
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: iconURL.path),
+              iconURL.pathExtension.lowercased() == "png"
+        else { return [:] }
+
+        let tmp = fm.temporaryDirectory.appendingPathComponent("swift-pwa-appicon-\(UUID().uuidString)")
+        let assets = tmp.appendingPathComponent("Assets.xcassets")
+        let iconset = assets.appendingPathComponent("AppIcon.appiconset")
+        defer { try? fm.removeItem(at: tmp) }
+        do {
+            try fm.createDirectory(at: iconset, withIntermediateDirectories: true)
+            try fm.copyItem(at: iconURL, to: iconset.appendingPathComponent("icon.png"))
+            try Self.appIconContentsJSON.write(
+                to: iconset.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8
+            )
+            let partial = tmp.appendingPathComponent("icon-info.plist")
+            let platform = simulator ? "iphonesimulator" : "iphoneos"
+            try await Shell.run("/usr/bin/env", [
+                "xcrun", "actool",
+                "--compile", app.path,
+                "--platform", platform,
+                "--minimum-deployment-target", manifest.ios?.minimumSystemVersion ?? "18.0",
+                "--app-icon", "AppIcon",
+                "--output-partial-info-plist", partial.path,
+                assets.path
+            ])
+            if let data = try? Data(contentsOf: partial),
+               let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
+            {
+                return dict
+            }
+        } catch {
+            print("note: app icon generation skipped (\(error)). The build is otherwise fine.")
+        }
+        return [:]
+    }
+
+    /// Asset-catalog manifest for a single 1024×1024 universal iOS app
+    /// icon (Xcode 14+ single-size form). `actool` expands it to the full
+    /// size set at compile time.
+    private static let appIconContentsJSON = """
+    {
+      "images" : [
+        { "filename" : "icon.png", "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" }
+      ],
+      "info" : { "author" : "xcode", "version" : 1 }
+    }
+    """
 
     /// Best-effort: build a launch storyboard from `manifest.icon` if it's a
     /// PNG. Drops `LaunchIcon.png` into the bundle root so the storyboard's

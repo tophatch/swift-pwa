@@ -240,15 +240,16 @@ swift run swift-pwa build --target android                            # → MyAp
 swift run swift-pwa build --target android --cross-compile-android --android-abis arm64-v8a,x86_64
 ```
 
-`pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup).
+`pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup). If `pwa.json` declares a [`build.prebuild`](#configuring-pwajson) command, every `build` runs it first.
 
-The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md).
+The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md). To update the CLI itself, run `swift-pwa self-update`.
 
 ## Roadmap
 
 - **v0.5** (released) — Android backend at desktop parity: Swift target, JNI shim, Kotlin / Gradle scaffold, full plugin set including streaming `updater.install` events, `setFullscreen` via `WindowInsetsControllerCompat`, multi-window via Activity-per-window, and transparent SAF `content://` URI handling in `Fs`. CI runs the cross-compile + `assembleDebug` pipeline on every push. Wiring lives in [docs/android-setup.md](docs/android-setup.md); the on-device test loop in [docs/android-on-device-testing.md](docs/android-on-device-testing.md).
 - **v0.5.1 / v0.5.2** (released) — CLI developer-experience pass for adopting an existing web app: `pwa.json` `executable_name` (now auto-discovered from the package, rarely needed), `swift-pwa init` in-place adoption (auto-detected), host-default `--target`, `App.swift` seeded from the manifest `window` block, actionable `build` preflight errors, and a [docs/tutorials/](docs/tutorials/) series.
-- **Friendliness wave** (on `main`, unreleased) — making "package a web app cross-platform" require minimal setup: `swift-pwa init` scaffolds a **GitHub Actions release workflow** (tag → all desktop platforms built in the cloud; `swift-pwa generate-ci` for existing projects); one `pwa.json` `icon` PNG now becomes the **iOS + Android app icon** too (not just macOS); **`swift-pwa doctor`** checks per-target toolchain prerequisites; and `build --target macos --notarize` **automates notarization** (submit → wait → staple).
+- **v0.6.0** (released) — "friendliness wave" making "package a web app cross-platform" require minimal setup: `swift-pwa init` scaffolds a **GitHub Actions release workflow** (tag → all desktop platforms built in the cloud; `swift-pwa generate-ci` for existing projects); one `pwa.json` `icon` PNG now becomes the **iOS + Android app icon** too (not just macOS); **`swift-pwa doctor`** checks per-target toolchain prerequisites; `build --target macos --notarize` **automates notarization** (submit → wait → staple); and **`swift-pwa dev`** runs a built-in live-reload server.
+- **v0.6.1 / v0.6.2** (released) — a second ease-of-use pass: an **`AppPlugin`** (`app.quit` / `app.name` / `app.version`, so a Quit button needs no Swift); **`doctor` flags a generated `App.swift` that lags the CLI** (the shell is version-stamped); a single `SWIFT_PWA_CLI_VERSION` in the generated workflow; a corrected JS API reference; a **`build.prebuild`** hook in `pwa.json` for codegen / asset steps that produce part of `web/`; and **`swift-pwa self-update`** to update the CLI in place.
 
 Next up, in priority order:
 
@@ -259,6 +260,7 @@ Next up, in priority order:
 5. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
 6. **Windows `.exe` icon** — embed an `.ico` generated from the `pwa.json` icon (the one platform the icon pipeline doesn't yet cover).
 7. **Built-in live reload on Windows** — the `swift-pwa dev` server is POSIX-only today (macOS / Linux); Windows still needs `--server <url>`.
+8. **Homebrew tap** — `brew install tophatch/tap/swift-pwa` as the idiomatic macOS / Linux install + upgrade story. `swift-pwa self-update` already covers the no-brew and Windows cases.
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail. [`CHANGELOG.md`](CHANGELOG.md) has the per-release breakdown.
 

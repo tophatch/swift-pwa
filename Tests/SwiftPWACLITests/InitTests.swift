@@ -55,6 +55,29 @@ struct InitTests {
         #expect(fm.fileExists(atPath: target.appendingPathComponent(".git").path))
     }
 
+    @Test("scaffolds a release CI workflow by default; --no-ci-workflow skips it")
+    func scaffoldsReleaseWorkflow() async throws {
+        let parent = tmpDir()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        try FileManager.default.createDirectory(at: parent, withIntermediateDirectories: true)
+        let fm = FileManager.default
+
+        let withCI = parent.appendingPathComponent("WithCI")
+        try await Init.parse(["WithCI", "--path", withCI.path]).run()
+        let workflow = withCI.appendingPathComponent(".github/workflows/release.yml")
+        #expect(fm.fileExists(atPath: workflow.path))
+        let yml = try String(contentsOf: workflow, encoding: .utf8)
+        // Pins the CLI to this release and covers the three desktop jobs.
+        #expect(yml.contains("swift-pwa-macos-arm64"))
+        #expect(yml.contains("v\(SwiftPWAVersion.current)"))
+        #expect(yml.contains("--target windows"))
+        #expect(yml.contains("softprops/action-gh-release"))
+
+        let noCI = parent.appendingPathComponent("NoCI")
+        try await Init.parse(["NoCI", "--path", noCI.path, "--no-ci-workflow"]).run()
+        #expect(!fm.fileExists(atPath: noCI.appendingPathComponent(".github/workflows/release.yml").path))
+    }
+
     @Test("normalises hyphenated names so the generated Swift compiles")
     func normalisesHyphenatedName() async throws {
         let parent = tmpDir()

@@ -236,23 +236,21 @@ struct Build: AsyncParsableCommand {
             )
         }
 
-        // 2. The bundler locates the built binary at
-        // `.build/release/<binaryName>`, and `<binaryName>` is the SwiftPM
-        // target name, which can't contain whitespace. If `name` has a
-        // space and no `executable_name` override was set, the build would
-        // compile fine (the target name comes from Package.swift) and then
-        // fail *late* at the bundling step looking for a binary that can't
-        // exist. Catch it up front with the fix.
-        let binaryName = manifest.binaryName
-        if binaryName.contains(where: \.isWhitespace) {
+        // 2. The bundler discovers the built executable's name from the
+        // package itself (`swift package describe`), so a `name` with
+        // spaces is fine — the SwiftPM target name comes from
+        // Package.swift, not from `name`. The one thing we *can* validate
+        // up front is an explicit `executable_name` override: it has to
+        // name a SwiftPM target, which can't contain whitespace. (When
+        // unset, the probe resolves the real name; nothing to check.)
+        if let exe = manifest.executableName, exe.contains(where: \.isWhitespace) {
+            let suggestion = exe.split(whereSeparator: \.isWhitespace).joined()
             throw ValidationError(
                 """
-                pwa.json: the executable name '\(binaryName)' contains whitespace, but it has to \
-                match a SwiftPM target name (the value after `name:` in Package.swift), which can't.
-                `name` is the human-facing label (Finder / dock / window title) and is allowed to \
-                contain spaces. Set a separate `executable_name` to your SwiftPM target name, e.g.:
-                  { "name": "\(binaryName)", "executable_name": "\(binaryName.split(whereSeparator: \.isWhitespace)
-                    .joined())", ... }
+                pwa.json: `executable_name` ('\(exe)') contains whitespace, but it must match a \
+                SwiftPM target name (the value after `name:` in Package.swift), which can't contain \
+                spaces. Drop the spaces (e.g. "\(suggestion)"), or remove `executable_name` entirely \
+                to let swift-pwa read the target name from the package.
                 """
             )
         }

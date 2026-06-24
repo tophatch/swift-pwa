@@ -173,15 +173,17 @@ struct Init: AsyncParsableCommand {
 
     /// The default manifest for a brand-new project. `name` is the
     /// human-facing display string (window title / Finder label) and may
-    /// contain spaces; `executableName` is the SwiftPM target name (the
-    /// sanitized identifier) and is only emitted when it differs from
-    /// `name`, so an all-identifier-safe name like "MyApp" produces a
-    /// clean manifest with no redundant `executable_name`.
-    static func freshManifest(identifier: String, displayName: String, id: String) -> PWAManifest {
+    /// contain spaces. We deliberately *don't* emit `executable_name`:
+    /// the SwiftPM target is named `identifier` (in the generated
+    /// `Package.swift`), and the bundlers discover that from the package
+    /// itself, so a redundant `executable_name` in the manifest would
+    /// only be noise. `identifier` still drives `Package.swift` /
+    /// `Sources/<name>/` / the `@main` struct.
+    static func freshManifest(identifier _: String, displayName: String, id: String) -> PWAManifest {
         PWAManifest(
             id: id,
             name: displayName,
-            executableName: identifier == displayName ? nil : identifier,
+            executableName: nil,
             version: "0.1.0",
             description: nil,
             icon: nil,
@@ -207,13 +209,11 @@ struct Init: AsyncParsableCommand {
     /// object (not a Codable round-trip) precisely so unknown / hand-added
     /// fields survive.
     ///
-    /// One field is force-set rather than merge-if-absent:
-    /// `executable_name`. `init` generates `Package.swift` with the
-    /// SwiftPM target named after `identifier`, so the bundler must look
-    /// for `.build/release/<identifier>`. If the user's existing `name`
-    /// isn't that identifier (e.g. it has spaces), we pin
-    /// `executable_name` to `identifier` so the two can't silently drift.
-    /// Writes the merged object back and returns it decoded.
+    /// We don't touch `executable_name`: `init` generates `Package.swift`
+    /// with the SwiftPM target named after `identifier`, and the bundlers
+    /// discover that target name from the package itself, so an existing
+    /// (possibly spaced) `name` doesn't need pinning. Writes the merged
+    /// object back and returns it decoded.
     static func mergeIntoExistingManifest(
         at url: URL, identifier: String, displayName: String, id: String
     ) throws -> PWAManifest {
@@ -232,13 +232,6 @@ struct Init: AsyncParsableCommand {
 
         for (key, value) in defaultsObject where object[key] == nil {
             object[key] = value
-        }
-
-        // Pin executable_name to the generated SwiftPM target name unless
-        // the user already declared one or their `name` is already exactly
-        // the identifier (in which case binaryName == name == identifier).
-        if object["executable_name"] == nil, (object["name"] as? String) != identifier {
-            object["executable_name"] = identifier
         }
 
         let merged = try JSONSerialization.data(withJSONObject: object, options: [.prettyPrinted, .sortedKeys])

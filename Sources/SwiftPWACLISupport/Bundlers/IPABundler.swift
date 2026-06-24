@@ -24,6 +24,10 @@ struct IPABundler {
         if simulator {
             try await Self.ensureSimulatorRuntimeInstalled()
         }
+        // The SwiftPM target / product name (== xcodebuild scheme),
+        // resolved from the package rather than guessed from the display
+        // `name`.
+        let exe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
         let derived = outputDir.appendingPathComponent("ios-derived")
         let destination = simulator
             ? "generic/platform=iOS Simulator"
@@ -34,7 +38,7 @@ struct IPABundler {
             "xcodebuild",
             // The scheme is the SwiftPM target / product name, which may
             // differ from the human-facing display `name`.
-            "-scheme", manifest.binaryName,
+            "-scheme", exe,
             "-workspace", projectRoot.path,
             "-destination", destination,
             "-configuration", configuration,
@@ -60,12 +64,12 @@ struct IPABundler {
         let productsDir = derived
             .appendingPathComponent("Build/Products")
             .appendingPathComponent("\(configuration)-\(suffix)")
-        let binary = productsDir.appendingPathComponent(manifest.binaryName)
+        let binary = productsDir.appendingPathComponent(exe)
         guard FileManager.default.fileExists(atPath: binary.path) else {
-            throw BundlerError.binaryMissing(binary, expectedName: manifest.binaryName)
+            throw BundlerError.binaryMissing(binary, expectedName: exe)
         }
 
-        let app = try await assembleApp(binary: binary, productsDir: productsDir)
+        let app = try await assembleApp(binary: binary, productsDir: productsDir, executableName: exe)
 
         if simulator {
             // Adhoc-sign so the simulator will accept it.
@@ -106,7 +110,7 @@ struct IPABundler {
     /// the SwiftPM resource bundles (e.g. `bridge.js`), the project's `web/`
     /// directory, and write `Info.plist`. iOS bundles are flat — no
     /// `Contents/MacOS` wrapper.
-    private func assembleApp(binary: URL, productsDir: URL) async throws -> URL {
+    private func assembleApp(binary: URL, productsDir: URL, executableName: String) async throws -> URL {
         let fm = FileManager.default
         let app = outputDir.appendingPathComponent("\(manifest.name).app")
         if fm.fileExists(atPath: app.path) {
@@ -116,15 +120,19 @@ struct IPABundler {
         // The binary inside the .app must match CFBundleExecutable (the
         // SwiftPM target name), even though the .app filename above uses
         // the human-facing display `name`.
-        try fm.copyItem(at: binary, to: app.appendingPathComponent(manifest.binaryName))
+        try fm.copyItem(at: binary, to: app.appendingPathComponent(executableName))
 
         // Launch screen: if the manifest has a PNG icon, compile a
         // storyboard that centers it on a black background. Otherwise
         // fall back to the system-default empty UILaunchScreen.
         let storyboardName = await compileLaunchScreen(into: app)
 
-        try InfoPlistGenerator.iOS(manifest: manifest, launchStoryboardName: storyboardName)
-            .write(to: app.appendingPathComponent("Info.plist"))
+        try InfoPlistGenerator.iOS(
+            manifest: manifest,
+            executableName: executableName,
+            launchStoryboardName: storyboardName
+        )
+        .write(to: app.appendingPathComponent("Info.plist"))
 
         // SwiftPM resource bundles (e.g. swift-pwa_SwiftPWACore.bundle holding bridge.js).
         for entry in (try? fm.contentsOfDirectory(atPath: productsDir.path)) ?? []

@@ -90,11 +90,12 @@ The bundler:
 The bundle filename and the `CFBundleName` / `CFBundleDisplayName`
 Finder/dock label come from `name` (which may contain spaces, e.g.
 "My App.app"), while the executable inside `Contents/MacOS/` and
-`CFBundleExecutable` come from `executable_name` — the SwiftPM target
-name, which can't contain spaces. Set `executable_name` whenever `name`
-has a space; omit it when `name` is already identifier-safe and it falls
-back to `name`. See the [README](../README.md#configuring-pwajson) for
-the full rationale.
+`CFBundleExecutable` are named after the SwiftPM target — which can't
+contain spaces. You don't have to keep the two in sync: the bundler
+reads the real target name from the package (`swift package describe`),
+so a spaced `name` just works. The optional `executable_name` overrides
+that only when a package builds more than one executable. See the
+[README](../README.md#configuring-pwajson) for the full rationale.
 
 ### About panel
 

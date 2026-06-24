@@ -85,14 +85,13 @@ struct InitTests {
         // The window title preserves the user's original string.
         #expect(appSwift.contains("title: \"test-app\""))
 
-        // `name` is the human-facing display string (preserved verbatim);
-        // `executable_name` is the sanitized SwiftPM target the bundler
-        // locates under `.build/release/`. The two only diverge when
-        // sanitization changed something, as here.
+        // `name` is the human-facing display string (preserved verbatim).
+        // `init` does NOT write `executable_name` — the SwiftPM target is
+        // `testApp` (asserted via Package.swift above) and the bundler
+        // discovers that from the package, so the manifest stays clean.
         let manifest = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
         #expect(manifest.name == "test-app")
-        #expect(manifest.executableName == "testApp")
-        #expect(manifest.binaryName == "testApp")
+        #expect(manifest.executableName == nil)
         #expect(manifest.window.title == "test-app")
     }
 
@@ -146,14 +145,15 @@ struct InitTests {
 
         // pwa.json merged, not overwritten: user values preserved, the
         // non-schema field survives, missing sections filled, and
-        // executable_name pinned to the generated SwiftPM target.
+        // missing sections filled, user values kept, no executable_name
+        // pin (the bundler discovers the SwiftPM target from the package).
         let merged = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
         #expect(merged.id == "com.acme.game")
         #expect(merged.name == "My Cool Game")
         #expect(merged.version == "2.1.0")
         #expect(merged.window.width == 800)
         #expect(merged.window.resizable == false)
-        #expect(merged.executableName == "MyCoolGame")
+        #expect(merged.executableName == nil)
         #expect(merged.android != nil) // section added by the merge
         let rawMerged = try String(contentsOf: target.appendingPathComponent("pwa.json"), encoding: .utf8)
         #expect(rawMerged.contains("customTeamField"))
@@ -212,12 +212,13 @@ struct InitTests {
         try await Init.parse(["AcmeApp", "--path", target.path]).run()
 
         #expect(fm.fileExists(atPath: target.appendingPathComponent("Package.swift").path))
-        // Existing manifest merged, not clobbered: user values kept, target pinned.
+        // Existing manifest merged, not clobbered: user values kept, and
+        // no executable_name written (resolved from the package instead).
         let merged = try PWAManifest.load(from: target.appendingPathComponent("pwa.json"))
         #expect(merged.id == "com.acme.app")
         #expect(merged.version == "3.0.0")
         #expect(merged.window.width == 640)
-        #expect(merged.executableName == "AcmeApp")
+        #expect(merged.executableName == nil)
     }
 
     @Test("auto-adopts in place when only a web/ directory exists")

@@ -66,6 +66,9 @@ struct AndroidBundler {
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
 
         let pkg = androidPackageId()
+        // SwiftPM product name → `lib<name>.so`. Resolved from the
+        // package rather than guessed from the display `name`.
+        let soBase = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
         let label = manifest.name
         let versionName = manifest.version
         let versionCode = manifest.android?.versionCode ?? 1
@@ -98,7 +101,7 @@ struct AndroidBundler {
             minSdk: minSdk,
             targetSdk: targetSdk,
             abis: abis,
-            soBaseName: soBaseName(),
+            soBaseName: soBase,
             signing: signing
         ).write(
             to: app.appendingPathComponent("build.gradle.kts"),
@@ -121,7 +124,7 @@ struct AndroidBundler {
         // Kotlin sources go under `java/<package-as-path>/...`
         let kotlinDir = main.appendingPathComponent("java/" + pkg.replacingOccurrences(of: ".", with: "/"))
         try FileManager.default.createDirectory(at: kotlinDir, withIntermediateDirectories: true)
-        try AndroidTemplates.mainActivityKt(packageId: pkg, soBaseName: soBaseName()).write(
+        try AndroidTemplates.mainActivityKt(packageId: pkg, soBaseName: soBase).write(
             to: kotlinDir.appendingPathComponent("MainActivity.kt"),
             atomically: true, encoding: .utf8
         )
@@ -180,7 +183,7 @@ struct AndroidBundler {
         // doesn't produce one — the project still lays out cleanly
         // so the developer can inspect / fix in isolation.
         if crossCompile {
-            try await stageJniLibs(into: app)
+            try await stageJniLibs(into: app, soBaseName: soBase)
         } else {
             print(
                 "note: --no-cross-compile in effect; jniLibs/ will be empty until you run `swift build --triple <android>` and copy the .so files manually"
@@ -269,15 +272,11 @@ struct AndroidBundler {
     }
 
     /// `lib<name>.so` is what Android's loader expects under
-    /// `jniLibs/<abi>/`. SwiftPM's executable target on Android
-    /// produces `lib<TargetName>.so` once the user's package is
-    /// configured to build a shared object (see
-    /// `docs/android-setup.md`).
-    private func soBaseName() -> String {
-        manifest.binaryName
-    }
-
-    private func stageJniLibs(into appModule: URL) async throws {
+    /// `jniLibs/<abi>/`. SwiftPM's executable target on Android produces
+    /// `lib<TargetName>.so` once the user's package is configured to
+    /// build a shared object (see `docs/android-setup.md`); `soBaseName`
+    /// is that `<TargetName>`, resolved by `ExecutableNameResolver`.
+    private func stageJniLibs(into appModule: URL, soBaseName: String) async throws {
         let jniLibs = appModule.appendingPathComponent("src/main/jniLibs")
         try FileManager.default.createDirectory(at: jniLibs, withIntermediateDirectories: true)
 
@@ -345,21 +344,21 @@ struct AndroidBundler {
                 // library target if/when SwiftPM gains a "library
                 // executable" knob.
                 let candidates = [
-                    projectRoot.appendingPathComponent(".build/\(triple)/release/lib\(soBaseName()).so"),
-                    projectRoot.appendingPathComponent(".build/\(triple)/release/\(soBaseName())"),
-                    projectRoot.appendingPathComponent(".build/release/lib\(soBaseName()).so"),
-                    projectRoot.appendingPathComponent(".build/release/\(soBaseName())")
+                    projectRoot.appendingPathComponent(".build/\(triple)/release/lib\(soBaseName).so"),
+                    projectRoot.appendingPathComponent(".build/\(triple)/release/\(soBaseName)"),
+                    projectRoot.appendingPathComponent(".build/release/lib\(soBaseName).so"),
+                    projectRoot.appendingPathComponent(".build/release/\(soBaseName)")
                 ]
                 guard let so = candidates.first(where: { FileManager.default.fileExists(atPath: $0.path) }) else {
                     failures
                         .append(
-                            "\(abi): build succeeded but no \(soBaseName()) / lib\(soBaseName()).so output found under .build/"
+                            "\(abi): build succeeded but no \(soBaseName) / lib\(soBaseName).so output found under .build/"
                         )
                     continue
                 }
                 let abiDir = jniLibs.appendingPathComponent(abi)
                 try FileManager.default.createDirectory(at: abiDir, withIntermediateDirectories: true)
-                let stagedAppSO = abiDir.appendingPathComponent("lib\(soBaseName()).so")
+                let stagedAppSO = abiDir.appendingPathComponent("lib\(soBaseName).so")
                 try FileManager.default.copyItem(at: so, to: stagedAppSO)
 
                 // The Swift binary `dlopen`s the Swift runtime stdlib

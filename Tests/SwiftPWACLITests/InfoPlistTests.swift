@@ -19,7 +19,7 @@ struct InfoPlistTests {
 
     @Test("macOS plist has required keys and serializes")
     func mac() throws {
-        let plist = InfoPlistGenerator.macOS(manifest: manifest)
+        let plist = InfoPlistGenerator.macOS(manifest: manifest, executableName: manifest.binaryName)
         let data = try plist.encode()
         let parsed = try #require(PropertyListSerialization.propertyList(
             from: data, options: [], format: nil
@@ -39,19 +39,21 @@ struct InfoPlistTests {
         var withCopyright = manifest
         withCopyright.macos?.copyright = "© 2026 Acme Corp."
         let parsed = try #require(PropertyListSerialization.propertyList(
-            from: InfoPlistGenerator.macOS(manifest: withCopyright).encode(),
+            from: InfoPlistGenerator.macOS(manifest: withCopyright, executableName: withCopyright.binaryName).encode(),
             options: [], format: nil
         ) as? [String: Any])
         #expect(parsed["NSHumanReadableCopyright"] as? String == "© 2026 Acme Corp.")
     }
 
-    @Test("CFBundleExecutable uses executable_name while display keys use name")
+    @Test("CFBundleExecutable uses the resolved executable name while display keys use name")
     func executableNameDecoupledFromDisplay() throws {
         var m = manifest
         m.name = "Field Notes" // display, has a space
-        m.executableName = "FieldNotes" // SwiftPM target
+        // The bundler resolves the SwiftPM target name and passes it in;
+        // the plist's executable key must use that, not the display name.
         let parsed = try #require(PropertyListSerialization.propertyList(
-            from: InfoPlistGenerator.macOS(manifest: m).encode(), options: [], format: nil
+            from: InfoPlistGenerator.macOS(manifest: m, executableName: "FieldNotes").encode(),
+            options: [], format: nil
         ) as? [String: Any])
         // The executable key must match the on-disk binary (the target).
         #expect(parsed["CFBundleExecutable"] as? String == "FieldNotes")
@@ -61,7 +63,8 @@ struct InfoPlistTests {
 
         // iOS mirrors the same split.
         let ios = try #require(PropertyListSerialization.propertyList(
-            from: InfoPlistGenerator.iOS(manifest: m).encode(), options: [], format: nil
+            from: InfoPlistGenerator.iOS(manifest: m, executableName: "FieldNotes").encode(),
+            options: [], format: nil
         ) as? [String: Any])
         #expect(ios["CFBundleExecutable"] as? String == "FieldNotes")
         #expect(ios["CFBundleDisplayName"] as? String == "Field Notes")
@@ -69,7 +72,7 @@ struct InfoPlistTests {
 
     @Test("iOS plist declares a UIScene configuration")
     func ios() throws {
-        let plist = InfoPlistGenerator.iOS(manifest: manifest)
+        let plist = InfoPlistGenerator.iOS(manifest: manifest, executableName: manifest.binaryName)
         let parsed = try #require(PropertyListSerialization.propertyList(
             from: plist.encode(), options: [], format: nil
         ) as? [String: Any])
@@ -88,7 +91,9 @@ struct InfoPlistTests {
     @Test("iOS plist switches to UILaunchStoryboardName when a storyboard is supplied")
     func iosLaunchStoryboard() throws {
         let parsed = try #require(PropertyListSerialization.propertyList(
-            from: InfoPlistGenerator.iOS(manifest: manifest, launchStoryboardName: "LaunchScreen").encode(),
+            from: InfoPlistGenerator.iOS(
+                manifest: manifest, executableName: manifest.binaryName, launchStoryboardName: "LaunchScreen"
+            ).encode(),
             options: [], format: nil
         ) as? [String: Any])
         #expect(parsed["UILaunchStoryboardName"] as? String == "LaunchScreen")

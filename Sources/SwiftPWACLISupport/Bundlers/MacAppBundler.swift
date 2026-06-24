@@ -25,10 +25,11 @@ struct MacAppBundler {
         let binDir = projectRoot
             .appendingPathComponent(".build")
             .appendingPathComponent("release")
-        // The built binary is named after the SwiftPM target
-        // (`manifest.binaryName`), which may differ from the human-facing
-        // display `name` used for the `.app` filename / CFBundleName.
-        let exe = manifest.binaryName
+        // The built binary is named after the SwiftPM target — resolved
+        // from the package itself (via `swift package describe`), which
+        // may differ from the human-facing display `name` used for the
+        // `.app` filename / CFBundleName.
+        let exe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
         let binary = binDir.appendingPathComponent(exe)
         guard FileManager.default.fileExists(atPath: binary.path) else {
             throw BundlerError.binaryMissing(binary, expectedName: exe)
@@ -48,7 +49,7 @@ struct MacAppBundler {
         try FileManager.default.copyItem(at: binary, to: macOSDir.appendingPathComponent(exe))
 
         // 3. Info.plist
-        let plist = InfoPlistGenerator.macOS(manifest: manifest)
+        let plist = InfoPlistGenerator.macOS(manifest: manifest, executableName: exe)
         try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
 
         // PkgInfo
@@ -128,18 +129,16 @@ enum BundlerError: Error, CustomStringConvertible {
     var description: String {
         switch self {
         case let .binaryMissing(url, name):
-            // The overwhelmingly common cause is a mismatch between the
-            // name the bundler looks for (pwa.json `name` /
-            // `executable_name`) and the SwiftPM target that actually
-            // built — point straight at it rather than just reporting the
-            // missing path.
+            // The bundler resolves the executable name from the package
+            // (`swift package describe`) or an explicit `executable_name`,
+            // so reaching here means the build didn't actually produce
+            // that product — point at the likely causes.
             """
             expected built binary at \(url.path)
-            The build succeeded but produced no executable named '\(name)'. This usually means \
-            pwa.json's `name` (or `executable_name`) doesn't match the SwiftPM target name in \
-            Package.swift. The target name can't contain spaces; set pwa.json `name` to your \
-            human-facing label and `executable_name` to the SwiftPM target name (the value after \
-            `name:` in Package.swift).
+            The build ran but produced no executable named '\(name)'. Likely causes: the build \
+            didn't finish producing the executable product, or pwa.json's `executable_name` names \
+            a SwiftPM target that doesn't exist in Package.swift. If `executable_name` is set, make \
+            it match a target name there (or remove it to let swift-pwa read the name from the package).
             """
         case let .toolMissing(name): "required tool not on PATH: \(name)"
         case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
@@ -204,11 +203,15 @@ enum Shell {
         return merged
     }
 
-    /// Run a short command and capture its stdout. Used for `which`.
-    static func capture(_ executable: String, _ arguments: [String]) async throws -> String {
+    /// Run a short command and capture its stdout. Used for `which` and
+    /// `swift package describe`.
+    static func capture(
+        _ executable: String, _ arguments: [String], cwd: URL? = nil
+    ) async throws -> String {
         let task = Process()
         task.executableURL = try resolveExecutable(executable)
         task.arguments = arguments
+        if let cwd { task.currentDirectoryURL = cwd }
         let stdout = Pipe()
         task.standardOutput = stdout
         task.standardError = FileHandle.standardError // surface errors

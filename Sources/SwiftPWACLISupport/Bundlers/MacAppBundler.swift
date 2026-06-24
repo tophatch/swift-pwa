@@ -205,8 +205,15 @@ enum Shell {
 
     /// Run a short command and capture its stdout. Used for `which` and
     /// `swift package describe`.
+    ///
+    /// `timeout` (seconds) bounds the run: if the process is still alive
+    /// after the deadline it's terminated and the call throws. Used by
+    /// `doctor`, whose whole job is probing toolchains that might be
+    /// wedged (e.g. an `xcrun` stuck on Xcode first-launch) — a probe must
+    /// never hang the checker.
     static func capture(
-        _ executable: String, _ arguments: [String], cwd: URL? = nil
+        _ executable: String, _ arguments: [String],
+        cwd: URL? = nil, timeout: TimeInterval? = nil, discardStderr: Bool = false
     ) async throws -> String {
         let task = Process()
         task.executableURL = try resolveExecutable(executable)
@@ -214,8 +221,16 @@ enum Shell {
         if let cwd { task.currentDirectoryURL = cwd }
         let stdout = Pipe()
         task.standardOutput = stdout
-        task.standardError = FileHandle.standardError // surface errors
+        // Surface a tool's own diagnostics by default; `doctor` discards
+        // them (it only wants the probe's success / stdout, not noisy
+        // banners from a half-configured toolchain).
+        task.standardError = discardStderr ? FileHandle.nullDevice : FileHandle.standardError
         try task.run()
+        if let timeout {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if task.isRunning { task.terminate() }
+            }
+        }
         task.waitUntilExit()
         let outData = stdout.fileHandleForReading.readDataToEndOfFile()
         if task.terminationStatus != 0 {

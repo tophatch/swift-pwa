@@ -130,9 +130,12 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 ### Build and run
 
 ```bash
+swift-pwa doctor                   # check this machine has the toolchains a build needs
 swift run swift-pwa build          # --target defaults to the host (macos/linux/windows)
 open ./build/MyApp.app
 ```
+
+`swift-pwa doctor [--target <platform>]` reports, with a copy-paste fix for each gap, whether the tools a target needs are installed (Xcode for iOS, `linuxdeploy` for AppImages, the Android NDK, etc.) — so a missing prerequisite is a friendly message up front rather than a cryptic mid-build failure.
 
 `--target` defaults to the desktop platform you're building on, so you can omit it for a host build; pass it explicitly for cross-targets (`--target ios`, `--target android`) or to bundle for another desktop OS.
 

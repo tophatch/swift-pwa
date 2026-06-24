@@ -152,8 +152,10 @@ jobs:
           # cyclic-module-import error against the Windows SDK shipped
           # on `windows-latest` — fixed in 6.1+. Stay on the latest
           # 6.1 stable for now; bump as new releases land.
-          branch: swift-6.1.2-release
-          tag: 6.1.2-RELEASE
+          # (`swift-version` / `swift-build` replaced the deprecated
+          # `branch` / `tag` inputs; values are unchanged.)
+          swift-version: swift-6.1.2-release
+          swift-build: 6.1.2-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         shell: pwsh
@@ -288,7 +290,7 @@ jobs:
         # found" warning under AGP 8.5; AGP 8.7+ relaxes the
         # constraint, but we pin AGP 8.5 in the scaffold so the
         # workflow follows that pin).
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@v5
         with:
           distribution: temurin
           java-version: "17"
@@ -316,7 +318,7 @@ jobs:
           test -f "$APK" || (echo "no APK at $APK" && exit 1)
           ls -lh "$APK"
       - name: Upload APK as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: HelloPWA-debug-apk
           path: Examples/HelloPWA/build/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk

@@ -135,6 +135,12 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 "build": { "prebuild": "node scripts/build-index.mjs" }
 ```
 
+**Optional `build.serve`** — serve extra directories on the bundle origin under an app-chosen path prefix, so page JS references runtime-imported content (a downloaded "content pack" of images / video) with an origin-relative URL — `videoEl.src = "/packs/<id>/clip.webm"` — that works unchanged on every backend, streamed with HTTP range requests. On desktop the equivalent is `ctx.serveDirectory(_:at:)` at `configure()` time; Android needs the mount declared here (its asset loader is built before any Swift runs). See [docs/swift-api.md](docs/swift-api.md#serving-extra-directories-content-packs).
+
+```json
+"build": { "serve": [ { "mount": "/packs", "from": "data/packs" } ] }
+```
+
 ### Develop with live reload
 
 ```bash

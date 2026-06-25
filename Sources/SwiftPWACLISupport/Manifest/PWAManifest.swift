@@ -305,8 +305,41 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Skip it for a fast local iteration with `build --skip-prebuild`.
         public var prebuild: String?
 
-        public init(prebuild: String? = nil) {
+        /// Directories served on the bundle origin under an app-chosen path
+        /// prefix (e.g. `/packs`), so page JS can reference runtime-imported
+        /// content with an origin-relative URL on every backend. On **desktop**
+        /// `ctx.serveDirectory(_:at:)` is the imperative equivalent and is read
+        /// at `configure()` time; on **Android** the `WebViewAssetLoader` is
+        /// built at Activity-init (before any Swift runs), so mounts that must
+        /// exist at startup have to be declared here — the bundler wires each
+        /// into the generated Kotlin as an `addPathHandler`. See the
+        /// content-packs design doc.
+        ///
+        /// ```json
+        /// "build": { "serve": [ { "mount": "/packs", "from": "data/packs" } ] }
+        /// ```
+        public var serve: [ServeMount]?
+
+        public init(prebuild: String? = nil, serve: [ServeMount]? = nil) {
             self.prebuild = prebuild
+            self.serve = serve
+        }
+    }
+
+    /// One served-directory declaration (see ``BuildSection/serve``).
+    public struct ServeMount: Codable, Sendable, Equatable {
+        /// The origin-relative path prefix page JS uses (e.g. `/packs`). Must
+        /// not be the bundle root `/`.
+        public var mount: String
+        /// Source directory, relative to the per-app **data** dir by default
+        /// (`data/packs` → `<dataDir>/packs`). A `cache/…` prefix roots it at
+        /// the **cache** dir instead. These are the only two roots an Android
+        /// app can serve from without a runtime path.
+        public var from: String
+
+        public init(mount: String, from: String) {
+            self.mount = mount
+            self.from = from
         }
     }
 

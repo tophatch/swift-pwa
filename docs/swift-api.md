@@ -103,6 +103,50 @@ UIScene-aware: a single scene is polished, multi-scene scaffolded.
 The cross-platform `Window` protocol documents per-method support;
 unsupported operations log a one-shot warning rather than throwing.
 
+## Serving extra directories (content packs)
+
+`ctx.serveDirectory(_:at:)` mounts a directory on the **bundle origin**
+under an app-chosen path prefix, so page JS can reference it with an
+origin-relative URL that works unchanged on every backend:
+
+```swift
+@MainActor func configure(_ ctx: any AppContext) throws {
+    let packs = ctx.dataDirectory().appendingPathComponent("packs")
+    try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+    ctx.serveDirectory(packs, at: "/packs")   // served at /packs/... on the bundle origin
+    _ = try ctx.createWindow(...)
+}
+```
+
+```js
+// Same code on macOS, Linux, Windows, iOS, Android:
+videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range requests
+```
+
+- **Read-only** (GET). Writes still go through `fs.*`. Mounting is the
+  app author's decision — page JS can't mount arbitrary paths.
+- Mounts can be added/removed at runtime (`ctx.unserveDirectory(at:)`)
+  and take effect for in-flight requests, so a pack extracted *after* a
+  window exists is immediately fetchable — no per-pack call needed; the
+  app mounts the **container** once.
+- Range / `206 Partial Content` is honored on all backends, so a large
+  `<video>` seeks/streams off disk instead of buffering.
+- The prefix is fully app-chosen (anything but the bundle root `/`).
+
+**Android** builds its asset loader before any Swift runs, so a mount
+that must exist at startup is declared in `pwa.json` instead — the
+bundler wires it into the generated Activity:
+
+```json
+"build": { "serve": [ { "mount": "/packs", "from": "data/packs" } ] }
+```
+
+`from` is rooted at the per-app data dir by default (a `cache/…` prefix
+roots it at the cache dir). On desktop the imperative
+`ctx.serveDirectory` is the equivalent and is read at `configure()` time;
+a runtime `serveDirectory` for an *undeclared* prefix is a desktop-only
+capability. See [docs/design/runtime-content-packs.md](design/runtime-content-packs.md).
+
 ## Window events
 
 ```swift

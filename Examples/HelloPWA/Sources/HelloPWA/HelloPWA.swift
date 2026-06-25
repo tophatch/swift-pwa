@@ -1,5 +1,11 @@
 import Foundation
 import SwiftPWA
+// `ZIPExtractor` lives in SwiftPWAArchive (ZIPFoundation / tar.exe); on Android
+// that can't build, so the extractor comes from the SwiftPWA umbrella
+// (`AndroidArchiveExtractor`, Kotlin java.util.zip over JNI) instead.
+#if !os(Android)
+    import SwiftPWAArchive
+#endif
 
 // `@main` is the desktop entry point; on Android it's still defined
 // so SwiftPM's linker can resolve its `--defsym=main=HelloPWA_main`
@@ -65,11 +71,44 @@ func configure(_ ctx: any AppContext) throws {
     ctx.use(DialogPlugin(SystemDialog()))
     ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
 
-    // Filesystem plugin — Foundation-backed, identical surface
-    // on every backend (SystemFs lives in SwiftPWACore). Opt-in
-    // because filesystem access is the plugin most likely to be
-    // misused.
-    ctx.use(FsPlugin(SystemFs()))
+    // Filesystem plugin — Foundation-backed, identical surface on every
+    // backend (SystemFs lives in SwiftPWACore). Opt-in because filesystem
+    // access is the plugin most likely to be misused. We inject an archive
+    // extractor so the content-packs demo can use `fs.extractZip` —
+    // `ZIPExtractor` everywhere except Android, which routes to Kotlin's
+    // java.util.zip via `AndroidArchiveExtractor`.
+    #if os(Android)
+        let extractor: any ArchiveExtractor = AndroidArchiveExtractor()
+    #else
+        let extractor: any ArchiveExtractor = ZIPExtractor()
+    #endif
+    ctx.use(FsPlugin(SystemFs(extractor: extractor)))
+
+    // Content packs: serve a writable directory under the bundle origin so
+    // page JS can reference runtime-extracted media at `/packs/...` on every
+    // backend. The app mounts the *container* once; packs extracted into it
+    // at runtime are served immediately. On Android the same mount is declared
+    // in `pwa.json` (`build.serve`) because the asset loader is built before
+    // this code runs; here we mount it imperatively for desktop.
+    let packsDir = ctx.dataDirectory().appendingPathComponent("packs", isDirectory: true)
+    try? FileManager.default.createDirectory(at: packsDir, withIntermediateDirectories: true)
+    ctx.serveDirectory(packsDir, at: "/packs")
+
+    // A tiny custom command the demo's JS calls to get a real on-disk path to
+    // the embedded sample `.zip` (writing it into the cache dir). This stands
+    // in for `dialog.openFile` — a real app would let the user pick a pack —
+    // and works identically on Android, where bundled web assets have no
+    // filesystem path that `fs.extractZip` could read. Paths are captured here
+    // (configure runs on the MainActor) so the handler — which runs on the
+    // cooperative pool — doesn't have to hop back for the dir lookups.
+    let cacheDir = ctx.cacheDirectory()
+    let sampleDest = packsDir.appendingPathComponent("sample", isDirectory: true)
+    ctx.registry.register("demo.stageSamplePack", typed: { (_: EmptyArgs, _) -> StageResult in
+        try? FileManager.default.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+        let zipURL = cacheDir.appendingPathComponent("sample-pack.zip")
+        try Data(sampleContentPackZip).write(to: zipURL)
+        return StageResult(zipPath: zipURL.path, destPath: sampleDest.path)
+    })
 
     // Auto-updater. The real backends — `AppleUpdater`,
     // `LinuxAppImageUpdater`, `WindowsUpdater` — only do
@@ -99,6 +138,13 @@ func configure(_ ctx: any AppContext) throws {
 
 struct NowResult: Codable, Sendable {
     let iso: String
+}
+
+/// Returned by `demo.stageSamplePack`: where the sample `.zip` was written
+/// and where the demo should extract it (a `/packs/sample` mount on disk).
+struct StageResult: Codable, Sendable {
+    let zipPath: String
+    let destPath: String
 }
 
 /// Local stand-in for a real `Updater` used by the demo's "Updater"

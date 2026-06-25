@@ -236,10 +236,18 @@ path outside the data/cache roots). On Android only the `pwa.json`-declared moun
 guaranteed at startup; a later `serveDirectory` call for an undeclared prefix is a
 desktop-only capability (documented as such).
 
-### Core refactor: `AssetProvider` value → shared `AssetRouter`
+### Core refactor: `AssetProvider` value → shared multi-mount class
 
-Replace the per-window `AssetProvider` value with a shared, thread-safe **`AssetRouter`**
-class (NSLock, `@unchecked Sendable` — same concurrency idiom as `CommandRegistry`):
+> **As implemented (Phase A2):** rather than introduce a separately-named `AssetRouter`,
+> the existing public `AssetProvider` was evolved from a struct into the `final class`
+> below — same name, so none of the six backend call sites (`AssetProvider(root:)` +
+> `.resolve(_:)`) needed editing, and the change is a pure, behavior-preserving refactor
+> with the bundle as the `/` mount. It gains `mount(_:at:)` / `unmount(at:)` and a
+> `fileSize` on `Resolved` (for range). The description below uses "AssetRouter" for the
+> concept.
+
+Replace the per-window `AssetProvider` value with a shared, thread-safe class
+(NSLock, `@unchecked Sendable` — same concurrency idiom as `CommandRegistry`):
 
 ```
 final class AssetRouter {                      // held by AppContext; shared into each handler
@@ -329,7 +337,19 @@ carry their own value (dir API, faster bundle streaming).
    dependency-free. The command is registered only when an extractor is injected
    (`FsPlugin(SystemFs(extractor: ZIPExtractor()))` or a `.withZip()` convenience), so
    apps that don't import packs link neither ZIPFoundation nor the command. **Not a new
-   plugin.**
+   plugin.** *(Implemented in Phase 0a.)*
+
+   **Windows finding + decision (from the Phase 0a CI de-risk):** ZIPFoundation does
+   **not** build on Windows — its `CZLib` shim uses `#import <zlib.h>`, which clang-cl
+   rejects (the MSVC `#import`-typelib feature), and Windows ships no system zlib. So
+   ZIPFoundation is gated off Windows (the `ZIPExtractor` is a throwing
+   `unsupportedPlatform` stub there today). **Decision: keep full parity** — Phase C
+   ships a `WindowsZIPExtractor` that shells to bundled `bsdtar` (`tar.exe`, present on
+   Windows 10 1803+). The same `ArchiveExtractor` contract applies; the traversal /
+   symlink / zip-bomb guards are enforced by a pre-extract listing pass (`tar -tvf`)
+   since `tar` won't enforce our limits. macOS / iOS / Linux / Android keep
+   ZIPFoundation. (Android confirmed indirectly: Linux — same clang + sysroot-zlib
+   shape — builds it; a direct check lands with the Phase C HelloPWA wiring.)
 2. **Mount prefix → fully app-chosen.** No reserved name; the router enforces only
    non-collision with bundle paths. Android's build-time constraint is handled by the
    `pwa.json` `build.serve` declaration (above), not by reserving a fixed prefix.
@@ -341,4 +361,50 @@ carry their own value (dir API, faster bundle streaming).
 5. **`app.dataDir` + `app.cacheDir` → both, from the start.**
 6. **Release line → 0.6.x.** Pre-1.0, rapidly developing, few adopters; no need to hold
    these new APIs for a 0.7.0.
+
+## Resume notes (implementation status + how to work)
+
+All work is on branch **`feat/content-packs`** (PR #3), committed + pushed.
+
+**Status:**
+- ✅ **Phase 0a** — `SwiftPWAArchive`/`ZIPExtractor` (Windows = throwing stub). CI green.
+- ✅ **Phase A1** — `app.dataDir`/`app.cacheDir` + `PlatformDirectories` (+ `ctx.dataDirectory()`/`cacheDirectory()`). Android `filesDir`/`cacheDir` use a fallback derived from the temp dir; a real `PlatformDirectories.Hook` should be installed by the Android backend (still TODO).
+- ✅ **Phase A2** — `AssetProvider` is now a multi-mount class (`mount`/`unmount`, `fileSize` on `Resolved`).
+- ✅ **Phase A3** — range/206 done on Apple (`WKSchemeHandler`, synchronous chunked, `@unchecked Sendable` — *not* `@MainActor`; CI Xcode SDK marks `WKURLSchemeHandler` `@MainActor` so off-main delivery is illegal) and GTK (both shims' `swiftpwa_uri_request_*` helpers + `SchemeBox`). **GTK verified headless on real WebKitGTK 6.0.** Shared `ByteRange` parser in Core.
+- ✅ **Phase B** — `ctx.serveDirectory(_:at:)`/`unserveDirectory(at:)` on the `AppContext` protocol (default extension forwarding to the shared router). The per-window `AssetProvider` is **hoisted to context level** (`AppContext.assetProvider`, a bundle-less `AssetProvider()`; the first `.bundled` window installs the `/` mount via `setBundleRoot`), so a runtime mount is visible to every window's handler. Apple + GTK work through the existing `resolve()` + range path (A3) — **GTK4 re-verified building on the box** after the adapter init-signature change. Windows: `WebResourceRequested` interception filtered on the bundle origin; bundle paths fall through to the native virtual-host mapping (`swiftpwa_w2_resource_passthrough`), served mounts answered range-aware off disk (`swiftpwa_w2_resource_respond_file` via `SHCreateStreamOnFileEx`; to-EOF ranges stream lazily, bounded ranges read a capped buffer — same hybrid as GTK) — **compile-only here, CI-verified**. Android: `pwa.json` `build.serve` (`PWAManifest.ServeMount`) → bundler emits `addPathHandler(<prefix>/, InternalStoragePathHandler(filesDir|cacheDir/<sub>))` in the generated Kotlin — **compile-only / generated-source-tested**. New Core helper `AssetProvider.isServedPrefix` (Windows triage) + unit tests; `ServeDirectoryTests` cover the AppContext extension.
+  - **Deferred to Phase C:** the Android `PlatformDirectories.Hook` (real `filesDir`/`cacheDir` via a new JNI accessor) so `app.dataDir()` returns the exact path the Kotlin serves from. The current fallback (`NSTemporaryDirectory()`'s sibling `files`) resolves to `/data/data/<pkg>/files` for the standard single-process layout, so the extract-then-serve flow already lines up; the proper hook lands with the HelloPWA wiring where a real device/emulator can verify it.
+- ✅ **Phase C** — `fs.extractZip`/`fs.listZip` + streaming `fs.extractZipProgress` wired through `Fs`/`SystemFs`/`FsPlugin` (registered only when an extractor is injected). `ArchiveExtractor` is **async** (one impl is inherently async — see Android). Per-platform extractor:
+  - **macOS / iOS / Linux** — `ZIPExtractor` (ZIPFoundation), all guards, staging-then-commit. Unit + registry tests on macOS.
+  - **Windows** — `ZIPExtractor` shells to `tar.exe` (bsdtar); guards enforced via a `tar -tvf` listing pre-pass (`BSDTarListParser`, tested against real `tar`). Compile-only here, CI-verified.
+  - **Android** — ZIPFoundation **does not build against Bionic libc** (confirmed on the real toolchain: pervasive `lstat`/`errno`/`S_IF*`/`mode_t` breakage — the Phase 0 risk #3, never actually exercised before because nothing cross-compiled `SwiftPWAArchive` for Android). So ZIPFoundation is gated off Android and `AndroidArchiveExtractor` (SwiftPWAAndroid) routes to Kotlin `java.util.zip` over the existing RPC bridge; guards (canonical-path traversal + zip-bomb) enforced Kotlin-side.
+  - **HelloPWA** exhibits the flow (extract embedded sample zip → serve via `/packs`); `pwa.json` `build.serve` declares the Android mount.
+  - **Verified end-to-end on a real Android device** (tablet over adb): app launches (runtime `.so` loads), `fs.extractZip` via java.util.zip returns `{entries:2}`, `fetch('/packs/sample/hello.png')` → `200 image/png`.
+
+**Phase C device findings (fixed):**
+- The Android bundler resolved the Swift runtime-`.so` bundle at the **macOS** swift-sdks path on a Linux host → skipped runtime bundling → APK crashed at `System.loadLibrary` on-device (CI's assemble-only check never caught it; every Linux-host APK incl. CI release artifacts was affected). Fixed by probing the real candidate roots (`~/.swiftpm/swift-sdks`, XDG, macOS `~/Library`).
+- `WebViewAssetLoader` matches path handlers in registration order; the catch-all `addPathHandler("/")` was registered before `/packs/`, shadowing served mounts (broken image). Fixed by registering `build.serve` mounts first.
+
+**Still open / follow-ups:**
+- Android `PlatformDirectories.Hook` (real `filesDir`/`cacheDir` via JNI) — turned out **not needed** for the demo: the temp-dir fallback resolved to `/data/.../files`, so `app.dataDir()` aligned with the Kotlin-served `filesDir/packs`. A proper hook is still nice-to-have for robustness.
+- Android `fs.extractZipProgress` emits a single terminal tick (unary RPC has no per-entry channel) — a streaming JNI channel could give true per-entry progress.
+- **Recurring CI flake (not content-packs):** `swift-test` intermittently hangs ~12 min *after all tests pass* on one of the two Linux GTK jobs (gtk3/gtk4 alternately) — a known Linux swift-testing teardown issue, likely the DevServer inotify watcher not torn down. Passes on retry. Worth a separate hardening pass.
+
+**Key gotchas learned this session:**
+- `WKURLSchemeHandler` is `@MainActor` in CI's Xcode SDK (not in my local SDK) → keep handler work on the main actor; deliver synchronously in chunks (reads only the requested bytes, so no full-file buffering).
+- WebKitGTK reads the response stream to **EOF** (`stream_length` is only a hint) → `finish_file` hybrid: ranges-to-EOF use the lazy seekable `GFileInputStream` (GB-safe, cancellable); **bounded** sub-ranges must read exactly their bytes (capped memory buffer) or the 206 body won't match `Content-Range`.
+- glib `gint64` imports as Swift `Int` on Linux x86_64 → wrap call args in `gint64(...)`.
+
+**Linux GTK build/verify box** (see also the saved project memory): host `bminisaix1p.local` (passwordless ssh; headless; no sudo; no appindicator → **build the GTK4 backend**). Repo clone at `~/swift-pwa`.
+```bash
+# Local → box sync (no git noise):
+rsync -az --exclude=.build --exclude=.git ~/Code/swift-pwa/ bminisaix1p.local:~/swift-pwa/
+# On box (GTK4 path; appindicator absent):
+export PATH="$HOME/.local/share/swiftly/bin:$PATH"; export SWIFT_PWA_GTK4=1
+cd ~/swift-pwa && swift build
+# A C-shim (systemLibrary) header change is NOT picked up incrementally → rm -rf .build.
+# Headless WebView run:
+export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+timeout 40 xvfb-run -a .build/x86_64-unknown-linux-gnu/debug/<exe> ./web
 ```
+Local `swift build`/`swift package` needs the git safe-directory workaround for dep resolution:
+`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all swift build`.

@@ -96,4 +96,119 @@ static inline void swiftpwa_evaluate_javascript(
     );
 }
 
+// ---------------------------------------------------------------------
+// Range-aware asset serving (content packs / large media)
+// ---------------------------------------------------------------------
+
+/// Read the request's "Range" header value, or NULL if absent. The caller
+/// must `g_free` the returned string.
+static inline char *swiftpwa_uri_request_range_header(WebKitURISchemeRequest *request) {
+    SoupMessageHeaders *headers = webkit_uri_scheme_request_get_http_headers(request);
+    if (!headers) return NULL;
+    const char *range = soup_message_headers_get_one(headers, "Range");
+    return range ? g_strdup(range) : NULL;
+}
+
+/// Finish `request` by streaming `length` bytes of the file at `path`
+/// starting at `offset`, with HTTP `status` (200 or 206) and `mime`. Reads
+/// straight from disk via a seekable `GFileInputStream` — the file is never
+/// fully buffered in memory. Adds `Accept-Ranges: bytes` and, for 206, a
+/// `Content-Range: bytes <offset>-<offset+length-1>/<total>` header.
+/// `webkit_uri_scheme_response_new` takes its own ref on the stream
+/// (transfer-none) so we release ours; `set_http_headers` is transfer-full
+/// so we don't. Returns 1 on success, 0 after finishing with an error.
+static inline int swiftpwa_uri_request_finish_file(
+    WebKitURISchemeRequest *request,
+    const char *path,
+    gint64 offset,
+    gint64 length,
+    gint64 total,
+    int status,
+    const char *mime
+) {
+    GFile *file = g_file_new_for_path(path);
+    GError *error = NULL;
+    GFileInputStream *fstream = g_file_read(file, NULL, &error);
+    g_object_unref(file);
+    if (!fstream) {
+        webkit_uri_scheme_request_finish_error(request, error);
+        if (error) g_error_free(error);
+        return 0;
+    }
+    if (offset > 0 &&
+        !g_seekable_seek(G_SEEKABLE(fstream), offset, G_SEEK_SET, NULL, &error)) {
+        webkit_uri_scheme_request_finish_error(request, error);
+        if (error) g_error_free(error);
+        g_object_unref(fstream);
+        return 0;
+    }
+
+    // WebKit reads the response stream to EOF (stream_length is only a
+    // Content-Length hint), so the stream must contain *exactly* the bytes
+    // to send. When the range runs to EOF the seeked file stream already
+    // yields exactly that — and WebKit reads it lazily/cancellably, so a
+    // multi-GB file never materializes (the streaming-video case). A
+    // bounded sub-range (ends before EOF) must be capped: read just those
+    // bytes (bounded ranges are small) so the 206 body matches
+    // Content-Range.
+    GInputStream *body = NULL;
+    if (offset + length >= total) {
+        body = G_INPUT_STREAM(fstream); // ownership flows to `body`
+    } else {
+        gpointer buf = g_malloc((gsize)length);
+        gsize got = 0;
+        gboolean ok = g_input_stream_read_all(
+            G_INPUT_STREAM(fstream), buf, (gsize)length, &got, NULL, &error);
+        g_object_unref(fstream);
+        if (!ok) {
+            g_free(buf);
+            webkit_uri_scheme_request_finish_error(request, error);
+            if (error) g_error_free(error);
+            return 0;
+        }
+        body = g_memory_input_stream_new_from_data(buf, (gssize)got, g_free);
+        length = (gint64)got; // honor a short read in the headers below
+    }
+
+    WebKitURISchemeResponse *response = webkit_uri_scheme_response_new(body, length);
+    webkit_uri_scheme_response_set_status(response, (guint)status, NULL);
+    if (mime) webkit_uri_scheme_response_set_content_type(response, mime);
+
+    SoupMessageHeaders *headers = soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE);
+    soup_message_headers_append(headers, "Accept-Ranges", "bytes");
+    soup_message_headers_append(headers, "Access-Control-Allow-Origin", "*");
+    if (status == 206) {
+        char *cr = g_strdup_printf(
+            "bytes %" G_GINT64_FORMAT "-%" G_GINT64_FORMAT "/%" G_GINT64_FORMAT,
+            offset, offset + length - 1, total);
+        soup_message_headers_append(headers, "Content-Range", cr);
+        g_free(cr);
+    }
+    webkit_uri_scheme_response_set_http_headers(response, headers);
+
+    webkit_uri_scheme_request_finish_with_response(request, response);
+    g_object_unref(response);
+    g_object_unref(body);
+    return 1;
+}
+
+/// Finish `request` with `416 Range Not Satisfiable` (empty body +
+/// `Content-Range: bytes *\/<total>`).
+static inline void swiftpwa_uri_request_finish_range_not_satisfiable(
+    WebKitURISchemeRequest *request,
+    gint64 total
+) {
+    GInputStream *empty = g_memory_input_stream_new();
+    WebKitURISchemeResponse *response = webkit_uri_scheme_response_new(empty, 0);
+    webkit_uri_scheme_response_set_status(response, 416, NULL);
+    SoupMessageHeaders *headers = soup_message_headers_new(SOUP_MESSAGE_HEADERS_RESPONSE);
+    char *cr = g_strdup_printf("bytes */%" G_GINT64_FORMAT, total);
+    soup_message_headers_append(headers, "Content-Range", cr);
+    g_free(cr);
+    webkit_uri_scheme_response_set_http_headers(response, headers);
+    webkit_uri_scheme_request_finish_with_response(request, response);
+    g_object_unref(response);
+    g_object_unref(empty);
+}
+
 #endif

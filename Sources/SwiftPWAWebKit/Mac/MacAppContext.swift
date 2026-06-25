@@ -6,6 +6,7 @@
     @MainActor
     public final class MacAppContext: AppContext {
         public let registry = CommandRegistry()
+        public let assetProvider = AssetProvider()
         public private(set) var windows: [WindowID: any Window] = [:]
         public var pendingExitCode: Int32?
         private var installedPlugins: Set<String> = []

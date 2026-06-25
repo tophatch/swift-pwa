@@ -38,6 +38,17 @@ public struct AppPlugin: Plugin {
         registry.register("app.version", typed: { (_: EmptyArgs, _) -> StringResult in
             StringResult(value: Self.appVersion())
         })
+
+        // Per-app writable roots. `dataDir` is persistent (the place to
+        // extract content packs into); `cacheDir` is disposable. Both are
+        // created on first read so JS can write into them immediately.
+        registry.register("app.dataDir", typed: { (_: EmptyArgs, _) -> StringResult in
+            StringResult(value: PlatformDirectories.dataDirectory(appID: Self.appID()).path)
+        })
+
+        registry.register("app.cacheDir", typed: { (_: EmptyArgs, _) -> StringResult in
+            StringResult(value: PlatformDirectories.cacheDirectory(appID: Self.appID()).path)
+        })
     }
 
     /// The human-facing app name. Prefers the bundle's display name, then
@@ -60,6 +71,29 @@ public struct AppPlugin: Plugin {
         if let short = info?["CFBundleShortVersionString"] as? String, !short.isEmpty { return short }
         if let build = info?["CFBundleVersion"] as? String, !build.isEmpty { return build }
         return ""
+    }
+
+    /// Stable identifier used to scope the per-app data / cache
+    /// directories on desktop. Prefers the bundle id; falls back to the
+    /// (filesystem-safe-ish) app name when unbundled.
+    static func appID() -> String {
+        if let id = Bundle.main.bundleIdentifier, !id.isEmpty { return id }
+        return appName()
+    }
+}
+
+public extension AppContext {
+    /// Persistent per-app data directory (created if absent) — the Swift-
+    /// side equivalent of the `app.dataDir` command. Use as the extraction
+    /// target for content packs and the root passed to `serveDirectory`.
+    func dataDirectory() -> URL {
+        PlatformDirectories.dataDirectory(appID: AppPlugin.appID())
+    }
+
+    /// Disposable per-app cache directory (created if absent) — the Swift-
+    /// side equivalent of `app.cacheDir`. The OS may evict its contents.
+    func cacheDirectory() -> URL {
+        PlatformDirectories.cacheDirectory(appID: AppPlugin.appID())
     }
 }
 

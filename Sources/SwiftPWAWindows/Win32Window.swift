@@ -116,7 +116,8 @@
             let adapter = try WebView2Adapter(
                 environment: environment,
                 parent: hwnd,
-                content: config.content
+                content: config.content,
+                sharedProvider: app.assetProvider
             )
             self.adapter = adapter
             webView = adapter

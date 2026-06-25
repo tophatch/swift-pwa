@@ -56,6 +56,58 @@ public protocol Fs: AnyObject, Sendable {
     /// File / directory metadata. `modified` is millisecond Unix epoch
     /// for compatibility with JS `new Date(...)`.
     func metadata(path: String) async throws -> FsMetadata
+
+    // MARK: - Archive (content packs)
+
+    /// Whether `fs.extractZip` / `fs.listZip` are available — true only
+    /// when an `ArchiveExtractor` is injected (`SystemFs(extractor:)`).
+    /// `FsPlugin` registers the zip commands only when this is true, so an
+    /// app that doesn't import packs links neither ZIPFoundation nor the
+    /// commands.
+    var supportsZip: Bool { get }
+
+    /// List a zip's central directory without extracting — lets a caller
+    /// validate a manifest entry before committing to a multi-GB extract.
+    func listZip(path: String) async throws -> [ArchiveEntry]
+
+    /// Extract `from` (a `.zip`) into `to` (created if absent), enforcing
+    /// `limits` (zip-bomb / traversal / symlink guards). `onProgress`, if
+    /// given, fires per entry. Bytes are read and written entry-by-entry —
+    /// they never cross the bridge.
+    func extractZip(
+        from: String,
+        to: String,
+        limits: ExtractLimits,
+        onProgress: (@Sendable (ExtractProgress) -> Void)?
+    ) async throws -> ExtractResult
+}
+
+/// Default archive surface: unsupported. Only `SystemFs` (with an injected
+/// extractor) overrides these, so `MockFs` and any other `Fs` get the
+/// no-op-but-clear-error behavior for free.
+public extension Fs {
+    var supportsZip: Bool {
+        false
+    }
+
+    func listZip(path _: String) async throws -> [ArchiveEntry] {
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "fs.listZip: no archive extractor configured — use FsPlugin(SystemFs(extractor: ZIPExtractor()))"
+        )
+    }
+
+    func extractZip(
+        from _: String,
+        to _: String,
+        limits _: ExtractLimits,
+        onProgress _: (@Sendable (ExtractProgress) -> Void)?
+    ) async throws -> ExtractResult {
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "fs.extractZip: no archive extractor configured — use FsPlugin(SystemFs(extractor: ZIPExtractor()))"
+        )
+    }
 }
 
 /// Backend hook for resolving `content://` URIs. Android's Storage
@@ -179,4 +231,91 @@ public struct FsExistsResult: Sendable, Codable, Equatable {
 public struct FsReadDirResult: Sendable, Codable, Equatable {
     public var entries: [FsEntry]
     public init(entries: [FsEntry]) { self.entries = entries }
+}
+
+// MARK: - Archive argument / result DTOs
+
+public struct FsListZipArgs: Sendable, Codable, Equatable {
+    public var from: String
+    public init(from: String) { self.from = from }
+}
+
+public struct FsListZipResult: Sendable, Codable, Equatable {
+    public var entries: [ArchiveEntry]
+    public init(entries: [ArchiveEntry]) { self.entries = entries }
+}
+
+public struct FsExtractZipArgs: Sendable, Codable, Equatable {
+    public var from: String
+    public var to: String
+    /// Zip-bomb guards. Omitted fields fall back to `ExtractLimits.default`
+    /// (generous-but-finite), never to unbounded — untrusted input.
+    public var maxUncompressedBytes: Int64?
+    public var maxEntries: Int?
+    public var maxCompressionRatio: Double?
+
+    public init(
+        from: String,
+        to: String,
+        maxUncompressedBytes: Int64? = nil,
+        maxEntries: Int? = nil,
+        maxCompressionRatio: Double? = nil
+    ) {
+        self.from = from
+        self.to = to
+        self.maxUncompressedBytes = maxUncompressedBytes
+        self.maxEntries = maxEntries
+        self.maxCompressionRatio = maxCompressionRatio
+    }
+
+    /// Merge the supplied guards over the safe defaults.
+    public var limits: ExtractLimits {
+        ExtractLimits(
+            maxUncompressedBytes: maxUncompressedBytes ?? ExtractLimits.default.maxUncompressedBytes,
+            maxEntries: maxEntries ?? ExtractLimits.default.maxEntries,
+            maxCompressionRatio: maxCompressionRatio ?? ExtractLimits.default.maxCompressionRatio
+        )
+    }
+}
+
+/// One event of the streaming `fs.extractZipProgress` subscription. `type`
+/// is `"progress"` (carries `entriesDone` / `bytesDone` / `totalEntries`)
+/// or `"done"` (carries the final `entries` / `uncompressedBytes`). Errors
+/// arrive as the stream's error termination, not a `type: "error"` event.
+public struct FsExtractEvent: Sendable, Codable, Equatable {
+    public var type: String
+    public var entriesDone: Int?
+    public var bytesDone: Int64?
+    public var totalEntries: Int?
+    public var entries: Int?
+    public var uncompressedBytes: Int64?
+
+    public static func progress(_ p: ExtractProgress) -> FsExtractEvent {
+        FsExtractEvent(
+            type: "progress",
+            entriesDone: p.entriesDone,
+            bytesDone: p.bytesDone,
+            totalEntries: p.totalEntries
+        )
+    }
+
+    public static func done(_ r: ExtractResult) -> FsExtractEvent {
+        FsExtractEvent(type: "done", entries: r.entries, uncompressedBytes: r.uncompressedBytes)
+    }
+
+    public init(
+        type: String,
+        entriesDone: Int? = nil,
+        bytesDone: Int64? = nil,
+        totalEntries: Int? = nil,
+        entries: Int? = nil,
+        uncompressedBytes: Int64? = nil
+    ) {
+        self.type = type
+        self.entriesDone = entriesDone
+        self.bytesDone = bytesDone
+        self.totalEntries = totalEntries
+        self.entries = entries
+        self.uncompressedBytes = uncompressedBytes
+    }
 }

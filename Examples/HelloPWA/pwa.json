@@ -7,6 +7,11 @@
     "directory": "Sources/HelloPWA/web",
     "entry": "index.html"
   },
+  "build": {
+    "serve": [
+      { "mount": "/packs", "from": "data/packs" }
+    ]
+  },
   "window": {
     "title": "Hello, swift-pwa",
     "width": 1024,

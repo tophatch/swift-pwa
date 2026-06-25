@@ -59,7 +59,7 @@
 
             titleStorage = config.title
 
-            let adapter = try WebKitGTKAdapter(parent: win, content: config.content)
+            let adapter = try WebKitGTKAdapter(parent: win, content: config.content, sharedProvider: app.assetProvider)
             self.adapter = adapter
             webView = adapter
             self.app = app

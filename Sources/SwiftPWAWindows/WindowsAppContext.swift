@@ -15,6 +15,7 @@
         public static let shared = WindowsAppContext()
 
         public let registry = CommandRegistry()
+        public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
         public private(set) var windows: [WindowID: any Window] = [:]
         public var pendingExitCode: Int32?
         private var installedPlugins: Set<String> = []

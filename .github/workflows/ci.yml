@@ -80,15 +80,16 @@ jobs:
         # alone is hundreds of clang invocations).
         run: swift build --build-tests
       - name: Test Core + CLI
-        # 12 minutes rather than 5: even with `--build-tests` having
-        # already produced the bundles, `swift test --filter` still
-        # does an incremental link pass on every invocation (visible in
-        # the log as `lld-link @response.txt` being the last thing the
-        # 5-min timeout was killing). 12 min gives test execution and
-        # the link plenty of headroom; the workflow-level default of
-        # 360 min remains the runaway-test safety net.
-        timeout-minutes: 12
-        run: swift test --verbose --filter SwiftPWACoreTests --filter SwiftPWACLITests
+        # Wrapped in Scripts/ci-test-linux.sh, which bounds each `swift
+        # test` with a timeout and retries ONLY on a clean timeout — the
+        # known swift-corelibs process-exit hang (all tests pass, then the
+        # async-`@main` drain never fires the final `exit()`; see the
+        # script header + docs/linux-setup.md). A real failure exits
+        # non-zero on the first attempt and fails the job immediately, so
+        # nothing is masked. 20 min covers up to 3 capped attempts plus
+        # the per-invocation incremental link pass.
+        timeout-minutes: 20
+        run: bash Scripts/ci-test-linux.sh --verbose
 
   linux-gtk4:
     runs-on: ubuntu-24.04
@@ -123,9 +124,11 @@ jobs:
       - name: Build test targets
         run: swift build --build-tests
       - name: Test Core + CLI
-        # See linux-gtk3 for the rationale on 12-minute timeout.
-        timeout-minutes: 12
-        run: swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests
+        # See linux-gtk3 + Scripts/ci-test-linux.sh: retry-on-timeout
+        # wrapper that tolerates the swift-corelibs process-exit hang
+        # without masking real failures.
+        timeout-minutes: 20
+        run: bash Scripts/ci-test-linux.sh
 
   windows:
     # Pinned to windows-2022 (matching release.yml) rather than

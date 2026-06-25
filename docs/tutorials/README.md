@@ -5,5 +5,6 @@ Step-by-step, copy-paste-friendly guides for common things you'll want to add wh
 | Tutorial | What you'll build |
 |---|---|
 | [Saving and loading files (Export / Import)](saving-and-loading-files.md) | Native **Save** / **Open** dialogs that write and read a file on disk (e.g. game saves, documents, settings), with an automatic browser fallback so one codebase runs everywhere. |
+| [Importing content packs (extract a zip, serve its media)](importing-content-packs.md) | Let users import a large `.zip` of media at runtime: extract it natively to disk (`fs.extractZip`, with zip-bomb / traversal guards) and serve its `<img>` / `<video>` from your app's origin (`ctx.serveDirectory`), range-streamed. |
 
 More to come. For the full reference behind these guides, see the [JavaScript API](../javascript-api.md) and [Swift API](../swift-api.md) docs; for per-platform build setup, see the [`*-setup.md`](../) docs.

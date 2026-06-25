@@ -307,6 +307,27 @@
             </section>
 
             <section class="section">
+                <h2>Content packs</h2>
+                <p>The runtime content-pack flow: extract a <code>.zip</code>
+                natively (<code>fs.extractZip</code>, bytes never cross the
+                bridge) into the app's data dir, then reference the extracted
+                media by an origin-relative URL served via
+                <code>ctx.serveDirectory("/packs")</code> — same code on every
+                backend, streamed with HTTP range requests. The sample pack is
+                staged to a real path by a small <code>demo.stageSamplePack</code>
+                command (standing in for <code>dialog.openFile</code>).</p>
+                <div class="actions">
+                    <button id="pack-list" data-requires="fs.listZip">Peek pack</button>
+                    <button id="pack-extract" data-requires="fs.extractZip">Install &amp; show</button>
+                </div>
+                <progress id="pack-progress" value="0" max="1" hidden></progress>
+                <div id="pack-result" hidden style="margin-top:12px">
+                    <img id="pack-image" alt="served pack image"
+                         style="max-width:200px;border:1px solid var(--border,#333);border-radius:8px" />
+                </div>
+            </section>
+
+            <section class="section">
                 <h2>Biometrics</h2>
                 <p>Cross-platform <code>biometric.canAuthenticate</code>
                 + <code>biometric.authenticate</code>. Touch ID / Face ID /
@@ -599,6 +620,48 @@
                     fsScratchPath = null;
                 } catch (e) { log("fs.remove failed: " + e.message); }
             },
+            packList: async () => {
+                try {
+                    const { zipPath } = await __SWIFT_PWA__.invoke("demo.stageSamplePack");
+                    const { entries } = await __SWIFT_PWA__.invoke("fs.listZip", { from: zipPath });
+                    log("fs.listZip → " + entries.map((e) => e.path + " (" + e.uncompressedSize + "B)").join(", "));
+                } catch (e) { log("fs.listZip failed: " + (e.message || e)); }
+            },
+            packExtract: async () => {
+                const progress = document.getElementById("pack-progress");
+                try {
+                    const { zipPath, destPath } = await __SWIFT_PWA__.invoke("demo.stageSamplePack");
+                    progress.hidden = false; progress.value = 0;
+                    // Stream extraction progress, then show the served media.
+                    await new Promise((resolve, reject) => {
+                        const unsub = __SWIFT_PWA__.subscribe(
+                            "fs.extractZipProgress",
+                            { from: zipPath, to: destPath },
+                            (e) => {
+                                if (e.type === "progress") {
+                                    progress.value = e.totalEntries ? e.entriesDone / e.totalEntries : 0;
+                                } else if (e.type === "done") {
+                                    log("fs.extractZip → " + e.entries + " entries, " + e.uncompressedBytes + "B");
+                                    unsub(); resolve();
+                                } else if (e.type === "error") {
+                                    unsub(); reject(new Error(e.message || "extract error"));
+                                }
+                            }
+                        );
+                    });
+                    progress.hidden = true;
+                    // Reference the extracted media by its served, origin-relative
+                    // URL — resolves through ctx.serveDirectory("/packs") on every
+                    // backend. Cache-bust so a re-install reloads the image.
+                    const img = document.getElementById("pack-image");
+                    img.src = "/packs/sample/hello.png?t=" + Date.now();
+                    document.getElementById("pack-result").hidden = false;
+                    log("serving /packs/sample/hello.png");
+                } catch (e) {
+                    progress.hidden = true;
+                    log("content pack failed: " + (e.message || e));
+                }
+            },
             bioStatus: async () => {
                 const r = await __SWIFT_PWA__.invoke("biometric.canAuthenticate");
                 if (r.available) {
@@ -795,6 +858,8 @@
         document.getElementById("fs-read").onclick   = actions.fsRead;
         document.getElementById("fs-meta").onclick   = actions.fsMeta;
         document.getElementById("fs-remove").onclick = actions.fsRemove;
+        document.getElementById("pack-list").onclick    = actions.packList;
+        document.getElementById("pack-extract").onclick  = actions.packExtract;
         document.getElementById("bio-status").onclick = actions.bioStatus;
         document.getElementById("bio-auth").onclick   = actions.bioAuth;
         document.getElementById("updater-check").onclick   = actions.updaterCheck;

@@ -37,13 +37,13 @@
         }
 
         @Test("round-trips files out of a zip onto disk")
-        func roundTrip() throws {
+        func roundTrip() async throws {
             let (zip, work) = try makeZip(["manifest.json": "{}", "media/clip.txt": "hello"])
             defer { try? FileManager.default.removeItem(at: work) }
             let dest = tmp()
             defer { try? FileManager.default.removeItem(at: dest) }
 
-            let result = try ZIPExtractor().extract(zipAt: zip, to: dest, limits: .default)
+            let result = try await ZIPExtractor().extract(zipAt: zip, to: dest, limits: .default)
             #expect(result.entries > 0)
             let clip = dest.appendingPathComponent("media/clip.txt")
             #expect(FileManager.default.fileExists(atPath: clip.path))
@@ -51,43 +51,43 @@
         }
 
         @Test("list reports entries without extracting")
-        func list() throws {
+        func list() async throws {
             let (zip, work) = try makeZip(["a.txt": "a", "b.txt": "b"])
             defer { try? FileManager.default.removeItem(at: work) }
-            let entries = try ZIPExtractor().list(zipAt: zip)
+            let entries = try await ZIPExtractor().list(zipAt: zip)
             let names = Set(entries.map(\.path))
             #expect(names.contains("a.txt"))
             #expect(names.contains("b.txt"))
         }
 
         @Test("maxEntries trips the zip-bomb guard")
-        func maxEntriesGuard() throws {
+        func maxEntriesGuard() async throws {
             let (zip, work) = try makeZip(["a.txt": "a", "b.txt": "b", "c.txt": "c"])
             defer { try? FileManager.default.removeItem(at: work) }
             let dest = tmp()
             defer { try? FileManager.default.removeItem(at: dest) }
-            #expect(throws: ArchiveError.self) {
-                try ZIPExtractor().extract(zipAt: zip, to: dest, limits: ExtractLimits(maxEntries: 1))
+            await #expect(throws: ArchiveError.self) {
+                try await ZIPExtractor().extract(zipAt: zip, to: dest, limits: ExtractLimits(maxEntries: 1))
             }
         }
 
         @Test("maxUncompressedBytes trips the zip-bomb guard")
-        func maxBytesGuard() throws {
+        func maxBytesGuard() async throws {
             let (zip, work) = try makeZip(["big.txt": String(repeating: "x", count: 10000)])
             defer { try? FileManager.default.removeItem(at: work) }
             let dest = tmp()
             defer { try? FileManager.default.removeItem(at: dest) }
-            #expect(throws: ArchiveError.self) {
-                try ZIPExtractor().extract(zipAt: zip, to: dest, limits: ExtractLimits(maxUncompressedBytes: 100))
+            await #expect(throws: ArchiveError.self) {
+                try await ZIPExtractor().extract(zipAt: zip, to: dest, limits: ExtractLimits(maxUncompressedBytes: 100))
             }
         }
 
         @Test("a non-existent archive throws notReadable")
-        func notReadable() {
+        func notReadable() async {
             let dest = tmp()
             defer { try? FileManager.default.removeItem(at: dest) }
-            #expect(throws: ArchiveError.self) {
-                try ZIPExtractor().extract(
+            await #expect(throws: ArchiveError.self) {
+                try await ZIPExtractor().extract(
                     zipAt: URL(fileURLWithPath: "/nonexistent/nope.zip"), to: dest, limits: .default
                 )
             }

@@ -875,6 +875,8 @@ enum AndroidTemplates {
                 "fs.readContentUri" -> fsReadContentUri(json, done)
                 "fs.writeContentUri" -> fsWriteContentUri(json, done)
                 "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
+                "fs.listZipNative" -> fsListZipNative(json, done)
+                "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 else -> done(null, "swift-pwa: unknown rpc method $method")
             }
         }
@@ -1397,6 +1399,105 @@ enum AndroidTemplates {
                     done(payload.toString(), null)
                 } catch (t: Throwable) {
                     done(null, "swift-pwa: fs.contentUriMetadata failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        // -----------------------------------------------------------
+        // Zip extraction (content packs) — ZIPFoundation can't build for
+        // Android (Bionic libc), so the Swift `AndroidArchiveExtractor`
+        // RPCs into these java.util.zip implementations. The traversal /
+        // zip-bomb guards are enforced here since `ZipFile` won't.
+        // -----------------------------------------------------------
+
+        private fun fsListZipNative(json: JSONObject, done: (String?, String?) -> Unit) {
+            val from = json.optString("from", "")
+            if (from.isEmpty()) { done(null, "swift-pwa: fs.listZip: from is empty"); return }
+            backgroundExecutor.execute {
+                try {
+                    val arr = org.json.JSONArray()
+                    java.util.zip.ZipFile(from).use { zf ->
+                        val e = zf.entries()
+                        while (e.hasMoreElements()) {
+                            val ze = e.nextElement()
+                            arr.put(
+                                JSONObject()
+                                    .put("path", ze.name)
+                                    .put("isDirectory", ze.isDirectory)
+                                    .put("isSymlink", false)
+                                    .put("uncompressedSize", if (ze.size >= 0) ze.size else 0L)
+                                    .put("compressedSize", if (ze.compressedSize >= 0) ze.compressedSize else 0L)
+                            )
+                        }
+                    }
+                    done(JSONObject().put("entries", arr).toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.listZip failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun fsExtractZipNative(json: JSONObject, done: (String?, String?) -> Unit) {
+            val from = json.optString("from", "")
+            val to = json.optString("to", "")
+            if (from.isEmpty() || to.isEmpty()) {
+                done(null, "swift-pwa: fs.extractZip: from/to required"); return
+            }
+            val maxBytes = if (json.has("maxUncompressedBytes")) json.getLong("maxUncompressedBytes") else Long.MAX_VALUE
+            val maxEntries = if (json.has("maxEntries")) json.getInt("maxEntries") else Int.MAX_VALUE
+            val maxRatio = if (json.has("maxCompressionRatio")) json.getDouble("maxCompressionRatio") else Double.MAX_VALUE
+            backgroundExecutor.execute {
+                val dest = java.io.File(to)
+                val staging = java.io.File(dest.parentFile, ".swift-pwa-extract-" + System.nanoTime())
+                try {
+                    staging.mkdirs()
+                    val stagingCanon = staging.canonicalPath
+                    var totalBytes = 0L
+                    var count = 0
+                    java.util.zip.ZipFile(from).use { zf ->
+                        val e = zf.entries()
+                        while (e.hasMoreElements()) {
+                            val ze = e.nextElement()
+                            count++
+                            if (count > maxEntries) throw IllegalStateException("too many entries (limit $maxEntries)")
+                            val outFile = java.io.File(staging, ze.name)
+                            // Path-traversal guard: canonical path must stay in staging.
+                            val canon = outFile.canonicalPath
+                            if (canon != stagingCanon && !canon.startsWith(stagingCanon + java.io.File.separator)) {
+                                throw SecurityException("entry escapes destination (path traversal): ${ze.name}")
+                            }
+                            val usize = if (ze.size >= 0) ze.size else 0L
+                            val csize = if (ze.compressedSize > 0) ze.compressedSize else 1L
+                            if (usize.toDouble() / csize.toDouble() > maxRatio) {
+                                throw IllegalStateException("compression ratio exceeds limit for ${ze.name}")
+                            }
+                            totalBytes += usize
+                            if (totalBytes > maxBytes) throw IllegalStateException("uncompressed size exceeds limit ($maxBytes)")
+                            if (ze.isDirectory) {
+                                outFile.mkdirs()
+                            } else {
+                                outFile.parentFile?.mkdirs()
+                                zf.getInputStream(ze).use { input ->
+                                    java.io.FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                                }
+                            }
+                        }
+                    }
+                    // Commit staging → dest (move each top-level item into place).
+                    dest.mkdirs()
+                    staging.listFiles()?.forEach { item ->
+                        val target = java.io.File(dest, item.name)
+                        if (target.exists()) target.deleteRecursively()
+                        if (!item.renameTo(target)) {
+                            item.copyRecursively(target, overwrite = true)
+                            item.deleteRecursively()
+                        }
+                    }
+                    done(JSONObject().put("entries", count).put("uncompressedBytes", totalBytes).toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.extractZip failed: ${t.javaClass.simpleName}: ${t.message}")
+                } finally {
+                    if (staging.exists()) staging.deleteRecursively()
                 }
             }
         }

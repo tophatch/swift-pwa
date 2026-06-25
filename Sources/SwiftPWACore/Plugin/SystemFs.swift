@@ -278,7 +278,7 @@ public final class SystemFs: Fs, @unchecked Sendable {
         }
         let url = URL(fileURLWithPath: path)
         do {
-            return try extractor.list(zipAt: url)
+            return try await extractor.list(zipAt: url)
         } catch let e as ArchiveError {
             throw Self.mapArchiveError("fs.listZip", e)
         }
@@ -297,7 +297,7 @@ public final class SystemFs: Fs, @unchecked Sendable {
         let src = URL(fileURLWithPath: from)
         let dst = URL(fileURLWithPath: to)
         do {
-            return try extractor.extract(zipAt: src, to: dst, limits: limits, onProgress: onProgress)
+            return try await extractor.extract(zipAt: src, to: dst, limits: limits, onProgress: onProgress)
         } catch let e as ArchiveError {
             throw Self.mapArchiveError("fs.extractZip", e)
         }

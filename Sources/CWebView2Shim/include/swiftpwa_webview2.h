@@ -173,6 +173,39 @@ void swiftpwa_w2_resource_respond(
     const uint8_t *body,
     int32_t body_len);
 
+// Read the "Range" header of a previously-intercepted request, as a
+// freshly-allocated UTF-8 string (caller must `free`), or NULL if absent.
+// Used to range-serve files mounted via `serveDirectory`.
+char *swiftpwa_w2_resource_range_header(
+    swiftpwa_w2_view *view,
+    uint64_t request_token);
+
+// Respond to an intercepted request by streaming a file region directly
+// off disk (range-aware; never buffers a whole large file). `path` is
+// UTF-16. `status` is 200, 206, or 416. For a range that runs to EOF
+// (`offset + length >= total`) the file stream is seeked and handed to
+// WebView2 to read lazily (GB-safe); a bounded sub-range reads exactly
+// `length` bytes into memory. Emits `Accept-Ranges: bytes` and, for 206,
+// `Content-Range: bytes <offset>-<offset+length-1>/<total>` (for 416,
+// `bytes */<total>` with an empty body). `mime_type` is UTF-8.
+void swiftpwa_w2_resource_respond_file(
+    swiftpwa_w2_view *view,
+    uint64_t request_token,
+    int32_t status,
+    const char *mime_type,
+    const wchar_t *path,
+    int64_t offset,
+    int64_t length,
+    int64_t total);
+
+// Release a previously-intercepted request *without* providing a
+// response, so WebView2 falls back to its default handling (e.g. the
+// `SetVirtualHostNameToFolderMapping` bundle host). Used for requests
+// that don't fall under a `serveDirectory` mount.
+void swiftpwa_w2_resource_passthrough(
+    swiftpwa_w2_view *view,
+    uint64_t request_token);
+
 // MARK: - Win32 helpers
 //
 // These aren't WebView2-specific, but live here so we don't need a

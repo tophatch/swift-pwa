@@ -34,6 +34,7 @@
 
 #include <windows.h>
 #include <objbase.h>
+#include <shlwapi.h> // SHCreateStreamOnFileEx (range-serving files)
 #include <wrl.h>
 #include <wil/com.h>
 #include <WebView2.h>
@@ -584,6 +585,154 @@ extern "C" void swiftpwa_w2_resource_respond(
     if (pending.deferral) pending.deferral->Complete();
 }
 
+extern "C" char *swiftpwa_w2_resource_range_header(
+    swiftpwa_w2_view *view,
+    uint64_t request_token) {
+    if (!view || !view->raw) return nullptr;
+    ViewExtension &ext = get_or_create_extension(view->raw);
+    ComPtr<ICoreWebView2WebResourceRequestedEventArgs> args;
+    {
+        std::lock_guard<std::mutex> lock(ext.mu);
+        auto it = ext.pending.find(request_token);
+        if (it == ext.pending.end()) return nullptr;
+        args = it->second.args;
+    }
+    if (!args) return nullptr;
+    ComPtr<ICoreWebView2WebResourceRequest> req;
+    if (FAILED(args->get_Request(&req)) || !req) return nullptr;
+    ComPtr<ICoreWebView2HttpRequestHeaders> headers;
+    if (FAILED(req->get_Headers(&headers)) || !headers) return nullptr;
+    BOOL contains = FALSE;
+    if (FAILED(headers->Contains(L"Range", &contains)) || !contains) return nullptr;
+    wil::unique_cotaskmem_string value;
+    if (FAILED(headers->GetHeader(L"Range", &value)) || !value) return nullptr;
+    std::string utf8 = wide_to_utf8(value.get());
+    char *out = static_cast<char *>(malloc(utf8.size() + 1));
+    if (!out) return nullptr;
+    std::memcpy(out, utf8.c_str(), utf8.size() + 1);
+    return out;
+}
+
+extern "C" void swiftpwa_w2_resource_passthrough(
+    swiftpwa_w2_view *view,
+    uint64_t request_token) {
+    if (!view || !view->raw) return;
+    ViewExtension &ext = get_or_create_extension(view->raw);
+    PendingResource pending;
+    {
+        std::lock_guard<std::mutex> lock(ext.mu);
+        auto it = ext.pending.find(request_token);
+        if (it == ext.pending.end()) return;
+        pending = std::move(it->second);
+        ext.pending.erase(it);
+    }
+    // Complete the deferral without a response → WebView2 performs its
+    // default fetch (the bundle's virtual-host mapping serves this path).
+    if (pending.deferral) pending.deferral->Complete();
+}
+
+extern "C" void swiftpwa_w2_resource_respond_file(
+    swiftpwa_w2_view *view,
+    uint64_t request_token,
+    int32_t status,
+    const char *mime_type,
+    const wchar_t *path,
+    int64_t offset,
+    int64_t length,
+    int64_t total) {
+    if (!view || !view->raw) return;
+    ViewExtension &ext = get_or_create_extension(view->raw);
+    PendingResource pending;
+    {
+        std::lock_guard<std::mutex> lock(ext.mu);
+        auto it = ext.pending.find(request_token);
+        if (it == ext.pending.end()) return;
+        pending = std::move(it->second);
+        ext.pending.erase(it);
+    }
+
+    ComPtr<ICoreWebView2Environment> env;
+    {
+        std::lock_guard<std::mutex> lock(ext.mu);
+        env = ext.env;
+    }
+    if (!env) {
+        if (pending.deferral) pending.deferral->Complete();
+        return;
+    }
+
+    ComPtr<IStream> stream;
+    if (status != 416 && path) {
+        ComPtr<IStream> fileStream;
+        HRESULT shr = SHCreateStreamOnFileEx(
+            path, STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
+            FALSE, nullptr, &fileStream);
+        if (SUCCEEDED(shr) && fileStream) {
+            if (offset > 0) {
+                LARGE_INTEGER li;
+                li.QuadPart = offset;
+                fileStream->Seek(li, STREAM_SEEK_SET, nullptr);
+            }
+            if (offset + length >= total) {
+                // Range runs to EOF (or full file): hand WebView2 the
+                // seeked stream to read lazily — a multi-GB file never
+                // materializes in memory (the streaming-video case).
+                stream = fileStream;
+            } else {
+                // Bounded sub-range: read exactly `length` bytes so the
+                // 206 body matches Content-Range. Bounded ranges are small.
+                HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(length));
+                if (h) {
+                    void *dst = GlobalLock(h);
+                    ULONG read = 0;
+                    if (dst) {
+                        fileStream->Read(dst, static_cast<ULONG>(length), &read);
+                        GlobalUnlock(h);
+                    }
+                    ComPtr<IStream> mem;
+                    if (SUCCEEDED(CreateStreamOnHGlobal(h, TRUE, &mem))) {
+                        stream = mem;
+                        length = static_cast<int64_t>(read); // honor a short read
+                    } else {
+                        GlobalFree(h);
+                    }
+                }
+            }
+        }
+    }
+
+    std::wstring headers = L"Accept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *";
+    if (mime_type && *mime_type) {
+        headers += L"\r\nContent-Type: " + utf8_to_wide(mime_type);
+    }
+    wchar_t range_line[160];
+    if (status == 206) {
+        swprintf(range_line, 160, L"\r\nContent-Range: bytes %lld-%lld/%lld",
+                 static_cast<long long>(offset),
+                 static_cast<long long>(offset + length - 1),
+                 static_cast<long long>(total));
+        headers += range_line;
+    } else if (status == 416) {
+        swprintf(range_line, 160, L"\r\nContent-Range: bytes */%lld",
+                 static_cast<long long>(total));
+        headers += range_line;
+    }
+
+    const wchar_t *reason =
+        status == 206   ? L"Partial Content"
+        : status == 416 ? L"Range Not Satisfiable"
+        : (status >= 200 && status < 300) ? L"OK"
+                                          : L"Not Found";
+
+    ComPtr<ICoreWebView2WebResourceResponse> response;
+    HRESULT hr = env->CreateWebResourceResponse(
+        stream.Get(), status, reason, headers.c_str(), &response);
+    if (SUCCEEDED(hr) && response) {
+        pending.args->put_Response(response.Get());
+    }
+    if (pending.deferral) pending.deferral->Complete();
+}
+
 // MARK: - Win32 helpers
 
 extern "C" int swiftpwa_track_popup_menu(
@@ -632,6 +781,9 @@ extern "C" void swiftpwa_w2_view_set_web_message_handler(swiftpwa_w2_view *, swi
 extern "C" void swiftpwa_w2_view_map_virtual_host(swiftpwa_w2_view *, const wchar_t *, const wchar_t *, int) {}
 extern "C" void swiftpwa_w2_view_intercept_resources(swiftpwa_w2_view *, const wchar_t *, swiftpwa_w2_resource_cb, void *) {}
 extern "C" void swiftpwa_w2_resource_respond(swiftpwa_w2_view *, uint64_t, int32_t, const char *, const uint8_t *, int32_t) {}
+extern "C" char *swiftpwa_w2_resource_range_header(swiftpwa_w2_view *, uint64_t) { return NULL; }
+extern "C" void swiftpwa_w2_resource_passthrough(swiftpwa_w2_view *, uint64_t) {}
+extern "C" void swiftpwa_w2_resource_respond_file(swiftpwa_w2_view *, uint64_t, int32_t, const char *, const wchar_t *, int64_t, int64_t, int64_t) {}
 extern "C" int swiftpwa_track_popup_menu(void *, unsigned int, int, int, void *) { return 0; }
 extern "C" swiftpwa_w2_hresult swiftpwa_w2_check_runtime(void) { return -1; }
 

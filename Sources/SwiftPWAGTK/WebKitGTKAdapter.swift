@@ -27,7 +27,7 @@
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
         }
 
-        init(parent: UnsafeMutablePointer<GtkWidget>, content: WindowContent) throws {
+        init(parent: UnsafeMutablePointer<GtkWidget>, content: WindowContent, sharedProvider: AssetProvider) throws {
             // Create the user content manager and inject bridge.js as a user script.
             guard let ucm = webkit_user_content_manager_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_user_content_manager_new failed")
@@ -63,9 +63,11 @@
 
             // Wire scheme handler if bundled content was specified.
             if case let .bundled(directory, _) = content {
-                let provider = AssetProvider(root: directory)
-                assetProvider = provider
-                registerScheme(provider: provider)
+                // Use the context-level shared router so runtime
+                // `serveDirectory` mounts reach this window's handler.
+                sharedProvider.setBundleRoot(directory)
+                assetProvider = sharedProvider
+                registerScheme(provider: sharedProvider)
             }
 
             // Enable the WebKit inspector. Without this,

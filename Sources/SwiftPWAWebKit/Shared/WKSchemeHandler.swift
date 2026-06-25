@@ -7,17 +7,17 @@
     /// `AssetProvider` (the mount table rooted at the bundle + any served
     /// directories).
     ///
-    /// Streams responses in chunks off the main thread and honors HTTP
-    /// `Range` requests (`206 Partial Content`), so a large served `.webm`
-    /// from an imported content pack seeks/streams instead of buffering
-    /// fully — and the UI thread isn't blocked reading it. WebKit calls
-    /// `start`/`stop` on the main thread; the actual file read runs on a
-    /// background queue, with a cancellation set keyed by task identity.
+    /// Honors HTTP `Range` requests (`206 Partial Content`), so a large
+    /// served `.webm` from an imported content pack seeks/streams instead of
+    /// buffering: it reads only the requested byte range, in chunks, so the
+    /// whole file never lands in memory (the win over the previous
+    /// `Data(contentsOf:)` full-file read). `WKURLSchemeHandler` is
+    /// `@MainActor` in recent SDKs and `WKURLSchemeTask` isn't `Sendable`, so
+    /// delivery stays on the main actor; chunked reads keep peak memory
+    /// bounded. (Moving the file read off-thread is a possible later
+    /// optimization, but needs care around the task's main-actor isolation.)
     public final class WKSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
         private let provider: AssetProvider
-        private let queue = DispatchQueue(label: "dev.swiftpwa.scheme", qos: .userInitiated, attributes: .concurrent)
-        private let lock = NSLock()
-        private var cancelled = Set<ObjectIdentifier>()
         private static let chunkSize = 256 * 1024
 
         public init(provider: AssetProvider) {
@@ -38,41 +38,15 @@
                 header: urlSchemeTask.request.value(forHTTPHeaderField: "Range"),
                 fileSize: resolved.fileSize
             )
-            let id = ObjectIdentifier(urlSchemeTask as AnyObject)
-            let box = TaskBox(urlSchemeTask)
 
-            queue.async { [weak self] in
-                guard let self else { return }
-                serve(box: box, id: id, url: url, resolved: resolved, resolution: resolution)
-            }
-        }
-
-        public func webView(_: WKWebView, stop urlSchemeTask: any WKURLSchemeTask) {
-            let id = ObjectIdentifier(urlSchemeTask as AnyObject)
-            lock.lock(); cancelled.insert(id); lock.unlock()
-        }
-
-        // MARK: - Streaming
-
-        private func serve(
-            box: TaskBox,
-            id: ObjectIdentifier,
-            url: URL,
-            resolved: AssetProvider.Resolved,
-            resolution: ByteRangeResolution
-        ) {
-            let task = box.task
-
-            // 416 for an unsatisfiable range.
+            // 416 for a range we can't satisfy.
             if case .unsatisfiable = resolution {
-                guard !isCancelled(id) else { return }
                 let response = HTTPURLResponse(url: url, statusCode: 416, httpVersion: "HTTP/1.1", headerFields: [
                     "Content-Range": "bytes */\(resolved.fileSize)",
                     "Access-Control-Allow-Origin": "*"
                 ])!
-                task.didReceive(response)
-                task.didFinish()
-                clear(id)
+                urlSchemeTask.didReceive(response)
+                urlSchemeTask.didFinish()
                 return
             }
 
@@ -82,7 +56,7 @@
             switch resolution {
             case .full: (status, offset, length) = (200, 0, resolved.fileSize)
             case let .partial(o, l): (status, offset, length) = (206, o, l)
-            case .unsatisfiable: return
+            case .unsatisfiable: return // handled above
             }
 
             var headers = [
@@ -95,63 +69,37 @@
                 headers["Content-Range"] = "bytes \(offset)-\(offset + length - 1)/\(resolved.fileSize)"
             }
 
-            guard let handle = try? FileHandle(forReadingFrom: resolved.fileURL) else {
-                if !isCancelled(id) {
-                    task.didFailWithError(NSError(domain: "swift-pwa", code: 404, userInfo: nil))
-                }
-                clear(id)
-                return
-            }
-            defer { try? handle.close() }
-
             do {
+                let handle = try FileHandle(forReadingFrom: resolved.fileURL)
+                defer { try? handle.close() }
                 if offset > 0 { try handle.seek(toOffset: UInt64(offset)) }
+                guard let response = HTTPURLResponse(
+                    url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
+                ) else {
+                    urlSchemeTask.didFailWithError(NSError(domain: "swift-pwa", code: 500, userInfo: nil))
+                    return
+                }
+                urlSchemeTask.didReceive(response)
+
+                // Deliver the requested range in chunks so peak memory is
+                // bounded regardless of file size (a GB video never fully
+                // materializes).
+                var remaining = length
+                while remaining > 0 {
+                    let toRead = Int(min(Int64(Self.chunkSize), remaining))
+                    guard let chunk = try handle.read(upToCount: toRead), !chunk.isEmpty else { break }
+                    urlSchemeTask.didReceive(chunk)
+                    remaining -= Int64(chunk.count)
+                }
+                urlSchemeTask.didFinish()
             } catch {
-                if !isCancelled(id) { task.didFailWithError(error) }
-                clear(id)
-                return
+                urlSchemeTask.didFailWithError(error)
             }
-
-            guard !isCancelled(id),
-                  let response = HTTPURLResponse(
-                      url: url,
-                      statusCode: status,
-                      httpVersion: "HTTP/1.1",
-                      headerFields: headers
-                  )
-            else { clear(id); return }
-            task.didReceive(response)
-
-            var remaining = length
-            while remaining > 0 {
-                if isCancelled(id) { clear(id); return }
-                let toRead = Int(min(Int64(Self.chunkSize), remaining))
-                guard let chunk = try? handle.read(upToCount: toRead), !chunk.isEmpty else { break }
-                if isCancelled(id) { clear(id); return }
-                task.didReceive(chunk)
-                remaining -= Int64(chunk.count)
-            }
-            if !isCancelled(id) { task.didFinish() }
-            clear(id)
         }
 
-        private func isCancelled(_ id: ObjectIdentifier) -> Bool {
-            lock.lock(); defer { lock.unlock() }
-            return cancelled.contains(id)
+        public func webView(_: WKWebView, stop _: any WKURLSchemeTask) {
+            // Delivery is synchronous within `start`, so there's nothing
+            // in flight to cancel by the time `stop` is called.
         }
-
-        private func clear(_ id: ObjectIdentifier) {
-            lock.lock(); defer { lock.unlock() }
-            cancelled.remove(id)
-        }
-    }
-
-    /// Carries the non-`Sendable` `WKURLSchemeTask` across the hop to the
-    /// background queue. The handler serializes all use of the task (one
-    /// serving closure per task, guarded by the cancellation set), so this
-    /// `@unchecked` is sound in practice.
-    private final class TaskBox: @unchecked Sendable {
-        let task: any WKURLSchemeTask
-        init(_ task: any WKURLSchemeTask) { self.task = task }
     }
 #endif

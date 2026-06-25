@@ -77,6 +77,45 @@ import SwiftPWACore
             return ExtractResult(entries: count, uncompressedBytes: totalBytes)
         }
 
+        @discardableResult
+        public func create(
+            zipAt destination: URL,
+            from source: URL,
+            compression: ZipCompression,
+            onProgress: (@Sendable (CreateProgress) -> Void)?
+        ) async throws -> CreateResult {
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else {
+                throw ArchiveError.notReadable(path: source.path)
+            }
+            // bsdtar doesn't print a clean machine-readable summary, so walk the
+            // tree ourselves for the entry count / uncompressed total.
+            let items = try ArchiveSourceWalk.walk(source: source)
+            let totalBytes = items.reduce(Int64(0)) { $0 + $1.size }
+
+            let staging = destination.deletingLastPathComponent()
+                .appendingPathComponent(".swift-pwa-create-\(UUID().uuidString).zip")
+            var cleanup = true
+            defer { if cleanup { try? fm.removeItem(at: staging) } }
+
+            // libarchive's zip writer: `store` (no deflate) or `deflate`.
+            let comp = compression == .deflate ? "deflate" : "store"
+            _ = try Self.runTar([
+                "--format", "zip",
+                "--options", "zip:compression=\(comp)",
+                "-cf", staging.path,
+                "-C", source.path, "."
+            ])
+            onProgress?(CreateProgress(entriesDone: items.count, bytesDone: totalBytes, totalEntries: items.count))
+
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.moveItem(at: staging, to: destination)
+            cleanup = false
+            return CreateResult(entries: items.count, uncompressedBytes: totalBytes)
+        }
+
         /// Run `tar.exe` with `args`, returning stdout. Resolves the binary
         /// under `%SystemRoot%\System32` (where Windows ships bsdtar).
         private static func runTar(_ args: [String]) throws -> String {
@@ -131,6 +170,18 @@ import SwiftPWACore
             limits _: ExtractLimits,
             onProgress _: (@Sendable (ExtractProgress) -> Void)?
         ) async throws -> ExtractResult {
+            throw ArchiveError.unsupportedPlatform(
+                "ZIPExtractor isn't available on Android — use AndroidArchiveExtractor (SwiftPWAAndroid)"
+            )
+        }
+
+        @discardableResult
+        public func create(
+            zipAt _: URL,
+            from _: URL,
+            compression _: ZipCompression,
+            onProgress _: (@Sendable (CreateProgress) -> Void)?
+        ) async throws -> CreateResult {
             throw ArchiveError.unsupportedPlatform(
                 "ZIPExtractor isn't available on Android — use AndroidArchiveExtractor (SwiftPWAAndroid)"
             )
@@ -239,6 +290,60 @@ import SwiftPWACore
             return ExtractResult(entries: count, uncompressedBytes: totalBytes)
         }
 
+        @discardableResult
+        public func create(
+            zipAt destination: URL,
+            from source: URL,
+            compression: ZipCompression,
+            onProgress: (@Sendable (CreateProgress) -> Void)?
+        ) async throws -> CreateResult {
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: source.path, isDirectory: &isDir), isDir.boolValue else {
+                throw ArchiveError.notReadable(path: source.path)
+            }
+
+            // Walk the tree up front so totalEntries is known for progress.
+            let items = try ArchiveSourceWalk.walk(source: source)
+            let method: CompressionMethod = compression == .deflate ? .deflate : .none
+
+            // Build into a temp sibling, then move into place, so a failed
+            // create never leaves a half-written .zip at `destination`.
+            let staging = destination.deletingLastPathComponent()
+                .appendingPathComponent(".swift-pwa-create-\(UUID().uuidString).zip")
+            var cleanup = true
+            defer { if cleanup { try? fm.removeItem(at: staging) } }
+
+            let archive: Archive
+            do {
+                archive = try Archive(url: staging, accessMode: .create)
+            } catch {
+                throw ArchiveError.notReadable(path: staging.path)
+            }
+
+            var totalBytes: Int64 = 0
+            var count = 0
+            for item in items {
+                do {
+                    // ZIPFoundation streams the file through a provider — bytes
+                    // go disk→archive without a full in-memory copy.
+                    try archive.addEntry(with: item.relativePath, relativeTo: source, compressionMethod: method)
+                } catch {
+                    throw ArchiveError.corrupt("failed to add \(item.relativePath): \(error)")
+                }
+                count += 1
+                totalBytes += item.size
+                onProgress?(CreateProgress(entriesDone: count, bytesDone: totalBytes, totalEntries: items.count))
+            }
+
+            // Commit: replace any existing file at the destination atomically.
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.moveItem(at: staging, to: destination)
+            cleanup = false
+            return CreateResult(entries: count, uncompressedBytes: totalBytes)
+        }
+
         // MARK: - Helpers
 
         private func openArchive(_ url: URL) throws -> Archive {
@@ -261,3 +366,47 @@ import SwiftPWACore
     }
 
 #endif
+
+/// Source-tree walk shared by the `create` paths (ZIPFoundation on
+/// Apple/Linux, `tar.exe` on Windows). Compiled on every platform — it
+/// only touches Foundation. Returns each regular file and directory as a
+/// path relative to `source`, in a deterministic order, **skipping
+/// symlinks** (not followed, not stored) so an exported pack can't smuggle
+/// a link out of the tree.
+enum ArchiveSourceWalk {
+    struct Item: Equatable {
+        let relativePath: String
+        let isDirectory: Bool
+        let size: Int64
+    }
+
+    static func walk(source: URL) throws -> [Item] {
+        let fm = FileManager.default
+        let keys: [URLResourceKey] = [.isDirectoryKey, .isSymbolicLinkKey, .fileSizeKey]
+        guard let enumerator = fm.enumerator(
+            at: source, includingPropertiesForKeys: keys, options: []
+        ) else {
+            throw ArchiveError.notReadable(path: source.path)
+        }
+        let basePath = source.standardizedFileURL.path
+        let basePrefix = basePath.hasSuffix("/") ? basePath : basePath + "/"
+        var items: [Item] = []
+        for case let url as URL in enumerator {
+            let vals = try? url.resourceValues(forKeys: Set(keys))
+            if vals?.isSymbolicLink == true {
+                enumerator.skipDescendants() // don't recurse a symlinked dir
+                continue // skip symlink entries entirely
+            }
+            let full = url.standardizedFileURL.path
+            guard full.hasPrefix(basePrefix) else { continue }
+            let rel = String(full.dropFirst(basePrefix.count))
+            if rel.isEmpty { continue }
+            let isDir = vals?.isDirectory == true
+            let size = isDir ? 0 : Int64(vals?.fileSize ?? 0)
+            items.append(Item(relativePath: rel, isDirectory: isDir, size: size))
+        }
+        // Deterministic order (enumerator order varies by platform); parents
+        // sort before their children lexicographically.
+        return items.sorted { $0.relativePath < $1.relativePath }
+    }
+}

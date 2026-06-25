@@ -80,6 +80,17 @@ public protocol Fs: AnyObject, Sendable {
         limits: ExtractLimits,
         onProgress: (@Sendable (ExtractProgress) -> Void)?
     ) async throws -> ExtractResult
+
+    /// Create a zip at `to` from the directory tree rooted at `from` — the
+    /// inverse of `extractZip`. `compression` picks stored vs deflate.
+    /// `onProgress`, if given, fires per entry. Bytes are read and written
+    /// entry-by-entry; they never cross the bridge.
+    func createZip(
+        from: String,
+        to: String,
+        compression: ZipCompression,
+        onProgress: (@Sendable (CreateProgress) -> Void)?
+    ) async throws -> CreateResult
 }
 
 /// Default archive surface: unsupported. Only `SystemFs` (with an injected
@@ -106,6 +117,18 @@ public extension Fs {
         throw BridgeError(
             code: BridgeError.handler,
             message: "fs.extractZip: no archive extractor configured — use FsPlugin(SystemFs(extractor: ZIPExtractor()))"
+        )
+    }
+
+    func createZip(
+        from _: String,
+        to _: String,
+        compression _: ZipCompression,
+        onProgress _: (@Sendable (CreateProgress) -> Void)?
+    ) async throws -> CreateResult {
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "fs.createZip: no archive extractor configured — use FsPlugin(SystemFs(extractor: ZIPExtractor()))"
         )
     }
 }
@@ -301,6 +324,70 @@ public struct FsExtractEvent: Sendable, Codable, Equatable {
 
     public static func done(_ r: ExtractResult) -> FsExtractEvent {
         FsExtractEvent(type: "done", entries: r.entries, uncompressedBytes: r.uncompressedBytes)
+    }
+
+    public init(
+        type: String,
+        entriesDone: Int? = nil,
+        bytesDone: Int64? = nil,
+        totalEntries: Int? = nil,
+        entries: Int? = nil,
+        uncompressedBytes: Int64? = nil
+    ) {
+        self.type = type
+        self.entriesDone = entriesDone
+        self.bytesDone = bytesDone
+        self.totalEntries = totalEntries
+        self.entries = entries
+        self.uncompressedBytes = uncompressedBytes
+    }
+}
+
+public struct FsCreateZipArgs: Sendable, Codable, Equatable {
+    /// Source directory to zip.
+    public var from: String
+    /// Output `.zip` path.
+    public var to: String
+    /// `"stored"` (default) or `"deflate"`. Packs default to stored —
+    /// already-compressed media gains nothing from deflate.
+    public var compression: String?
+
+    public init(from: String, to: String, compression: String? = nil) {
+        self.from = from
+        self.to = to
+        self.compression = compression
+    }
+
+    /// Parse `compression`, defaulting to `.stored` for an absent or
+    /// unrecognised value.
+    public var zipCompression: ZipCompression {
+        compression.flatMap(ZipCompression.init(rawValue:)) ?? .stored
+    }
+}
+
+/// One event of the streaming `fs.createZipProgress` subscription. Mirrors
+/// `FsExtractEvent`: `type` is `"progress"` (carries `entriesDone` /
+/// `bytesDone` / `totalEntries`) or `"done"` (carries `entries` /
+/// `uncompressedBytes`). Errors arrive as the stream's error termination.
+public struct FsCreateEvent: Sendable, Codable, Equatable {
+    public var type: String
+    public var entriesDone: Int?
+    public var bytesDone: Int64?
+    public var totalEntries: Int?
+    public var entries: Int?
+    public var uncompressedBytes: Int64?
+
+    public static func progress(_ p: CreateProgress) -> FsCreateEvent {
+        FsCreateEvent(
+            type: "progress",
+            entriesDone: p.entriesDone,
+            bytesDone: p.bytesDone,
+            totalEntries: p.totalEntries
+        )
+    }
+
+    public static func done(_ r: CreateResult) -> FsCreateEvent {
+        FsCreateEvent(type: "done", entries: r.entries, uncompressedBytes: r.uncompressedBytes)
     }
 
     public init(

@@ -28,20 +28,20 @@
         private nonisolated(unsafe) var view: OpaquePointer?
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        // Eager `let` rather than a `lazy var` for the same reason
-        // as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
-        // toolchain) refuses `nonisolated` on lazy properties, and
-        // dropping the modifier promotes the property to an
-        // isolation that breaks `nonisolated func inboundFrames()`.
-        // `AsyncStream`'s init invokes the closure synchronously,
-        // so we lift the continuation out and assign it after the
-        // stored property is set. (`AsyncStream` is itself
-        // Sendable, so no `nonisolated(unsafe)` modifier needed.)
+        /// Eager `let` rather than a `lazy var` for the same reason
+        /// as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
+        /// toolchain) refuses `nonisolated` on lazy properties, and
+        /// dropping the modifier promotes the property to an
+        /// isolation that breaks `nonisolated func inboundFrames()`.
+        /// `AsyncStream`'s init invokes the closure synchronously,
+        /// so we lift the continuation out and assign it after the
+        /// stored property is set. (`AsyncStream` is itself
+        /// Sendable, so no `nonisolated(unsafe)` modifier needed.)
         private let stream: AsyncStream<InboundFrame>
-        // The context-level shared router (bundle `/` mount + any
-        // `serveDirectory` mounts). Set in `init`; the bundle root is
-        // installed in `load(_:)`. `WebResourceRequested` interception
-        // resolves served mounts through it.
+        /// The context-level shared router (bundle `/` mount + any
+        /// `serveDirectory` mounts). Set in `init`; the bundle root is
+        /// installed in `load(_:)`. `WebResourceRequested` interception
+        /// resolves served mounts through it.
         private nonisolated(unsafe) var assetProvider: AssetProvider
 
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache

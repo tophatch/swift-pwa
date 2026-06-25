@@ -166,15 +166,15 @@ struct AssetProviderTests {
         let provider = AssetProvider(root: bundle)
         provider.mount(packs, at: "/packs")
         // Under a served prefix (even for a file that doesn't exist) → true.
-        #expect(provider.isServedPrefix(try #require(URL(string: "pwa://localhost/packs/missing.webm"))))
-        #expect(provider.isServedPrefix(try #require(URL(string: "pwa://localhost/packs"))))
+        #expect(try provider.isServedPrefix(#require(URL(string: "pwa://localhost/packs/missing.webm"))))
+        #expect(try provider.isServedPrefix(#require(URL(string: "pwa://localhost/packs"))))
         // Bundle paths and the root → false (native serving handles those).
-        #expect(!provider.isServedPrefix(try #require(URL(string: "pwa://localhost/index.html"))))
-        #expect(!provider.isServedPrefix(try #require(URL(string: "pwa://localhost/"))))
+        #expect(try !provider.isServedPrefix(#require(URL(string: "pwa://localhost/index.html"))))
+        #expect(try !provider.isServedPrefix(#require(URL(string: "pwa://localhost/"))))
         // A near-miss prefix that isn't a path-segment boundary → false.
-        #expect(!provider.isServedPrefix(try #require(URL(string: "pwa://localhost/packsextra/x"))))
+        #expect(try !provider.isServedPrefix(#require(URL(string: "pwa://localhost/packsextra/x"))))
         // Wrong origin → false.
-        #expect(!provider.isServedPrefix(try #require(URL(string: "https://evil/packs/x"))))
+        #expect(try !provider.isServedPrefix(#require(URL(string: "https://evil/packs/x"))))
     }
 
     @Test("unmount removes a prefix but never the bundle root")

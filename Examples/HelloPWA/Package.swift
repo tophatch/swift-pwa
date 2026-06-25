@@ -14,6 +14,17 @@ let package = Package(
             name: "HelloPWA",
             dependencies: [
                 .product(name: "SwiftPWA", package: "swift-pwa"),
+                // Opt-in zip extractor for the content-packs demo. Pulls in
+                // ZIPFoundation only because this app imports it — apps that
+                // don't need pack import link neither it nor `fs.extractZip`.
+                // Gated off Android: ZIPFoundation can't build against Bionic
+                // libc, so on Android the demo uses `AndroidArchiveExtractor`
+                // (from the SwiftPWA umbrella) instead of `ZIPExtractor`.
+                .product(
+                    name: "SwiftPWAArchive",
+                    package: "swift-pwa",
+                    condition: .when(platforms: [.macOS, .iOS, .linux, .windows])
+                ),
             ],
             resources: [.copy("web")],
             linkerSettings: [

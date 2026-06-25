@@ -28,17 +28,21 @@
         private nonisolated(unsafe) var view: OpaquePointer?
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        // Eager `let` rather than a `lazy var` for the same reason
-        // as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
-        // toolchain) refuses `nonisolated` on lazy properties, and
-        // dropping the modifier promotes the property to an
-        // isolation that breaks `nonisolated func inboundFrames()`.
-        // `AsyncStream`'s init invokes the closure synchronously,
-        // so we lift the continuation out and assign it after the
-        // stored property is set. (`AsyncStream` is itself
-        // Sendable, so no `nonisolated(unsafe)` modifier needed.)
+        /// Eager `let` rather than a `lazy var` for the same reason
+        /// as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
+        /// toolchain) refuses `nonisolated` on lazy properties, and
+        /// dropping the modifier promotes the property to an
+        /// isolation that breaks `nonisolated func inboundFrames()`.
+        /// `AsyncStream`'s init invokes the closure synchronously,
+        /// so we lift the continuation out and assign it after the
+        /// stored property is set. (`AsyncStream` is itself
+        /// Sendable, so no `nonisolated(unsafe)` modifier needed.)
         private let stream: AsyncStream<InboundFrame>
-        private nonisolated(unsafe) var assetProvider: AssetProvider?
+        /// The context-level shared router (bundle `/` mount + any
+        /// `serveDirectory` mounts). Set in `init`; the bundle root is
+        /// installed in `load(_:)`. `WebResourceRequested` interception
+        /// resolves served mounts through it.
+        private nonisolated(unsafe) var assetProvider: AssetProvider
 
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache
         // the most recently issued one so `respond` can find its way
@@ -54,10 +58,12 @@
         public init(
             environment: OpaquePointer,
             parent: HWND,
-            content _: WindowContent
+            content _: WindowContent,
+            sharedProvider: AssetProvider
         ) throws {
             self.environment = environment
             self.parent = parent
+            assetProvider = sharedProvider
             var captured: AsyncStream<InboundFrame>.Continuation?
             stream = AsyncStream { captured = $0 }
             continuation = captured
@@ -111,9 +117,68 @@
                 }
                 let user = Unmanaged.passUnretained(self).toOpaque()
                 swiftpwa_w2_view_set_web_message_handler(view, messageReceivedTrampoline, user)
+
+                // Intercept requests to the bundle origin so directories
+                // added via `ctx.serveDirectory(_:at:)` are served (with
+                // range support) from the shared router. Bundle paths fall
+                // through to the native virtual-host mapping — the handler
+                // only answers requests under a served mount prefix. The
+                // filter is broad (`/*`); per-request triage is cheap.
+                let resUser = Unmanaged.passUnretained(self).toOpaque()
+                "https://swift-pwa.local/*".withCString(encodedAs: UTF16.self) { filterW in
+                    swiftpwa_w2_view_intercept_resources(view, filterW, resourceRequestedTrampoline, resUser)
+                }
             }
 
             ready = true
+        }
+
+        /// Called from `resourceRequestedTrampoline` on the UI thread for
+        /// every request to the bundle origin. Requests that don't fall
+        /// under a `serveDirectory` mount are handed back to WebView2's
+        /// default handling (the bundle's virtual-host mapping); served
+        /// requests are resolved and answered range-aware off disk.
+        func _onResourceRequested(uri: String, token: UInt64) {
+            guard let view, let url = URL(string: uri) else {
+                if let view { swiftpwa_w2_resource_passthrough(view, token) }
+                return
+            }
+            guard assetProvider.isServedPrefix(url) else {
+                swiftpwa_w2_resource_passthrough(view, token)
+                return
+            }
+            guard let resolved = assetProvider.resolve(url) else {
+                // Under a served prefix but missing / traversal-blocked → 404.
+                "text/plain; charset=utf-8".withCString { mime in
+                    swiftpwa_w2_resource_respond(view, token, 404, mime, nil, 0)
+                }
+                return
+            }
+
+            // Parse the Range header (if any) the same way every backend does.
+            var rangeHeader: String?
+            if let raw = swiftpwa_w2_resource_range_header(view, token) {
+                rangeHeader = String(cString: raw)
+                free(raw)
+            }
+            let resolution = ByteRange.resolve(header: rangeHeader, fileSize: resolved.fileSize)
+
+            let path = resolved.fileURL.withUnsafeFileSystemRepresentation { rep -> String in
+                rep.map { String(cString: $0) } ?? resolved.fileURL.path
+            }
+            let total = resolved.fileSize
+            path.withCString(encodedAs: UTF16.self) { pathW in
+                resolved.mimeType.withCString { mime in
+                    switch resolution {
+                    case .full:
+                        swiftpwa_w2_resource_respond_file(view, token, 200, mime, pathW, 0, total, total)
+                    case let .partial(offset, length):
+                        swiftpwa_w2_resource_respond_file(view, token, 206, mime, pathW, offset, length, total)
+                    case .unsatisfiable:
+                        swiftpwa_w2_resource_respond_file(view, token, 416, mime, pathW, 0, 0, total)
+                    }
+                }
+            }
         }
 
         /// Pop the WebView2 DevTools window. Useful as a proof-of-life
@@ -190,7 +255,11 @@
                 urlString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
                 }
-                assetProvider = AssetProvider(root: directory)
+                // Bundle is served natively by the virtual-host mapping
+                // above; the shared router still records the `/` root so
+                // `serveDirectory` mounts (handled via interception below)
+                // can resolve relative file paths consistently.
+                assetProvider.setBundleRoot(directory)
             case let .remote(url):
                 url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
@@ -338,6 +407,17 @@
         let json = String(cString: jsonPtr)
         let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
         adapter._ingest(jsonString: json)
+    }
+
+    /// `@convention(c)` callback from `swiftpwa_w2_view_intercept_resources`.
+    /// Fires on the UI thread for each request matching the filter.
+    let resourceRequestedTrampoline: @convention(c) (
+        UnsafePointer<CChar>?, UInt64, UnsafeMutableRawPointer?
+    ) -> Void = { uriPtr, token, userData in
+        guard let uriPtr, let userData else { return }
+        let uri = String(cString: uriPtr)
+        let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
+        adapter._onResourceRequested(uri: uri, token: token)
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_execute_script`.

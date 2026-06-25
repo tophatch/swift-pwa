@@ -72,12 +72,23 @@ await __SWIFT_PWA__.invoke('app.quit');              // clean exit (code 0)
 await __SWIFT_PWA__.invoke('app.quit', { exitCode: 1 });
 const { value: name }    = await __SWIFT_PWA__.invoke('app.name');
 const { value: version } = await __SWIFT_PWA__.invoke('app.version');
+
+const { value: dataDir }  = await __SWIFT_PWA__.invoke('app.dataDir');
+const { value: cacheDir } = await __SWIFT_PWA__.invoke('app.cacheDir');
 ```
 
 `app.name` / `app.version` read the bundle's `Info.plist`
 (`CFBundleDisplayName` / `CFBundleShortVersionString`). `name` falls back
 to the process name when no bundle is present; `version` is the empty
 string on hosts without an `Info.plist` (Linux / Android).
+
+`app.dataDir` / `app.cacheDir` return the platform's per-app **persistent**
+and **disposable** writable directories (created on first call) —
+`~/Library/Application Support/<bundle-id>` and `~/Library/Caches/<bundle-id>`
+on macOS, the XDG data/cache dirs on Linux, `%APPDATA%` / `%LOCALAPPDATA%`
+on Windows, the Activity `filesDir` / `cacheDir` on Android. `dataDir` is
+where you extract a downloaded content pack (see `fs.extractZip`); the OS
+may evict `cacheDir` at any time, so only put regenerable artifacts there.
 
 ### `clipboard.*`
 
@@ -139,6 +150,37 @@ const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
 `FsPlugin` does not enforce a path scope. Apps that need a sandbox
 should layer it themselves — typically by gating writes behind
 `dialog.openFile` so the user grants paths through the picker.
+
+**Zip extraction (content packs)** — available only when an archive
+extractor is injected: `ctx.use(FsPlugin(SystemFs(extractor: ZIPExtractor())))`
+(import `SwiftPWAArchive`). Bytes never cross the bridge — extraction is
+path-to-path:
+
+```js
+// Peek the central directory before committing to a multi-GB extract:
+const { entries } = await __SWIFT_PWA__.invoke('fs.listZip', { from });
+// → entries: [{ path, isDirectory, isSymlink, uncompressedSize, compressedSize }]
+
+// Extract (optional zip-bomb guards; omitted → safe defaults):
+const r = await __SWIFT_PWA__.invoke('fs.extractZip', {
+    from, to,
+    maxUncompressedBytes, maxEntries, maxCompressionRatio  // all optional
+});
+// → { entries, uncompressedBytes }
+
+// Or stream progress for a big extract:
+const unsub = __SWIFT_PWA__.subscribe('fs.extractZipProgress', { from, to }, (e) => {
+    if (e.type === 'progress') updateBar(e.entriesDone, e.totalEntries);
+    else if (e.type === 'done') done(e.entries);
+});
+```
+
+Path-traversal and symlink entries are rejected, and the zip-bomb guards
+(uncompressed-size / entry-count / compression-ratio) abort with the
+output cleaned up. A typical flow: `dialog.openFile` → `fs.extractZip`
+into `app.dataDir()` → reference the media via a
+[`serveDirectory`](swift-api.md#serving-extra-directories-content-packs)
+mount. Available on macOS / iOS / Linux / Android (Windows: pending).
 
 ### `tray.*`
 

@@ -35,7 +35,7 @@
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
         }
 
-        init(content: WindowContent) throws {
+        init(content: WindowContent, sharedProvider: AssetProvider) throws {
             guard let ucm = webkit_user_content_manager_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_user_content_manager_new failed")
             }
@@ -69,9 +69,11 @@
             viewWidget = view
 
             if case let .bundled(directory, _) = content {
-                let provider = AssetProvider(root: directory)
-                assetProvider = provider
-                registerScheme(provider: provider)
+                // Use the context-level shared router so runtime
+                // `serveDirectory` mounts reach this window's handler.
+                sharedProvider.setBundleRoot(directory)
+                assetProvider = sharedProvider
+                registerScheme(provider: sharedProvider)
             }
 
             // Enable the WebKit inspector. Without this,
@@ -276,25 +278,37 @@
                 return
             }
             let urlString = String(cString: urlCStr)
-            guard let url = URL(string: urlString),
-                  let resolved = provider.resolve(url),
-                  let data = try? Data(contentsOf: resolved.fileURL)
-            else {
+            guard let url = URL(string: urlString), let resolved = provider.resolve(url) else {
                 webkit_uri_scheme_request_finish_error(request, nil)
                 return
             }
-            data.withUnsafeBytes { (raw: UnsafeRawBufferPointer) in
-                guard let base = raw.baseAddress else { return }
-                let stream = g_memory_input_stream_new_from_data(base, gssize(data.count), nil)
-                resolved.mimeType.withCString { mime in
-                    webkit_uri_scheme_request_finish(
-                        request,
-                        stream,
-                        gint64(data.count),
-                        mime
+
+            // Honor HTTP Range so large served media (a content pack's
+            // `.webm`) seeks/streams instead of buffering — the shim reads
+            // the byte range straight from disk.
+            var rangeHeader: String?
+            if let cstr = swiftpwa_uri_request_range_header(request) {
+                rangeHeader = String(cString: cstr)
+                g_free(cstr)
+            }
+
+            let status: Int32
+            let offset: Int64
+            let length: Int64
+            switch ByteRange.resolve(header: rangeHeader, fileSize: resolved.fileSize) {
+            case .full: (status, offset, length) = (200, 0, resolved.fileSize)
+            case let .partial(o, l): (status, offset, length) = (206, o, l)
+            case .unsatisfiable:
+                swiftpwa_uri_request_finish_range_not_satisfiable(request, gint64(resolved.fileSize))
+                return
+            }
+
+            resolved.fileURL.path.withCString { pathC in
+                resolved.mimeType.withCString { mimeC in
+                    _ = swiftpwa_uri_request_finish_file(
+                        request, pathC, gint64(offset), gint64(length), gint64(resolved.fileSize), status, mimeC
                     )
                 }
-                g_object_unref(UnsafeMutableRawPointer(stream))
             }
         }
     }

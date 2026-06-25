@@ -324,6 +324,45 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("bridge.attach()"))
     }
 
+    @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
+    func mainActivityServeMounts() throws {
+        let activity = AndroidTemplates.mainActivityKt(
+            packageId: "com.example.hi",
+            soBaseName: "Hi",
+            serveMounts: [
+                .init(mount: "/packs", from: "data/packs"),
+                .init(mount: "/thumbs", from: "cache/thumbs"),
+                .init(mount: "/lib", from: "library") // bare → filesDir
+            ]
+        )
+        // Bundle handler is present.
+        #expect(activity.contains(".addPathHandler(\"/\", WebViewAssetLoader.AssetsPathHandler(this))"))
+        // Each declared mount maps to an internal-storage handler under the
+        // right root, prefix normalized to end with "/".
+        #expect(activity.contains(
+            ".addPathHandler(\"/packs/\", WebViewAssetLoader.InternalStoragePathHandler(this, File(filesDir, \"packs\").apply { mkdirs() }))"
+        ))
+        // Critical: served mounts must register BEFORE the catch-all "/" bundle
+        // handler, or "/" shadows them (WebViewAssetLoader matches in order).
+        let packsIdx = try #require(activity.range(of: ".addPathHandler(\"/packs/\""))
+        let bundleIdx = try #require(activity.range(of: ".addPathHandler(\"/\", WebViewAssetLoader.AssetsPathHandler"))
+        #expect(packsIdx.lowerBound < bundleIdx.lowerBound)
+        #expect(activity.contains(
+            ".addPathHandler(\"/thumbs/\", WebViewAssetLoader.InternalStoragePathHandler(this, File(cacheDir, \"thumbs\").apply { mkdirs() }))"
+        ))
+        #expect(activity.contains(
+            ".addPathHandler(\"/lib/\", WebViewAssetLoader.InternalStoragePathHandler(this, File(filesDir, \"library\").apply { mkdirs() }))"
+        ))
+        // File import is pulled in for the handler construction.
+        #expect(activity.contains("import java.io.File"))
+    }
+
+    @Test("no build.serve mounts leaves the asset loader chain unchanged")
+    func mainActivityNoServeMounts() {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(!activity.contains("InternalStoragePathHandler"))
+    }
+
     @Test("SwiftPWASystemPlugins exposes fs.* content-URI RPC methods")
     func systemPluginsContentURIDispatch() {
         let kt = AndroidTemplates.swiftPWASystemPluginsKt

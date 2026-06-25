@@ -130,7 +130,9 @@ struct AndroidBundler {
         // Kotlin sources go under `java/<package-as-path>/...`
         let kotlinDir = main.appendingPathComponent("java/" + pkg.replacingOccurrences(of: ".", with: "/"))
         try FileManager.default.createDirectory(at: kotlinDir, withIntermediateDirectories: true)
-        try AndroidTemplates.mainActivityKt(packageId: pkg, soBaseName: soBase).write(
+        try AndroidTemplates.mainActivityKt(
+            packageId: pkg, soBaseName: soBase, serveMounts: manifest.build?.serve ?? []
+        ).write(
             to: kotlinDir.appendingPathComponent("MainActivity.kt"),
             atomically: true, encoding: .utf8
         )
@@ -730,14 +732,50 @@ struct AndroidBundler {
         return stable.contains(name)
     }
 
-    /// Standard install path for a Swift SDK bundle. macOS only for
-    /// now; Linux uses `~/.swiftpm/swift-sdks/...` and would need a
-    /// per-OS branch added here.
+    /// Standard install path for a Swift SDK bundle, resolved against the
+    /// **host** OS running this CLI (the machine doing the cross-compile).
+    /// SwiftPM's swift-sdks root is platform-dependent:
+    /// `~/Library/org.swift.swiftpm/swift-sdks` on macOS,
+    /// `${XDG_DATA_HOME:-~/.local/share}/swiftpm/swift-sdks` on Linux. Getting
+    /// this wrong silently skips runtime-stdlib bundling, producing an APK
+    /// that crashes at `System.loadLibrary` on-device (it still *assembles*,
+    /// so CI's assemble-only check never catches it).
     private func swiftSDKBundleRoot(id: String) -> URL {
+        let leaf = "\(id).artifactbundle/swift-android"
+        // SwiftPM's swift-sdks root varies by host *and* by SwiftPM version /
+        // install method, so probe the known roots and use whichever actually
+        // holds the bundle. Order: legacy `~/.swiftpm` (what swiftly-managed
+        // toolchains use today), the XDG location, then macOS. Getting this
+        // wrong silently skips runtime-stdlib bundling — the APK assembles but
+        // crashes at `System.loadLibrary` on-device (CI's assemble-only check
+        // never catches it).
+        let fm = FileManager.default
+        let candidates = swiftSDKRootCandidates()
+        for root in candidates {
+            let bundle = root.appendingPathComponent(leaf)
+            if fm.fileExists(atPath: bundle.path) { return bundle }
+        }
+        // None found — return the first candidate so the "not found" note
+        // points at the most likely location for this host.
+        return (candidates.first ?? URL(fileURLWithPath: NSHomeDirectory()))
+            .appendingPathComponent(leaf)
+    }
+
+    /// Candidate SwiftPM swift-sdks roots, most-likely first.
+    private func swiftSDKRootCandidates() -> [URL] {
         let home = URL(fileURLWithPath: NSHomeDirectory())
-        return home
-            .appendingPathComponent("Library/org.swift.swiftpm/swift-sdks")
-            .appendingPathComponent("\(id).artifactbundle/swift-android")
+        var roots: [URL] = []
+        #if os(macOS)
+            roots.append(home.appendingPathComponent("Library/org.swift.swiftpm/swift-sdks"))
+        #endif
+        // Legacy data dir — used by swiftly-managed toolchains today.
+        roots.append(home.appendingPathComponent(".swiftpm/swift-sdks"))
+        // XDG location (newer SwiftPM): $XDG_DATA_HOME ?? ~/.local/share.
+        if let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"], !xdg.isEmpty {
+            roots.append(URL(fileURLWithPath: xdg).appendingPathComponent("swiftpm/swift-sdks"))
+        }
+        roots.append(home.appendingPathComponent(".local/share/swiftpm/swift-sdks"))
+        return roots
     }
 
     /// Map an Android ABI to the SDK's per-arch directory names:

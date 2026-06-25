@@ -151,6 +151,37 @@ const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
 should layer it themselves — typically by gating writes behind
 `dialog.openFile` so the user grants paths through the picker.
 
+**Zip extraction (content packs)** — available only when an archive
+extractor is injected: `ctx.use(FsPlugin(SystemFs(extractor: ZIPExtractor())))`
+(import `SwiftPWAArchive`). Bytes never cross the bridge — extraction is
+path-to-path:
+
+```js
+// Peek the central directory before committing to a multi-GB extract:
+const { entries } = await __SWIFT_PWA__.invoke('fs.listZip', { from });
+// → entries: [{ path, isDirectory, isSymlink, uncompressedSize, compressedSize }]
+
+// Extract (optional zip-bomb guards; omitted → safe defaults):
+const r = await __SWIFT_PWA__.invoke('fs.extractZip', {
+    from, to,
+    maxUncompressedBytes, maxEntries, maxCompressionRatio  // all optional
+});
+// → { entries, uncompressedBytes }
+
+// Or stream progress for a big extract:
+const unsub = __SWIFT_PWA__.subscribe('fs.extractZipProgress', { from, to }, (e) => {
+    if (e.type === 'progress') updateBar(e.entriesDone, e.totalEntries);
+    else if (e.type === 'done') done(e.entries);
+});
+```
+
+Path-traversal and symlink entries are rejected, and the zip-bomb guards
+(uncompressed-size / entry-count / compression-ratio) abort with the
+output cleaned up. A typical flow: `dialog.openFile` → `fs.extractZip`
+into `app.dataDir()` → reference the media via a
+[`serveDirectory`](swift-api.md#serving-extra-directories-content-packs)
+mount. Available on macOS / iOS / Linux / Android (Windows: pending).
+
 ### `tray.*`
 
 ```js

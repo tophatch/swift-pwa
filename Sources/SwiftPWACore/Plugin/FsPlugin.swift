@@ -113,5 +113,50 @@ public struct FsPlugin: Plugin {
                 try await fs.metadata(path: args.path)
             }
         )
+
+        // Archive commands are registered only when the injected `Fs` has an
+        // extractor (`SystemFs(extractor: ZIPExtractor())`), so an app that
+        // doesn't import content packs neither links ZIPFoundation nor
+        // exposes `fs.extractZip` to its page JS.
+        guard fs.supportsZip else { return }
+
+        registry.register(
+            "fs.listZip",
+            typed: { (args: FsListZipArgs, _) async throws -> FsListZipResult in
+                try await FsListZipResult(entries: fs.listZip(path: args.from))
+            }
+        )
+
+        registry.register(
+            "fs.extractZip",
+            typed: { (args: FsExtractZipArgs, _) async throws -> ExtractResult in
+                try await fs.extractZip(from: args.from, to: args.to, limits: args.limits, onProgress: nil)
+            }
+        )
+
+        // Streaming variant: emits `progress` events per entry, then a
+        // terminal `done` event. Lets a GB extract drive a progress bar.
+        registry.registerStream(
+            "fs.extractZipProgress",
+            typed: { (args: FsExtractZipArgs, _) -> AsyncThrowingStream<FsExtractEvent, any Error> in
+                AsyncThrowingStream { continuation in
+                    let task = Task {
+                        do {
+                            let result = try await fs.extractZip(
+                                from: args.from,
+                                to: args.to,
+                                limits: args.limits,
+                                onProgress: { progress in continuation.yield(.progress(progress)) }
+                            )
+                            continuation.yield(.done(result))
+                            continuation.finish()
+                        } catch {
+                            continuation.finish(throwing: error)
+                        }
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            }
+        )
     }
 }

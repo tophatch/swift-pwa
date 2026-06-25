@@ -429,6 +429,7 @@ let package = Package(
             dependencies: [
                 "SwiftPWAArchive",
                 "SwiftPWACore",
+                "_SwiftPWATestSupport",
                 // Same Windows gate as the target — the round-trip tests
                 // drive ZIPFoundation directly, which doesn't build on
                 // Windows. The test file is `#if canImport(ZIPFoundation)`.

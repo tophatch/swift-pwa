@@ -24,14 +24,45 @@ public protocol ArchiveExtractor: Sendable {
     func list(zipAt url: URL) throws -> [ArchiveEntry]
 
     /// Extract every entry into `destination` (created if absent),
-    /// enforcing `limits`. Returns a summary. Throws `ArchiveError` on a
-    /// guard violation or a corrupt archive, leaving no partial output.
+    /// enforcing `limits`. `onProgress` (if given) is called after each
+    /// entry is written, so a GB extract can drive a progress bar. Returns
+    /// a summary. Throws `ArchiveError` on a guard violation or a corrupt
+    /// archive, leaving no partial output.
     @discardableResult
-    func extract(zipAt url: URL, to destination: URL, limits: ExtractLimits) throws -> ExtractResult
+    func extract(
+        zipAt url: URL,
+        to destination: URL,
+        limits: ExtractLimits,
+        onProgress: (@Sendable (ExtractProgress) -> Void)?
+    ) throws -> ExtractResult
+}
+
+public extension ArchiveExtractor {
+    /// Convenience: extract without progress reporting.
+    @discardableResult
+    func extract(zipAt url: URL, to destination: URL, limits: ExtractLimits) throws -> ExtractResult {
+        try extract(zipAt: url, to: destination, limits: limits, onProgress: nil)
+    }
+}
+
+/// Incremental extraction progress, reported per entry written.
+public struct ExtractProgress: Sendable, Codable, Equatable {
+    /// Entries written so far (includes directories).
+    public let entriesDone: Int
+    /// Uncompressed bytes accounted for so far.
+    public let bytesDone: Int64
+    /// Total entries in the archive's central directory.
+    public let totalEntries: Int
+
+    public init(entriesDone: Int, bytesDone: Int64, totalEntries: Int) {
+        self.entriesDone = entriesDone
+        self.bytesDone = bytesDone
+        self.totalEntries = totalEntries
+    }
 }
 
 /// One entry in a zip's central directory.
-public struct ArchiveEntry: Sendable, Equatable {
+public struct ArchiveEntry: Sendable, Codable, Equatable {
     public let path: String
     public let isDirectory: Bool
     public let isSymlink: Bool
@@ -87,7 +118,7 @@ public struct ExtractLimits: Sendable, Equatable {
 }
 
 /// Summary of a completed extraction.
-public struct ExtractResult: Sendable, Equatable {
+public struct ExtractResult: Sendable, Codable, Equatable {
     public let entries: Int
     public let uncompressedBytes: Int64
 

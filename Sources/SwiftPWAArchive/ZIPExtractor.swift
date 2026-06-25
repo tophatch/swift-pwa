@@ -18,7 +18,12 @@ import SwiftPWACore
         }
 
         @discardableResult
-        public func extract(zipAt _: URL, to _: URL, limits _: ExtractLimits) throws -> ExtractResult {
+        public func extract(
+            zipAt _: URL,
+            to _: URL,
+            limits _: ExtractLimits,
+            onProgress _: (@Sendable (ExtractProgress) -> Void)?
+        ) throws -> ExtractResult {
             throw ArchiveError.unsupportedPlatform("fs.extractZip is not yet available on Windows")
         }
     }
@@ -51,9 +56,18 @@ import SwiftPWACore
         }
 
         @discardableResult
-        public func extract(zipAt url: URL, to destination: URL, limits: ExtractLimits) throws -> ExtractResult {
+        public func extract(
+            zipAt url: URL,
+            to destination: URL,
+            limits: ExtractLimits,
+            onProgress: (@Sendable (ExtractProgress) -> Void)?
+        ) throws -> ExtractResult {
             let archive = try openArchive(url)
             let fm = FileManager.default
+            // The central directory is cheap to enumerate (metadata only), so
+            // total-entry count is known up front for progress reporting even
+            // for a multi-GB archive.
+            let totalEntries = archive.reduce(into: 0) { acc, _ in acc += 1 }
 
             // Extract into a temp sibling, then move into place, so an aborted
             // or failed extract never leaves a half-populated destination the
@@ -102,6 +116,7 @@ import SwiftPWACore
                         throw ArchiveError.corrupt("failed to extract \(entry.path): \(error)")
                     }
                 }
+                onProgress?(ExtractProgress(entriesDone: count, bytesDone: totalBytes, totalEntries: totalEntries))
             }
 
             // Commit: move staged contents into the real destination.

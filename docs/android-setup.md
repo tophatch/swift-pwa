@@ -598,13 +598,17 @@ without further configuration.
   `tray.*` reject with `E_NO_HANDLER`. Cross-platform code should
   gate on `__platform.info.commands` (see `Examples/HelloPWA`'s
   `data-requires="tray.setMenu"` capability gating for the pattern).
-- **Content packs: extraction is `java.util.zip`, served mounts are
-  declared in `pwa.json`.** `fs.extractZip` / `fs.listZip` work on
-  Android, but **not** via ZIPFoundation — it can't build against
-  Bionic libc (`lstat` / `errno` / `S_IF*` / `mode_t` mismatches), so
-  the Android backend routes extraction to Kotlin's `java.util.zip`
-  over the JNI bridge (`AndroidArchiveExtractor`, with the traversal /
-  symlink / zip-bomb guards enforced Kotlin-side). Apps select it per
+- **Content packs: extraction/creation are `java.util.zip`, served mounts
+  are declared in `pwa.json`.** `fs.extractZip` / `fs.listZip` /
+  `fs.createZip` work on Android, but **not** via ZIPFoundation — it can't
+  build against Bionic libc (`lstat` / `errno` / `S_IF*` / `mode_t`
+  mismatches), so the Android backend routes extraction *and creation* to
+  Kotlin's `java.util.zip` over the JNI bridge (`AndroidArchiveExtractor`,
+  with the traversal / symlink / zip-bomb guards enforced Kotlin-side).
+  One create caveat: `compression: "stored"` maps to a single-pass
+  deflate-level-0 entry (java.util.zip's true STORED method needs a CRC
+  pre-pass — a second read of every file — which a multi-GB export can't
+  afford); the output is a valid zip either way. Apps select it per
   platform: `#if os(Android) AndroidArchiveExtractor() #else
   ZIPExtractor() #endif` (see `Examples/HelloPWA`). For **serving**,
   the `WebViewAssetLoader` is built at `Activity.onCreate` — *before*
@@ -615,8 +619,9 @@ without further configuration.
   generated Activity as an `addPathHandler`. A runtime
   `ctx.serveDirectory(_:at:)` for an *undeclared* prefix is a desktop
   capability and won't take effect on Android. The
-  `fs.extractZipProgress` stream emits a single terminal progress tick
-  on Android (the unary JNI RPC has no per-entry channel), then `done`.
+  `fs.extractZipProgress` / `fs.createZipProgress` streams emit a single
+  terminal progress tick on Android (the unary JNI RPC has no per-entry
+  channel), then `done`.
 
 ## 8. Troubleshooting
 

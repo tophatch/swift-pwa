@@ -141,6 +141,51 @@ A failed or aborted extract cleans up after itself — you never end up serving 
 
 ---
 
+## Exporting / authoring a pack (the inverse)
+
+If your app also lets users *create* packs to share, the mirror of
+`fs.extractZip` is `fs.createZip` — zip a folder into a `.zip`, path-to-path,
+bytes never crossing the bridge.
+
+**Reach for it only when the pack is too big to zip in the browser.** For a
+normal pack, build the `.zip` in memory with a JS zip library and hand the
+user a `Blob` download — no native call needed, and it runs in a plain
+browser tab too. `fs.createZip` is the escape hatch for the giant-file case
+(a multi-GB folder of video that can't become an in-memory blob), and for
+**re-exporting an already-installed pack** — whose source is a folder under
+`app.dataDir()` that the browser can't re-`fetch()`.
+
+```js
+async function exportPack(packId) {
+  const dataDir = (await __SWIFT_PWA__.invoke("app.dataDir")).value;
+  const from = `${dataDir}/packs/${packId}`;   // the installed pack folder
+  const to   = `${dataDir}/exports/${packId}.zip`;
+
+  // 'stored' (the default) is right for packs: their media (png/webm/jpg/mp4)
+  // is already compressed, so deflating it burns CPU for ~0% size gain.
+  await new Promise((resolve, reject) => {
+    const unsub = __SWIFT_PWA__.subscribe(
+      "fs.createZipProgress",
+      { from, to, compression: "stored" },
+      (e) => {
+        if (e.type === "progress") setProgress(e.entriesDone / e.totalEntries);
+        else if (e.type === "done") { unsub(); resolve(); }
+        else if (e.type === "error") { unsub(); reject(new Error(e.message)); }
+      },
+    );
+  });
+
+  // `to` is now a .zip on disk. Let the user save it where they want with a
+  // native Save dialog (see the file save/load tutorial), or share it.
+}
+```
+
+Prefer one-shot without progress? `await __SWIFT_PWA__.invoke("fs.createZip", { from, to })`
+returns `{ entries, uncompressedBytes }`. Symlinks in the source are skipped,
+and a failed create never leaves a half-written `.zip`. Same platform support
+as `fs.extractZip`, gated on the same injected extractor — no extra Swift
+setup beyond Step 1.
+
 ## Notes
 
 - **Serving is read-only.** `/packs/…` only *reads* files. To write, use `fs.writeText` / `fs.writeBinary` with a real path under `app.dataDir()`.

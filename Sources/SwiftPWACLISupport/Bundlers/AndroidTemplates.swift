@@ -883,6 +883,7 @@ enum AndroidTemplates {
                 "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
+                "fs.createZipNative" -> fsCreateZipNative(json, done)
                 else -> done(null, "swift-pwa: unknown rpc method $method")
             }
         }
@@ -1504,6 +1505,76 @@ enum AndroidTemplates {
                     done(null, "swift-pwa: fs.extractZip failed: ${t.javaClass.simpleName}: ${t.message}")
                 } finally {
                     if (staging.exists()) staging.deleteRecursively()
+                }
+            }
+        }
+
+        private fun fsCreateZipNative(json: JSONObject, done: (String?, String?) -> Unit) {
+            val from = json.optString("from", "")
+            val to = json.optString("to", "")
+            if (from.isEmpty() || to.isEmpty()) {
+                done(null, "swift-pwa: fs.createZip: from/to required"); return
+            }
+            val compression = json.optString("compression", "stored")
+            backgroundExecutor.execute {
+                val src = java.io.File(from)
+                if (!src.isDirectory) {
+                    done(null, "swift-pwa: fs.createZip: from is not a directory: $from"); return@execute
+                }
+                val dest = java.io.File(to)
+                val staging = java.io.File(dest.parentFile, ".swift-pwa-create-" + System.nanoTime() + ".zip")
+                try {
+                    staging.parentFile?.mkdirs()
+                    val basePath = src.canonicalPath
+                    // Walk deterministically (sorted), parent-before-child,
+                    // skipping symlinks (not followed, not stored).
+                    val all = ArrayList<java.io.File>()
+                    fun collect(dir: java.io.File) {
+                        dir.listFiles()?.sortedBy { it.name }?.forEach { f ->
+                            if (java.nio.file.Files.isSymbolicLink(f.toPath())) return@forEach
+                            all.add(f)
+                            if (f.isDirectory) collect(f)
+                        }
+                    }
+                    collect(src)
+                    var totalBytes = 0L
+                    var count = 0
+                    java.util.zip.ZipOutputStream(
+                        java.io.BufferedOutputStream(java.io.FileOutputStream(staging))
+                    ).use { zos ->
+                        // "stored" maps to deflate level 0 (single-pass, no real
+                        // compression): java.util.zip's true STORED method needs
+                        // a CRC pre-pass (a second read of every file), which a
+                        // multi-GB pack export can't afford. "deflate" uses the
+                        // default level. Output is a valid zip either way.
+                        zos.setLevel(
+                            if (compression == "deflate") java.util.zip.Deflater.DEFAULT_COMPRESSION else 0
+                        )
+                        for (f in all) {
+                            val rel = f.canonicalPath
+                                .removePrefix(basePath + java.io.File.separator)
+                                .replace(java.io.File.separatorChar, '/')
+                            if (f.isDirectory) {
+                                zos.putNextEntry(java.util.zip.ZipEntry("$rel/"))
+                                zos.closeEntry()
+                            } else {
+                                zos.putNextEntry(java.util.zip.ZipEntry(rel))
+                                java.io.FileInputStream(f).use { input -> totalBytes += input.copyTo(zos) }
+                                zos.closeEntry()
+                            }
+                            count++
+                        }
+                    }
+                    dest.parentFile?.mkdirs()
+                    if (dest.exists()) dest.delete()
+                    if (!staging.renameTo(dest)) {
+                        staging.copyTo(dest, overwrite = true); staging.delete()
+                    }
+                    done(JSONObject().put("entries", count).put("uncompressedBytes", totalBytes).toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.createZip failed: ${t.javaClass.simpleName}: ${t.message}")
+                } finally {
+                    if (staging.exists()) staging.delete()
                 }
             }
         }

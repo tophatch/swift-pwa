@@ -303,6 +303,25 @@ public final class SystemFs: Fs, @unchecked Sendable {
         }
     }
 
+    public func createZip(
+        from: String,
+        to: String,
+        compression: ZipCompression,
+        onProgress: (@Sendable (CreateProgress) -> Void)?
+    ) async throws -> CreateResult {
+        let extractor = try requireExtractor("fs.createZip")
+        if Self.isContentURI(from) || Self.isContentURI(to) {
+            throw contentURIOperationUnsupported("fs.createZip", path: "\(from) → \(to)")
+        }
+        let src = URL(fileURLWithPath: from)
+        let dst = URL(fileURLWithPath: to)
+        do {
+            return try await extractor.create(zipAt: dst, from: src, compression: compression, onProgress: onProgress)
+        } catch let e as ArchiveError {
+            throw Self.mapArchiveError("fs.createZip", e)
+        }
+    }
+
     // MARK: - Helpers
 
     private func requireExtractor(_ op: String) throws -> any ArchiveExtractor {

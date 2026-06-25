@@ -389,6 +389,18 @@ All work is on branch **`feat/content-packs`** (PR #3), committed + pushed.
 - Android `fs.extractZipProgress` emits a single terminal tick (unary RPC has no per-entry channel) — a streaming JNI channel could give true per-entry progress.
 - **Recurring CI flake (not content-packs):** `swift-test` intermittently hangs ~12 min *after all tests pass* on one of the two Linux GTK jobs (gtk3/gtk4 alternately) — a known Linux swift-testing teardown issue, likely the DevServer inotify watcher not torn down. Passes on retry. Worth a separate hardening pass.
 
+## Round 4 — `fs.createZip` (symmetric counterpart to `fs.extractZip`)
+
+**Status:** implemented (branch `feat/fs-create-zip`). A small, non-blocking follow-on from adopter feedback round 4 — in-app pack **authoring / re-export**.
+
+The everyday authoring case (a small pack) is built **in the browser** as an in-memory `Blob` download — no platform support, runs in a plain tab. `fs.createZip` is the giant-file escape hatch: a multi-GB folder of video that can't become an in-memory blob, and re-exporting an *already-installed* pack (its source is a `<dataDir>` folder the browser can't re-`fetch()`). Same constraint as extract, mirrored: bytes stay off the bridge (path-to-path).
+
+- **API:** `fs.createZip({ from, to, compression? }) → { entries, uncompressedBytes }` + streaming `fs.createZipProgress` mirroring `fs.extractZipProgress`. `compression`: `"stored"` (default) | `"deflate"` — pack media is already compressed, so stored is faster for the same size.
+- **Reuses the opt-in archiver.** `create` is a new method on the existing `ArchiveExtractor` protocol (default impl throws, so non-archive `Fs` conformers still compile), wired through `Fs`/`SystemFs`/`FsPlugin` and gated on the same injected extractor — no new dependency, nothing extra linked for apps that don't import packs.
+- **Per-platform** (same backends as extract): ZIPFoundation `Archive(accessMode: .create)` + `addEntry` (streams disk→archive) on macOS/iOS/Linux; `tar --format zip --options zip:compression=store|deflate` on Windows; Kotlin `ZipOutputStream` over JNI on Android (where `"stored"` → deflate-level-0 single pass, since `java.util.zip`'s true STORED needs a CRC pre-pass — a second read of every file).
+- **Guards:** symlinks in the source are skipped (not followed, not stored); staging-then-move so a failed create leaves no partial `.zip`. No zip-bomb/traversal guards needed — we're reading the app's own files, not untrusted input.
+- **Tests:** create→extract round-trip (both compression modes), progress monotonicity, symlink skip, no-partial-on-failure, and the FsPlugin command path incl. a full create→extract bridge round-trip. Verified on macOS + the Linux GTK4 box; Windows is compile-only (CI builds but can't run tests there).
+
 **Key gotchas learned this session:**
 - `WKURLSchemeHandler` is `@MainActor` in CI's Xcode SDK (not in my local SDK) → keep handler work on the main actor; deliver synchronously in chunks (reads only the requested bytes, so no full-file buffering).
 - WebKitGTK reads the response stream to **EOF** (`stream_length` is only a hint) → `finish_file` hybrid: ranges-to-EOF use the lazy seekable `GFileInputStream` (GB-safe, cancellable); **bounded** sub-ranges must read exactly their bytes (capped memory buffer) or the 206 body won't match `Content-Range`.

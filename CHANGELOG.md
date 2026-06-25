@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`fs.createZip` — native, path-to-path zip *creation*, the symmetric counterpart to `fs.extractZip`.** For in-app pack authoring / re-export. The common authoring case (a small pack) should still build the `.zip` in the browser as an in-memory `Blob` — no platform support needed, and it runs in a plain tab. `fs.createZip({ from, to, compression? }) → { entries, uncompressedBytes }` is the escape hatch for the giant-file case (a multi-GB folder of video that can't become an in-memory blob) and for re-exporting an *already-installed* pack — whose source is a folder under `app.dataDir()` the browser can't re-`fetch()`. Bytes are read from disk and written into the archive entry-by-entry; they never cross the JS↔Swift bridge (the same constraint that motivated `fs.extractZip`, mirrored for creation). `compression` is `"stored"` (default) or `"deflate"` — pack media (png / webm / jpg / mp4) is already compressed, so storing is faster for the same size; deflate only earns its CPU on text-like payloads. A streaming `subscribe('fs.createZipProgress', …)` variant mirrors `fs.extractZipProgress` for a progress bar. Symlinks in the source are skipped (not followed, not stored), and a failed create leaves no partial `.zip`. Reuses the same opt-in archiver as extraction — `ctx.use(FsPlugin(SystemFs(extractor: ZIPExtractor())))` — so an app that doesn't import packs links nothing extra, and the commands register only when an extractor is injected. All five platforms with the backend that builds there: ZIPFoundation on macOS / iOS / Linux; `tar.exe` (`--format zip --options zip:compression=store|deflate`) on Windows; Kotlin's `java.util.zip` over JNI on Android (where `"stored"` maps to a single-pass deflate-level-0 entry — true STORED would need a CRC pre-pass, a second read of every file, which a multi-GB export can't afford). Part of the [runtime content-packs design](docs/design/runtime-content-packs.md) (Round 4 follow-on).
+
 ## [0.6.3] - 2026-06-25
 
 ### Added

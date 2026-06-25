@@ -265,8 +265,8 @@ remain:
   AppImage alongside the old and update a `~/.local/bin` symlink
   rather than swapping in place). See [docs/auto-updates.md](auto-updates.md)
   for the full publishing flow.
-- **Content packs are fully supported.** `fs.extractZip` / `fs.listZip`
-  use ZIPFoundation (Linux links it the same as Apple), and
+- **Content packs are fully supported.** `fs.extractZip` / `fs.listZip` /
+  `fs.createZip` use ZIPFoundation (Linux links it the same as Apple), and
   `ctx.serveDirectory(_:at:)` serves through the `pwa://localhost`
   scheme handler with HTTP `Range` / `206 Partial Content` support on
   **both** GTK backends — a seeked `GFileInputStream` streams a

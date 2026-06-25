@@ -182,6 +182,33 @@ into `app.dataDir()` → reference the media via a
 [`serveDirectory`](swift-api.md#serving-extra-directories-content-packs)
 mount. Available on macOS / iOS / Linux / Android (Windows: pending).
 
+**Zip creation (authoring / re-exporting a pack)** — the inverse of
+`fs.extractZip`, gated on the same injected extractor. For the common
+case (a small pack) build the `.zip` in the browser as a `Blob`; reach for
+`fs.createZip` only when the pack is too big to zip in memory (a multi-GB
+folder of video) — bytes stay off the bridge, path-to-path:
+
+```js
+// Zip a folder (e.g. an authored pack, or an already-installed pack whose
+// source is a folder under app.dataDir() the browser can't re-fetch):
+const r = await __SWIFT_PWA__.invoke('fs.createZip', {
+    from, to,                 // from: source dir, to: output .zip path
+    compression: 'stored'     // 'stored' (default) | 'deflate'
+});
+// → { entries, uncompressedBytes }
+
+// Or stream progress for a big archive:
+const unsub = __SWIFT_PWA__.subscribe('fs.createZipProgress', { from, to }, (e) => {
+    if (e.type === 'progress') updateBar(e.entriesDone, e.totalEntries);
+    else if (e.type === 'done') done(e.entries);
+});
+```
+
+Default `compression` is `'stored'` — pack media (png / webm / jpg / mp4)
+is already compressed, so deflate burns CPU for ~0% gain. Use `'deflate'`
+for compressible (text-like) payloads. Symlinks in the source are skipped
+(not followed, not stored), and a failed create leaves no partial `.zip`.
+
 ### `tray.*`
 
 ```js

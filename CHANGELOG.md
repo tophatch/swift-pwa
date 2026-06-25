@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`swift-pwa init --in-place` now scaffolds into the current directory instead of nesting a `<name>/` subdir.** The flag flipped the adopt-in-place behavior (merge an existing `pwa.json`, leave `web/` alone) but the target-directory choice ignored it — it only auto-detected an existing `pwa.json`/`web/` and otherwise fell through to the `cwd/<name>` default. So `--in-place` in a repo without a frontend yet (the exact "force it for a non-standard layout" case the flag documents) still nested under `<name>/`. The directory resolution now honors `--in-place` (and `--path` still wins over both).
+
 ## [0.6.4] - 2026-06-25
 
 ### Added

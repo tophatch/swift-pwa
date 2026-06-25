@@ -130,7 +130,9 @@ struct AndroidBundler {
         // Kotlin sources go under `java/<package-as-path>/...`
         let kotlinDir = main.appendingPathComponent("java/" + pkg.replacingOccurrences(of: ".", with: "/"))
         try FileManager.default.createDirectory(at: kotlinDir, withIntermediateDirectories: true)
-        try AndroidTemplates.mainActivityKt(packageId: pkg, soBaseName: soBase).write(
+        try AndroidTemplates.mainActivityKt(
+            packageId: pkg, soBaseName: soBase, serveMounts: manifest.build?.serve ?? []
+        ).write(
             to: kotlinDir.appendingPathComponent("MainActivity.kt"),
             atomically: true, encoding: .utf8
         )

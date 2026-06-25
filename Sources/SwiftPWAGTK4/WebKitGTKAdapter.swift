@@ -35,7 +35,7 @@
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
         }
 
-        init(content: WindowContent) throws {
+        init(content: WindowContent, sharedProvider: AssetProvider) throws {
             guard let ucm = webkit_user_content_manager_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_user_content_manager_new failed")
             }
@@ -69,9 +69,11 @@
             viewWidget = view
 
             if case let .bundled(directory, _) = content {
-                let provider = AssetProvider(root: directory)
-                assetProvider = provider
-                registerScheme(provider: provider)
+                // Use the context-level shared router so runtime
+                // `serveDirectory` mounts reach this window's handler.
+                sharedProvider.setBundleRoot(directory)
+                assetProvider = sharedProvider
+                registerScheme(provider: sharedProvider)
             }
 
             // Enable the WebKit inspector. Without this,

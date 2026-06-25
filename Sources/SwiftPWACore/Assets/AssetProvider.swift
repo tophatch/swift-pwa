@@ -36,6 +36,26 @@ public final class AssetProvider: @unchecked Sendable {
         mounts = [Mount(prefix: "/", root: root.standardizedFileURL, writable: false)]
     }
 
+    /// Create a router with **no** bundle mount yet. Used when the provider
+    /// is owned by `AppContext` and shared across windows: the context
+    /// creates it up front, then the first `.bundled` window installs the
+    /// `/` mount via `setBundleRoot(_:)`. Until then `resolve` returns nil
+    /// for everything (a `.remote`-only app needs no bundle root).
+    public init(scheme: String = "pwa", host: String = "localhost") {
+        self.scheme = scheme
+        self.host = host
+        mounts = []
+    }
+
+    /// Install (or replace) the read-only bundle `/` mount. Idempotent for
+    /// the common case where every window loads the same bundle directory;
+    /// the last writer wins if windows somehow disagree.
+    public func setBundleRoot(_ root: URL) {
+        lock.lock(); defer { lock.unlock() }
+        mounts.removeAll { $0.prefix == "/" }
+        mounts.append(Mount(prefix: "/", root: root.standardizedFileURL, writable: false))
+    }
+
     /// The bundle root (the `/` mount) — exposed for the rare caller that
     /// needs the on-disk directory rather than a resolved URL.
     public var root: URL {
@@ -63,6 +83,9 @@ public final class AssetProvider: @unchecked Sendable {
     /// ever reads.
     public func mount(_ root: URL, at prefix: String, writable: Bool = true) {
         let normalized = Self.normalize(prefix)
+        // `/` is reserved for the bundle (use `setBundleRoot`); a served mount
+        // must have its own non-root prefix so it can't shadow the whole app.
+        guard normalized != "/" else { return }
         lock.lock(); defer { lock.unlock() }
         mounts.removeAll { $0.prefix == normalized }
         mounts.append(Mount(prefix: normalized, root: root.standardizedFileURL, writable: writable))
@@ -103,6 +126,28 @@ public final class AssetProvider: @unchecked Sendable {
             return Resolved(fileURL: candidate, mimeType: Self.mimeType(for: candidate), fileSize: size)
         }
         return nil
+    }
+
+    /// Whether `url` falls under a mount added via ``mount(_:at:)`` (a
+    /// served pack), as opposed to the bundle `/` root or no mount at all.
+    ///
+    /// The Windows backend uses this to decide, per `WebResourceRequested`,
+    /// whether to answer the request itself (true → resolve + range-serve the
+    /// served directory) or let the native `SetVirtualHostNameToFolderMapping`
+    /// serve the bundle (false). Scheme/host must still match.
+    public func isServedPrefix(_ url: URL) -> Bool {
+        guard url.scheme?.lowercased() == scheme else { return false }
+        guard let urlHost = url.host?.lowercased(), urlHost == host else { return false }
+        var path = url.path
+        if path.isEmpty { path = "/" }
+        let servedPrefixes: [String] = {
+            lock.lock(); defer { lock.unlock() }
+            return mounts.compactMap { $0.prefix == "/" ? nil : $0.prefix }
+        }()
+        for prefix in servedPrefixes where path == prefix || path.hasPrefix(prefix + "/") {
+            return true
+        }
+        return false
     }
 
     // MARK: - Helpers

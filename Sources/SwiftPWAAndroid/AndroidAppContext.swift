@@ -26,6 +26,14 @@
         public static let shared = AndroidAppContext()
 
         public let registry = CommandRegistry()
+        // Satisfies the `AppContext` requirement, but the Android backend
+        // serves the bundle and any mounts through the Kotlin
+        // `WebViewAssetLoader` (built at Activity-init), *not* this router.
+        // A runtime `serveDirectory` here is a no-op for serving; mounts that
+        // must exist at startup are declared in `pwa.json`'s `build.serve` and
+        // wired into the generated Kotlin by the bundler. See the
+        // content-packs design doc.
+        public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
         public private(set) nonisolated(unsafe) var windows: [WindowID: any Window] = [:]
         // `pendingExitCode` is read by the runtime worker thread
         // (in `AndroidAppRuntime.run`) right after `runSemaphore`

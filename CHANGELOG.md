@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ctx.serveDirectory(_:at:)` — serve a writable directory on the bundle origin, with HTTP range support.** The runtime content-packs feature's linchpin: an app can mount a directory (e.g. its per-user data dir) under an app-chosen path prefix so page JS references it with an origin-relative URL — `videoEl.src = "/packs/<id>/clip.webm"` — that works unchanged on every backend regardless of the underlying scheme/host. Read-only (GET); writes still go through `fs.*`. Mounts can be added or removed at runtime (`unserveDirectory(at:)`) and take effect for in-flight requests, so a pack extracted *after* the window exists is immediately fetchable without re-registering anything — and without exposing a "serve any path" capability to page JS (mounting stays the app author's decision). Backed by a single context-level `AssetProvider` (the bundle is just its `/` mount) shared into every window's scheme handler. Range/`206 Partial Content` is honored on all backends so large `<video>` seeks/streams off disk instead of buffering: Apple `WKURLSchemeHandler`, GTK3/GTK4 (`webkit_uri_scheme_request`), Windows via `WebResourceRequested` interception (the bundle keeps its native virtual-host mapping; only served mounts are intercepted), and Android via `WebViewAssetLoader.InternalStoragePathHandler`. On **Android** the asset loader is built at Activity-init before any Swift runs, so mounts that must exist at startup are declared in `pwa.json` (`"build": { "serve": [ { "mount": "/packs", "from": "data/packs" } ] }`, rooted at the data/cache dir) and the bundler wires each into the generated Kotlin; `serveDirectory` for an undeclared prefix is a desktop capability. Part of the [runtime content-packs design](docs/design/runtime-content-packs.md) (Phase B).
+
 ## [0.6.2] - 2026-06-24
 
 ### Added

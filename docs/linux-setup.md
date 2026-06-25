@@ -297,6 +297,27 @@ own commands that need to touch GTK from a non-main thread, use
 `MainThread.run` rather than `MainActor.run` and you'll avoid the
 deadlock.
 
+### `swift test` occasionally hangs at exit on Linux
+
+The same libdispatch main queue is behind an intermittent flake when you
+run the test suite on Linux: every test passes, then the process **fails
+to exit**. A swift-testing bundle's async `@main` parks the main thread in
+`dispatch_main()` (`swift_task_asyncMainDrainQueue`) after the run
+completes, waiting for the wakeup that fires the final `exit()` — and that
+wakeup is intermittently lost (a swift-corelibs-libdispatch main-queue
+race). It reproduces in roughly **15–25 % of runs**, on Swift 6.0.3 **and**
+6.2.0 (so it isn't toolchain-specific), independent of which tests run and
+of `--no-parallel`. It always clears on a fresh run.
+
+This is purely a *process-exit* hang — the tests themselves have already
+passed — so CI wraps the Linux test step in
+[`Scripts/ci-test-linux.sh`](../Scripts/ci-test-linux.sh): each `swift
+test` is bounded by a `timeout`, and **only a clean timeout is retried**.
+A real test failure exits non-zero on the first attempt and fails the job
+immediately, so nothing is masked; three attempts take the residual flake
+below 1 %. If you hit the hang locally, just re-run, or invoke the same
+wrapper (`bash Scripts/ci-test-linux.sh`).
+
 ## Reporting issues
 
 When filing a Linux issue, include:

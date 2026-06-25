@@ -408,8 +408,10 @@ enum AndroidTemplates {
             let dirExpr = sub.isEmpty ? root : "File(\(root), \(kotlinString(sub)))"
             return """
 
-                            .addPathHandler(\(kotlinString(prefix)), WebViewAssetLoader.InternalStoragePathHandler(this, \(dirExpr).apply { mkdirs() }))
-                """
+                        .addPathHandler(\(kotlinString(
+                            prefix
+                        )), WebViewAssetLoader.InternalStoragePathHandler(this, \(dirExpr).apply { mkdirs() }))
+            """
             // Note: leading newline + indentation chains onto the builder.
         }.joined()
     }

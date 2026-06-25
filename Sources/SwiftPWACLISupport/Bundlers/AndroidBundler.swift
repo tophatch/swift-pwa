@@ -732,14 +732,29 @@ struct AndroidBundler {
         return stable.contains(name)
     }
 
-    /// Standard install path for a Swift SDK bundle. macOS only for
-    /// now; Linux uses `~/.swiftpm/swift-sdks/...` and would need a
-    /// per-OS branch added here.
+    /// Standard install path for a Swift SDK bundle, resolved against the
+    /// **host** OS running this CLI (the machine doing the cross-compile).
+    /// SwiftPM's swift-sdks root is platform-dependent:
+    /// `~/Library/org.swift.swiftpm/swift-sdks` on macOS,
+    /// `${XDG_DATA_HOME:-~/.local/share}/swiftpm/swift-sdks` on Linux. Getting
+    /// this wrong silently skips runtime-stdlib bundling, producing an APK
+    /// that crashes at `System.loadLibrary` on-device (it still *assembles*,
+    /// so CI's assemble-only check never catches it).
     private func swiftSDKBundleRoot(id: String) -> URL {
         let home = URL(fileURLWithPath: NSHomeDirectory())
-        return home
-            .appendingPathComponent("Library/org.swift.swiftpm/swift-sdks")
-            .appendingPathComponent("\(id).artifactbundle/swift-android")
+        let sdksRoot: URL
+        #if os(macOS)
+            sdksRoot = home.appendingPathComponent("Library/org.swift.swiftpm/swift-sdks")
+        #else
+            // Linux (and any other host): honor XDG_DATA_HOME, default
+            // ~/.local/share — matches `swift sdk install`'s layout.
+            let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
+            let base = (xdg.map { $0.isEmpty ? nil : $0 } ?? nil)
+                .map { URL(fileURLWithPath: $0) }
+                ?? home.appendingPathComponent(".local/share")
+            sdksRoot = base.appendingPathComponent("swiftpm/swift-sdks")
+        #endif
+        return sdksRoot.appendingPathComponent("\(id).artifactbundle/swift-android")
     }
 
     /// Map an Android ABI to the SDK's per-arch directory names:

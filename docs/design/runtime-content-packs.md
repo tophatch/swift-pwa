@@ -361,4 +361,35 @@ carry their own value (dir API, faster bundle streaming).
 5. **`app.dataDir` + `app.cacheDir` → both, from the start.**
 6. **Release line → 0.6.x.** Pre-1.0, rapidly developing, few adopters; no need to hold
    these new APIs for a 0.7.0.
+
+## Resume notes (implementation status + how to work)
+
+All work is on branch **`feat/content-packs`** (PR #3), committed + pushed.
+
+**Status:**
+- ✅ **Phase 0a** — `SwiftPWAArchive`/`ZIPExtractor` (Windows = throwing stub). CI green.
+- ✅ **Phase A1** — `app.dataDir`/`app.cacheDir` + `PlatformDirectories` (+ `ctx.dataDirectory()`/`cacheDirectory()`). Android `filesDir`/`cacheDir` use a fallback derived from the temp dir; a real `PlatformDirectories.Hook` should be installed by the Android backend (still TODO).
+- ✅ **Phase A2** — `AssetProvider` is now a multi-mount class (`mount`/`unmount`, `fileSize` on `Resolved`).
+- ✅ **Phase A3** — range/206 done on Apple (`WKSchemeHandler`, synchronous chunked, `@unchecked Sendable` — *not* `@MainActor`; CI Xcode SDK marks `WKURLSchemeHandler` `@MainActor` so off-main delivery is illegal) and GTK (both shims' `swiftpwa_uri_request_*` helpers + `SchemeBox`). **GTK verified headless on real WebKitGTK 6.0.** Shared `ByteRange` parser in Core.
+- ⏭️ **Phase B (next)** — `ctx.serveDirectory(_:at:)`/`unserveDirectory(at:)`. Add to the `AppContext` protocol; **hoist the per-window `AssetProvider` to context level** so the call mutates the shared router (Apple + GTK then work via the mount table). Windows: same-origin `/packs` needs `WebResourceRequested` interception (shim hooks exist, unused) with range in C++ — *compile-only verifiable here*. Android: `addPathHandler` in the generated Kotlin + `pwa.json` `build.serve` schema + bundler wiring + the `filesDir` JNI hook — *compile-only*.
+- ⏭️ **Phase C** — wire `fs.extractZip`/`fs.listZip` into `Fs`/`SystemFs`/`FsPlugin` (testable on macOS) + a progress `subscribe` + the Windows `bsdtar` `WindowsZIPExtractor` (replaces the stub; compile-only here) + wire `Examples/HelloPWA` to demo (also runtime-confirms ZIPFoundation on Android).
+
+**Key gotchas learned this session:**
+- `WKURLSchemeHandler` is `@MainActor` in CI's Xcode SDK (not in my local SDK) → keep handler work on the main actor; deliver synchronously in chunks (reads only the requested bytes, so no full-file buffering).
+- WebKitGTK reads the response stream to **EOF** (`stream_length` is only a hint) → `finish_file` hybrid: ranges-to-EOF use the lazy seekable `GFileInputStream` (GB-safe, cancellable); **bounded** sub-ranges must read exactly their bytes (capped memory buffer) or the 206 body won't match `Content-Range`.
+- glib `gint64` imports as Swift `Int` on Linux x86_64 → wrap call args in `gint64(...)`.
+
+**Linux GTK build/verify box** (see also the saved project memory): host `bminisaix1p.local` (passwordless ssh; headless; no sudo; no appindicator → **build the GTK4 backend**). Repo clone at `~/swift-pwa`.
+```bash
+# Local → box sync (no git noise):
+rsync -az --exclude=.build --exclude=.git ~/Code/swift-pwa/ bminisaix1p.local:~/swift-pwa/
+# On box (GTK4 path; appindicator absent):
+export PATH="$HOME/.local/share/swiftly/bin:$PATH"; export SWIFT_PWA_GTK4=1
+cd ~/swift-pwa && swift build
+# A C-shim (systemLibrary) header change is NOT picked up incrementally → rm -rf .build.
+# Headless WebView run:
+export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1
+timeout 40 xvfb-run -a .build/x86_64-unknown-linux-gnu/debug/<exe> ./web
 ```
+Local `swift build`/`swift package` needs the git safe-directory workaround for dep resolution:
+`GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=safe.bareRepository GIT_CONFIG_VALUE_0=all swift build`.

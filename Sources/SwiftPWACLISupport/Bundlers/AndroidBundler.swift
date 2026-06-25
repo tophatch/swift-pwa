@@ -741,20 +741,41 @@ struct AndroidBundler {
     /// that crashes at `System.loadLibrary` on-device (it still *assembles*,
     /// so CI's assemble-only check never catches it).
     private func swiftSDKBundleRoot(id: String) -> URL {
+        let leaf = "\(id).artifactbundle/swift-android"
+        // SwiftPM's swift-sdks root varies by host *and* by SwiftPM version /
+        // install method, so probe the known roots and use whichever actually
+        // holds the bundle. Order: legacy `~/.swiftpm` (what swiftly-managed
+        // toolchains use today), the XDG location, then macOS. Getting this
+        // wrong silently skips runtime-stdlib bundling — the APK assembles but
+        // crashes at `System.loadLibrary` on-device (CI's assemble-only check
+        // never catches it).
+        let fm = FileManager.default
+        let candidates = swiftSDKRootCandidates()
+        for root in candidates {
+            let bundle = root.appendingPathComponent(leaf)
+            if fm.fileExists(atPath: bundle.path) { return bundle }
+        }
+        // None found — return the first candidate so the "not found" note
+        // points at the most likely location for this host.
+        return (candidates.first ?? URL(fileURLWithPath: NSHomeDirectory()))
+            .appendingPathComponent(leaf)
+    }
+
+    /// Candidate SwiftPM swift-sdks roots, most-likely first.
+    private func swiftSDKRootCandidates() -> [URL] {
         let home = URL(fileURLWithPath: NSHomeDirectory())
-        let sdksRoot: URL
+        var roots: [URL] = []
         #if os(macOS)
-            sdksRoot = home.appendingPathComponent("Library/org.swift.swiftpm/swift-sdks")
-        #else
-            // Linux (and any other host): honor XDG_DATA_HOME, default
-            // ~/.local/share — matches `swift sdk install`'s layout.
-            let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"]
-            let base = (xdg.map { $0.isEmpty ? nil : $0 } ?? nil)
-                .map { URL(fileURLWithPath: $0) }
-                ?? home.appendingPathComponent(".local/share")
-            sdksRoot = base.appendingPathComponent("swiftpm/swift-sdks")
+            roots.append(home.appendingPathComponent("Library/org.swift.swiftpm/swift-sdks"))
         #endif
-        return sdksRoot.appendingPathComponent("\(id).artifactbundle/swift-android")
+        // Legacy data dir — used by swiftly-managed toolchains today.
+        roots.append(home.appendingPathComponent(".swiftpm/swift-sdks"))
+        // XDG location (newer SwiftPM): $XDG_DATA_HOME ?? ~/.local/share.
+        if let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"], !xdg.isEmpty {
+            roots.append(URL(fileURLWithPath: xdg).appendingPathComponent("swiftpm/swift-sdks"))
+        }
+        roots.append(home.appendingPathComponent(".local/share/swiftpm/swift-sdks"))
+        return roots
     }
 
     /// Map an Android ABI to the SDK's per-arch directory names:

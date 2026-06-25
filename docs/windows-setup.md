@@ -541,17 +541,21 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   CI does the same. The other suites (`SwiftPWACoreTests` etc.) get
   compile-checked on Windows via `swift build --build-tests` but can't
   be *run* until SwiftPM's Windows discovery is fixed upstream.
-- **Content packs: extraction is `tar.exe`, served mounts use
-  `WebResourceRequested`.** `fs.extractZip` / `fs.listZip` work on
-  Windows, but **not** via ZIPFoundation — its `CZLib` shim uses
+- **Content packs: extraction/creation are `tar.exe`, served mounts use
+  `WebResourceRequested`.** `fs.extractZip` / `fs.listZip` / `fs.createZip`
+  work on Windows, but **not** via ZIPFoundation — its `CZLib` shim uses
   `#import <zlib.h>`, which clang-cl rejects, and Windows ships no
   system zlib. The same `ZIPExtractor` type therefore shells to
   `tar.exe` (libarchive's bsdtar, bundled in Windows 10 1803+),
   enforcing the traversal / symlink / zip-bomb guards via a pre-extract
-  `tar -tvf` listing pass. One degradation: bsdtar's listing doesn't
-  expose per-entry *compressed* size, so the `maxCompressionRatio`
-  guard is a no-op on Windows (the `maxUncompressedBytes` / `maxEntries`
-  guards still apply). For **serving**, `SetVirtualHostNameToFolderMapping`
+  `tar -tvf` listing pass. `fs.createZip` runs `tar --format zip
+  --options zip:compression=store|deflate`. One degradation: bsdtar's
+  listing doesn't expose per-entry *compressed* size, so the
+  `maxCompressionRatio` guard is a no-op on Windows (the
+  `maxUncompressedBytes` / `maxEntries` guards still apply). The `tar.exe`
+  paths aren't exercised by CI (SwiftPM test discovery is broken on
+  Windows, so the job builds but doesn't run tests). For **serving**,
+  `SetVirtualHostNameToFolderMapping`
   maps a whole host, not a subpath, so `ctx.serveDirectory(_:at:)`
   mounts are served via a `WebResourceRequested` interception filtered
   to the bundle origin (the bundle itself keeps its native virtual-host

@@ -158,5 +158,39 @@ public struct FsPlugin: Plugin {
                 }
             }
         )
+
+        registry.register(
+            "fs.createZip",
+            typed: { (args: FsCreateZipArgs, _) async throws -> CreateResult in
+                try await fs.createZip(
+                    from: args.from, to: args.to, compression: args.zipCompression, onProgress: nil
+                )
+            }
+        )
+
+        // Streaming variant: emits `progress` events per entry, then a
+        // terminal `done` event. Lets a GB pack export drive a progress bar.
+        registry.registerStream(
+            "fs.createZipProgress",
+            typed: { (args: FsCreateZipArgs, _) -> AsyncThrowingStream<FsCreateEvent, any Error> in
+                AsyncThrowingStream { continuation in
+                    let task = Task {
+                        do {
+                            let result = try await fs.createZip(
+                                from: args.from,
+                                to: args.to,
+                                compression: args.zipCompression,
+                                onProgress: { progress in continuation.yield(.progress(progress)) }
+                            )
+                            continuation.yield(.done(result))
+                            continuation.finish()
+                        } catch {
+                            continuation.finish(throwing: error)
+                        }
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            }
+        )
     }
 }

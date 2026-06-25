@@ -325,7 +325,7 @@ struct AndroidBundlerUnitTests {
     }
 
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
-    func mainActivityServeMounts() {
+    func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(
             packageId: "com.example.hi",
             soBaseName: "Hi",
@@ -335,13 +335,18 @@ struct AndroidBundlerUnitTests {
                 .init(mount: "/lib", from: "library") // bare → filesDir
             ]
         )
-        // Bundle handler is still present and first.
+        // Bundle handler is present.
         #expect(activity.contains(".addPathHandler(\"/\", WebViewAssetLoader.AssetsPathHandler(this))"))
         // Each declared mount maps to an internal-storage handler under the
         // right root, prefix normalized to end with "/".
         #expect(activity.contains(
             ".addPathHandler(\"/packs/\", WebViewAssetLoader.InternalStoragePathHandler(this, File(filesDir, \"packs\").apply { mkdirs() }))"
         ))
+        // Critical: served mounts must register BEFORE the catch-all "/" bundle
+        // handler, or "/" shadows them (WebViewAssetLoader matches in order).
+        let packsIdx = try #require(activity.range(of: ".addPathHandler(\"/packs/\""))
+        let bundleIdx = try #require(activity.range(of: ".addPathHandler(\"/\", WebViewAssetLoader.AssetsPathHandler"))
+        #expect(packsIdx.lowerBound < bundleIdx.lowerBound)
         #expect(activity.contains(
             ".addPathHandler(\"/thumbs/\", WebViewAssetLoader.InternalStoragePathHandler(this, File(cacheDir, \"thumbs\").apply { mkdirs() }))"
         ))

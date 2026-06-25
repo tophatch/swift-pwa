@@ -1,40 +1,139 @@
 import Foundation
 
-/// Resolves `pwa://localhost/...` URLs to file URLs / mime types for the
-/// custom URL scheme handlers in each backend.
-public struct AssetProvider: Sendable {
+/// Resolves `pwa://localhost/...` (and the equivalent virtual-host) URLs to
+/// file URLs / mime types for the custom URL scheme handlers in each
+/// backend.
+///
+/// Originally a single-root value type; now a small **mount table** so the
+/// bundle and additional writable roots (extracted content packs) can be
+/// served on the *same* scheme/host under different path prefixes. The
+/// bundle is always the `/` mount; `mount(_:at:)` adds more. Longest
+/// matching prefix wins, and each mount keeps its own path-traversal guard.
+///
+/// It's a `final class` (not a value type) so the instance a backend hands
+/// its scheme handler at window-creation time is the same one
+/// `AppContext.serveDirectory` mutates later — a pack mounted at runtime is
+/// visible to in-flight requests without re-registering anything. Thread
+/// safety via `NSLock` (`resolve` runs on the platform UI thread; mounts may
+/// be added from `configure`/command handlers).
+public final class AssetProvider: @unchecked Sendable {
     public let scheme: String // "pwa"
     public let host: String // "localhost"
-    public let root: URL // directory containing the web bundle
+
+    private let lock = NSLock()
+    private var mounts: [Mount]
+
+    private struct Mount {
+        let prefix: String // normalized: "/" or "/foo" (no trailing slash)
+        let root: URL
+        let writable: Bool
+    }
 
     public init(scheme: String = "pwa", host: String = "localhost", root: URL) {
         self.scheme = scheme
         self.host = host
-        self.root = root
+        // The bundle is the read-only root mount.
+        mounts = [Mount(prefix: "/", root: root.standardizedFileURL, writable: false)]
+    }
+
+    /// The bundle root (the `/` mount) — exposed for the rare caller that
+    /// needs the on-disk directory rather than a resolved URL.
+    public var root: URL {
+        lock.lock(); defer { lock.unlock() }
+        return mounts.first { $0.prefix == "/" }?.root ?? URL(fileURLWithPath: "/")
     }
 
     public struct Resolved: Sendable {
         public let fileURL: URL
         public let mimeType: String
+        /// Size in bytes — handlers use it for `Content-Length` and to
+        /// answer `Range` requests without a second `stat`.
+        public let fileSize: Int64
+
+        public init(fileURL: URL, mimeType: String, fileSize: Int64) {
+            self.fileURL = fileURL
+            self.mimeType = mimeType
+            self.fileSize = fileSize
+        }
     }
 
-    /// Resolve a `pwa://` request URL. Returns nil if the URL is outside
-    /// the configured scheme/host or escapes the bundle root.
+    /// Mount an additional directory at `prefix` (e.g. `/packs`), served on
+    /// the same scheme/host as the bundle. Re-mounting the same prefix
+    /// replaces it. `writable` is metadata for callers; the handler only
+    /// ever reads.
+    public func mount(_ root: URL, at prefix: String, writable: Bool = true) {
+        let normalized = Self.normalize(prefix)
+        lock.lock(); defer { lock.unlock() }
+        mounts.removeAll { $0.prefix == normalized }
+        mounts.append(Mount(prefix: normalized, root: root.standardizedFileURL, writable: writable))
+    }
+
+    /// Remove a previously-mounted prefix. The bundle `/` mount can't be
+    /// removed.
+    public func unmount(at prefix: String) {
+        let normalized = Self.normalize(prefix)
+        guard normalized != "/" else { return }
+        lock.lock(); defer { lock.unlock() }
+        mounts.removeAll { $0.prefix == normalized }
+    }
+
+    /// Resolve a request URL. Returns nil if the URL is outside the
+    /// configured scheme/host, matches no mount, escapes a mount's root, or
+    /// names something that isn't a regular file.
     public func resolve(_ url: URL) -> Resolved? {
         guard url.scheme?.lowercased() == scheme else { return nil }
-        guard let host = url.host?.lowercased(), host == self.host else { return nil }
+        guard let urlHost = url.host?.lowercased(), urlHost == host else { return nil }
         var path = url.path
         if path.isEmpty || path == "/" { path = "/index.html" }
-        // Strip leading slash to make it relative.
-        if path.hasPrefix("/") { path.removeFirst() }
 
-        let candidate = root.appendingPathComponent(path).standardizedFileURL
-        // Guard against path traversal: candidate must stay within root.
-        let rootStd = root.standardizedFileURL.path
-        guard candidate.path.hasPrefix(rootStd) else { return nil }
-        guard FileManager.default.fileExists(atPath: candidate.path) else { return nil }
+        // Longest prefix first, so `/packs/...` beats the `/` bundle mount.
+        let ordered: [Mount] = {
+            lock.lock(); defer { lock.unlock() }
+            return mounts.sorted { $0.prefix.count > $1.prefix.count }
+        }()
 
-        return Resolved(fileURL: candidate, mimeType: Self.mimeType(for: candidate))
+        for mount in ordered {
+            guard let relative = Self.relativePath(of: path, under: mount.prefix) else { continue }
+            let candidate = mount.root.appendingPathComponent(relative).standardizedFileURL
+            // Per-mount traversal guard: candidate must stay within root.
+            let rootPath = mount.root.path
+            let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
+            guard candidate.path == rootPath || candidate.path.hasPrefix(rootPrefix) else { continue }
+            guard let size = Self.regularFileSize(candidate) else { continue }
+            return Resolved(fileURL: candidate, mimeType: Self.mimeType(for: candidate), fileSize: size)
+        }
+        return nil
+    }
+
+    // MARK: - Helpers
+
+    /// The path *under* `prefix`, or nil if `path` isn't covered by it.
+    /// `/` covers everything; `/foo` covers `/foo` and `/foo/...`.
+    private static func relativePath(of path: String, under prefix: String) -> String? {
+        if prefix == "/" {
+            return String(path.drop(while: { $0 == "/" }))
+        }
+        if path == prefix { return "" }
+        if path.hasPrefix(prefix + "/") { return String(path.dropFirst(prefix.count + 1)) }
+        return nil
+    }
+
+    private static func normalize(_ prefix: String) -> String {
+        var p = prefix
+        if !p.hasPrefix("/") { p = "/" + p }
+        while p.count > 1, p.hasSuffix("/") { p.removeLast() }
+        return p
+    }
+
+    /// Byte size of a regular file at `url`, or nil if it's missing or a
+    /// directory (so a directory request 404s rather than 500-ing in the
+    /// handler's `Data(contentsOf:)`).
+    private static func regularFileSize(_ url: URL) -> Int64? {
+        let fm = FileManager.default
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return nil }
+        let attrs = try? fm.attributesOfItem(atPath: url.path)
+        return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
     }
 
     public static func mimeType(for url: URL) -> String {
@@ -56,6 +155,15 @@ public struct AssetProvider: Sendable {
         case "otf": "font/otf"
         case "txt": "text/plain; charset=utf-8"
         case "map": "application/json; charset=utf-8"
+        // Media types matter for the served-pack use case — browsers gate
+        // `<video>`/`<audio>` streaming on a sensible content type.
+        case "webm": "video/webm"
+        case "mp4", "m4v": "video/mp4"
+        case "mov": "video/quicktime"
+        case "mp3": "audio/mpeg"
+        case "m4a": "audio/mp4"
+        case "ogg", "ogv": "video/ogg"
+        case "wav": "audio/wav"
         default: "application/octet-stream"
         }
     }

@@ -236,10 +236,18 @@ path outside the data/cache roots). On Android only the `pwa.json`-declared moun
 guaranteed at startup; a later `serveDirectory` call for an undeclared prefix is a
 desktop-only capability (documented as such).
 
-### Core refactor: `AssetProvider` value → shared `AssetRouter`
+### Core refactor: `AssetProvider` value → shared multi-mount class
 
-Replace the per-window `AssetProvider` value with a shared, thread-safe **`AssetRouter`**
-class (NSLock, `@unchecked Sendable` — same concurrency idiom as `CommandRegistry`):
+> **As implemented (Phase A2):** rather than introduce a separately-named `AssetRouter`,
+> the existing public `AssetProvider` was evolved from a struct into the `final class`
+> below — same name, so none of the six backend call sites (`AssetProvider(root:)` +
+> `.resolve(_:)`) needed editing, and the change is a pure, behavior-preserving refactor
+> with the bundle as the `/` mount. It gains `mount(_:at:)` / `unmount(at:)` and a
+> `fileSize` on `Resolved` (for range). The description below uses "AssetRouter" for the
+> concept.
+
+Replace the per-window `AssetProvider` value with a shared, thread-safe class
+(NSLock, `@unchecked Sendable` — same concurrency idiom as `CommandRegistry`):
 
 ```
 final class AssetRouter {                      // held by AppContext; shared into each handler

@@ -40,6 +40,31 @@ public protocol ArchiveExtractor: Sendable {
         limits: ExtractLimits,
         onProgress: (@Sendable (ExtractProgress) -> Void)?
     ) async throws -> ExtractResult
+
+    /// Create a zip at `destination` from the file tree rooted at `source`,
+    /// the inverse of `extract`. Walks `source` recursively and stores each
+    /// regular file under its path relative to `source`; `compression`
+    /// picks stored vs deflate. `onProgress` (if given) fires after each
+    /// entry. Bytes are read from disk and written into the archive
+    /// **in-process** — they never cross the JS↔Swift bridge, the same
+    /// reason `extract` exists (a GB of media would otherwise become a
+    /// ~1.33 GB base64 string per file across the wire).
+    ///
+    /// Symlinks in `source` are skipped (not followed, not stored) so an
+    /// exported pack can't smuggle a link out of the tree. Throws
+    /// `ArchiveError` on failure, leaving no partial archive at
+    /// `destination`.
+    ///
+    /// `async` for the same reason `extract` is: the Android backend routes
+    /// to Kotlin's `java.util.zip` over JNI (ZIPFoundation can't build
+    /// against Bionic libc); the in-process backends do their work inside.
+    @discardableResult
+    func create(
+        zipAt destination: URL,
+        from source: URL,
+        compression: ZipCompression,
+        onProgress: (@Sendable (CreateProgress) -> Void)?
+    ) async throws -> CreateResult
 }
 
 public extension ArchiveExtractor {
@@ -47,6 +72,62 @@ public extension ArchiveExtractor {
     @discardableResult
     func extract(zipAt url: URL, to destination: URL, limits: ExtractLimits) async throws -> ExtractResult {
         try await extract(zipAt: url, to: destination, limits: limits, onProgress: nil)
+    }
+
+    /// Convenience: create without progress reporting.
+    @discardableResult
+    func create(zipAt destination: URL, from source: URL, compression: ZipCompression) async throws -> CreateResult {
+        try await create(zipAt: destination, from: source, compression: compression, onProgress: nil)
+    }
+
+    /// Default so existing conformers (and test doubles) that only extract
+    /// still compile. A real archiver overrides this; the in-package
+    /// `ZIPExtractor` / `AndroidArchiveExtractor` do.
+    @discardableResult
+    func create(
+        zipAt _: URL,
+        from _: URL,
+        compression _: ZipCompression,
+        onProgress _: (@Sendable (CreateProgress) -> Void)?
+    ) async throws -> CreateResult {
+        throw ArchiveError.unsupportedPlatform("this archiver does not support zip creation")
+    }
+}
+
+/// Compression applied when creating a zip. Pack media (png / webm / jpg /
+/// mp4) is already compressed, so `.stored` adds entries with no deflate
+/// pass — faster, and the same size. `.deflate` only earns its CPU on
+/// compressible (text-like) payloads. Packs default to `.stored`.
+public enum ZipCompression: String, Sendable, Codable, Equatable {
+    case stored
+    case deflate
+}
+
+/// Incremental creation progress, reported per entry added. Mirrors
+/// `ExtractProgress`.
+public struct CreateProgress: Sendable, Codable, Equatable {
+    /// Entries added so far (includes directories).
+    public let entriesDone: Int
+    /// Uncompressed bytes read from `source` so far.
+    public let bytesDone: Int64
+    /// Total entries to add (known up front from the source walk).
+    public let totalEntries: Int
+
+    public init(entriesDone: Int, bytesDone: Int64, totalEntries: Int) {
+        self.entriesDone = entriesDone
+        self.bytesDone = bytesDone
+        self.totalEntries = totalEntries
+    }
+}
+
+/// Summary of a completed archive creation. Mirrors `ExtractResult`.
+public struct CreateResult: Sendable, Codable, Equatable {
+    public let entries: Int
+    public let uncompressedBytes: Int64
+
+    public init(entries: Int, uncompressedBytes: Int64) {
+        self.entries = entries
+        self.uncompressedBytes = uncompressedBytes
     }
 }
 

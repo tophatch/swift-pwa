@@ -60,6 +60,28 @@
             return result
         }
 
+        @discardableResult
+        public func create(
+            zipAt destination: URL,
+            from source: URL,
+            compression: ZipCompression,
+            onProgress: (@Sendable (CreateProgress) -> Void)?
+        ) async throws -> CreateResult {
+            let result = try await AndroidRPC.call(
+                "fs.createZipNative",
+                CreateZipArgs(from: source.path, to: destination.path, compression: compression.rawValue),
+                as: CreateResult.self
+            )
+            // One-shot RPC (no per-entry channel), so emit a single terminal
+            // progress tick — enough to drive a determinate-on-completion bar.
+            onProgress?(CreateProgress(
+                entriesDone: result.entries,
+                bytesDone: result.uncompressedBytes,
+                totalEntries: result.entries
+            ))
+            return result
+        }
+
         // MARK: - On-the-wire shapes (match the Kotlin handlers)
 
         private struct ListZipArgs: Encodable { let from: String }
@@ -73,6 +95,12 @@
             let maxUncompressedBytes: Int64?
             let maxEntries: Int?
             let maxCompressionRatio: Double?
+        }
+
+        private struct CreateZipArgs: Encodable {
+            let from: String
+            let to: String
+            let compression: String // "stored" | "deflate"
         }
     }
 #endif

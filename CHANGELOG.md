@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI: the Linux `Test Core + CLI` step no longer flakes on a swift-corelibs process-exit hang.** On Linux, a swift-testing bundle's async `@main` parks the main thread in `dispatch_main()` after every test passes, waiting for the wakeup that fires the final `exit()` — and ~15–25 % of runs that wakeup is lost (a libdispatch main-queue race, reproduced on Swift 6.0.3 *and* 6.2.0, independent of test selection and `--no-parallel`), so the process hangs until CI's 12-minute timeout kills it. The Linux jobs now run through [`Scripts/ci-test-linux.sh`](Scripts/ci-test-linux.sh), which bounds each `swift test` with a `timeout` and **retries only on a clean timeout** — a genuine failure exits non-zero on the first attempt and fails the job immediately, so nothing is masked. Three attempts drop the residual flake below 1 %. The mechanism is documented in [docs/linux-setup.md](docs/linux-setup.md#swift-test-occasionally-hangs-at-exit-on-linux).
+
 ## [0.6.3] - 2026-06-25
 
 ### Added

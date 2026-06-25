@@ -79,7 +79,7 @@ flags are the same.
 
 ```bash
 swift-pwa self-update              # → latest release
-swift-pwa self-update --version v0.6.2
+swift-pwa self-update --version v0.6.3
 ```
 
 Prefer this over `cp`-ing a fresh binary over the installed one. On

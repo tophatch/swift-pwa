@@ -88,8 +88,21 @@ import Foundation
             while true {
                 lock.lock(); let fd = listenFd; let go = running; lock.unlock()
                 guard go, fd >= 0 else { return }
+                // Poll with a timeout rather than blocking in `accept()`
+                // indefinitely: on Linux, `stop()` closing `listenFd` from
+                // another thread does NOT wake a thread already blocked in
+                // `accept()` (it does on Darwin), so a plain blocking accept
+                // leaves this thread — and thus the whole process — alive after
+                // `stop()`. That's what hung `swift test` on exit in CI. The
+                // 300 ms timeout means we re-check `running` promptly and exit.
+                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+                let pr = poll(&pfd, 1, 300)
+                if pr <= 0 { continue } // timeout / EINTR → re-check `running`
+                // Closed-or-errored fd (e.g. POLLNVAL after `stop()`) → loop
+                // and let the `running` guard end the thread.
+                if pfd.revents & Int16(POLLIN) == 0 { continue }
                 let client = accept(fd, nil, nil)
-                if client < 0 { if errno == EINTR { continue } else { return } }
+                if client < 0 { continue }
                 Thread.detachNewThread { [self] in handle(client) }
             }
         }

@@ -21,7 +21,12 @@ public protocol ArchiveExtractor: Sendable {
     /// List a zip's entries without extracting — lets a caller validate a
     /// manifest entry (e.g. read `pack.json`'s presence/size) before
     /// committing to a multi-GB extract.
-    func list(zipAt url: URL) throws -> [ArchiveEntry]
+    ///
+    /// `async` because not every backend extracts in-process: the Android
+    /// extractor routes to Kotlin's `java.util.zip` over the JNI bridge
+    /// (ZIPFoundation can't build against Bionic libc). The ZIPFoundation
+    /// and `tar.exe` backends just do their synchronous work inside.
+    func list(zipAt url: URL) async throws -> [ArchiveEntry]
 
     /// Extract every entry into `destination` (created if absent),
     /// enforcing `limits`. `onProgress` (if given) is called after each
@@ -34,14 +39,14 @@ public protocol ArchiveExtractor: Sendable {
         to destination: URL,
         limits: ExtractLimits,
         onProgress: (@Sendable (ExtractProgress) -> Void)?
-    ) throws -> ExtractResult
+    ) async throws -> ExtractResult
 }
 
 public extension ArchiveExtractor {
     /// Convenience: extract without progress reporting.
     @discardableResult
-    func extract(zipAt url: URL, to destination: URL, limits: ExtractLimits) throws -> ExtractResult {
-        try extract(zipAt: url, to: destination, limits: limits, onProgress: nil)
+    func extract(zipAt url: URL, to destination: URL, limits: ExtractLimits) async throws -> ExtractResult {
+        try await extract(zipAt: url, to: destination, limits: limits, onProgress: nil)
     }
 }
 

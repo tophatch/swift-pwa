@@ -17,7 +17,7 @@ import SwiftPWACore
     public struct ZIPExtractor: ArchiveExtractor {
         public init() {}
 
-        public func list(zipAt url: URL) throws -> [ArchiveEntry] {
+        public func list(zipAt url: URL) async throws -> [ArchiveEntry] {
             guard FileManager.default.fileExists(atPath: url.path) else {
                 throw ArchiveError.notReadable(path: url.path)
             }
@@ -30,8 +30,8 @@ import SwiftPWACore
             to destination: URL,
             limits: ExtractLimits,
             onProgress: (@Sendable (ExtractProgress) -> Void)?
-        ) throws -> ExtractResult {
-            let entries = try list(zipAt: url)
+        ) async throws -> ExtractResult {
+            let entries = try await list(zipAt: url)
 
             // Enforce every guard from the listing *before* we let tar write a
             // single byte — a malicious archive never reaches the extract call.
@@ -108,6 +108,35 @@ import SwiftPWACore
         }
     }
 
+#elseif os(Android)
+
+    /// Android stub. ZIPFoundation can't build against Bionic libc (`lstat`,
+    /// `errno`, `S_IF*`, `mode_t` mismatches), so apps on Android use
+    /// `AndroidArchiveExtractor` (from `SwiftPWAAndroid`, routing to Kotlin's
+    /// `java.util.zip` over JNI) instead of this type. This stub keeps
+    /// `SwiftPWAArchive` compilable if ever pulled into an Android target.
+    public struct ZIPExtractor: ArchiveExtractor {
+        public init() {}
+
+        public func list(zipAt _: URL) async throws -> [ArchiveEntry] {
+            throw ArchiveError.unsupportedPlatform(
+                "ZIPExtractor isn't available on Android — use AndroidArchiveExtractor (SwiftPWAAndroid)"
+            )
+        }
+
+        @discardableResult
+        public func extract(
+            zipAt _: URL,
+            to _: URL,
+            limits _: ExtractLimits,
+            onProgress _: (@Sendable (ExtractProgress) -> Void)?
+        ) async throws -> ExtractResult {
+            throw ArchiveError.unsupportedPlatform(
+                "ZIPExtractor isn't available on Android — use AndroidArchiveExtractor (SwiftPWAAndroid)"
+            )
+        }
+    }
+
 #else
 
     import ZIPFoundation
@@ -130,7 +159,7 @@ import SwiftPWACore
     public struct ZIPExtractor: ArchiveExtractor {
         public init() {}
 
-        public func list(zipAt url: URL) throws -> [ArchiveEntry] {
+        public func list(zipAt url: URL) async throws -> [ArchiveEntry] {
             let archive = try openArchive(url)
             return archive.map(Self.entry(from:))
         }
@@ -141,7 +170,7 @@ import SwiftPWACore
             to destination: URL,
             limits: ExtractLimits,
             onProgress: (@Sendable (ExtractProgress) -> Void)?
-        ) throws -> ExtractResult {
+        ) async throws -> ExtractResult {
             let archive = try openArchive(url)
             let fm = FileManager.default
             // The central directory is cheap to enumerate (metadata only), so

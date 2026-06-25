@@ -181,14 +181,16 @@ let package = Package(
                 "SwiftPWACore",
                 // ZIPFoundation doesn't build on Windows (its CZLib shim
                 // uses `#import <zlib.h>`, which clang-cl rejects, and
-                // Windows ships no system zlib). Gate the dependency off
-                // Windows; `ZIPExtractor` is a throwing stub there until a
-                // Windows-native extractor lands. macOS / iOS / Linux /
-                // Android link it normally.
+                // Windows ships no system zlib). It *also* can't build for
+                // Android: it assumes glibc/Darwin POSIX (`lstat`, `errno`,
+                // `S_IF*`, `mode_t` as Int32), none of which resolve against
+                // Bionic libc. So gate it to macOS / iOS / Linux. Windows uses
+                // a `tar.exe`-backed `ZIPExtractor`; Android uses
+                // `AndroidArchiveExtractor` (Kotlin `java.util.zip` over JNI).
                 .product(
                     name: "ZIPFoundation",
                     package: "ZIPFoundation",
-                    condition: .when(platforms: [.macOS, .iOS, .linux, .android])
+                    condition: .when(platforms: [.macOS, .iOS, .linux])
                 )
             ],
             swiftSettings: swiftSettings

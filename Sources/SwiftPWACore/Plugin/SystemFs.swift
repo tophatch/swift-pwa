@@ -11,7 +11,14 @@ import Foundation
 /// `Task.detached`-style hop keeps the JS-facing latency consistent
 /// across platforms even though most operations are quick.
 public final class SystemFs: Fs, @unchecked Sendable {
-    public init() {}
+    private let extractor: (any ArchiveExtractor)?
+
+    /// `extractor` is the optional zip backend. Pass `ZIPExtractor()` (from
+    /// `SwiftPWAArchive`) to enable `fs.extractZip` / `fs.listZip`; leave nil
+    /// for an app that doesn't import content packs (no ZIPFoundation link).
+    public init(extractor: (any ArchiveExtractor)? = nil) {
+        self.extractor = extractor
+    }
 
     // MARK: - Content URI resolver (Android SAF)
 
@@ -258,7 +265,73 @@ public final class SystemFs: Fs, @unchecked Sendable {
         return FsMetadata(size: size, isDir: isDir, isFile: isFile, modified: modified)
     }
 
+    // MARK: - Archive (content packs)
+
+    public var supportsZip: Bool {
+        extractor != nil
+    }
+
+    public func listZip(path: String) async throws -> [ArchiveEntry] {
+        let extractor = try requireExtractor("fs.listZip")
+        if Self.isContentURI(path) {
+            throw contentURIOperationUnsupported("fs.listZip", path: path)
+        }
+        let url = URL(fileURLWithPath: path)
+        do {
+            return try extractor.list(zipAt: url)
+        } catch let e as ArchiveError {
+            throw Self.mapArchiveError("fs.listZip", e)
+        }
+    }
+
+    public func extractZip(
+        from: String,
+        to: String,
+        limits: ExtractLimits,
+        onProgress: (@Sendable (ExtractProgress) -> Void)?
+    ) async throws -> ExtractResult {
+        let extractor = try requireExtractor("fs.extractZip")
+        if Self.isContentURI(from) || Self.isContentURI(to) {
+            throw contentURIOperationUnsupported("fs.extractZip", path: "\(from) → \(to)")
+        }
+        let src = URL(fileURLWithPath: from)
+        let dst = URL(fileURLWithPath: to)
+        do {
+            return try extractor.extract(zipAt: src, to: dst, limits: limits, onProgress: onProgress)
+        } catch let e as ArchiveError {
+            throw Self.mapArchiveError("fs.extractZip", e)
+        }
+    }
+
     // MARK: - Helpers
+
+    private func requireExtractor(_ op: String) throws -> any ArchiveExtractor {
+        guard let extractor else {
+            throw BridgeError(
+                code: BridgeError.handler,
+                message: "\(op): no archive extractor configured — use FsPlugin(SystemFs(extractor: ZIPExtractor()))"
+            )
+        }
+        return extractor
+    }
+
+    /// Map an `ArchiveError` to a `BridgeError` with a stable, JS-readable
+    /// message. The guard violations carry enough detail for an app to tell
+    /// a user *why* a pack was rejected (traversal, symlink, too big).
+    static func mapArchiveError(_ op: String, _ error: ArchiveError) -> BridgeError {
+        let detail: String = switch error {
+        case let .notReadable(path): "not a readable zip: \(path)"
+        case let .corrupt(msg): "corrupt archive: \(msg)"
+        case let .pathTraversal(entry): "entry escapes destination (path traversal): \(entry)"
+        case let .symlinkRejected(entry): "symlink entries are rejected: \(entry)"
+        case let .tooManyEntries(limit): "too many entries (limit \(limit))"
+        case let .uncompressedTooLarge(limit): "uncompressed size exceeds limit (\(limit) bytes)"
+        case let .compressionRatioExceeded(entry, ratio, limit):
+            "compression ratio \(ratio) exceeds limit \(limit) for \(entry)"
+        case let .unsupportedPlatform(msg): msg
+        }
+        return BridgeError(code: BridgeError.handler, message: "\(op): \(detail)")
+    }
 
     private func mapPosixError(_ op: String, path: String) -> BridgeError {
         let exists = FileManager.default.fileExists(atPath: path)

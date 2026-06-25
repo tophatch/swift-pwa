@@ -205,6 +205,40 @@ struct InitTests {
         #expect(throws: (any Error).self) { try Init.sanitizeIdentifier("---") }
     }
 
+    @Test("resolveRoot: --in-place scaffolds into the cwd even with no pwa.json/web present")
+    func resolveRootInPlaceForcesCwd() {
+        let cwd = URL(fileURLWithPath: "/repo")
+        let none: (URL) -> Bool = { _ in false } // a bare repo: no pwa.json, no web/
+
+        // The bug: without the flag, a bare repo nests under <name>/.
+        #expect(
+            Init.resolveRoot(name: "myapp", cwd: cwd, path: nil, inPlace: false, fileExists: none)
+                == cwd.appendingPathComponent("myapp")
+        )
+        // The fix: --in-place forces the cwd, no nesting.
+        #expect(
+            Init.resolveRoot(name: "myapp", cwd: cwd, path: nil, inPlace: true, fileExists: none)
+                == cwd
+        )
+    }
+
+    @Test("resolveRoot: auto-detects an existing pwa.json or web/ → cwd; --path always wins")
+    func resolveRootAutoDetectAndPath() {
+        let cwd = URL(fileURLWithPath: "/repo")
+        let hasPwaJson: (URL) -> Bool = { $0.lastPathComponent == "pwa.json" }
+        let hasWeb: (URL) -> Bool = { $0.lastPathComponent == "web" }
+        let none: (URL) -> Bool = { _ in false }
+
+        // An existing frontend adopts in place without the flag.
+        #expect(Init.resolveRoot(name: "x", cwd: cwd, path: nil, inPlace: false, fileExists: hasPwaJson) == cwd)
+        #expect(Init.resolveRoot(name: "x", cwd: cwd, path: nil, inPlace: false, fileExists: hasWeb) == cwd)
+        // Explicit --path is used verbatim and beats --in-place.
+        #expect(
+            Init.resolveRoot(name: "x", cwd: cwd, path: "/somewhere/else", inPlace: true, fileExists: none)
+                == URL(fileURLWithPath: "/somewhere/else")
+        )
+    }
+
     @Test("App.swift template resolves the web bundle via resourceURL")
     func webBundleResolvesViaResourceURL() async throws {
         let parent = tmpDir()

@@ -18,10 +18,12 @@ struct Init: AsyncParsableCommand {
 
     @Flag(
         help: """
-        Force adopt-in-place: add only the native shell (Package.swift + Sources/), leave an \
-        existing web/ untouched, and merge missing fields into an existing pwa.json instead of \
-        refusing to overwrite it. This is auto-detected when the target directory already has a \
-        pwa.json or web/ — pass the flag to force it for a frontend in a non-standard layout.
+        Force adopt-in-place: scaffold into the current directory (not a <name>/ subdir), \
+        adding only the native shell (Package.swift + Sources/), leaving an existing web/ \
+        untouched, and merging missing fields into an existing pwa.json instead of refusing to \
+        overwrite it. This is auto-detected when the current directory already has a pwa.json or \
+        web/ — pass the flag to force it for a frontend in a non-standard layout (e.g. a custom \
+        dist/ with no pwa.json yet). Ignored if --path is given.
         """
     )
     var inPlace: Bool = false
@@ -36,20 +38,9 @@ struct Init: AsyncParsableCommand {
         let fm = FileManager.default
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
 
-        // Resolve where the project lives. An explicit --path is used
-        // verbatim. Otherwise, if the *current directory* already looks
-        // like a web app (a pwa.json or web/ is present), adopt it in
-        // place — the natural "cd into my web app, run init" flow — rather
-        // than nesting a <name>/ subdirectory inside it. Only a directory
-        // with neither gets the fresh-project <name>/ subdir default.
-        let root: URL = if let explicitPath = path {
-            URL(fileURLWithPath: explicitPath)
-        } else if fm.fileExists(atPath: cwd.appendingPathComponent("pwa.json").path)
-            || fm.fileExists(atPath: cwd.appendingPathComponent("web").path)
-        {
-            cwd
-        } else {
-            cwd.appendingPathComponent(name)
+        // Resolve where the project lives (see `resolveRoot`).
+        let root = Self.resolveRoot(name: name, cwd: cwd, path: path, inPlace: inPlace) {
+            fm.fileExists(atPath: $0.path)
         }
 
         // The argument we got is what the user wants to *see* (window
@@ -194,6 +185,36 @@ struct Init: AsyncParsableCommand {
         } else {
             print("Next: cd \(root.lastPathComponent) && swift run swift-pwa build --target macos")
         }
+    }
+
+    /// Decide the directory the project scaffolds into. Resolution order:
+    ///
+    ///   1. An explicit `--path` is used verbatim (it wins over everything,
+    ///      including `--in-place`).
+    ///   2. Otherwise scaffold into the **current directory** — adopt in
+    ///      place — when either the user forced it with `--in-place` *or*
+    ///      the cwd already looks like a web app (a `pwa.json` or `web/` is
+    ///      present, the "cd into my web app and run init" flow).
+    ///   3. Failing both, a fresh project nests under a `<name>/` subdir.
+    ///
+    /// `--in-place` belongs in (2), not just the later adopt logic: its
+    /// whole purpose is forcing in-place adoption for a frontend in a
+    /// non-standard layout (a custom `dist/` with no `pwa.json`/`web/` yet),
+    /// which is exactly the case auto-detection can't see — so without this
+    /// the flag would still nest under `<name>/`, the opposite of "in place".
+    static func resolveRoot(
+        name: String, cwd: URL, path: String?, inPlace: Bool, fileExists: (URL) -> Bool
+    ) -> URL {
+        if let path {
+            return URL(fileURLWithPath: path)
+        }
+        if inPlace
+            || fileExists(cwd.appendingPathComponent("pwa.json"))
+            || fileExists(cwd.appendingPathComponent("web"))
+        {
+            return cwd
+        }
+        return cwd.appendingPathComponent(name)
     }
 
     /// The default manifest for a brand-new project. `name` is the

@@ -325,9 +325,15 @@ enum AndroidTemplates {
                 // the Swift runtime navigates to
                 // `https://swift-pwa.local/web/<entry>` to pick it up
                 // (see SwiftPWAAndroid/AndroidWebViewAdapter.swift).
+                // Served mounts are registered BEFORE the catch-all "/" bundle
+                // handler: WebViewAssetLoader matches handlers in registration
+                // order by path prefix, and "/" is a prefix of "/packs/…", so a
+                // "/"-first order would let the bundle's AssetsPathHandler
+                // shadow every served mount (404 from assets). Specific prefixes
+                // must come first.
                 val assetLoader = WebViewAssetLoader.Builder()
-                    .setDomain("swift-pwa.local")
-                    .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))\(serveHandlerLines(serveMounts))
+                    .setDomain("swift-pwa.local")\(serveHandlerLines(serveMounts))
+                    .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
                     .build()
 
                 bridge = SwiftPWABridge(this, webView, assetLoader)

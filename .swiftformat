@@ -9,5 +9,5 @@
 --stripunusedargs closure-only
 --self remove
 --header ignore
---exclude .build,build,Examples
+--exclude .build,build,Examples,Sources/SwiftPWACLISupport/Generated
 --disable wrapFunctionBodies,wrapLoopBodies,blankLinesBetweenScopes

@@ -1,7 +1,10 @@
 // The Windows `ZIPExtractor` shells to `tar.exe` (libarchive bsdtar) and
 // parses its verbose listing. The `Process` call is Windows-only, but the
-// parser is host-agnostic — and macOS/Linux `tar` IS the same bsdtar, so we
-// test the parser both against hardcoded sample lines and real `tar` output.
+// parser is host-agnostic, so we test it against hardcoded sample lines on
+// every host, plus real `tar` output *where bsdtar is available*. macOS
+// ships bsdtar as /usr/bin/tar; Linux typically ships GNU tar, which can't
+// read/write zip — there the real-tar test skips (the sample-line tests
+// still run).
 #if !os(Windows)
 
     import Foundation
@@ -40,9 +43,10 @@
 
         @Test("parses real `tar -tvf` output for a zip")
         func realTar() throws {
-            let tar = ["/usr/bin/tar", "/bin/tar", "/usr/local/bin/tar"]
-                .first { FileManager.default.isExecutableFile(atPath: $0) }
-            guard let tar else { return } // no tar on this host — skip
+            // Needs bsdtar (libarchive) specifically — it's the only `tar`
+            // that reads/writes zip, and what the Windows ZIPExtractor uses.
+            // GNU tar (typical on Linux) can't, so skip rather than fail.
+            guard let tar = Self.bsdtarPath() else { return }
 
             // Build a small zip via `zip`-less path: stage files, then `tar`
             // can create a zip with `--format zip` (bsdtar supports it).
@@ -72,6 +76,28 @@
         }
 
         // MARK: - Process helpers (test-only)
+
+        /// Path to a `bsdtar` (libarchive) binary, or nil if only GNU tar /
+        /// no tar is present. bsdtar/libarchive announce themselves in
+        /// `--version`; GNU tar prints "tar (GNU tar) …".
+        private static func bsdtarPath() -> String? {
+            for candidate in ["/usr/bin/tar", "/bin/tar", "/usr/local/bin/tar", "/opt/homebrew/bin/tar"]
+                where FileManager.default.isExecutableFile(atPath: candidate)
+            {
+                let p = Process()
+                p.executableURL = URL(fileURLWithPath: candidate)
+                p.arguments = ["--version"]
+                let pipe = Pipe()
+                p.standardOutput = pipe
+                p.standardError = pipe
+                guard (try? p.run()) != nil else { continue }
+                let data = pipe.fileHandleForReading.readDataToEndOfFile()
+                p.waitUntilExit()
+                let version = (String(data: data, encoding: .utf8) ?? "").lowercased()
+                if version.contains("bsdtar") || version.contains("libarchive") { return candidate }
+            }
+            return nil
+        }
 
         private func runProcess(_ exe: String, _ args: [String]) throws {
             let p = Process()

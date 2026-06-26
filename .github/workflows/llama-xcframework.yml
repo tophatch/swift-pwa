@@ -1,0 +1,39 @@
+name: llama xcframework
+
+# Build the prebuilt llama.cpp xcframework that `SwiftPWALlama` consumes via
+# `.binaryTarget`, and publish it as a STABLE release asset.
+#
+# Run this manually (workflow_dispatch) only when the pinned llama.cpp commit
+# in Scripts/build-llama-xcframework.sh changes — the artifact depends on that
+# commit, NOT on the swift-pwa version, so it lives on its own long-lived
+# `llama-vendor` release rather than being rebuilt for every `v*` tag. After it
+# runs, pin the printed SHA-256 as the `checksum:` of the `CLlama` binaryTarget
+# in Package.swift (the `url:` is stable and already points here).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build xcframework (macOS + iOS + iOS-sim)
+        run: bash Scripts/build-llama-xcframework.sh macos ios ios-sim
+      - name: Compute checksum
+        id: sum
+        run: echo "sha256=$(swift package compute-checksum Vendor/llama/llama.xcframework.zip)" >> "$GITHUB_OUTPUT"
+      - name: Publish to the stable llama-vendor release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: llama-vendor
+          name: llama.cpp xcframework (vendored)
+          prerelease: true
+          files: Vendor/llama/llama.xcframework.zip
+      - name: Pin instructions
+        run: |
+          echo "::notice::Pin these in Package.swift's CLlama binaryTarget:"
+          echo "  url:      https://github.com/${{ github.repository }}/releases/download/llama-vendor/llama.xcframework.zip"
+          echo "  checksum: ${{ steps.sum.outputs.sha256 }}"

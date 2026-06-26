@@ -548,11 +548,15 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
         ? .binaryTarget(name: "CLlama", path: localXcframework)
         : .binaryTarget(
             name: "CLlama",
-            // TODO(0.7.1): pin to the v0.7.1 release asset + its checksum once
-            // release.yml has run Scripts/build-llama-xcframework.sh and
-            // uploaded the zip. Until then, the local-path branch above is the
-            // only supported route (set up by the build script).
-            url: "https://github.com/tophatch/swift-pwa/releases/download/v0.7.1/llama.xcframework.zip",
+            // Stable, llama-pin-versioned asset (NOT per swift-pwa release):
+            // built + published by .github/workflows/llama-xcframework.yml and
+            // re-pinned here only when Scripts/build-llama-xcframework.sh bumps
+            // the pinned llama.cpp commit. The `url` is stable; the `checksum`
+            // moves with the pin. (Local dev / swift-pwa CI use the
+            // Vendor/llama path branch above, built by the same script.)
+            // TODO(0.7.1): replace the placeholder checksum with the value the
+            // llama-xcframework workflow prints on its first run.
+            url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
             checksum: "0000000000000000000000000000000000000000000000000000000000000000"
         )
 

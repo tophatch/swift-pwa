@@ -59,6 +59,11 @@ COMMON_ARGS=(
     # Build every requested arch, not just the host's — without this the Xcode
     # generator honors ONLY_ACTIVE_ARCH and a "universal" slice comes out thin.
     -DCMAKE_XCODE_ATTRIBUTE_ONLY_ACTIVE_ARCH=NO
+    # Static libs aren't signed, but the iOS device slice's Xcode project still
+    # trips over code-signing without a team — disable it (matches upstream's
+    # build-xcframework.sh).
+    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO
+    -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_REQUIRED=NO
     -DLLAMA_BUILD_COMMON=OFF
     -DLLAMA_BUILD_EXAMPLES=OFF
     -DLLAMA_BUILD_TESTS=OFF
@@ -89,12 +94,21 @@ combine_slice() {
     local libs=()
     for name in libllama.a libggml.a libggml-cpu.a libggml-metal.a libggml-blas.a libggml-base.a; do
         local found
-        found="$(find "$bdir" -name "$name" -path '*Release*' | head -1)"
-        [ -z "$found" ] && found="$(find "$bdir" -name "$name" | head -1)"
+        # Pick the final (universal) product under `.../Release*/`, NOT the
+        # per-arch `Objects-normal/<arch>/Binary/` intermediates the Xcode
+        # generator also leaves around — matching one of those yields a thin
+        # slice and silently drops x86_64.
+        found="$(find "$bdir" -name "$name" -path '*Release*' \
+            -not -path '*Objects-normal*' -not -path '*.build/*' | head -1)"
+        [ -z "$found" ] && found="$(find "$bdir" -name "$name" -not -path '*Objects-normal*' -not -path '*.build/*' | head -1)"
         [ -z "$found" ] && { echo "missing $name for $slice" >&2; exit 1; }
         libs+=("$found")
     done
-    libtool -static -o "$WORK/$slice-combined.a" "${libs[@]}" 2>/dev/null
+    # Name the combined archive `libllama.a` (SwiftPM rejects xcframework
+    # static libs whose basename isn't `lib`-prefixed) in a per-slice dir so
+    # the three slices don't collide.
+    mkdir -p "$WORK/combined-$slice"
+    libtool -static -o "$WORK/combined-$slice/libllama.a" "${libs[@]}" 2>/dev/null
 }
 
 CREATE_ARGS=()
@@ -104,7 +118,7 @@ for slice in "${PLATFORMS[@]}"; do
     configure_slice "$slice" $(case_for "$slice")
     cmake --build "$WORK/build-$slice" --config Release -j "$(sysctl -n hw.logicalcpu)" -- -quiet
     combine_slice "$slice"
-    CREATE_ARGS+=(-library "$WORK/$slice-combined.a" -headers "$WORK/headers")
+    CREATE_ARGS+=(-library "$WORK/combined-$slice/libllama.a" -headers "$WORK/headers")
 done
 
 # --- headers (llama + ggml public headers, flattened, with a module map) ---

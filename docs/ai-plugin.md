@@ -9,12 +9,14 @@ page never has to encode.
 It is an **opt-in plugin** (like `fs.*` / `dialog.*`), not auto-installed:
 an app calls `ctx.use(AIPlugin(...))` and supplies the backend.
 
-> **Status (0.7): the contract, not yet the inference.** This release
-> ships the full JS contract, the `AIBackend` protocol, the shared
-> structured-output fallback, and `NoneBackend` (which reports
-> `available: false`). No on-device backend is wired yet — a page can
-> integrate against the frozen contract today and light up unchanged when
-> a real backend lands. The per-platform backends below are the roadmap.
+> **Status (0.7).** The full JS contract, the `AIBackend` protocol, the
+> shared structured-output fallback, and `NoneBackend` all ship. The first
+> real backend — **Apple Foundation Models** (`SwiftPWAFoundationModels`) —
+> is implemented and verified end-to-end on-device (text, token streaming,
+> and native schema-constrained `generateJSON`). The remaining per-platform
+> backends (Gemini Nano, Phi Silica, the portable Gemma fallback, and the
+> image/audio backends) are the roadmap below. A page integrates against
+> the frozen contract once and lights up on whatever backend is injected.
 
 ## JS surface
 
@@ -232,6 +234,29 @@ runtime.run { ctx in
 }
 ```
 
+### Available backend: Apple Foundation Models
+
+`SwiftPWAFoundationModels` ships the first real backend — Apple's on-device
+system model (Apple Intelligence). Add the product, then:
+
+```swift
+import SwiftPWAFoundationModels
+
+runtime.run { ctx in
+    ctx.use(AIPlugin(FoundationModelsBackend()))
+}
+```
+
+It provides text, token streaming, and **native schema-constrained**
+`generateJSON` (via Foundation Models guided generation — it maps the JSON
+Schema to a `GenerationSchema`, so `structuredOutput` is `true`, not the
+prompt fallback). It reports `available: false` (app falls back to its own
+tier) when built against an older SDK, run below macOS 26 / iOS 26, or when
+the system model isn't ready (unsupported device, Apple Intelligence off,
+still downloading). The base system model is text-only, so vision / image /
+audio stay off. It's isolated in its own target so apps that don't want
+on-device AI never link the FoundationModels framework.
+
 ### Structured output: native vs. the shared fallback
 
 `ai.generateJSON` must return schema-valid JSON *regardless of backend*,
@@ -263,8 +288,8 @@ small model → none** (the app supplies its own cloud tier on top).
 
 | Tier | Apple | Android | Windows | Linux |
 | --- | --- | --- | --- | --- |
-| 1 — platform built-in | Foundation Models (`apple-foundation-models`) | Gemini Nano / ML Kit GenAI (`gemini-nano`) | Windows AI / Phi Silica (`phi-silica`) | — |
-| 2 — downloadable Gemma | MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) | llama.cpp (`gemma-llamacpp`) |
+| 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | Gemini Nano / ML Kit GenAI (`gemini-nano`) | Windows AI / Phi Silica (`phi-silica`) | — |
+| 2 — downloadable Gemma | MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) | llama.cpp (`gemma-llamacpp`) — *next* |
 | 3 — none | `none` → `available:false` | | | |
 
 Vision input rides the same backends where the model is multimodal (e.g.

@@ -16,8 +16,13 @@ import Foundation
 /// **resolved** executable path (symlinks followed — a `/usr/local/bin`
 /// install is often a symlink) plus the FHS `../share/swift-pwa` layout.
 enum ResourceLocator {
-    /// SwiftPM names the bundle `<PackageName>_<TargetName>.bundle`.
-    private static let bundleName = "swift-pwa_SwiftPWACLISupport.bundle"
+    /// SwiftPM names the resource bundle `<PackageName>_<TargetName>` with a
+    /// platform-dependent extension: `.bundle` on Apple, `.resources` on
+    /// swift-corelibs-foundation (Linux / Android / Windows). Try both.
+    private static let bundleNames = [
+        "swift-pwa_SwiftPWACLISupport.bundle",
+        "swift-pwa_SwiftPWACLISupport.resources"
+    ]
 
     /// Locate `resource` (a file or directory name) inside this module's
     /// resource bundle, searching every plausible location for a prebuilt
@@ -26,12 +31,14 @@ enum ResourceLocator {
     static func moduleResource(_ resource: String, withExtension ext: String? = nil) -> URL? {
         let fm = FileManager.default
         for dir in searchDirectories() {
-            let bundleURL = dir.appendingPathComponent(bundleName)
-            guard fm.fileExists(atPath: bundleURL.path), let bundle = Bundle(url: bundleURL) else {
-                continue
-            }
-            if let url = bundle.url(forResource: resource, withExtension: ext) {
-                return url
+            for bundleName in bundleNames {
+                let bundleURL = dir.appendingPathComponent(bundleName)
+                guard fm.fileExists(atPath: bundleURL.path), let bundle = Bundle(url: bundleURL) else {
+                    continue
+                }
+                if let url = bundle.url(forResource: resource, withExtension: ext) {
+                    return url
+                }
             }
         }
         return nil

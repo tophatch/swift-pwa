@@ -3,6 +3,10 @@ import SwiftPWACore
 @testable import SwiftPWAModelStore
 import Testing
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking
+#endif
+
 #if canImport(CryptoKit)
     import CryptoKit
 #else

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`build --target ios --team <TEAMID>` — convenience signing.** Pass a 10-character Apple Developer Team ID and swift-pwa fills in the device-signing inputs you didn't pass explicitly: it selects that team's "Apple Development" identity (so `--sign` is optional) and finds an installed provisioning profile matching the app's bundle id, deriving entitlements from it (so `--provisioning-profile` / `--entitlements` are optional). Explicit flags still win. It's a convenience over the manual path for a developer who already has Xcode-managed signing — it does **not** create a profile from nothing (a SwiftPM package has no app-target Xcode project for `xcodebuild` to auto-provision; that's noted, with a fall-back to the explicit flags). See [docs/ios-setup.md](docs/ios-setup.md#--team-fewer-flags-when-you-already-have-signing-set-up).
+
 ### Fixed
 
 - **`build --target ios --sign` no longer fails on a package without a development team.** 0.7.0 passed `CODE_SIGN_IDENTITY` to the `xcodebuild` build phase *and* re-signed the assembled `.app` afterward (embed profile + entitlements + nested bundles). But xcodebuild can't auto-provision a SwiftPM-target product, so with a real `Apple Development` identity and no `DEVELOPMENT_TEAM`, the build phase failed with *"requires a development team"* before the post-assembly signing ever ran — blocking device builds for anyone without a team configured in an `.xcodeproj` (which swift-pwa apps don't have, including free-personal-team developers). The build phase now runs **unsigned** (`CODE_SIGNING_ALLOWED=NO`) for device builds too, and all signing happens post-assembly as before. No `DEVELOPMENT_TEAM` / `.xcodeproj` needed. See [docs/ios-setup.md](docs/ios-setup.md#4-build-for-a-real-device).

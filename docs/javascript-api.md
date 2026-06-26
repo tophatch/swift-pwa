@@ -305,6 +305,57 @@ and the runtime install path on each backend, and
 [docs/android-setup.md §6.1.2](android-setup.md#612-observing-the-updater-install-result)
 for the Android-specific `updater.install` lifecycle.
 
+### `ai.*`
+
+On-device (or otherwise native) LLM inference, so the page stays
+provider-agnostic. Probe once at startup and route on `available`.
+
+```js
+const info = await __SWIFT_PWA__.invoke('ai.info', {});
+// → { available, backend, model?, streaming, structuredOutput }
+if (!info.available) { /* fall back to your own (e.g. cloud) tier */ }
+
+// One-shot structured generation — returns a parsed, schema-valid object.
+const obj = await __SWIFT_PWA__.invoke('ai.generateJSON', {
+    system: '…', prompt: '…',
+    schema: { type: 'object', required: ['summary'] },
+});
+
+// Streaming text — `delta` chunks, then a terminal `done`.
+__SWIFT_PWA__.subscribe('ai.generateStream', { prompt }, (e) => {
+    if (e.type === 'delta') appendToken(e.text);
+});
+
+// Vision (when info.vision): attach images to any text command.
+await __SWIFT_PWA__.invoke('ai.generate', {
+    prompt: 'Describe this.', images: [{ path: '/photo.jpg' }],
+});
+
+// Text-to-image (when info.imageGeneration).
+const { images } = await __SWIFT_PWA__.invoke('ai.generateImage', {
+    prompt: 'a watercolor fox', steps: 20, outputDirectory: dataDir + '/gen',
+});
+// streaming variant: subscribe('ai.generateImageStream', …) for step progress
+
+// Audio in (when info.audioInput) — e.g. phoneme evaluation from a recording.
+const score = await __SWIFT_PWA__.invoke('ai.generateJSON', {
+    prompt: 'Score this pronunciation.', audio: [{ path: '/utterance.wav' }],
+    schema: { type: 'object', required: ['overallScore'] },
+});
+// Audio out (when info.audioGeneration) — TTS.
+const { audio } = await __SWIFT_PWA__.invoke('ai.generateAudio', { prompt: 'kiitos' });
+// streaming variant: subscribe('ai.generateAudioStream', …) for play-as-it-arrives
+```
+
+`ai.generateJSON` always returns schema-valid JSON regardless of backend
+(native schema-constrained decoding where available, otherwise a
+prompt-and-validate fallback), and composes with multimodal `images` /
+`audio` input + `schema`. Errors carry stable codes (`E_AI_UNAVAILABLE`,
+`E_AI_GENERATION`, `E_AI_STRUCTURED_OUTPUT`). In 0.7 the contract is in
+place but no on-device backend is wired yet, so `ai.info` reports
+`available: false` until one lands. Full reference, backend protocol, and
+roadmap: [docs/ai-plugin.md](ai-plugin.md).
+
 ## Custom commands
 
 The Swift side can register arbitrary commands; JS calls them through

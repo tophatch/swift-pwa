@@ -115,7 +115,8 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
     },
     "ios": {
         "bundle_identifier": "com.example.myapp",
-        "minimum_system_version": "18.0"
+        "minimum_system_version": "18.0",
+        "device_family": [1, 2]
     },
     "linux": {
         "desktop_categories": ["Utility"]

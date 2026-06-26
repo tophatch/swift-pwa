@@ -96,6 +96,12 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public struct IOSSection: Codable, Sendable, Equatable {
         public var bundleIdentifier: String?
         public var minimumSystemVersion: String? // e.g. "18.0"
+        /// `UIDeviceFamily` — which device idioms the app supports
+        /// (`1` = iPhone, `2` = iPad). Defaults to `[1, 2]` (universal): a
+        /// thin-client WebView app is device-agnostic, and omitting the key
+        /// makes iOS treat the app as iPhone-only and letterbox it on iPad.
+        /// Override here to ship phone-only (`[1]`) or iPad-only (`[2]`).
+        public var deviceFamily: [Int]?
         /// Arbitrary keys merged into the generated iOS `Info.plist`, after
         /// swift-pwa's own (override on collision). See
         /// ``MacOSSection/infoPlist``.

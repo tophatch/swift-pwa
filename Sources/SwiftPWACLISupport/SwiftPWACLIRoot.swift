@@ -81,9 +81,14 @@ public enum SwiftPWACLIEntry {
     /// spawns. Skipped if the user already drives `GIT_CONFIG_*` themselves
     /// (don't clobber their setup).
     private static func quietBareRepositoryGitWarning() {
-        guard ProcessInfo.processInfo.environment["GIT_CONFIG_COUNT"] == nil else { return }
-        setenv("GIT_CONFIG_COUNT", "1", 1)
-        setenv("GIT_CONFIG_KEY_0", "safe.bareRepository", 1)
-        setenv("GIT_CONFIG_VALUE_0", "all", 1)
+        // POSIX only. `setenv` isn't in scope on Windows (ucrt exposes
+        // `_putenv_s`), and this warning is a Unix-y-hardening cosmetic —
+        // not worth the CRT-import surface to suppress on Windows.
+        #if !os(Windows)
+            guard ProcessInfo.processInfo.environment["GIT_CONFIG_COUNT"] == nil else { return }
+            setenv("GIT_CONFIG_COUNT", "1", 1)
+            setenv("GIT_CONFIG_KEY_0", "safe.bareRepository", 1)
+            setenv("GIT_CONFIG_VALUE_0", "all", 1)
+        #endif
     }
 }

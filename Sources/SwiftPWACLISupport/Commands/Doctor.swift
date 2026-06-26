@@ -129,7 +129,7 @@ struct Doctor: AsyncParsableCommand {
                 )]
             #endif
         case .android:
-            return await [
+            var checks: [Check] = await [
                 envDir(
                     "ANDROID_NDK_HOME",
                     label: "Android NDK",
@@ -144,7 +144,33 @@ struct Doctor: AsyncParsableCommand {
                 ),
                 androidSwiftSDK()
             ]
+            if let drift = androidEntryDriftCheck() { checks.append(drift) }
+            return checks
         }
+    }
+
+    /// In an Android project, flag a stale JNI entry point — `package_id`
+    /// changed after `init` but the hand-written `@_cdecl` in
+    /// `AndroidEntry.swift` still names the old package, which is a
+    /// guaranteed `UnsatisfiedLinkError` at launch. Returns `nil` outside a
+    /// project, or when the symbol already matches (no news is good news).
+    private static func androidEntryDriftCheck() -> Check? {
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        guard let manifest = try? PWAManifest.load(from: cwd.appendingPathComponent("pwa.json")) else {
+            return nil
+        }
+        let pkg = AndroidEntryDrift.resolvePackageId(manifest)
+        guard let m = AndroidEntryDrift.detect(projectRoot: cwd, packageId: pkg) else { return nil }
+        return Check(
+            name: "Android JNI entry (\(m.file))",
+            ok: false,
+            detail: "declares Java_\(m.declared)_…, but package_id '\(pkg)' needs Java_\(m.expected)_… "
+                + "(UnsatisfiedLinkError at launch)",
+            required: true,
+            fix: "Set the @_cdecl in \(m.file) to "
+                + "Java_\(m.expected)_MainActivity_swiftPwaMain, or delete it and "
+                + "`swift-pwa init <name> --in-place`."
+        )
     }
 
     // MARK: - Scaffold freshness

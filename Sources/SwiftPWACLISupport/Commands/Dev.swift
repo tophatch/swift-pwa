@@ -21,6 +21,20 @@ struct Dev: AsyncParsableCommand {
     @Option(help: "Path to pwa.json (used to locate web/). Defaults to ./pwa.json.")
     var manifest: String = "pwa.json"
 
+    @Option(
+        help: """
+        Port for the built-in live-reload server. A fixed port (default \(Dev.defaultPort)) keeps a \
+        stable origin across launches, so OPFS / localStorage / IndexedDB persist between runs. \
+        Pass 0 for an OS-assigned port (storage resets each launch). Ignored with --server.
+        """
+    )
+    var port: UInt16 = Dev.defaultPort
+
+    /// Default loopback port for the built-in dev server. Fixed (not
+    /// OS-assigned) so the dev origin — and therefore per-origin web storage
+    /// — is stable across `swift-pwa dev` launches.
+    static let defaultPort: UInt16 = 4321
+
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
 
@@ -39,10 +53,14 @@ struct Dev: AsyncParsableCommand {
                             + "or pass --server <url> to use your own dev server."
                     )
                 }
-                let dev = DevServer(root: webDir, entry: pwa.web.entry)
+                let dev = DevServer(root: webDir, entry: pwa.web.entry, port: port)
                 let url = try dev.start()
+                let persistenceNote = port == 0
+                    ? " (OS-assigned port — web storage resets each launch; use a fixed --port to persist it)"
+                    : ""
                 print(
                     "Live-reload server serving \(pwa.web.directory)/ at \(url.absoluteString) — edit and save to refresh."
+                        + persistenceNote
                 )
                 devURL = url.absoluteString
             #else

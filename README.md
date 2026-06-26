@@ -105,7 +105,8 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
         "width": 1024,
         "height": 768,
         "resizable": true,
-        "fullscreen": false
+        "fullscreen": false,
+        "background_color": "#F4F7F5"
     },
     "macos": {
         "bundle_identifier": "com.example.myapp",

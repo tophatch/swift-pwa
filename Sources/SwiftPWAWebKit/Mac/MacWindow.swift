@@ -54,6 +54,16 @@
             window.center()
             window.contentView = adapter.webView
 
+            // Native background before first paint: avoids the white flash
+            // and colours the overscroll / rubber-band area.
+            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
+                let color = NSColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+                window.backgroundColor = color
+                adapter.webView.underPageBackgroundColor = color
+                adapter.webView.wantsLayer = true
+                adapter.webView.layer?.backgroundColor = color.cgColor
+            }
+
             nsWindow = window
             self.app = app
 

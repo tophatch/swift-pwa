@@ -57,18 +57,27 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var height: Double
         public var resizable: Bool
         public var fullscreen: Bool
+        /// Native window/webview background colour (hex, e.g. `"#F4F7F5"`),
+        /// applied before the page's first paint to avoid a white/black
+        /// flash and to match the scroll overscroll area; also used as the
+        /// iOS launch-screen background. Optional — omit for the platform
+        /// default (opaque white). Seeds `WindowConfig.backgroundColor` in
+        /// the generated `App.swift`.
+        public var backgroundColor: String?
         public init(
             title: String,
             width: Double = 1024,
             height: Double = 768,
             resizable: Bool = true,
-            fullscreen: Bool = false
+            fullscreen: Bool = false,
+            backgroundColor: String? = nil
         ) {
             self.title = title
             self.width = width
             self.height = height
             self.resizable = resizable
             self.fullscreen = fullscreen
+            self.backgroundColor = backgroundColor
         }
     }
 

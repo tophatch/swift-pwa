@@ -39,6 +39,17 @@
             titleStorage = config.title
             vc.title = config.title
 
+            // Native background before first paint: kills the white/black
+            // flash and colours the scroll overscroll (rubber-band) area.
+            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
+                let color = UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+                adapter.webView.isOpaque = false
+                adapter.webView.backgroundColor = color
+                adapter.webView.scrollView.backgroundColor = color
+                adapter.webView.underPageBackgroundColor = color
+                vc.view.backgroundColor = color
+            }
+
             self.app = app
             bridge = BridgeRuntime(
                 webView: adapter,

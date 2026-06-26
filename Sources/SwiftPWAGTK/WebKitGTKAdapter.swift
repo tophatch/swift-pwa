@@ -85,6 +85,13 @@
             connectMessageHandler(ucm: ucm)
         }
 
+        /// Set the web view's base background colour. Called from
+        /// `GTKWindow.init` on the GTK main thread, before the window is
+        /// shown, so there's no white flash before first paint.
+        func setBackgroundColor(_ rgb: RGBColor) {
+            swiftpwa_webkit_set_background_color(webView, rgb.red, rgb.green, rgb.blue, 1.0)
+        }
+
         private func connectMessageHandler(ucm: UnsafeMutablePointer<WebKitUserContentManager>) {
             // Heap-box self so the C callback can find us via user_data.
             // Released by `messageBoxDestroy` when the signal is disconnected.

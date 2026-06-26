@@ -336,12 +336,21 @@ const { images } = await __SWIFT_PWA__.invoke('ai.generateImage', {
     prompt: 'a watercolor fox', steps: 20, outputDirectory: dataDir + '/gen',
 });
 // streaming variant: subscribe('ai.generateImageStream', …) for step progress
+
+// Audio in (when info.audioInput) — e.g. phoneme evaluation from a recording.
+const score = await __SWIFT_PWA__.invoke('ai.generateJSON', {
+    prompt: 'Score this pronunciation.', audio: [{ path: '/utterance.wav' }],
+    schema: { type: 'object', required: ['overallScore'] },
+});
+// Audio out (when info.audioGeneration) — TTS.
+const { audio } = await __SWIFT_PWA__.invoke('ai.generateAudio', { prompt: 'kiitos' });
+// streaming variant: subscribe('ai.generateAudioStream', …) for play-as-it-arrives
 ```
 
 `ai.generateJSON` always returns schema-valid JSON regardless of backend
 (native schema-constrained decoding where available, otherwise a
-prompt-and-validate fallback), and composes with vision (`images` +
-`schema`). Errors carry stable codes (`E_AI_UNAVAILABLE`,
+prompt-and-validate fallback), and composes with multimodal `images` /
+`audio` input + `schema`. Errors carry stable codes (`E_AI_UNAVAILABLE`,
 `E_AI_GENERATION`, `E_AI_STRUCTURED_OUTPUT`). In 0.7 the contract is in
 place but no on-device backend is wired yet, so `ai.info` reports
 `available: false` until one lands. Full reference, backend protocol, and

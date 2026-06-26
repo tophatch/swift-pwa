@@ -55,6 +55,7 @@ enum AIStructuredFallback {
             system: system,
             prompt: request.prompt,
             images: request.images,
+            audio: request.audio,
             maxTokens: request.maxTokens,
             temperature: request.temperature
         )
@@ -79,6 +80,7 @@ enum AIStructuredFallback {
             system: request.system,
             prompt: prompt,
             images: request.images,
+            audio: request.audio,
             maxTokens: request.maxTokens,
             temperature: request.temperature
         )

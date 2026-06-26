@@ -63,6 +63,19 @@ public protocol AIBackend: Sendable {
     /// final images. Has a default that wraps `generateImage` in a single
     /// `done`; a backend that can report per-step progress overrides it.
     func generateImageStream(_ request: AIGenerateImageRequest) -> AsyncThrowingStream<AIImageEvent, any Error>
+
+    /// Generate audio from text (text→audio, e.g. TTS or generative audio).
+    /// Has a default that throws `.unsupportedPlatform`; an audio backend
+    /// overrides it and reports `audioGeneration: true`. (Audio *input* —
+    /// phoneme evaluation, ASR — needs no method: it's the `audio` field on
+    /// the text requests, mirroring vision's `images`.)
+    func generateAudio(_ request: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult
+
+    /// Streaming audio generation — incremental `chunk`s of audio bytes
+    /// (play-as-it-arrives TTS), then a terminal `done`. Has a default that
+    /// wraps `generateAudio` in a single `done`; a backend that synthesizes
+    /// incrementally overrides it.
+    func generateAudioStream(_ request: AIGenerateAudioRequest) -> AsyncThrowingStream<AIAudioChunk, any Error>
 }
 
 public extension AIBackend {
@@ -130,6 +143,30 @@ public extension AIBackend {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// Default audio generation: unsupported. A non-audio backend inherits
+    /// this; an audio backend overrides it.
+    func generateAudio(_: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+        throw AIError.unsupportedPlatform("this backend does not generate audio")
+    }
+
+    /// Default streaming audio generation: run `generateAudio` and surface
+    /// its result as a single `done` (no incremental chunks). A backend
+    /// that synthesizes incrementally overrides this.
+    func generateAudioStream(_ request: AIGenerateAudioRequest) -> AsyncThrowingStream<AIAudioChunk, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let result = try await generateAudio(request)
+                    continuation.yield(.done(audio: result.audio, backend: result.backend))
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
 }
 
 // MARK: - Capabilities
@@ -161,6 +198,13 @@ public struct AICapabilities: Sendable, Codable, Equatable {
     /// Whether the backend supports text→image generation
     /// (`ai.generateImage` / `ai.generateImageStream`).
     public let imageGeneration: Bool
+    /// Whether the backend accepts audio input — i.e. `audio` on
+    /// `ai.generate` / `ai.generateJSON` / `ai.generateStream` is honored
+    /// (phoneme evaluation, transcription, audio Q&A).
+    public let audioInput: Bool
+    /// Whether the backend supports text→audio generation — TTS or
+    /// generative audio (`ai.generateAudio` / `ai.generateAudioStream`).
+    public let audioGeneration: Bool
 
     public init(
         available: Bool,
@@ -169,7 +213,9 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         streaming: Bool = false,
         structuredOutput: Bool = false,
         vision: Bool = false,
-        imageGeneration: Bool = false
+        imageGeneration: Bool = false,
+        audioInput: Bool = false,
+        audioGeneration: Bool = false
     ) {
         self.available = available
         self.backend = backend
@@ -178,6 +224,8 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         self.structuredOutput = structuredOutput
         self.vision = vision
         self.imageGeneration = imageGeneration
+        self.audioInput = audioInput
+        self.audioGeneration = audioGeneration
     }
 
     /// The capabilities of a host with no usable backend.
@@ -202,6 +250,11 @@ public enum AIBackendID {
     public static let stableDiffusionMLX = "stable-diffusion-mlx"
     public static let stableDiffusionONNX = "stable-diffusion-onnx"
     public static let stableDiffusionMediaPipe = "stable-diffusion-mediapipe"
+
+    // Audio backends (input: ASR / phoneme eval; output: TTS).
+    public static let appleSpeech = "apple-speech"
+    public static let whisperMLX = "whisper-mlx"
+    public static let ttsMLX = "tts-mlx"
 }
 
 // MARK: - Requests / results
@@ -217,6 +270,9 @@ public struct AIGenerateRequest: Sendable, Codable, Equatable {
     /// Optional image inputs for a vision-capable backend. Ignored by a
     /// backend that reports `vision: false`.
     public var images: [AIImage]?
+    /// Optional audio inputs for an audio-capable backend (phoneme
+    /// evaluation, transcription). Ignored when `audioInput: false`.
+    public var audio: [AIAudio]?
     /// Soft cap on generated tokens; `nil` lets the backend choose.
     public var maxTokens: Int?
     /// Sampling temperature; `nil` lets the backend choose.
@@ -226,12 +282,14 @@ public struct AIGenerateRequest: Sendable, Codable, Equatable {
         system: String? = nil,
         prompt: String,
         images: [AIImage]? = nil,
+        audio: [AIAudio]? = nil,
         maxTokens: Int? = nil,
         temperature: Double? = nil
     ) {
         self.system = system
         self.prompt = prompt
         self.images = images
+        self.audio = audio
         self.maxTokens = maxTokens
         self.temperature = temperature
     }
@@ -270,6 +328,37 @@ public struct AIImage: Sendable, Codable, Equatable {
     }
 }
 
+/// An audio clip supplied as input to a request (phoneme evaluation,
+/// transcription, audio Q&A). Like `AIImage`: inline base64 for short
+/// clips, or an on-disk `path` for longer recordings (so the bytes don't
+/// cross the bridge as a base64 string). Provide exactly one of
+/// `dataBase64` / `path`. Carry standard encoded audio (WAV / MP3 / etc.)
+/// and hint the container with `mimeType` (e.g. `"audio/wav"`).
+public struct AIAudio: Sendable, Codable, Equatable {
+    /// Base64-encoded audio bytes, for short inline clips.
+    public var dataBase64: String?
+    /// Filesystem path the backend reads directly, for longer recordings.
+    public var path: String?
+    /// MIME type hint (e.g. `"audio/wav"`, `"audio/mpeg"`); optional.
+    public var mimeType: String?
+
+    public init(dataBase64: String? = nil, path: String? = nil, mimeType: String? = nil) {
+        self.dataBase64 = dataBase64
+        self.path = path
+        self.mimeType = mimeType
+    }
+
+    /// An inline base64 audio clip.
+    public static func inline(_ dataBase64: String, mimeType: String? = nil) -> AIAudio {
+        AIAudio(dataBase64: dataBase64, mimeType: mimeType)
+    }
+
+    /// An on-disk recording the backend reads directly.
+    public static func file(_ path: String, mimeType: String? = nil) -> AIAudio {
+        AIAudio(path: path, mimeType: mimeType)
+    }
+}
+
 /// A structured-generation request (`ai.generateJSON`). `schema` is a JSON
 /// Schema object the result must satisfy; backends that can constrain
 /// decoding use it directly, the fallback injects it into the prompt and
@@ -281,6 +370,10 @@ public struct AIGenerateJSONRequest: Sendable, Codable, Equatable {
     /// Optional image inputs for a vision-capable backend — e.g. extract
     /// typed fields from a photo. Ignored when `vision: false`.
     public var images: [AIImage]?
+    /// Optional audio inputs for an audio-capable backend — e.g. return a
+    /// schema'd pronunciation assessment from a recording. Ignored when
+    /// `audioInput: false`.
+    public var audio: [AIAudio]?
     public var maxTokens: Int?
     public var temperature: Double?
 
@@ -289,6 +382,7 @@ public struct AIGenerateJSONRequest: Sendable, Codable, Equatable {
         prompt: String,
         schema: JSONValue,
         images: [AIImage]? = nil,
+        audio: [AIAudio]? = nil,
         maxTokens: Int? = nil,
         temperature: Double? = nil
     ) {
@@ -296,6 +390,7 @@ public struct AIGenerateJSONRequest: Sendable, Codable, Equatable {
         self.prompt = prompt
         self.schema = schema
         self.images = images
+        self.audio = audio
         self.maxTokens = maxTokens
         self.temperature = temperature
     }
@@ -459,6 +554,118 @@ public struct AIImageEvent: Sendable, Codable, Equatable {
     }
 }
 
+// MARK: - Audio generation (text→audio / TTS)
+
+/// A text→audio generation request (`ai.generateAudio` /
+/// `ai.generateAudioStream`). `prompt` is the text to speak (TTS) or the
+/// description (generative audio); the rest are optional, mostly
+/// TTS-oriented, hints with backend-chosen defaults.
+public struct AIGenerateAudioRequest: Sendable, Codable, Equatable {
+    /// Text to synthesize / describe. Required.
+    public var prompt: String
+    /// Voice identifier, for TTS backends that offer a choice.
+    public var voice: String?
+    /// BCP-47 language tag (e.g. `"fi-FI"`), when the backend needs steering.
+    public var language: String?
+    /// Speaking rate multiplier (1.0 = normal), for backends that accept it.
+    public var speed: Double?
+    /// Desired output container (e.g. `"wav"`, `"mp3"`); backend default if nil.
+    public var format: String?
+    /// Where to write the audio. When set, the result returns a file
+    /// `path` (bridge-efficient for longer clips); when `nil`, base64 bytes
+    /// inline. Mirrors `ai.generateImage`.
+    public var outputDirectory: String?
+
+    public init(
+        prompt: String,
+        voice: String? = nil,
+        language: String? = nil,
+        speed: Double? = nil,
+        format: String? = nil,
+        outputDirectory: String? = nil
+    ) {
+        self.prompt = prompt
+        self.voice = voice
+        self.language = language
+        self.speed = speed
+        self.format = format
+        self.outputDirectory = outputDirectory
+    }
+}
+
+/// Generated audio. Carries inline base64 bytes **or** a written file
+/// `path` (depending on whether the request supplied an `outputDirectory`).
+public struct AIGeneratedAudio: Sendable, Codable, Equatable {
+    /// Base64-encoded audio bytes, when the request had no `outputDirectory`.
+    public var dataBase64: String?
+    /// Path to the written audio, when the request supplied an `outputDirectory`.
+    public var path: String?
+    /// MIME type of the audio (e.g. `"audio/wav"`).
+    public var mimeType: String?
+    /// Duration in milliseconds, when known.
+    public var durationMs: Int?
+
+    public init(dataBase64: String? = nil, path: String? = nil, mimeType: String? = nil, durationMs: Int? = nil) {
+        self.dataBase64 = dataBase64
+        self.path = path
+        self.mimeType = mimeType
+        self.durationMs = durationMs
+    }
+}
+
+/// Result of a unary `ai.generateAudio`.
+public struct AIGenerateAudioResult: Sendable, Codable, Equatable {
+    public var audio: AIGeneratedAudio
+    /// Which backend produced it (one of `AIBackendID`).
+    public var backend: String
+
+    public init(audio: AIGeneratedAudio, backend: String) {
+        self.audio = audio
+        self.backend = backend
+    }
+}
+
+/// One frame of a streaming audio generation. A run of `chunk`s carrying
+/// incremental audio bytes (base64), then a terminal `done` carrying the
+/// final assembled `audio` (typically the written `path`, or the full clip
+/// when no `outputDirectory` was given).
+public struct AIAudioChunk: Sendable, Codable, Equatable {
+    /// `"chunk"` (incremental bytes in `dataBase64`) or `"done"`.
+    public let type: String
+    /// Incremental audio bytes for a `chunk`.
+    public let dataBase64: String?
+    /// MIME type of the chunk bytes (on `chunk`).
+    public let mimeType: String?
+    /// The final assembled audio (on `done`).
+    public let audio: AIGeneratedAudio?
+    /// The producing backend (on `done`).
+    public let backend: String?
+
+    public init(
+        type: String,
+        dataBase64: String? = nil,
+        mimeType: String? = nil,
+        audio: AIGeneratedAudio? = nil,
+        backend: String? = nil
+    ) {
+        self.type = type
+        self.dataBase64 = dataBase64
+        self.mimeType = mimeType
+        self.audio = audio
+        self.backend = backend
+    }
+
+    /// An incremental audio chunk.
+    public static func chunk(_ dataBase64: String, mimeType: String? = nil) -> AIAudioChunk {
+        AIAudioChunk(type: "chunk", dataBase64: dataBase64, mimeType: mimeType)
+    }
+
+    /// The terminal end-of-stream frame with the final audio.
+    public static func done(audio: AIGeneratedAudio, backend: String) -> AIAudioChunk {
+        AIAudioChunk(type: "done", audio: audio, backend: backend)
+    }
+}
+
 // MARK: - Model download (reserved)
 
 /// A request to ensure a downloadable model is present. **Reserved** for
@@ -553,6 +760,10 @@ public struct NoneBackend: AIBackend {
     }
 
     public func generateImage(_: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
+        throw AIError.unavailable("no on-device AI backend is installed")
+    }
+
+    public func generateAudio(_: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
         throw AIError.unavailable("no on-device AI backend is installed")
     }
 }

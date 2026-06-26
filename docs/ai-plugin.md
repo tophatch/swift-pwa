@@ -166,14 +166,23 @@ Failures cross the bridge as a `BridgeError` with a stable `code`:
 | `E_AI_UNAVAILABLE` | no usable backend (also reported ahead of time by `ai.info`) — fall back to your own tier |
 | `E_AI_GENERATION` | the backend was available but generation failed |
 | `E_AI_STRUCTURED_OUTPUT` | `ai.generateJSON` couldn't get schema-valid JSON, even after a repair attempt |
-| `E_UNIMPLEMENTED` | a reserved command not yet implemented (see `ai.ensureModel`) |
+| `E_AI_MODEL` | `ai.ensureModel` download failed — network error or checksum mismatch |
+| `E_UNIMPLEMENTED` | the backend doesn't support this command (e.g. `ai.ensureModel` on a platform-built-in backend) |
 
-### `ai.ensureModel` (reserved)
+### `ai.ensureModel`
 
-`subscribe('ai.ensureModel', { model? }, …)` is **reserved** for the
-downloadable-model tier (capacity gating, resumable download, checksum
-pinning, progress events). It exists now so the contract is stable, but
-throws `E_UNIMPLEMENTED` until that tier ships.
+`subscribe('ai.ensureModel', { model? }, …)` makes a downloadable model
+present, streaming `progress` events (`bytesDone` / `totalBytes`) then
+`done`. It's for the downloadable-model tier (llama.cpp / the Gemma
+fallback); a backend that uses only a platform built-in (Foundation
+Models) throws `E_UNIMPLEMENTED`.
+
+The download machinery ships now as `ModelDownloader`
+(`SwiftPWAModelStore`): resumable (HTTP `Range`), SHA-256-pinned, cached on
+disk with atomic rename, reused across launches. A downloadable backend
+keeps a registry of model specs and drives it from its `ensureModel`; the
+command lights up for JS once such a backend is installed. Failures
+surface as `E_AI_MODEL` (network error or checksum mismatch).
 
 ## Swift surface — implementing a backend
 

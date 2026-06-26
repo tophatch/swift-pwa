@@ -718,6 +718,10 @@ public enum AIError: Error, Equatable {
     /// The operation isn't supported on this backend/platform (e.g.
     /// `ai.ensureModel` before the downloadable tier ships).
     case unsupportedPlatform(String)
+    /// Acquiring a downloadable model failed — network error, or the
+    /// downloaded bytes didn't match the pinned checksum. Surfaced by
+    /// `ai.ensureModel` (the downloadable-model tier).
+    case modelDownloadFailed(String)
 
     /// Stable bridge code for this error.
     public var code: String {
@@ -726,6 +730,7 @@ public enum AIError: Error, Equatable {
         case .generationFailed: AIError.generationCode
         case .invalidStructuredOutput: AIError.structuredOutputCode
         case .unsupportedPlatform: BridgeError.unimplemented
+        case .modelDownloadFailed: AIError.modelCode
         }
     }
 
@@ -733,7 +738,8 @@ public enum AIError: Error, Equatable {
     public var bridgeError: BridgeError {
         switch self {
         case let .unavailable(m), let .generationFailed(m),
-             let .invalidStructuredOutput(m), let .unsupportedPlatform(m):
+             let .invalidStructuredOutput(m), let .unsupportedPlatform(m),
+             let .modelDownloadFailed(m):
             BridgeError(code: code, message: m)
         }
     }
@@ -741,6 +747,7 @@ public enum AIError: Error, Equatable {
     public static let unavailableCode = "E_AI_UNAVAILABLE"
     public static let generationCode = "E_AI_GENERATION"
     public static let structuredOutputCode = "E_AI_STRUCTURED_OUTPUT"
+    public static let modelCode = "E_AI_MODEL"
 }
 
 // MARK: - None backend

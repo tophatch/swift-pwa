@@ -132,6 +132,12 @@ let package = Package(
         // and inject `FoundationModelsBackend()` into `AIPlugin`; everyone
         // else links neither it nor the FoundationModels framework.
         .library(name: "SwiftPWAFoundationModels", targets: ["SwiftPWAFoundationModels"]),
+        // Reusable downloadable-model store powering `ai.ensureModel` —
+        // resumable, checksum-pinned model downloads cached on disk. Used by
+        // backends that ship a downloadable model (llama.cpp / the Gemma
+        // tier); apps that only use a platform built-in (Foundation Models)
+        // never link it.
+        .library(name: "SwiftPWAModelStore", targets: ["SwiftPWAModelStore"]),
         .library(name: "SwiftPWATestSupport", targets: ["_SwiftPWATestSupport"]),
         .executable(name: "swift-pwa", targets: ["swift-pwa-cli"]),
         // CI-internal: the Windows test runner. See the matching
@@ -214,6 +220,25 @@ let package = Package(
         .target(
             name: "SwiftPWAFoundationModels",
             dependencies: ["SwiftPWACore"],
+            swiftSettings: swiftSettings
+        ),
+
+        // MARK: - Downloadable-model store (ai.ensureModel)
+
+        // Resumable, checksum-pinned model downloads for backends that ship
+        // a downloadable model (llama.cpp / Gemma tier). SHA-256 uses
+        // CryptoKit on Apple (no dependency) and swift-crypto's `Crypto`
+        // elsewhere — the same split the updater uses.
+        .target(
+            name: "SwiftPWAModelStore",
+            dependencies: [
+                "SwiftPWACore",
+                .product(
+                    name: "Crypto",
+                    package: "swift-crypto",
+                    condition: .when(platforms: [.linux, .windows, .android])
+                )
+            ],
             swiftSettings: swiftSettings
         ),
 
@@ -444,6 +469,14 @@ let package = Package(
             name: "SwiftPWAFoundationModelsTests",
             dependencies: [
                 "SwiftPWAFoundationModels",
+                "SwiftPWACore"
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAModelStoreTests",
+            dependencies: [
+                "SwiftPWAModelStore",
                 "SwiftPWACore"
             ],
             swiftSettings: swiftSettings

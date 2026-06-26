@@ -23,6 +23,21 @@ struct IPABundler {
     var provisioningProfile: URL?
     let simulator: Bool
 
+    /// Signing flags for the `xcodebuild` build phase. We **always** build
+    /// unsigned and sign the assembled `.app` ourselves afterward (simulator →
+    /// adhoc; device → embed profile + re-sign with entitlements, nested
+    /// bundles inside-out). Passing `CODE_SIGN_IDENTITY` to the build phase is
+    /// redundant with that post-assembly signing — and worse, it *fails* for a
+    /// SwiftPM-target product: with a real "Apple Development" identity and no
+    /// `DEVELOPMENT_TEAM`, xcodebuild can't auto-provision a SwiftPM target
+    /// ("requires a development team") and errors out *before* our signing step
+    /// runs. That blocked device builds for anyone without a team configured in
+    /// an `.xcodeproj` — which swift-pwa apps don't have.
+    static let buildPhaseSigningArgs = [
+        "CODE_SIGNING_REQUIRED=NO",
+        "CODE_SIGNING_ALLOWED=NO"
+    ]
+
     func build() async throws -> URL {
         if simulator {
             try await Self.ensureSimulatorRuntimeInstalled()
@@ -51,14 +66,7 @@ struct IPABundler {
             "-configuration", configuration,
             "-derivedDataPath", derived.path
         ]
-        if simulator {
-            args.append(contentsOf: [
-                "CODE_SIGNING_REQUIRED=NO",
-                "CODE_SIGNING_ALLOWED=NO"
-            ])
-        } else if let identity = signIdentity {
-            args.append("CODE_SIGN_IDENTITY=\(identity)")
-        }
+        args.append(contentsOf: Self.buildPhaseSigningArgs)
         args.append("build")
 
         try await Shell.run("/usr/bin/env", args)

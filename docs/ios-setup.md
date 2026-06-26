@@ -108,11 +108,17 @@ swift-pwa build --target ios \
 # → build/MyApp.ipa  (profile embedded, signed with entitlements)
 ```
 
-The bundler embeds the profile, signs the nested resource bundles, then
-signs the `.app` with your entitlements (`--generate-entitlement-der`). Run
-`swift-pwa doctor --target ios` first — it checks for a valid signing
-identity and flags the classic missing **Apple WWDR intermediate** (a cert
-that's present but untrusted won't sign).
+The bundler runs the `xcodebuild` phase **unsigned** (`CODE_SIGNING_ALLOWED=NO`)
+and does *all* signing afterward on the assembled `.app`: it embeds the
+profile, signs the nested resource bundles, then signs the app with your
+entitlements (`--generate-entitlement-der`). Building unsigned matters — the
+product is a SwiftPM target, which `xcodebuild` can't auto-provision, so
+passing a signing identity to the build phase would fail with *"requires a
+development team"* before the post-assembly signing runs. Because we sign
+after assembly, **no `DEVELOPMENT_TEAM` or `.xcodeproj` is needed** — a
+free-personal-team identity works. Run `swift-pwa doctor --target ios` first —
+it checks for a valid signing identity and flags the classic missing **Apple
+WWDR intermediate** (a cert that's present but untrusted won't sign).
 
 ### Getting a profile + entitlements
 

@@ -170,6 +170,8 @@ struct Build: AsyncParsableCommand {
 
         try Self.preflight(manifest: pwa, projectRoot: cwd)
 
+        Self.applyLocalLlamaGate(manifest: pwa, target: target)
+
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -258,6 +260,32 @@ struct Build: AsyncParsableCommand {
         print("Built: \(artifact.path)")
         if target == .android {
             print("Next: cd '\(artifact.path)' && ./gradlew assembleDebug")
+        }
+    }
+
+    /// Honor `pwa.json`'s `ai.local_llama` by exporting `SWIFT_PWA_LLAMA=1`
+    /// into this process's environment, which the underlying `swift build` /
+    /// `xcodebuild` children inherit (so SwiftPM's manifest evaluation includes
+    /// the `SwiftPWALlama` target + its prebuilt-xcframework `.binaryTarget`).
+    /// Adopters never set the env var by hand — the pwa.json flag is the knob.
+    ///
+    /// **Apple-only**, deliberately: the llama xcframework is macOS/iOS, so we
+    /// must NOT set the flag for a `--target linux/windows/android` build —
+    /// that would make the manifest declare an `.binaryTarget` those hosts
+    /// can't resolve, breaking the build. For those targets we warn instead.
+    static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget) {
+        guard manifest.ai?.localLlama == true else { return }
+        switch target {
+        case .macos, .ios:
+            #if !os(Windows)
+                setenv("SWIFT_PWA_LLAMA", "1", 1)
+            #endif
+            print("swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend (SwiftPWALlama)")
+        default:
+            print(
+                "swift-pwa: ai.local_llama is set but the llama.cpp backend is Apple-only for now — "
+                    + "ignoring it for the \(target) build."
+            )
         }
     }
 

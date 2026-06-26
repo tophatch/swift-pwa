@@ -304,6 +304,21 @@ extern "C" void swiftpwa_w2_controller_set_visible(
     ctrl->com->put_IsVisible(visible ? TRUE : FALSE);
 }
 
+extern "C" void swiftpwa_w2_controller_set_background_color(
+    swiftpwa_w2_controller *ctrl, uint8_t a, uint8_t r, uint8_t g, uint8_t b) {
+    if (!ctrl || !ctrl->com) return;
+    // DefaultBackgroundColor is on ICoreWebView2Controller2 — QI for it,
+    // and no-op on older runtimes that don't implement it.
+    ComPtr<ICoreWebView2Controller2> c2;
+    if (FAILED(ctrl->com->QueryInterface(IID_PPV_ARGS(&c2)))) return;
+    COREWEBVIEW2_COLOR color;
+    color.A = a;
+    color.R = r;
+    color.G = g;
+    color.B = b;
+    c2->put_DefaultBackgroundColor(color);
+}
+
 extern "C" void swiftpwa_w2_controller_close(swiftpwa_w2_controller *ctrl) {
     if (!ctrl || !ctrl->com) return;
     ctrl->com->Close();
@@ -770,6 +785,8 @@ extern "C" void swiftpwa_w2_create_controller(swiftpwa_w2_env *, void *, swiftpw
 extern "C" void swiftpwa_w2_controller_release(swiftpwa_w2_controller *) {}
 extern "C" void swiftpwa_w2_controller_set_bounds(swiftpwa_w2_controller *, int32_t, int32_t, int32_t, int32_t) {}
 extern "C" void swiftpwa_w2_controller_set_visible(swiftpwa_w2_controller *, int) {}
+extern "C" void swiftpwa_w2_controller_set_background_color(
+    swiftpwa_w2_controller *, uint8_t, uint8_t, uint8_t, uint8_t) {}
 extern "C" void swiftpwa_w2_controller_close(swiftpwa_w2_controller *) {}
 extern "C" swiftpwa_w2_view *swiftpwa_w2_controller_view(swiftpwa_w2_controller *) { return NULL; }
 extern "C" void swiftpwa_w2_view_navigate(swiftpwa_w2_view *, const wchar_t *) {}

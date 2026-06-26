@@ -114,6 +114,16 @@ static inline void swiftpwa_register_script_message_handler(
     webkit_user_content_manager_register_script_message_handler(ucm, name, NULL);
 }
 
+/// Set the web view's base background colour (painted before/under the
+/// page), so the surface matches the app background instead of flashing
+/// opaque white before first paint. Components are 0...1.
+static inline void swiftpwa_webkit_set_background_color(
+    WebKitWebView *web_view, double r, double g, double b, double a
+) {
+    GdkRGBA rgba = { r, g, b, a };
+    webkit_web_view_set_background_color(web_view, &rgba);
+}
+
 // ---------------------------------------------------------------------
 // Range-aware asset serving (content packs / large media)
 // ---------------------------------------------------------------------

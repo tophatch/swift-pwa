@@ -38,6 +38,12 @@ public struct WindowConfig: Sendable {
     public var fullscreen: Bool
     public var visibleOnLaunch: Bool
     public var content: WindowContent
+    /// Native surface background colour (hex, e.g. `"#F4F7F5"`), applied
+    /// before the page's first paint so there's no white/black flash and
+    /// the scroll overscroll area matches. `nil` keeps the platform default
+    /// (opaque white). A single solid colour can only approximate a
+    /// gradient page background — close, but not pixel-exact.
+    public var backgroundColor: String?
 
     public init(
         title: String,
@@ -47,7 +53,8 @@ public struct WindowConfig: Sendable {
         resizable: Bool = true,
         fullscreen: Bool = false,
         visibleOnLaunch: Bool = true,
-        content: WindowContent
+        content: WindowContent,
+        backgroundColor: String? = nil
     ) {
         self.title = title
         self.size = size
@@ -57,5 +64,6 @@ public struct WindowConfig: Sendable {
         self.fullscreen = fullscreen
         self.visibleOnLaunch = visibleOnLaunch
         self.content = content
+        self.backgroundColor = backgroundColor
     }
 }

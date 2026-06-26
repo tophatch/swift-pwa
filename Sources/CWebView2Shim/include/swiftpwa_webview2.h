@@ -99,6 +99,13 @@ void swiftpwa_w2_controller_set_bounds(
 // Show / hide the WebView2 host. Hidden controllers stop rendering.
 void swiftpwa_w2_controller_set_visible(swiftpwa_w2_controller *ctrl, int visible);
 
+// Set the controller's default background colour (the surface painted
+// before/under the page), so it matches the app background instead of
+// flashing white. ARGB bytes (0-255). No-op if the runtime predates
+// ICoreWebView2Controller2.
+void swiftpwa_w2_controller_set_background_color(
+    swiftpwa_w2_controller *ctrl, uint8_t a, uint8_t r, uint8_t g, uint8_t b);
+
 // Close the controller. Releases the WebView2 process for this window;
 // must be called before the parent HWND is destroyed.
 void swiftpwa_w2_controller_close(swiftpwa_w2_controller *ctrl);

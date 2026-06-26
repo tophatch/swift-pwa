@@ -166,6 +166,13 @@ swiftPwaMain()` declaration to your Swift function. If you change
 `pwa.json`'s `android.package_id`, regenerate the scaffold and update
 the `@_cdecl` to match.
 
+**Drift is caught for you.** `swift-pwa build --target android` (and
+`swift-pwa doctor --target android`) compare the `@_cdecl` symbol in
+`AndroidEntry.swift` against the manifest's `package_id` and **warn** if
+they disagree, before you get the runtime `UnsatisfiedLinkError`. The fix
+it prints: set the `@_cdecl` to the mangled current package, or delete
+`AndroidEntry.swift` and re-run `swift-pwa init <name> --in-place`.
+
 > Why a manual `@_cdecl` instead of a generated wrapper? Because the
 > exported symbol's name has to embed the user's Java package id,
 > which the Swift target itself doesn't know about. `swift-pwa init`

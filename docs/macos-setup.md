@@ -97,12 +97,35 @@ The bundler:
 1. Runs `swift build -c release`.
 2. Lays out `MyApp.app/Contents/{MacOS,Resources}` from the manifest.
 3. Writes `Info.plist` from `pwa.json` (bundle ID, version, minimum
-   system version, `LSApplicationCategoryType`, `NSHumanReadableCopyright`).
+   system version, `LSApplicationCategoryType`, `NSHumanReadableCopyright`),
+   then merges any `macos.info_plist` passthrough on top (see below).
 4. Copies the `web/` directory into `Contents/Resources/web`.
 5. If `pwa.json.icon` points at a PNG, converts it to `AppIcon.icns`
    via `sips` + `iconutil`.
 6. If `pwa.json.description` is set, writes a `Credits.html` so the
    description shows up as the body of the standard About panel.
+
+### Custom `Info.plist` keys (`macos.info_plist`)
+
+Anything the schema doesn't model goes through a passthrough object that's
+merged into the generated plist (passthrough wins on collision). The
+canonical case is reaching a local `http://localhost` dev service from the
+WebView, which App Transport Security blocks by default:
+
+```json
+"macos": {
+  "info_plist": {
+    "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true },
+    "NSCameraUsageDescription": "Scan a code"
+  }
+}
+```
+
+Use the **exact** `Info.plist` key names (nested objects/arrays are
+supported). The same `ios.info_plist` exists for the iOS bundle. This
+removes the old need to patch the built plist with `PlistBuddy` in a
+post-build step — though [`build.postbuild`](../README.md#configuring-pwajson)
+is there if you need to.
 
 The bundle filename and the `CFBundleName` / `CFBundleDisplayName`
 Finder/dock label come from `name` (which may contain spaces, e.g.

@@ -77,6 +77,14 @@ struct Build: AsyncParsableCommand {
     )
     var skipPrebuild: Bool = false
 
+    @Flag(
+        help: """
+        Skip the pwa.json `build.postbuild` command (the after-bundling step). For fast local \
+        iteration; CI / release builds should never set this.
+        """
+    )
+    var skipPostbuild: Bool = false
+
     @Option(help: "Output directory for the bundled artifact. Defaults to ./build.")
     var output: String = "build"
 
@@ -155,6 +163,7 @@ struct Build: AsyncParsableCommand {
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
+        let artifact: URL
         switch target {
         case .macos:
             let bundler = MacAppBundler(
@@ -165,8 +174,7 @@ struct Build: AsyncParsableCommand {
                 entitlements: entitlements.map { URL(fileURLWithPath: $0) },
                 notarizeProfile: notarize
             )
-            let url = try await bundler.build()
-            print("Built: \(url.path)")
+            artifact = try await bundler.build()
         case .ios:
             let bundler = IPABundler(
                 manifest: pwa,
@@ -175,16 +183,14 @@ struct Build: AsyncParsableCommand {
                 signIdentity: sign,
                 simulator: simulator
             )
-            let url = try await bundler.build()
-            print("Built: \(url.path)")
+            artifact = try await bundler.build()
         case .linux:
             let bundler = AppImageBundler(
                 manifest: pwa,
                 projectRoot: cwd,
                 outputDir: outputDir
             )
-            let url = try await bundler.build()
-            print("Built: \(url.path)")
+            artifact = try await bundler.build()
         case .windows:
             let format: WindowsBundler.PackageFormat
             switch packageFormat.lowercased() {
@@ -205,8 +211,7 @@ struct Build: AsyncParsableCommand {
                 bootstrapWebView2: bootstrapWebview2,
                 signIdentity: sign
             )
-            let url = try await bundler.build()
-            print("Built: \(url.path)")
+            artifact = try await bundler.build()
         case .android:
             // Resolve the ABI list: --android-abis overrides pwa.json's
             // android.abis, which falls back to the conventional pair.
@@ -227,9 +232,19 @@ struct Build: AsyncParsableCommand {
                 signKeystoreOverride: sign,
                 keyAliasOverride: androidKeyAlias
             )
-            let url = try await bundler.build()
-            print("Built: \(url.path)")
-            print("Next: cd '\(url.path)' && ./gradlew assembleDebug")
+            artifact = try await bundler.build()
+        }
+
+        // After-bundling hook: runs on the produced artifact (path in
+        // SWIFT_PWA_ARTIFACT) before we report success, so a failing
+        // postbuild fails the build.
+        try await Self.runPostbuild(
+            manifest: pwa, projectRoot: cwd, target: target, artifact: artifact, skip: skipPostbuild
+        )
+
+        print("Built: \(artifact.path)")
+        if target == .android {
+            print("Next: cd '\(artifact.path)' && ./gradlew assembleDebug")
         }
     }
 
@@ -268,6 +283,46 @@ struct Build: AsyncParsableCommand {
                 The prebuild step exited non-zero, so the build was aborted before staging web/ \
                 (shipping a half-generated web/ is worse than failing). Fix the command above, or \
                 pass --skip-prebuild to bypass it for a local iteration.
+                """
+            )
+        }
+    }
+
+    /// Run `pwa.json`'s `build.postbuild` command (if any) from the project
+    /// root, *after* the artifact is produced. The artifact's absolute path
+    /// is exposed in `SWIFT_PWA_ARTIFACT` and the target name in
+    /// `SWIFT_PWA_TARGET`, so the step can patch the generated bundle
+    /// (Info.plist tweaks, extra signing, checksums) without the caller
+    /// having to wrap the whole `swift-pwa build` invocation. A non-zero
+    /// exit fails the build. Same shell semantics as `runPrebuild`.
+    static func runPostbuild(
+        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, artifact: URL, skip: Bool
+    ) async throws {
+        guard let command = manifest.build?.postbuild, !command.trimmingCharacters(in: .whitespaces).isEmpty
+        else { return }
+        if skip {
+            print("swift-pwa: skipping build.postbuild (--skip-postbuild): \(command)")
+            return
+        }
+        print("swift-pwa: running build.postbuild: \(command)")
+        #if os(Windows)
+            let shell = "cmd"
+            let shellArgs = ["/c", command]
+        #else
+            let shell = "/bin/sh"
+            let shellArgs = ["-c", command]
+        #endif
+        do {
+            try await Shell.run(
+                shell, shellArgs, cwd: projectRoot,
+                envOverrides: ["SWIFT_PWA_ARTIFACT": artifact.path, "SWIFT_PWA_TARGET": target.rawValue]
+            )
+        } catch {
+            throw ValidationError(
+                """
+                build.postbuild failed: \(command)
+                The post-build step exited non-zero (artifact was at \(artifact.path)). Fix the \
+                command above, or pass --skip-postbuild to bypass it for a local iteration.
                 """
             )
         }

@@ -77,11 +77,29 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var category: String? // LSApplicationCategoryType
         public var minimumSystemVersion: String? // e.g. "15.0"
         public var copyright: String? // NSHumanReadableCopyright; shown under the version in the About panel
+        /// Arbitrary keys merged verbatim into the generated `Info.plist`,
+        /// after swift-pwa's own keys (so they override on collision). The
+        /// escape hatch for anything the schema doesn't model — App
+        /// Transport Security (`NSAppTransportSecurity`), usage strings
+        /// (`NSCameraUsageDescription`), custom URL schemes
+        /// (`CFBundleURLTypes`), etc. Use the **exact** Info.plist key
+        /// names; nested objects/arrays are supported.
+        ///
+        /// ```json
+        /// "macos": { "info_plist": {
+        ///   "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true }
+        /// } }
+        /// ```
+        public var infoPlist: [String: JSONValue]?
     }
 
     public struct IOSSection: Codable, Sendable, Equatable {
         public var bundleIdentifier: String?
         public var minimumSystemVersion: String? // e.g. "18.0"
+        /// Arbitrary keys merged into the generated iOS `Info.plist`, after
+        /// swift-pwa's own (override on collision). See
+        /// ``MacOSSection/infoPlist``.
+        public var infoPlist: [String: JSONValue]?
     }
 
     public struct LinuxSection: Codable, Sendable, Equatable {
@@ -305,6 +323,18 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Skip it for a fast local iteration with `build --skip-prebuild`.
         public var prebuild: String?
 
+        /// A command run from the project root *after* the platform artifact
+        /// is produced, on every `swift-pwa build`. Use it for an
+        /// "after bundling" step the CLI doesn't do itself — patching the
+        /// generated `Info.plist`, extra code-signing, emitting a checksum.
+        /// The absolute path to the produced artifact (the `.app` / `.ipa` /
+        /// `.AppImage` / Windows bundle dir / Android Gradle project) is
+        /// passed in the **`SWIFT_PWA_ARTIFACT`** environment variable, and
+        /// `SWIFT_PWA_TARGET` carries the target name. A non-zero exit fails
+        /// the build. Same shell semantics as `prebuild`; skip it with
+        /// `build --skip-postbuild`.
+        public var postbuild: String?
+
         /// Directories served on the bundle origin under an app-chosen path
         /// prefix (e.g. `/packs`), so page JS can reference runtime-imported
         /// content with an origin-relative URL on every backend. On **desktop**
@@ -320,8 +350,9 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// ```
         public var serve: [ServeMount]?
 
-        public init(prebuild: String? = nil, serve: [ServeMount]? = nil) {
+        public init(prebuild: String? = nil, postbuild: String? = nil, serve: [ServeMount]? = nil) {
             self.prebuild = prebuild
+            self.postbuild = postbuild
             self.serve = serve
         }
     }
@@ -378,5 +409,77 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         encoder.keyEncodingStrategy = .convertToSnakeCase
         try encoder.encode(self).write(to: url)
+    }
+}
+
+/// A JSON value of arbitrary shape, used for the `info_plist` passthrough
+/// (see ``PWAManifest/MacOSSection/infoPlist``). Codable so it rides along
+/// in the manifest; `plistValue` lowers it to the `Any` graph
+/// `PropertyListSerialization` accepts.
+///
+/// Note: `pwa.json` is decoded with `.convertFromSnakeCase`, which is a
+/// no-op for keys that contain no underscores — i.e. every conventional
+/// CamelCase Info.plist key (`NSAppTransportSecurity`, `CFBundleURLTypes`)
+/// passes through unchanged. Avoid underscores in passthrough keys.
+public enum JSONValue: Codable, Sendable, Equatable {
+    case string(String)
+    case bool(Bool)
+    case int(Int)
+    case double(Double)
+    case array([JSONValue])
+    case object([String: JSONValue])
+    case null
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() {
+            self = .null
+        } else if let b = try? c.decode(Bool.self) {
+            // Bool before Int: JSON `true`/`false` decode as Bool, numbers don't.
+            self = .bool(b)
+        } else if let i = try? c.decode(Int.self) {
+            self = .int(i)
+        } else if let d = try? c.decode(Double.self) {
+            self = .double(d)
+        } else if let s = try? c.decode(String.self) {
+            self = .string(s)
+        } else if let a = try? c.decode([JSONValue].self) {
+            self = .array(a)
+        } else if let o = try? c.decode([String: JSONValue].self) {
+            self = .object(o)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: c, debugDescription: "Unsupported JSON value in pwa.json passthrough"
+            )
+        }
+    }
+
+    public func encode(to encoder: any Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case let .string(s): try c.encode(s)
+        case let .bool(b): try c.encode(b)
+        case let .int(i): try c.encode(i)
+        case let .double(d): try c.encode(d)
+        case let .array(a): try c.encode(a)
+        case let .object(o): try c.encode(o)
+        case .null: try c.encodeNil()
+        }
+    }
+
+    /// The `Any` graph for `PropertyListSerialization`. `.null` has no
+    /// plist representation, so a null leaf is dropped by the caller.
+    public var plistValue: Any? {
+        switch self {
+        case let .string(s): s
+        case let .bool(b): b
+        case let .int(i): i
+        case let .double(d): d
+        case let .array(a): a.compactMap(\.plistValue)
+        case let .object(o): o.reduce(into: [String: Any]()) { acc, kv in
+                if let v = kv.value.plistValue { acc[kv.key] = v }
+            }
+        case .null: nil
+        }
     }
 }

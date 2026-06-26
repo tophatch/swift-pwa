@@ -135,6 +135,18 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 "build": { "prebuild": "node scripts/build-index.mjs" }
 ```
 
+**Optional `build.postbuild`** — the symmetric *after-bundling* hook: a command run once the platform artifact exists, with its absolute path in `SWIFT_PWA_ARTIFACT` (and the target in `SWIFT_PWA_TARGET`). Use it to patch the generated bundle without wrapping the whole `swift-pwa build` — e.g. a `PlistBuddy` tweak, extra signing, a checksum. Non-zero exit fails the build; `--skip-postbuild` bypasses it.
+
+```json
+"build": { "postbuild": "./scripts/sign-extra.sh \"$SWIFT_PWA_ARTIFACT\"" }
+```
+
+**Optional `macos.info_plist` / `ios.info_plist`** — arbitrary keys merged into the generated `Info.plist` (after swift-pwa's own, so they override on collision). The escape hatch for anything the schema doesn't model: App Transport Security, usage strings, custom URL schemes. Use the exact Info.plist key names; nested objects/arrays work.
+
+```json
+"macos": { "info_plist": { "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true } } }
+```
+
 **Optional `build.serve`** — serve extra directories on the bundle origin under an app-chosen path prefix, so page JS references runtime-imported content (a downloaded "content pack" of images / video) with an origin-relative URL — `videoEl.src = "/packs/<id>/clip.webm"` — that works unchanged on every backend, streamed with HTTP range requests. On desktop the equivalent is `ctx.serveDirectory(_:at:)` at `configure()` time; Android needs the mount declared here (its asset loader is built before any Swift runs). See [docs/swift-api.md](docs/swift-api.md#serving-extra-directories-content-packs).
 
 ```json
@@ -148,6 +160,8 @@ swift-pwa dev                      # serves web/ with live reload, launches the 
 ```
 
 `swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed (macOS / Linux; on Windows pass `--server`). Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
+
+The built-in server binds a **fixed port** (`4321`) so the dev origin is stable across launches — that's what lets OPFS / localStorage / IndexedDB **persist between runs** (an OS-assigned port would mint a fresh origin each launch and wipe storage). Override with `--port <n>`, or `--port 0` for the old ephemeral behavior.
 
 ### Build and run
 

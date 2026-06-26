@@ -20,6 +20,30 @@
             return dir
         }
 
+        @Test("a fixed port gives a stable origin; reusing a live port throws")
+        func fixedPortStableOrigin() throws {
+            let web = try tmpWeb()
+            defer { try? FileManager.default.removeItem(at: web) }
+
+            // Start on an OS-assigned port to discover a currently-free one…
+            let probe = DevServer(root: web, entry: "index.html", port: 0)
+            let probeURL = try probe.start()
+            let port = UInt16(probeURL.port ?? 0)
+            #expect(port != 0)
+            probe.stop()
+
+            // …then bind that exact port: the origin is now stable/predictable.
+            let server = DevServer(root: web, entry: "index.html", port: port)
+            let url = try server.start()
+            defer { server.stop() }
+            #expect(url.absoluteString == "http://127.0.0.1:\(port)")
+
+            // A second server on the same live port fails loudly rather than
+            // silently picking a different origin (which would lose storage).
+            let collide = DevServer(root: web, entry: "index.html", port: port)
+            #expect(throws: (any Error).self) { try collide.start() }
+        }
+
         @Test("serves index.html with an injected live-reload client, 404s the rest")
         func servesAndInjects() async throws {
             let web = try tmpWeb()

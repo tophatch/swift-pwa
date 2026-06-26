@@ -127,7 +127,7 @@ struct Init: AsyncParsableCommand {
             atomically: true,
             encoding: .utf8
         )
-        try Templates.mainSwift(structName: identifier, window: manifest.window).write(
+        try Templates.mainSwift(structName: identifier, window: manifest.window, entry: manifest.web.entry).write(
             to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
             atomically: true,
             encoding: .utf8
@@ -377,11 +377,20 @@ enum Templates {
         """
     }
 
-    static func mainSwift(structName: String, window: PWAManifest.WindowSection) -> String {
+    static func mainSwift(
+        structName: String,
+        window: PWAManifest.WindowSection,
+        entry: String = "index.html"
+    ) -> String {
         // Escape the window title for safe embedding in the generated
         // Swift source. `window.title` is whatever the user typed, which
         // can legitimately contain quotes / backslashes.
         let titleLiteral = window.title
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+        // `web.entry` becomes the window's bundled entry file. Escaped the
+        // same way; defaults to index.html.
+        let entryLiteral = entry
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         // Drop a trailing `.0` so 1024.0 reads as 1024 in the source.
@@ -452,7 +461,9 @@ enum Templates {
                         fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
                     }
                 #endif
-                content = .bundled(directory: webRoot)
+                // `entry` is seeded from pwa.json's `web.entry` at `init`
+                // time; edit it here to change which file the window opens.
+                content = .bundled(directory: webRoot, entry: "\(entryLiteral)")
             }
 
             // This WindowConfig is the *runtime* source of truth for the

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-06-26
+
 ### Added
 
 - **iOS device builds are installable end-to-end: `--provisioning-profile` + `--entitlements`, and a fail-fast guard.** `build --target ios --sign <id>` codesigned the `.app` but never embedded a provisioning profile or signed with entitlements, so the `.ipa` installed on a device but was denied launch (*"invalid code signature, inadequate entitlements…"*). New `--provisioning-profile <p.mobileprovision>` embeds it as `embedded.mobileprovision`, and `--entitlements <e.plist>` signs with them (`--generate-entitlement-der`), after signing nested resource bundles inside-out — the device path that previously had to be done by hand. A device build with **no** signing now **fails fast** with the fix (rather than emitting an un-launchable `.ipa`); `--simulator` is unaffected. `doctor --target ios` gained a code-signing check that flags a missing identity or the classic untrusted **Apple WWDR intermediate** (with the `security import` hint). See [docs/ios-setup.md](docs/ios-setup.md). (Automatic `--team` signing — generating a thin app-target project so `xcodebuild` provisions for you — is queued for 0.7.1.)

@@ -44,6 +44,13 @@ public struct ModelSpec: Sendable, Equatable {
 ///   renamed into place, so a half-written file is never seen as ready.
 /// - **Progress** — `onProgress(bytesDone, totalBytes?)` after each buffer
 ///   flush (`totalBytes` is `nil` when the server sends no length).
+///
+/// The network download path is **currently macOS/iOS only** — it uses
+/// `URLSession.bytes(for:)`, which swift-corelibs-foundation doesn't ship
+/// yet. On other platforms `ensure` throws `modelDownloadFailed` for a
+/// missing file (cache reuse and checksum still work). Linux/Windows
+/// download lands with the portable backends (llama.cpp), implemented and
+/// verified on those hosts.
 public struct ModelDownloader: Sendable {
     /// Directory the models are cached in (created on demand). Typically a
     /// subdirectory of the app's data directory.
@@ -124,52 +131,62 @@ public struct ModelDownloader: Sendable {
         to part: URL,
         onProgress: (@Sendable (Int64, Int64?) -> Void)?
     ) async throws {
-        let fm = FileManager.default
-        var offset: Int64 = 0
-        if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? Int64 { offset = size }
+        // The streamed, resumable download uses `URLSession.bytes(for:)`,
+        // which isn't available on swift-corelibs-foundation yet — so the
+        // network path is currently macOS/iOS only. Linux/Windows support
+        // lands with the portable backends (llama.cpp), implemented and
+        // verified on those hosts. Everything else here (cache reuse,
+        // checksum, the API) is cross-platform.
+        #if canImport(Darwin)
+            let fm = FileManager.default
+            var offset: Int64 = 0
+            if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? Int64 { offset = size }
 
-        var request = URLRequest(url: spec.url)
-        if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
+            var request = URLRequest(url: spec.url)
+            if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
 
-        let (bytes, response) = try await session.bytes(for: request)
-        guard let http = response as? HTTPURLResponse else {
-            throw AIError.modelDownloadFailed("no HTTP response from \(spec.url)")
-        }
-        guard (200 ... 299).contains(http.statusCode) else {
-            throw AIError.modelDownloadFailed("download failed (HTTP \(http.statusCode))")
-        }
-        // Range honored → 206 Partial Content; a plain 200 means the server
-        // ignored it, so discard the stale partial and restart from zero.
-        if offset > 0, http.statusCode != 206 {
-            try? fm.removeItem(at: part)
-            offset = 0
-        }
+            let (bytes, response) = try await session.bytes(for: request)
+            guard let http = response as? HTTPURLResponse else {
+                throw AIError.modelDownloadFailed("no HTTP response from \(spec.url)")
+            }
+            guard (200 ... 299).contains(http.statusCode) else {
+                throw AIError.modelDownloadFailed("download failed (HTTP \(http.statusCode))")
+            }
+            // Range honored → 206 Partial Content; a plain 200 means the server
+            // ignored it, so discard the stale partial and restart from zero.
+            if offset > 0, http.statusCode != 206 {
+                try? fm.removeItem(at: part)
+                offset = 0
+            }
 
-        // `expectedContentLength` is the remaining length for a 206.
-        let total: Int64? = http.expectedContentLength >= 0 ? offset + http.expectedContentLength : nil
+            // `expectedContentLength` is the remaining length for a 206.
+            let total: Int64? = http.expectedContentLength >= 0 ? offset + http.expectedContentLength : nil
 
-        if !fm.fileExists(atPath: part.path) { fm.createFile(atPath: part.path, contents: nil) }
-        let handle = try FileHandle(forWritingTo: part)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
+            if !fm.fileExists(atPath: part.path) { fm.createFile(atPath: part.path, contents: nil) }
+            let handle = try FileHandle(forWritingTo: part)
+            defer { try? handle.close() }
+            try handle.seekToEnd()
 
-        var done = offset
-        var buffer = Data()
-        buffer.reserveCapacity(1 << 20)
-        for try await byte in bytes {
-            buffer.append(byte)
-            if buffer.count >= (1 << 20) {
+            var done = offset
+            var buffer = Data()
+            buffer.reserveCapacity(1 << 20)
+            for try await byte in bytes {
+                buffer.append(byte)
+                if buffer.count >= (1 << 20) {
+                    try handle.write(contentsOf: buffer)
+                    done += Int64(buffer.count)
+                    buffer.removeAll(keepingCapacity: true)
+                    onProgress?(done, total)
+                }
+            }
+            if !buffer.isEmpty {
                 try handle.write(contentsOf: buffer)
                 done += Int64(buffer.count)
-                buffer.removeAll(keepingCapacity: true)
                 onProgress?(done, total)
             }
-        }
-        if !buffer.isEmpty {
-            try handle.write(contentsOf: buffer)
-            done += Int64(buffer.count)
-            onProgress?(done, total)
-        }
+        #else
+            throw AIError.modelDownloadFailed("on-device model download is currently macOS/iOS only")
+        #endif
     }
 
     // MARK: - Hashing

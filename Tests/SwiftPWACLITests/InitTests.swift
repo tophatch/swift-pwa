@@ -205,6 +205,31 @@ struct InitTests {
         #expect(throws: (any Error).self) { try Init.sanitizeIdentifier("---") }
     }
 
+    @Test("generated App.swift threads web.entry into the bundled window")
+    func appSwiftThreadsWebEntry() {
+        let custom = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"), entry: "app.html")
+        #expect(custom.contains("entry: \"app.html\""))
+        // Default is index.html when entry is omitted.
+        let def = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
+        #expect(def.contains("entry: \"index.html\""))
+    }
+
+    @Test("init bakes the manifest web.entry into the generated App.swift")
+    func initBakesWebEntry() async throws {
+        let parent = tmpDir()
+        defer { try? FileManager.default.removeItem(at: parent) }
+        let target = parent.appendingPathComponent("EntryApp")
+        // Pre-seed a pwa.json with a custom web.entry, then adopt in place.
+        try FileManager.default.createDirectory(at: target, withIntermediateDirectories: true)
+        try #"{"id":"com.example.e","name":"EntryApp","version":"1.0.0","web":{"directory":"web","entry":"main.html"},"window":{"title":"EntryApp","width":1024,"height":768,"resizable":true,"fullscreen":false}}"#
+            .write(to: target.appendingPathComponent("pwa.json"), atomically: true, encoding: .utf8)
+        try await Init.parse(["EntryApp", "--path", target.path, "--in-place"]).run()
+        let appSwift = try String(
+            contentsOf: target.appendingPathComponent("Sources/EntryApp/App.swift"), encoding: .utf8
+        )
+        #expect(appSwift.contains("entry: \"main.html\""))
+    }
+
     @Test("resolveRoot: --in-place scaffolds into the cwd even with no pwa.json/web present")
     func resolveRootInPlaceForcesCwd() {
         let cwd = URL(fileURLWithPath: "/repo")

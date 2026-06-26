@@ -24,18 +24,25 @@ import Foundation
     final class DevServer: @unchecked Sendable {
         private let root: URL
         private let entry: String
+        private let requestedPort: UInt16
         private let lock = NSLock()
         private var clientFds: [Int32] = []
         private var listenFd: Int32 = -1
         private var running = true
 
-        init(root: URL, entry: String) {
+        /// `port` is the loopback port to bind. A fixed, non-zero port gives
+        /// the dev app a **stable origin** (`http://127.0.0.1:<port>`) across
+        /// launches, so per-origin storage (OPFS, localStorage, IndexedDB)
+        /// persists between runs — `0` keeps the old OS-assigned behavior
+        /// (fresh origin, ephemeral storage, every launch).
+        init(root: URL, entry: String, port: UInt16 = 0) {
             self.root = root
             self.entry = entry
+            requestedPort = port
         }
 
-        /// Bind to an OS-assigned loopback port, start the accept + watch
-        /// threads, and return the URL the app should load.
+        /// Bind the loopback port, start the accept + watch threads, and
+        /// return the URL the app should load.
         func start() throws -> URL {
             let fd = socket(AF_INET, sockStreamType, 0)
             guard fd >= 0 else { throw DevServerError.socket("socket() failed") }
@@ -44,14 +51,23 @@ import Foundation
 
             var addr = sockaddr_in()
             addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = 0 // OS picks a free port
+            addr.sin_port = requestedPort.bigEndian // 0 → OS picks a free port
             addr.sin_addr.s_addr = inet_addr("127.0.0.1")
             let bindOK = withUnsafePointer(to: &addr) { p in
                 p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
                     bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
                 }
             }
-            guard bindOK == 0 else { close(fd); throw DevServerError.socket("bind() failed") }
+            guard bindOK == 0 else {
+                close(fd)
+                if requestedPort != 0 {
+                    throw DevServerError.socket(
+                        "port \(requestedPort) is already in use — pass `--port <n>` to pick another, "
+                            + "or `--port 0` for an OS-assigned one (storage won't persist across launches)"
+                    )
+                }
+                throw DevServerError.socket("bind() failed")
+            }
             guard listen(fd, 16) == 0 else { close(fd); throw DevServerError.socket("listen() failed") }
 
             // Read back the assigned port.

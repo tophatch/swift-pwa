@@ -45,6 +45,65 @@ struct InfoPlistTests {
         #expect(parsed["NSHumanReadableCopyright"] as? String == "© 2026 Acme Corp.")
     }
 
+    @Test("macOS info_plist passthrough merges, including nested objects")
+    func macInfoPlistPassthrough() throws {
+        var m = manifest
+        m.macos?.infoPlist = [
+            "NSAppTransportSecurity": .object(["NSAllowsLocalNetworking": .bool(true)]),
+            "NSCameraUsageDescription": .string("Scan a code"),
+            "CFBundleURLTypes": .array([.object(["CFBundleURLSchemes": .array([.string("myapp")])])])
+        ]
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.macOS(manifest: m, executableName: m.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        let ats = try #require(parsed["NSAppTransportSecurity"] as? [String: Any])
+        #expect(ats["NSAllowsLocalNetworking"] as? Bool == true)
+        #expect(parsed["NSCameraUsageDescription"] as? String == "Scan a code")
+        let urlTypes = try #require(parsed["CFBundleURLTypes"] as? [[String: Any]])
+        #expect((urlTypes.first?["CFBundleURLSchemes"] as? [String])?.first == "myapp")
+        // Generated keys still present alongside the passthrough.
+        #expect(parsed["CFBundleIdentifier"] as? String == "com.example.hi")
+    }
+
+    @Test("info_plist passthrough overrides a generated key on collision")
+    func macInfoPlistOverride() throws {
+        var m = manifest
+        m.macos?.infoPlist = ["LSMinimumSystemVersion": .string("26.0")]
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.macOS(manifest: m, executableName: m.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(parsed["LSMinimumSystemVersion"] as? String == "26.0")
+    }
+
+    @Test("iOS info_plist passthrough merges too")
+    func iosInfoPlistPassthrough() throws {
+        var m = manifest
+        m.ios?.infoPlist = ["UIFileSharingEnabled": .bool(true)]
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: m, executableName: m.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(parsed["UIFileSharingEnabled"] as? Bool == true)
+        #expect(parsed["CFBundleIdentifier"] as? String == "com.example.hi.ios")
+    }
+
+    @Test("info_plist passthrough round-trips (incl. nested) through pwa.json")
+    func infoPlistRoundTrips() throws {
+        let json = """
+        {"id":"com.example.x","name":"X","version":"1.0.0",
+         "web":{"directory":"web","entry":"index.html"},
+         "window":{"title":"X","width":1024,"height":768,"resizable":true,"fullscreen":false},
+         "macos":{"info_plist":{"NSAppTransportSecurity":{"NSAllowsLocalNetworking":true}}}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        // The CamelCase plist key survives convertFromSnakeCase (no underscores).
+        #expect(m.macos?.infoPlist?["NSAppTransportSecurity"] == .object(["NSAllowsLocalNetworking": .bool(true)]))
+    }
+
     @Test("CFBundleExecutable uses the resolved executable name while display keys use name")
     func executableNameDecoupledFromDisplay() throws {
         var m = manifest

@@ -63,6 +63,27 @@ public struct SwiftPWACLIRoot: AsyncParsableCommand {
 @available(macOS 10.15, macCatalyst 13, iOS 13, tvOS 13, watchOS 6, *)
 public enum SwiftPWACLIEntry {
     public static func run() async {
+        quietBareRepositoryGitWarning()
         await SwiftPWACLIRoot.main()
+    }
+
+    /// Stop SwiftPM's internal `git` calls (dependency resolution during
+    /// `swift build` / `swift package describe`) from printing
+    /// `warning: skipping cache … couldn't fetch updates` on machines that
+    /// harden git with `safe.bareRepository = explicit`. SwiftPM's clone
+    /// cache is a bare repo, and that hardening makes git refuse to operate
+    /// on it, so the cache is skipped with a noisy warning on every build.
+    ///
+    /// We relax it for **our child processes only** via git's
+    /// `GIT_CONFIG_*` environment protocol (git ≥ 2.31) — the equivalent of
+    /// `git -c safe.bareRepository=all`. This never touches the user's git
+    /// config files, only the environment inherited by the tools swift-pwa
+    /// spawns. Skipped if the user already drives `GIT_CONFIG_*` themselves
+    /// (don't clobber their setup).
+    private static func quietBareRepositoryGitWarning() {
+        guard ProcessInfo.processInfo.environment["GIT_CONFIG_COUNT"] == nil else { return }
+        setenv("GIT_CONFIG_COUNT", "1", 1)
+        setenv("GIT_CONFIG_KEY_0", "safe.bareRepository", 1)
+        setenv("GIT_CONFIG_VALUE_0", "all", 1)
     }
 }

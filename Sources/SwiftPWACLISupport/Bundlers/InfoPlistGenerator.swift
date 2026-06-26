@@ -28,6 +28,7 @@ enum InfoPlistGenerator {
         if manifest.icon != nil {
             plist["CFBundleIconFile"] = "AppIcon.icns"
         }
+        merge(manifest.macos?.infoPlist, into: &plist)
         return plist
     }
 
@@ -73,7 +74,18 @@ enum InfoPlistGenerator {
         } else {
             plist["UILaunchScreen"] = [String: Any]()
         }
+        merge(manifest.ios?.infoPlist, into: &plist)
         return plist
+    }
+
+    /// Merge a `pwa.json` `info_plist` passthrough over the generated keys
+    /// (passthrough wins on collision, so an app can override a default).
+    /// Null leaves are dropped (no plist representation).
+    private static func merge(_ passthrough: [String: JSONValue]?, into plist: inout InfoPlist) {
+        guard let passthrough else { return }
+        for (key, value) in passthrough {
+            if let v = value.plistValue { plist[key] = v }
+        }
     }
 }
 

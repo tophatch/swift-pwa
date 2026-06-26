@@ -40,17 +40,26 @@ enum ResourceLocator {
     /// Directories that might hold the resource bundle, most-likely first.
     private static func searchDirectories() -> [URL] {
         var dirs: [URL] = []
-        // The real executable's directory, symlinks resolved. Covers both
-        // a `swift run` build (bundle sits beside the binary in
-        // `.build/<config>/`) and a prebuilt binary that shipped its bundle.
-        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath() {
-            let exeDir = exe.deletingLastPathComponent()
-            dirs.append(exeDir)
+        func add(executableDir: URL) {
+            dirs.append(executableDir)
             // FHS install: binary in `…/bin`, resources in `…/share/swift-pwa`.
-            dirs.append(exeDir.deletingLastPathComponent()
+            dirs.append(executableDir.deletingLastPathComponent()
                 .appendingPathComponent("share/swift-pwa"))
         }
-        // The same candidates `Bundle.module` itself would consult.
+        // The real executable's directory. On Linux/Android `/proc/self/exe`
+        // is the reliable source — under `swift run`, `Bundle.main` does NOT
+        // resolve to the `.build` dir where the bundle sits (that's why the
+        // synthesized `Bundle.module` falls back to a compile-time path, which
+        // a *prebuilt* binary can't reuse). On Apple, `executableURL` is right.
+        #if os(Linux) || os(Android)
+            if let real = try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe") {
+                add(executableDir: URL(fileURLWithPath: real).deletingLastPathComponent())
+            }
+        #endif
+        if let exe = Bundle.main.executableURL?.resolvingSymlinksInPath() {
+            add(executableDir: exe.deletingLastPathComponent())
+        }
+        // The same candidates `Bundle.module` itself consults first.
         if let res = Bundle.main.resourceURL { dirs.append(res) }
         dirs.append(Bundle.main.bundleURL)
         return dirs

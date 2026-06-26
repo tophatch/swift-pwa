@@ -120,6 +120,27 @@ free-personal-team identity works. Run `swift-pwa doctor --target ios` first —
 it checks for a valid signing identity and flags the classic missing **Apple
 WWDR intermediate** (a cert that's present but untrusted won't sign).
 
+### `--team`: fewer flags when you already have signing set up
+
+If you've already got Xcode-managed signing (an identity in your keychain and
+an installed provisioning profile for the app's bundle id — see below), pass
+just your 10-character **Team ID** and swift-pwa fills in the rest:
+
+```bash
+swift-pwa build --target ios --team ABCDE12345
+# → selects that team's "Apple Development" identity,
+#   finds a matching installed .mobileprovision,
+#   derives entitlements from it, then signs as usual.
+```
+
+It only fills the inputs you didn't pass — any explicit `--sign` /
+`--provisioning-profile` / `--entitlements` wins. It does **not** create a
+profile from nothing (a SwiftPM package has no app-target Xcode project for
+`xcodebuild` to auto-provision); if no installed profile matches, it says so
+and you fall back to the explicit flags. Find your Team ID with
+`security find-identity -v -p codesigning` (the `(……)` suffix) or in the Apple
+Developer portal.
+
 ### Getting a profile + entitlements
 
 A SwiftPM executable target isn't an app product type, so `xcodebuild`

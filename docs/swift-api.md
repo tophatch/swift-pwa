@@ -85,6 +85,12 @@ platform-specific implementation provided by the umbrella module.
 Tests substitute `_SwiftPWATestSupport.Mock*` instead, which the same
 plugin shape accepts without changes.
 
+`AIPlugin` (on-device LLM inference behind `ai.*`) is also à la carte but
+takes an `AIBackend` rather than a `System*` adapter: `ctx.use(AIPlugin(MyBackend()))`,
+or `ctx.use(AIPlugin())` to wire the JS contract against `NoneBackend`
+(reports `available:false`) until a real backend lands. See
+[docs/ai-plugin.md](ai-plugin.md).
+
 ## Multi-window
 
 ```swift

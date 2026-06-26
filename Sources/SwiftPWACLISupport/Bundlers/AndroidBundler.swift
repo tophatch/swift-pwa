@@ -66,6 +66,11 @@ struct AndroidBundler {
         try FileManager.default.createDirectory(at: project, withIntermediateDirectories: true)
 
         let pkg = androidPackageId()
+        // Catch a stale JNI entry point (package_id changed after `init`)
+        // before producing an APK that would UnsatisfiedLinkError at launch.
+        if let drift = AndroidEntryDrift.detect(projectRoot: projectRoot, packageId: pkg) {
+            print("warning: \(AndroidEntryDrift.message(for: drift, packageId: pkg))")
+        }
         // SwiftPM product name → `lib<name>.so`. Resolved from the
         // package rather than guessed from the display `name`.
         let soBase = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
@@ -213,17 +218,17 @@ struct AndroidBundler {
     private func stageGradleWrapper(into project: URL) throws {
         // SwiftPM's `.copy("Bundlers/AndroidWrapperResources")` puts
         // the named directory verbatim in the resource bundle under
-        // its last path component. Locate it via `Bundle.module`.
-        guard let resourceRoot = Bundle.module.url(
-            forResource: "AndroidWrapperResources", withExtension: nil
-        ) else {
-            // The CLI was built without the wrapper resource — most
-            // likely because the user is building swift-pwa-cli from a
-            // pre-vendored checkout. Surface a clear note and continue
-            // emitting the rest of the scaffold; the user can drop a
-            // wrapper in by hand or run `gradle wrapper` themselves.
+        // its last path component. Locate it via `ResourceLocator` rather
+        // than `Bundle.module`, which *traps* (not returns nil) when the
+        // bundle isn't co-located — the case for a prebuilt single-file
+        // `swift-pwa` binary, which is exactly when this runs.
+        guard let resourceRoot = ResourceLocator.moduleResource("AndroidWrapperResources") else {
+            // No bundle found beside the binary — typically a prebuilt CLI
+            // shipped without its resource bundle. Surface a clear note and
+            // continue emitting the rest of the scaffold; the user can run
+            // `gradle wrapper` themselves to add `./gradlew`.
             print(
-                "note: vendored Gradle wrapper not found in CLI bundle; the generated project won't include `./gradlew`. Run `gradle wrapper` from the project directory once a system Gradle is installed."
+                "note: vendored Gradle wrapper not found next to the swift-pwa binary; the generated project won't include `./gradlew`. Run `gradle wrapper` from the project directory once a system Gradle is installed."
             )
             return
         }
@@ -262,21 +267,7 @@ struct AndroidBundler {
     // MARK: - Helpers
 
     private func androidPackageId() -> String {
-        if let configured = manifest.android?.packageId, !configured.isEmpty {
-            return configured
-        }
-        // Fall back to the top-level id if it looks like a package
-        // id; otherwise namespace under `dev.swiftpwa.<id>` (lowercase
-        // alphanumerics only).
-        let id = manifest.id
-        if id.contains(".") {
-            return id
-        }
-        let cleaned = id.unicodeScalars.compactMap { sc -> Character? in
-            if CharacterSet.alphanumerics.contains(sc) { return Character(sc) }
-            return nil
-        }
-        return "dev.swiftpwa." + String(cleaned).lowercased()
+        AndroidEntryDrift.resolvePackageId(manifest)
     }
 
     /// `lib<name>.so` is what Android's loader expects under

@@ -127,6 +127,11 @@ let package = Package(
         // `ZIPExtractor()` into `FsPlugin`; everyone else links neither it
         // nor ZIPFoundation.
         .library(name: "SwiftPWAArchive", targets: ["SwiftPWAArchive"]),
+        // Optional on-device AI backend (Apple Foundation Models) for the
+        // `ai.*` plugin. Apps that want on-device inference add this product
+        // and inject `FoundationModelsBackend()` into `AIPlugin`; everyone
+        // else links neither it nor the FoundationModels framework.
+        .library(name: "SwiftPWAFoundationModels", targets: ["SwiftPWAFoundationModels"]),
         .library(name: "SwiftPWATestSupport", targets: ["_SwiftPWATestSupport"]),
         .executable(name: "swift-pwa", targets: ["swift-pwa-cli"]),
         // CI-internal: the Windows test runner. See the matching
@@ -193,6 +198,22 @@ let package = Package(
                     condition: .when(platforms: [.macOS, .iOS, .linux])
                 )
             ],
+            swiftSettings: swiftSettings
+        ),
+
+        // MARK: - Optional on-device AI backend (Apple Foundation Models)
+
+        // Isolated so the FoundationModels framework is linked only by apps
+        // that opt into on-device inference. `SwiftPWACore` defines the
+        // `AIBackend` protocol; this target provides `FoundationModelsBackend`.
+        // macOS/iOS only (the framework doesn't exist elsewhere); the code is
+        // further guarded by `#if canImport(FoundationModels)` +
+        // `@available(macOS 26, iOS 26, *)` so it still builds on an older SDK
+        // (degrading to an `available:false` stub). The umbrella does NOT
+        // depend on it.
+        .target(
+            name: "SwiftPWAFoundationModels",
+            dependencies: ["SwiftPWACore"],
             swiftSettings: swiftSettings
         ),
 
@@ -416,6 +437,14 @@ let package = Package(
             dependencies: [
                 .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
                 "_SwiftPWATestSupport"
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAFoundationModelsTests",
+            dependencies: [
+                "SwiftPWAFoundationModels",
+                "SwiftPWACore"
             ],
             swiftSettings: swiftSettings
         ),

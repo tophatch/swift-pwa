@@ -64,6 +64,11 @@
             webView = adapter
             self.app = app
 
+            // Native background before first paint (no white flash).
+            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
+                adapter.setBackgroundColor(rgb)
+            }
+
             bridge = BridgeRuntime(
                 webView: adapter,
                 registry: app.registry,

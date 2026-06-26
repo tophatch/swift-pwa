@@ -117,6 +117,7 @@
                 environment: environment,
                 parent: hwnd,
                 content: config.content,
+                backgroundColor: config.backgroundColor.flatMap(RGBColor.init(hex:)),
                 sharedProvider: app.assetProvider
             )
             self.adapter = adapter

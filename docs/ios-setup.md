@@ -89,36 +89,57 @@ developers.)
 
 ## 4. Build for a real device
 
-The current state: `swift-pwa build --target ios --sign <identity>`
-will compile + codesign, but **does not embed a provisioning profile or
-entitlements** into the `.app`. iOS rejects unprovisioned binaries,
-so the resulting `.ipa` won't install via `ideviceinstaller` or Apple
-Configurator on its own.
+A device install needs two things a simulator build doesn't: an embedded
+**provisioning profile** (`embedded.mobileprovision`) whose
+`ProvisionedDevices` lists your device's UDID, and a code signature carrying
+**entitlements** (`application-identifier`, `get-task-allow`, …). Without
+both, the install succeeds but launch is denied (*"invalid code signature,
+inadequate entitlements or its profile has not been explicitly trusted"*).
 
-Until the CLI's signing / provisioning path is wrapped (queued for a follow-up), the recommended device path is to run from Xcode directly:
+So `swift-pwa build --target ios` for a device **fails fast** unless you sign
+it — it won't emit an `.ipa` that looks installable but can't launch. Pass
+`--sign`, plus a profile and entitlements:
 
 ```bash
-xed Package.swift                               # opens the SwiftPM project in Xcode
+swift-pwa build --target ios \
+  --sign "Apple Development: you@example.com (TEAMID)" \
+  --provisioning-profile path/to/app.mobileprovision \
+  --entitlements path/to/app.entitlements
+# → build/MyApp.ipa  (profile embedded, signed with entitlements)
 ```
 
-Then in Xcode:
+The bundler embeds the profile, signs the nested resource bundles, then
+signs the `.app` with your entitlements (`--generate-entitlement-der`). Run
+`swift-pwa doctor --target ios` first — it checks for a valid signing
+identity and flags the classic missing **Apple WWDR intermediate** (a cert
+that's present but untrusted won't sign).
 
-1. Pick the `MyApp` scheme and your physical device.
-2. **Signing & Capabilities** → enable *Automatically manage signing*
-   and select your team. Xcode generates the provisioning profile.
-3. *Run*. Xcode builds, signs with a fresh profile, copies the `.app`
-   to the device, and launches it.
+### Getting a profile + entitlements
 
-This is the same xcodebuild path the CLI uses, just with the signing
-infrastructure that Xcode bolts on. The command-line equivalent (for
-scripting) is `xcodebuild ... -allowProvisioningUpdates -destination
-'platform=iOS,id=<UDID>'`, but it still needs you to be logged into
-your Apple Developer account in Xcode at least once.
+A SwiftPM executable target isn't an app product type, so `xcodebuild`
+won't auto-provision it. Two ways to obtain the profile:
+
+- **Paid team / CI:** download a profile from the Apple Developer portal (or
+  `fastlane sigh`), and extract its entitlements:
+  `security cms -D -i app.mobileprovision > p.plist && /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' p.plist > app.entitlements`.
+- **Personal (free) team:** build a one-file throwaway app target with the
+  **same bundle id** in Xcode once with *Automatically manage signing* —
+  Xcode registers the device and emits a 7-day
+  `embedded.mobileprovision` you can reuse with the flags above. After
+  installing, trust the developer profile on the device once (Settings →
+  General → VPN & Device Management).
+
+Then install with `xcrun devicectl device install app build/MyApp.ipa` (or
+`ideviceinstaller`). Alternatively, just run from Xcode (`xed Package.swift`
+→ pick your device → *Run*) and let it manage signing.
+
+> **Coming in 0.7.1:** `--team <TEAMID>` for automatic signing — the bundler
+> will generate a thin app-target project so `xcodebuild` provisions and
+> embeds the profile for you, removing the manual steps above.
 
 For TestFlight / App Store distribution, `xcodebuild archive` →
-`xcodebuild -exportArchive -exportOptionsPlist ...` → `xcrun altool
---upload-app` is the canonical chain. Plumbing this through the
-`swift-pwa` CLI is queued for a follow-up.
+`xcodebuild -exportArchive -exportOptionsPlist ...` is still the canonical
+chain (a CLI wrapper is a later follow-up).
 
 ## 5. Sideloading for personal testing
 

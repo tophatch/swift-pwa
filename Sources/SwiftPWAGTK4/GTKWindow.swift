@@ -73,6 +73,11 @@
             // exactly one child slot.
             gtk_window_set_child(windowPtr, adapter.viewWidget)
 
+            // Native background before first paint (no white flash).
+            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
+                adapter.setBackgroundColor(rgb)
+            }
+
             self.app = app
 
             bridge = BridgeRuntime(

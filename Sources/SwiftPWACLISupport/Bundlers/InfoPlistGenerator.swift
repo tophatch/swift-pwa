@@ -45,6 +45,11 @@ enum InfoPlistGenerator {
         plist["CFBundleVersion"] = manifest.version
         plist["LSRequiresIPhoneOS"] = true
         plist["MinimumOSVersion"] = manifest.ios?.minimumSystemVersion ?? "18.0"
+        // Universal by default (iPhone + iPad). Without UIDeviceFamily, iOS
+        // treats the app as iPhone-only and runs it letterboxed on iPad; a
+        // thin-client WebView app is device-agnostic, so universal is right.
+        // Overridable via `ios.device_family` or the `info_plist` passthrough.
+        plist["UIDeviceFamily"] = manifest.ios?.deviceFamily ?? [1, 2]
 
         // UIScene declarations for full multi-window support.
         plist["UIApplicationSceneManifest"] = [

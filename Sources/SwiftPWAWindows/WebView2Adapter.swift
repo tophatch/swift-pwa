@@ -15,6 +15,8 @@
     public final class WebView2Adapter: PWAWebView, @unchecked Sendable {
         private let environment: OpaquePointer
         private let parent: HWND
+        /// Applied once the controller is ready (RGBColor is Sendable).
+        private let backgroundColor: RGBColor?
 
         // Mutable pointer fields are `nonisolated(unsafe)` because
         // they're read from `MainThread.run` closures (which Swift
@@ -59,10 +61,12 @@
             environment: OpaquePointer,
             parent: HWND,
             content _: WindowContent,
+            backgroundColor: RGBColor? = nil,
             sharedProvider: AssetProvider
         ) throws {
             self.environment = environment
             self.parent = parent
+            self.backgroundColor = backgroundColor
             assetProvider = sharedProvider
             var captured: AsyncStream<InboundFrame>.Continuation?
             stream = AsyncStream { captured = $0 }
@@ -107,6 +111,13 @@
             // hidden" failure mode in case the runtime drops the
             // default in some build.
             swiftpwa_w2_controller_set_visible(ctrl, 1)
+
+            // Native background before first paint (no white flash). ARGB,
+            // fully opaque. No-op on runtimes without ICoreWebView2Controller2.
+            if let bg = backgroundColor {
+                let c = bg.bytes
+                swiftpwa_w2_controller_set_background_color(ctrl, 255, c.r, c.g, c.b)
+            }
 
             // Inject bridge.js at document-start. WebView2's API for
             // this is "AddScriptToExecuteOnDocumentCreated" — fires

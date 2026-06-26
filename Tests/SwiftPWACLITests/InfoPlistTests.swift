@@ -89,6 +89,34 @@ struct InfoPlistTests {
         #expect(parsed["CFBundleIdentifier"] as? String == "com.example.hi.ios")
     }
 
+    @Test("iOS plist defaults UIDeviceFamily to universal [1, 2]")
+    func iosDeviceFamilyDefault() throws {
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: manifest, executableName: manifest.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(parsed["UIDeviceFamily"] as? [Int] == [1, 2])
+    }
+
+    @Test("ios.device_family overrides the universal default; passthrough still wins")
+    func iosDeviceFamilyOverride() throws {
+        var m = manifest
+        m.ios?.deviceFamily = [2] // iPad-only
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: m, executableName: m.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(parsed["UIDeviceFamily"] as? [Int] == [2])
+
+        // The info_plist passthrough wins over both default and device_family.
+        m.ios?.infoPlist = ["UIDeviceFamily": .array([.int(1)])]
+        let overridden = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: m, executableName: m.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        #expect(overridden["UIDeviceFamily"] as? [Int] == [1])
+    }
+
     @Test("info_plist passthrough round-trips (incl. nested) through pwa.json")
     func infoPlistRoundTrips() throws {
         let json = """

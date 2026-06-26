@@ -57,18 +57,27 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var height: Double
         public var resizable: Bool
         public var fullscreen: Bool
+        /// Native window/webview background colour (hex, e.g. `"#F4F7F5"`),
+        /// applied before the page's first paint to avoid a white/black
+        /// flash and to match the scroll overscroll area; also used as the
+        /// iOS launch-screen background. Optional — omit for the platform
+        /// default (opaque white). Seeds `WindowConfig.backgroundColor` in
+        /// the generated `App.swift`.
+        public var backgroundColor: String?
         public init(
             title: String,
             width: Double = 1024,
             height: Double = 768,
             resizable: Bool = true,
-            fullscreen: Bool = false
+            fullscreen: Bool = false,
+            backgroundColor: String? = nil
         ) {
             self.title = title
             self.width = width
             self.height = height
             self.resizable = resizable
             self.fullscreen = fullscreen
+            self.backgroundColor = backgroundColor
         }
     }
 
@@ -96,6 +105,12 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public struct IOSSection: Codable, Sendable, Equatable {
         public var bundleIdentifier: String?
         public var minimumSystemVersion: String? // e.g. "18.0"
+        /// `UIDeviceFamily` — which device idioms the app supports
+        /// (`1` = iPhone, `2` = iPad). Defaults to `[1, 2]` (universal): a
+        /// thin-client WebView app is device-agnostic, and omitting the key
+        /// makes iOS treat the app as iPhone-only and letterbox it on iPad.
+        /// Override here to ship phone-only (`[1]`) or iPad-only (`[2]`).
+        public var deviceFamily: [Int]?
         /// Arbitrary keys merged into the generated iOS `Info.plist`, after
         /// swift-pwa's own (override on collision). See
         /// ``MacOSSection/infoPlist``.

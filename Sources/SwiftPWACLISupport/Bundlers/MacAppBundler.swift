@@ -171,9 +171,18 @@ enum BundlerError: Error, CustomStringConvertible {
     case shell(Int32, String)
     case iosSimulatorRuntimeMissing
     case notarizeUnsigned
+    case iosDeviceUnsigned
 
     var description: String {
         switch self {
+        case .iosDeviceUnsigned:
+            """
+            An iOS device build needs code signing — without it the .ipa installs but won't launch \
+            ("invalid code signature, inadequate entitlements or its profile has not been explicitly \
+            trusted"). Pass --sign "Apple Development: …", and for an on-device install also \
+            --provisioning-profile <p.mobileprovision> --entitlements <e.plist> (the profile must list \
+            the device's UDID). See docs/ios-setup.md. (For a simulator build, use --simulator instead.)
+            """
         case .notarizeUnsigned:
             """
             --notarize requires a signed app. Pass --sign "Developer ID Application: …" too.

@@ -397,6 +397,12 @@ enum Templates {
         let width = String(format: "%g", window.width)
         let height = String(format: "%g", window.height)
         let name = structName
+        // Optional native background colour. Emitted only when set, so the
+        // generated WindowConfig keeps `nil` (platform default) otherwise.
+        let backgroundColorArg: String = window.backgroundColor.map {
+            let escaped = $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            return ",\n                backgroundColor: \"\(escaped)\""
+        } ?? ""
         return """
         // swift-pwa-generated: v\(SwiftPWAVersion.current)
         //
@@ -476,7 +482,7 @@ enum Templates {
                 size: Size(width: \(width), height: \(height)),
                 resizable: \(window.resizable),
                 fullscreen: \(window.fullscreen),
-                content: content
+                content: content\(backgroundColorArg)
             ))
         }
         """

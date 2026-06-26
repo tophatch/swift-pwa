@@ -214,6 +214,26 @@ struct InitTests {
         #expect(def.contains("entry: \"index.html\""))
     }
 
+    @Test("generated App.swift emits window.background_color only when set")
+    func appSwiftThreadsBackgroundColor() {
+        let withColor = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X", backgroundColor: "#F4F7F5")
+        )
+        #expect(withColor.contains("backgroundColor: \"#F4F7F5\""))
+        // Omitted when nil, so WindowConfig keeps the platform default.
+        let without = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
+        #expect(!without.contains("backgroundColor:"))
+    }
+
+    @Test("pwa.json window.background_color decodes (snake_case)")
+    func manifestDecodesBackgroundColor() throws {
+        let json = ##"{"id":"com.example.b","name":"B","version":"1.0.0","web":{"directory":"web","entry":"index.html"},"window":{"title":"B","width":1024,"height":768,"resizable":true,"fullscreen":false,"background_color":"#101418"}}"##
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.window.backgroundColor == "#101418")
+    }
+
     @Test("init bakes the manifest web.entry into the generated App.swift")
     func initBakesWebEntry() async throws {
         let parent = tmpDir()

@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import SwiftPWACore
 
 /// Builds an iOS `.app` (simulator) or `.ipa` (device).
 ///
@@ -18,11 +19,17 @@ struct IPABundler {
     let projectRoot: URL
     let outputDir: URL
     let signIdentity: String?
+    var entitlements: URL?
+    var provisioningProfile: URL?
     let simulator: Bool
 
     func build() async throws -> URL {
         if simulator {
             try await Self.ensureSimulatorRuntimeInstalled()
+        } else if signIdentity == nil {
+            // A device build with no signing produces an .ipa that installs
+            // but can't launch. Fail fast with the fix rather than emit it.
+            throw BundlerError.iosDeviceUnsigned
         }
         // The SwiftPM target / product name (== xcodebuild scheme),
         // resolved from the package rather than guessed from the display
@@ -83,12 +90,40 @@ struct IPABundler {
             return app
         }
 
-        // Device build: codesign, then assemble Payload/ → .ipa.
-        if let identity = signIdentity {
-            try await Shell.run("/usr/bin/env", ["codesign", "--force", "--sign", identity, app.path])
+        // Device build: embed the provisioning profile, code-sign
+        // inside-out (nested bundles first, then the app with
+        // entitlements), then assemble Payload/ → .ipa.
+        // `signIdentity` is guaranteed non-nil here (checked at build start).
+        let identity = signIdentity ?? ""
+        if let profile = provisioningProfile {
+            let embedded = app.appendingPathComponent("embedded.mobileprovision")
+            if FileManager.default.fileExists(atPath: embedded.path) {
+                try FileManager.default.removeItem(at: embedded)
+            }
+            try FileManager.default.copyItem(at: profile, to: embedded)
         } else {
-            print("note: not signed. Pass --sign <identity> for an installable build.")
+            print("""
+            note: no --provisioning-profile given. The .ipa is signed but lacks an embedded \
+            profile, so it won't install on a device. Pass --provisioning-profile + --entitlements \
+            (see docs/ios-setup.md), or use --simulator.
+            """)
         }
+        // codesign requires signing nested code (the SwiftPM resource
+        // bundles) before the containing app.
+        for entry in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
+            where entry.hasSuffix(".bundle")
+        {
+            try await Shell.run(
+                "/usr/bin/env",
+                ["codesign", "--force", "--sign", identity, app.appendingPathComponent(entry).path]
+            )
+        }
+        var codesignArgs = ["codesign", "--force", "--sign", identity]
+        if let ent = entitlements {
+            codesignArgs += ["--entitlements", ent.path, "--generate-entitlement-der"]
+        }
+        codesignArgs.append(app.path)
+        try await Shell.run("/usr/bin/env", codesignArgs)
         let payload = outputDir.appendingPathComponent("Payload")
         if FileManager.default.fileExists(atPath: payload.path) {
             try FileManager.default.removeItem(at: payload)
@@ -272,7 +307,9 @@ struct IPABundler {
             defer { try? fm.removeItem(at: tmp) }
 
             let sbInput = tmp.appendingPathComponent("LaunchScreen.storyboard")
-            try Self.launchStoryboardXML.write(to: sbInput, atomically: true, encoding: .utf8)
+            let background = manifest.window.backgroundColor.flatMap(RGBColor.init(hex:))
+            try Self.launchStoryboardXML(background: background)
+                .write(to: sbInput, atomically: true, encoding: .utf8)
             let sbOutput = app.appendingPathComponent("LaunchScreen.storyboardc")
 
             try await Shell.run(
@@ -287,52 +324,59 @@ struct IPABundler {
         }
     }
 
-    /// Black background, centered `UIImageView` referencing the loose
-    /// `LaunchIcon.png` we drop next to the bundle. Sized to 40 % of the
-    /// view's width, with a 1:1 aspect ratio. The format is the standard
-    /// IB launch-screen XML — Xcode emits something near-identical.
-    private static let launchStoryboardXML = """
-    <?xml version="1.0" encoding="UTF-8" standalone="no"?>
-    <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" \
-    toolsVersion="22689" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" \
-    useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" \
-    colorMatched="YES" initialViewController="VC1">
-        <dependencies>
-            <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22689"/>
-            <capability name="Safe area layout guides" minToolsVersion="9.0"/>
-        </dependencies>
-        <scenes>
-            <scene sceneID="SC1">
-                <objects>
-                    <viewController id="VC1" sceneMemberID="viewController">
-                        <view key="view" contentMode="scaleToFill" id="V1">
-                            <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
-                            <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
-                            <subviews>
-                                <imageView clipsSubviews="YES" userInteractionEnabled="NO" \
-    contentMode="scaleAspectFit" image="LaunchIcon" \
-    translatesAutoresizingMaskIntoConstraints="NO" id="ICON1"/>
-                            </subviews>
-                            <viewLayoutGuide key="safeArea" id="SA1"/>
-                            <color key="backgroundColor" red="0.0" green="0.0" blue="0.0" alpha="1" \
-    colorSpace="custom" customColorSpace="sRGB"/>
-                            <constraints>
-                                <constraint firstItem="ICON1" firstAttribute="centerX" \
-    secondItem="V1" secondAttribute="centerX" id="cx"/>
-                                <constraint firstItem="ICON1" firstAttribute="centerY" \
-    secondItem="V1" secondAttribute="centerY" id="cy"/>
-                                <constraint firstItem="ICON1" firstAttribute="width" \
-    secondItem="V1" secondAttribute="width" multiplier="0.4" id="w"/>
-                                <constraint firstItem="ICON1" firstAttribute="height" \
-    secondItem="ICON1" secondAttribute="width" id="h"/>
-                            </constraints>
-                        </view>
-                    </viewController>
-                    <placeholder placeholderIdentifier="IBFirstResponder" id="FR1" \
-    userLabel="First Responder" sceneMemberID="firstResponder"/>
-                </objects>
-            </scene>
-        </scenes>
-    </document>
-    """
+    /// Centered `UIImageView` referencing the loose `LaunchIcon.png` we
+    /// drop next to the bundle, sized to 40 % of the view's width with a
+    /// 1:1 aspect ratio, on a solid `background` (defaults to black when no
+    /// `window.background_color` is set). Matching the launch background to
+    /// the app background makes the splash→app transition seamless. The
+    /// format is the standard IB launch-screen XML.
+    private static func launchStoryboardXML(background: RGBColor?) -> String {
+        let r = background?.red ?? 0.0
+        let g = background?.green ?? 0.0
+        let b = background?.blue ?? 0.0
+        return """
+        <?xml version="1.0" encoding="UTF-8" standalone="no"?>
+        <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" \
+        toolsVersion="22689" targetRuntime="iOS.CocoaTouch" propertyAccessControl="none" \
+        useAutolayout="YES" launchScreen="YES" useTraitCollections="YES" useSafeAreas="YES" \
+        colorMatched="YES" initialViewController="VC1">
+            <dependencies>
+                <plugIn identifier="com.apple.InterfaceBuilder.IBCocoaTouchPlugin" version="22689"/>
+                <capability name="Safe area layout guides" minToolsVersion="9.0"/>
+            </dependencies>
+            <scenes>
+                <scene sceneID="SC1">
+                    <objects>
+                        <viewController id="VC1" sceneMemberID="viewController">
+                            <view key="view" contentMode="scaleToFill" id="V1">
+                                <rect key="frame" x="0.0" y="0.0" width="402" height="874"/>
+                                <autoresizingMask key="autoresizingMask" widthSizable="YES" heightSizable="YES"/>
+                                <subviews>
+                                    <imageView clipsSubviews="YES" userInteractionEnabled="NO" \
+        contentMode="scaleAspectFit" image="LaunchIcon" \
+        translatesAutoresizingMaskIntoConstraints="NO" id="ICON1"/>
+                                </subviews>
+                                <viewLayoutGuide key="safeArea" id="SA1"/>
+                                <color key="backgroundColor" red="\(r)" green="\(g)" blue="\(b)" alpha="1" \
+        colorSpace="custom" customColorSpace="sRGB"/>
+                                <constraints>
+                                    <constraint firstItem="ICON1" firstAttribute="centerX" \
+        secondItem="V1" secondAttribute="centerX" id="cx"/>
+                                    <constraint firstItem="ICON1" firstAttribute="centerY" \
+        secondItem="V1" secondAttribute="centerY" id="cy"/>
+                                    <constraint firstItem="ICON1" firstAttribute="width" \
+        secondItem="V1" secondAttribute="width" multiplier="0.4" id="w"/>
+                                    <constraint firstItem="ICON1" firstAttribute="height" \
+        secondItem="ICON1" secondAttribute="width" id="h"/>
+                                </constraints>
+                            </view>
+                        </viewController>
+                        <placeholder placeholderIdentifier="IBFirstResponder" id="FR1" \
+        userLabel="First Responder" sceneMemberID="firstResponder"/>
+                    </objects>
+                </scene>
+            </scenes>
+        </document>
+        """
+    }
 }

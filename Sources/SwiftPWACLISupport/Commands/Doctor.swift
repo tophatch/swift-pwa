@@ -102,7 +102,8 @@ struct Doctor: AsyncParsableCommand {
                     required: false,
                     fix: "Ships with Xcode. If it errors at build time, run: xcodebuild -runFirstLaunch"
                 ),
-                iosSimulatorRuntime()
+                iosSimulatorRuntime(),
+                iosCodeSigning()
             ]
         case .linux:
             return await [
@@ -279,6 +280,36 @@ struct Doctor: AsyncParsableCommand {
             detail: hasIOS ? "installed" : "none (only needed for --simulator)",
             required: false,
             fix: "Install via Xcode → Settings → Platforms → iOS, or: xcodebuild -downloadPlatform iOS"
+        )
+    }
+
+    /// A valid Apple Development / Distribution code-signing identity is
+    /// needed only for **device** installs (simulator builds skip signing),
+    /// so this is advisory. `security find-identity -v` lists *valid*
+    /// identities only — a cert whose chain is broken (the classic missing
+    /// Apple WWDR intermediate) simply won't appear, so the fix covers both
+    /// "no cert" and "cert present but untrusted".
+    private static func iosCodeSigning() async -> Check {
+        let label = "iOS code-signing identity"
+        let fix = """
+        Only needed for device installs. Create an Apple Development certificate (Xcode → \
+        Settings → Accounts, or developer.apple.com). If you have a cert but it isn't listed, \
+        the Apple WWDR intermediate is likely missing — download it from \
+        https://www.apple.com/certificateauthority/ and run: security import AppleWWDRCAG3.cer
+        """
+        let out = await (try? Shell.capture(
+            "/usr/bin/env",
+            ["security", "find-identity", "-v", "-p", "codesigning"],
+            timeout: 10,
+            discardStderr: true
+        )) ?? ""
+        let hasIdentity = ["Apple Development", "Apple Distribution", "iPhone Developer", "iPhone Distribution"]
+            .contains { out.contains($0) }
+        return Check(
+            name: label, ok: hasIdentity,
+            detail: hasIdentity ? "valid identity present" : "none found (only needed for device installs)",
+            required: false,
+            fix: hasIdentity ? nil : fix
         )
     }
 

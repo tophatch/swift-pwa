@@ -19,11 +19,17 @@ struct IPABundler {
     let projectRoot: URL
     let outputDir: URL
     let signIdentity: String?
+    var entitlements: URL?
+    var provisioningProfile: URL?
     let simulator: Bool
 
     func build() async throws -> URL {
         if simulator {
             try await Self.ensureSimulatorRuntimeInstalled()
+        } else if signIdentity == nil {
+            // A device build with no signing produces an .ipa that installs
+            // but can't launch. Fail fast with the fix rather than emit it.
+            throw BundlerError.iosDeviceUnsigned
         }
         // The SwiftPM target / product name (== xcodebuild scheme),
         // resolved from the package rather than guessed from the display
@@ -84,12 +90,40 @@ struct IPABundler {
             return app
         }
 
-        // Device build: codesign, then assemble Payload/ → .ipa.
-        if let identity = signIdentity {
-            try await Shell.run("/usr/bin/env", ["codesign", "--force", "--sign", identity, app.path])
+        // Device build: embed the provisioning profile, code-sign
+        // inside-out (nested bundles first, then the app with
+        // entitlements), then assemble Payload/ → .ipa.
+        // `signIdentity` is guaranteed non-nil here (checked at build start).
+        let identity = signIdentity ?? ""
+        if let profile = provisioningProfile {
+            let embedded = app.appendingPathComponent("embedded.mobileprovision")
+            if FileManager.default.fileExists(atPath: embedded.path) {
+                try FileManager.default.removeItem(at: embedded)
+            }
+            try FileManager.default.copyItem(at: profile, to: embedded)
         } else {
-            print("note: not signed. Pass --sign <identity> for an installable build.")
+            print("""
+            note: no --provisioning-profile given. The .ipa is signed but lacks an embedded \
+            profile, so it won't install on a device. Pass --provisioning-profile + --entitlements \
+            (see docs/ios-setup.md), or use --simulator.
+            """)
         }
+        // codesign requires signing nested code (the SwiftPM resource
+        // bundles) before the containing app.
+        for entry in (try? FileManager.default.contentsOfDirectory(atPath: app.path)) ?? []
+            where entry.hasSuffix(".bundle")
+        {
+            try await Shell.run(
+                "/usr/bin/env",
+                ["codesign", "--force", "--sign", identity, app.appendingPathComponent(entry).path]
+            )
+        }
+        var codesignArgs = ["codesign", "--force", "--sign", identity]
+        if let ent = entitlements {
+            codesignArgs += ["--entitlements", ent.path, "--generate-entitlement-der"]
+        }
+        codesignArgs.append(app.path)
+        try await Shell.run("/usr/bin/env", codesignArgs)
         let payload = outputDir.appendingPathComponent("Payload")
         if FileManager.default.fileExists(atPath: payload.path) {
             try FileManager.default.removeItem(at: payload)

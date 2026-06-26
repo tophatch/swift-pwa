@@ -54,8 +54,19 @@ struct Build: AsyncParsableCommand {
     )
     var sign: String?
 
-    @Option(help: "Path to entitlements plist (macOS only).")
+    @Option(
+        help: "Path to an entitlements plist. macOS: passed to codesign. iOS (device): signed into the app — pair with --provisioning-profile."
+    )
     var entitlements: String?
+
+    @Option(
+        help: """
+        iOS device only: path to a provisioning profile (.mobileprovision). Embedded as \
+        embedded.mobileprovision and (with --entitlements + --sign) makes the .ipa installable \
+        on a device whose UDID the profile lists. See docs/ios-setup.md.
+        """
+    )
+    var provisioningProfile: String?
 
     @Option(
         help: """
@@ -181,6 +192,8 @@ struct Build: AsyncParsableCommand {
                 projectRoot: cwd,
                 outputDir: outputDir,
                 signIdentity: sign,
+                entitlements: entitlements.map { URL(fileURLWithPath: $0) },
+                provisioningProfile: provisioningProfile.map { URL(fileURLWithPath: $0) },
                 simulator: simulator
             )
             artifact = try await bundler.build()

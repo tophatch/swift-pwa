@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-06-26
+
 ### Added
 
 - **`macos.info_plist` / `ios.info_plist` — arbitrary `Info.plist` passthrough in `pwa.json`.** The generator emitted a fixed key set; anything it didn't model (App Transport Security, camera/mic usage strings, custom URL schemes) meant patching the built plist by hand. Now a JSON object on the `macos`/`ios` section is merged into the generated plist — after swift-pwa's own keys, so it can also override one — with nested objects/arrays supported. Use exact `Info.plist` key names. Example: `"macos": { "info_plist": { "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true } } }` (reach a local `http://localhost` dev service from the WebView).

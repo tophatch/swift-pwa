@@ -1,6 +1,10 @@
 import Foundation
 import SwiftPWACore
 
+#if canImport(FoundationNetworking)
+    import FoundationNetworking // URLSession / URLRequest live here on non-Apple platforms
+#endif
+
 #if canImport(CryptoKit)
     import CryptoKit
 #else

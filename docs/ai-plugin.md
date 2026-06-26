@@ -25,14 +25,17 @@ sugar.
 // Capability probe — cheap, call once at startup and route on `available`.
 const info = await __SWIFT_PWA__.invoke('ai.info', {});
 // → { available, backend, model?, streaming, structuredOutput,
-//     vision, imageGeneration }
+//     vision, imageGeneration, audioInput, audioGeneration }
 //   backend ∈ none | apple-foundation-models | gemini-nano | phi-silica
 //           | gemma-mlx | gemma-mediapipe | gemma-onnx | gemma-llamacpp
-//           | apple-image-playground | stable-diffusion-mlx | …
+//           | apple-image-playground | stable-diffusion-mlx
+//           | apple-speech | whisper-mlx | tts-mlx | …
 if (!info.available) {
     // fall back to your own (e.g. cloud) tier
 }
-// `vision` → image input is honored; `imageGeneration` → text-to-image output.
+// Capability flags gate the modalities:
+//   vision          → image input honored      imageGeneration → text→image
+//   audioInput      → audio input honored       audioGeneration → text→audio
 
 // One-shot text.
 const { text, backend } = await __SWIFT_PWA__.invoke('ai.generate', {
@@ -106,6 +109,52 @@ __SWIFT_PWA__.subscribe('ai.generateImageStream', { prompt }, (e) => {
 });
 ```
 
+### Audio input (phoneme evaluation, transcription)
+
+When `info.audioInput` is true, attach `audio` to any text command — the
+exact same shape as vision's `images`. Each clip is inline base64 or an
+on-disk `path`. The page can record with the WebView's own `MediaRecorder`
+(no native audio plumbing needed) and pass the blob; combine with a schema
+to get a structured pronunciation assessment back.
+
+```js
+const assessment = await __SWIFT_PWA__.invoke('ai.generateJSON', {
+    prompt: 'Score the pronunciation of "kiitos".',
+    audio: [{ path: dataDir + '/utterance.wav', mimeType: 'audio/wav' }],
+    schema: { type: 'object', required: ['overallScore', 'phonemes'] },
+});
+// → { overallScore, phonemes: [{ symbol, score }, …] }   (shape is yours)
+```
+
+### Audio generation (text-to-audio / TTS)
+
+When `info.audioGeneration` is true, `ai.generateAudio` turns text into
+audio (speak a word, read a passage). Like image generation: supply an
+`outputDirectory` to get a written file `path`, or omit it for inline
+base64. The streaming variant emits play-as-it-arrives `chunk`s.
+
+```js
+const { audio } = await __SWIFT_PWA__.invoke('ai.generateAudio', {
+    prompt: 'kiitos', voice: 'fi-female', language: 'fi-FI', speed: 0.9,
+    format: 'wav', outputDirectory: dataDir + '/tts',   // omit for inline base64
+});
+// → audio: { path?|dataBase64?, mimeType, durationMs }
+
+__SWIFT_PWA__.subscribe('ai.generateAudioStream', { prompt }, (e) => {
+    if (e.type === 'chunk') enqueue(e.dataBase64);  // play incrementally
+    else if (e.type === 'done') finish(e.audio);
+});
+```
+
+> **Live, continuous audio streaming** (push mic frames into an open
+> session for real-time incremental results) is **not** part of this
+> contract — the bridge is request → server-stream-out, with no
+> client→server push mid-subscription. That needs a bridge-level
+> bidirectional session primitive (a roadmap item, see below); the interim
+> pattern is web-side `MediaRecorder` timeslices → repeated `ai.generateJSON`
+> calls. Discrete record-then-evaluate (the phoneme-eval case) needs none
+> of that.
+
 ### Errors
 
 Failures cross the bridge as a `BridgeError` with a stable `code`:
@@ -140,6 +189,8 @@ public protocol AIBackend: Sendable {
     func ensureModel(_ request: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error>
     func generateImage(_ request: AIGenerateImageRequest) async throws -> AIGenerateImageResult
     func generateImageStream(_ request: AIGenerateImageRequest) -> AsyncThrowingStream<AIImageEvent, any Error>
+    func generateAudio(_ request: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult
+    func generateAudioStream(_ request: AIGenerateAudioRequest) -> AsyncThrowingStream<AIAudioChunk, any Error>
 }
 ```
 
@@ -158,11 +209,15 @@ whole `ai.*` command set:
   it for a text-to-image backend (then set `imageGeneration: true`).
 - **`generateImageStream`** defaults to wrapping `generateImage` in a
   single `done`. Override it to report per-step denoising progress.
+- **`generateAudio`** defaults to throwing `.unsupportedPlatform`. Override
+  it for a TTS / generative-audio backend (then set `audioGeneration: true`).
+- **`generateAudioStream`** defaults to wrapping `generateAudio` in a
+  single `done`. Override it to emit incremental audio chunks.
 
-**Vision input** needs no protocol method — it's the `images` field on the
-existing requests. A vision backend reads `request.images` (each an inline
-`dataBase64` or an on-disk `path`) and sets `vision: true`; others ignore
-it.
+**Vision and audio input** need no protocol method — they're the `images`
+and `audio` fields on the existing requests. A multimodal backend reads
+`request.images` / `request.audio` (each an inline `dataBase64` or an
+on-disk `path`) and sets `vision` / `audioInput`; others ignore them.
 
 Throw `AIError` from a backend — the plugin maps each case to the stable
 bridge code above (`.unavailable` → `E_AI_UNAVAILABLE`, etc.) at both the
@@ -220,6 +275,25 @@ Gemini Nano's vision variants, a vision Gemma), gated by the `vision` flag.
 | Apple | Android | Windows | Linux |
 | --- | --- | --- | --- |
 | Image Playground (`apple-image-playground`) / Stable Diffusion via MLX (`stable-diffusion-mlx`) | MediaPipe Image Generation (`stable-diffusion-mediapipe`) | Stable Diffusion via ONNX Runtime (`stable-diffusion-onnx`) | (ONNX / llama.cpp-adjacent) |
+
+**Audio** — input (`audioInput`: ASR / phoneme evaluation) and output
+(`audioGeneration`: TTS). On Apple, `Speech` / `AVSpeechSynthesizer`
+(`apple-speech`) for the system path, Whisper-via-MLX (`whisper-mlx`) and a
+TTS model (`tts-mlx`) for the portable path; equivalents on the other OSes.
+
+### Not in this contract (separate roadmap items)
+
+- **Live duplex audio streaming.** Continuous mic → incremental results
+  within an open session is not expressible on today's bridge (no
+  client→server push mid-subscription). It needs a bridge-level
+  bidirectional session primitive — broader than AI, so it's tracked
+  separately rather than designed speculatively here. Interim:
+  `MediaRecorder` timeslices → repeated `ai.generateJSON`.
+- **Native audio capture / playback (platform audio).** The `ai.*`
+  contract only moves audio *bytes*; the page already gets recordings from
+  the WebView's `MediaRecorder`, so discrete audio I/O needs no native
+  audio plumbing. Lower-latency native capture / playback / device routing
+  is a separate platform-plugin effort on the project roadmap.
 
 Like the zip backends (`ArchiveExtractor` in Core, `ZIPExtractor` in the
 optional `SwiftPWAArchive` target), each real backend lives in its own

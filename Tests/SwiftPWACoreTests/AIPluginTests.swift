@@ -112,6 +112,60 @@ private struct StreamingImageBackend: AIBackend {
     }
 }
 
+/// Audio-input capable: echoes the number of audio clips into the text, so
+/// audio threading (phoneme-eval shape) is observable.
+private struct AudioInputEchoBackend: AIBackend {
+    func info() async -> AICapabilities {
+        AICapabilities(available: true, backend: AIBackendID.appleSpeech, audioInput: true)
+    }
+
+    func generate(_ request: AIGenerateRequest) async throws -> AIGenerateResult {
+        AIGenerateResult(text: "audio:\(request.audio?.count ?? 0)", backend: AIBackendID.appleSpeech)
+    }
+}
+
+/// Text→audio (TTS) backend using the default (single `done`) stream.
+private struct AudioBackend: AIBackend {
+    func info() async -> AICapabilities {
+        AICapabilities(available: true, backend: AIBackendID.ttsMLX, audioGeneration: true)
+    }
+
+    func generate(_: AIGenerateRequest) async throws -> AIGenerateResult {
+        AIGenerateResult(text: "", backend: AIBackendID.ttsMLX)
+    }
+
+    func generateAudio(_: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+        AIGenerateAudioResult(
+            audio: AIGeneratedAudio(dataBase64: "UklGRg==", mimeType: "audio/wav", durationMs: 1200),
+            backend: AIBackendID.ttsMLX
+        )
+    }
+}
+
+/// TTS backend that emits incremental audio chunks.
+private struct StreamingAudioBackend: AIBackend {
+    func info() async -> AICapabilities {
+        AICapabilities(available: true, backend: "tts", audioGeneration: true)
+    }
+
+    func generate(_: AIGenerateRequest) async throws -> AIGenerateResult {
+        AIGenerateResult(text: "", backend: "tts")
+    }
+
+    func generateAudio(_: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+        AIGenerateAudioResult(audio: AIGeneratedAudio(dataBase64: "AAA="), backend: "tts")
+    }
+
+    func generateAudioStream(_: AIGenerateAudioRequest) -> AsyncThrowingStream<AIAudioChunk, any Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.chunk("AA==", mimeType: "audio/wav"))
+            continuation.yield(.chunk("BB==", mimeType: "audio/wav"))
+            continuation.yield(.done(audio: AIGeneratedAudio(path: "/out.wav"), backend: "tts"))
+            continuation.finish()
+        }
+    }
+}
+
 @Suite("AIPlugin")
 @MainActor
 struct AIPluginTests {
@@ -312,6 +366,76 @@ struct AIPluginTests {
         #expect(events.first?.step == 1)
         #expect(events.last?.images?.first?.dataBase64 == "final")
     }
+
+    // MARK: - Audio input (phoneme evaluation shape)
+
+    @Test("ai.info reports the audioInput flag")
+    func infoAudioInput() async throws {
+        let result = await dispatch(app(AudioInputEchoBackend()), "ai.info", "{}")
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AICapabilities.self, from: data).audioInput == true)
+    }
+
+    @Test("audio inputs thread through ai.generate to the backend")
+    func audioInputThreads() async throws {
+        let payload = #"{"prompt":"score this","audio":[{"path":"/utterance.wav","mimeType":"audio/wav"}]}"#
+        let result = await dispatch(app(AudioInputEchoBackend()), "ai.generate", payload)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AIGenerateResult.self, from: data).text == "audio:1")
+    }
+
+    // MARK: - Audio generation (TTS)
+
+    @Test("ai.info reports the audioGeneration flag")
+    func infoAudioGeneration() async throws {
+        let result = await dispatch(app(AudioBackend()), "ai.info", "{}")
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AICapabilities.self, from: data).audioGeneration == true)
+    }
+
+    @Test("ai.generateAudio on NoneBackend reports E_AI_UNAVAILABLE")
+    func generateAudioNone() async {
+        let result = await dispatch(app(NoneBackend()), "ai.generateAudio", #"{"prompt":"hello"}"#)
+        guard case let .failure(err) = result else { Issue.record("expected failure"); return }
+        #expect(err.code == AIError.unavailableCode)
+    }
+
+    @Test("ai.generateAudio on a non-audio backend reports E_UNIMPLEMENTED")
+    func generateAudioUnsupported() async {
+        let result = await dispatch(app(CannedBackend(["hi"])), "ai.generateAudio", #"{"prompt":"hello"}"#)
+        guard case let .failure(err) = result else { Issue.record("expected failure"); return }
+        #expect(err.code == BridgeError.unimplemented)
+    }
+
+    @Test("ai.generateAudio returns audio and backend")
+    func generateAudioOK() async throws {
+        let result = await dispatch(app(AudioBackend()), "ai.generateAudio", #"{"prompt":"hello","voice":"a"}"#)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        let out = try JSONDecoder().decode(AIGenerateAudioResult.self, from: data)
+        #expect(out.backend == AIBackendID.ttsMLX)
+        #expect(out.audio.mimeType == "audio/wav")
+        #expect(out.audio.durationMs == 1200)
+    }
+
+    @Test("default generateAudioStream emits a single done with the audio")
+    func defaultAudioStream() async throws {
+        let result = await dispatch(app(AudioBackend()), "ai.generateAudioStream", #"{"prompt":"hi"}"#)
+        guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
+        let events = try await collect(stream).map { try JSONDecoder().decode(AIAudioChunk.self, from: $0) }
+        #expect(events.count == 1)
+        #expect(events.first?.type == "done")
+        #expect(events.first?.audio?.mimeType == "audio/wav")
+    }
+
+    @Test("a TTS backend's stream override emits chunks then done")
+    func overriddenAudioStream() async throws {
+        let result = await dispatch(app(StreamingAudioBackend()), "ai.generateAudioStream", #"{"prompt":"hi"}"#)
+        guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
+        let events = try await collect(stream).map { try JSONDecoder().decode(AIAudioChunk.self, from: $0) }
+        #expect(events.map(\.type) == ["chunk", "chunk", "done"])
+        #expect(events.first?.dataBase64 == "AA==")
+        #expect(events.last?.audio?.path == "/out.wav")
+    }
 }
 
 // MARK: - Fallback unit tests (no plugin, no backend)
@@ -376,15 +500,22 @@ struct AIStructuredFallbackTests {
         }
     }
 
-    @Test("run threads input images through to generate (vision + structured)")
-    func threadsImages() async throws {
-        let request = AIGenerateJSONRequest(prompt: "x", schema: objectSchema, images: [.inline("abc"), .file("/p")])
+    @Test("run threads input images and audio through to generate (multimodal + structured)")
+    func threadsMedia() async throws {
+        let request = AIGenerateJSONRequest(
+            prompt: "x", schema: objectSchema,
+            images: [.inline("abc"), .file("/p")],
+            audio: [.file("/utterance.wav")]
+        )
         var seenImages: Int?
+        var seenAudio: Int?
         _ = try await AIStructuredFallback.run(request) { generated in
             seenImages = generated.images?.count
+            seenAudio = generated.audio?.count
             return AIGenerateResult(text: #"{"name":"x"}"#, backend: "t")
         }
         #expect(seenImages == 2)
+        #expect(seenAudio == 1)
     }
 }
 
@@ -423,6 +554,20 @@ struct AIWireContractTests {
         #expect(try JSONDecoder().decode(AIImageEvent.self, from: JSONEncoder().encode(progress)) == progress)
         let done = AIImageEvent.done(images: [AIGeneratedImage(dataBase64: "x")], backend: "sd")
         #expect(try JSONDecoder().decode(AIImageEvent.self, from: JSONEncoder().encode(done)) == done)
+    }
+
+    @Test("AIAudio / audio request / AIAudioChunk round-trip")
+    func audioTypes() throws {
+        let clip = AIAudio.file("/utterance.wav", mimeType: "audio/wav")
+        #expect(try JSONDecoder().decode(AIAudio.self, from: JSONEncoder().encode(clip)) == clip)
+
+        let req = AIGenerateAudioRequest(prompt: "hi", voice: "a", language: "fi-FI", speed: 1.0, format: "wav")
+        #expect(try JSONDecoder().decode(AIGenerateAudioRequest.self, from: JSONEncoder().encode(req)) == req)
+
+        let chunk = AIAudioChunk.chunk("AA==", mimeType: "audio/wav")
+        #expect(try JSONDecoder().decode(AIAudioChunk.self, from: JSONEncoder().encode(chunk)) == chunk)
+        let done = AIAudioChunk.done(audio: AIGeneratedAudio(path: "/o.wav"), backend: "tts")
+        #expect(try JSONDecoder().decode(AIAudioChunk.self, from: JSONEncoder().encode(done)) == done)
     }
 
     @Test("AIChunk done has a null text field")

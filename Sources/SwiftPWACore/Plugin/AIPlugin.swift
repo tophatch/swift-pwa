@@ -92,6 +92,24 @@ public struct AIPlugin: Plugin {
                 Self.mapping(backend.generateImageStream(req))
             }
         )
+
+        // Text→audio generation (TTS / generative audio). Default backend
+        // impl throws `unsupportedPlatform` until an audio backend is injected.
+        registry.register(
+            "ai.generateAudio",
+            typed: { (req: AIGenerateAudioRequest, _) async throws -> AIGenerateAudioResult in
+                try await Self.mapping { try await backend.generateAudio(req) }
+            }
+        )
+
+        // Streaming audio generation: incremental `chunk`s of audio bytes,
+        // then a terminal `done` carrying the final audio.
+        registry.registerStream(
+            "ai.generateAudioStream",
+            typed: { (req: AIGenerateAudioRequest, _) -> AsyncThrowingStream<AIAudioChunk, any Error> in
+                Self.mapping(backend.generateAudioStream(req))
+            }
+        )
     }
 
     // MARK: - AIError → BridgeError mapping

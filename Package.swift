@@ -353,20 +353,13 @@ let package = Package(
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
                 .product(name: "Crypto", package: "swift-crypto")
             ],
-            // Vendored Gradle 8.10.2 wrapper that the Android bundler
-            // emits alongside the generated `MainActivity.kt` /
-            // `build.gradle.kts` so users can run `./gradlew
-            // assembleDebug` straight after `swift-pwa build --target
-            // android` — no separate Gradle install required. The
-            // four files (gradlew shell script, gradlew.bat, the
-            // version-pinning gradle-wrapper.jar, and
-            // gradle-wrapper.properties) are what `gradle wrapper`
-            // emits; we vendor them so the scaffold is offline-
-            // complete and the user doesn't need a system Gradle to
-            // bootstrap.
-            resources: [
-                .copy("Bundlers/AndroidWrapperResources")
-            ],
+            // No `resources:` on purpose. The vendored Gradle wrapper (pinned
+            // version, in `Vendor/gradle-wrapper/`) is base64-embedded into
+            // `Generated/GradleWrapperData.swift` instead of shipped as a
+            // SwiftPM resource bundle — so a prebuilt single-file `swift-pwa`
+            // binary stages `./gradlew` too, and `Bundle.module` (which
+            // *traps* when the bundle isn't co-located) is never synthesized
+            // for this target. Regenerate via Scripts/regenerate-gradle-wrapper.sh.
             swiftSettings: swiftSettings
         ),
 

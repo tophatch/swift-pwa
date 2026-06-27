@@ -10,13 +10,63 @@ import SwiftPWAModelStore // ModelSpec
     import SwiftPWALlama
 #endif
 
+#if canImport(SwiftPWALlama)
+    /// The downloadable model (tiny, ~400 MB, Apache-2.0) — shared by the
+    /// AIPlugin wiring and the headless smoke test.
+    let factModelSpec = ModelSpec(
+        url: URL(
+            string: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/"
+                + "resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
+        )!,
+        sha256: "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
+        fileName: "qwen2.5-0.5b-instruct-q4_k_m.gguf"
+    )
+#endif
+
 @main
 struct CritterFactsApp {
     static func main() async throws {
+        #if canImport(SwiftPWALlama)
+            // Headless self-test: build the backend, generate one fact, print it,
+            // and exit — no WebView. Verifies the on-device path end to end
+            // (including a packaged AppImage's bundled Vulkan loader) without
+            // having to drive the UI:
+            //   CRITTERFACTS_SMOKE=1 [SMOKE_MODEL=/path/to.gguf] ./CritterFacts…
+            if ProcessInfo.processInfo.environment["CRITTERFACTS_SMOKE"] != nil {
+                try await runSmoke()
+                return
+            }
+        #endif
         let runtime = try SwiftPWA.runtime()
         try runtime.run(configure)
     }
 }
+
+#if canImport(SwiftPWALlama)
+    /// One headless generation. Uses `SMOKE_MODEL` (a local GGUF path) when set,
+    /// else downloads `factModelSpec`. Prints the fact; a `CRITTERFACTS_SMOKE_OK`
+    /// line on stderr is the success marker. Throws on failure (non-zero exit).
+    func runSmoke() async throws {
+        let backend: LlamaBackend
+        if let path = ProcessInfo.processInfo.environment["SMOKE_MODEL"], !path.isEmpty {
+            backend = LlamaBackend(modelPath: path)
+        } else {
+            let dir = FileManager.default.temporaryDirectory
+                .appendingPathComponent("critterfacts-smoke", isDirectory: true)
+            backend = LlamaBackend(model: factModelSpec, cacheDirectory: dir)
+            for try await _ in backend.ensureModel(AIEnsureModelRequest()) {} // drive download
+        }
+        let result = try await backend.generate(AIGenerateRequest(
+            system: "You are a witty zoologist. Reply with ONE short, surprising, true "
+                + "sentence. No preamble, no lists, no quotation marks.",
+            prompt: "Tell me a fun fact about the octopus.",
+            maxTokens: 60,
+            temperature: 0.7
+        ))
+        FileHandle.standardError.write(Data("CRITTERFACTS_SMOKE_OK backend=\(result.backend)\n".utf8))
+        print(result.text)
+    }
+#endif
 
 /// Cross-platform configure closure. `@MainActor` to match the runtime's
 /// `run(_:)` signature.
@@ -30,15 +80,7 @@ func configure(_ ctx: any AppContext) throws {
         // bigger model just means a longer first-run download. On Apple it runs
         // Metal-accelerated; on Linux, Vulkan (GPU if present, else CPU).
         let modelsDir = ctx.dataDirectory().appendingPathComponent("models", isDirectory: true)
-        let spec = ModelSpec(
-            url: URL(
-                string: "https://huggingface.co/Qwen/Qwen2.5-0.5B-Instruct-GGUF/"
-                    + "resolve/main/qwen2.5-0.5b-instruct-q4_k_m.gguf"
-            )!,
-            sha256: "74a4da8c9fdbcd15bd1f6d01d621410d31c6fc00986f5eb687824e7b93d7a9db",
-            fileName: "qwen2.5-0.5b-instruct-q4_k_m.gguf"
-        )
-        ctx.use(AIPlugin(LlamaBackend(model: spec, cacheDirectory: modelsDir)))
+        ctx.use(AIPlugin(LlamaBackend(model: factModelSpec, cacheDirectory: modelsDir)))
     #else
         print(
             "CritterFacts: built without the llama backend. Build with "

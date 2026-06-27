@@ -70,8 +70,16 @@ public struct LlamaBackend: AIBackend {
     }
 
     public func info() async -> AICapabilities {
+        // A downloadable backend is "available" even before its model file
+        // exists: it can fetch the model on first use via `ai.ensureModel`. The
+        // contract tells pages to route on `available`, so reporting `false`
+        // here for a not-yet-downloaded model would be indistinguishable from
+        // "no backend installed" — and a page that disables itself on
+        // `!available` could then never trigger the download (the deadlock the
+        // CritterFacts demo hit). The fixed-path initializer has no way to
+        // obtain a missing model, so there it stays gated on the file existing.
         AICapabilities(
-            available: engine.modelFileExists(),
+            available: engine.modelFileExists() || download != nil,
             backend: AIBackendID.gemmaLlamaCpp,
             model: modelName,
             streaming: true,

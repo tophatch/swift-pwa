@@ -176,8 +176,11 @@ public extension AIBackend {
 /// feature-gating (e.g. don't request streaming UI when `streaming` is
 /// false).
 public struct AICapabilities: Sendable, Codable, Equatable {
-    /// Whether on-device inference is usable right now. When `false` the
-    /// app falls back to its own (e.g. cloud) tier.
+    /// Whether on-device inference is usable here. When `false` the app
+    /// falls back to its own (e.g. cloud) tier. A backend with a
+    /// *downloadable* model reports `true` even before the one-time fetch —
+    /// the model arrives via `ai.ensureModel` on first use — so a page can
+    /// route on `available` without deadlocking the download.
     public let available: Bool
     /// Which backend answered — one of `AIBackendID`. `"none"` when no
     /// usable backend is installed.

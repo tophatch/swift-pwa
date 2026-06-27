@@ -1,6 +1,7 @@
 import Foundation
 import SwiftPWACore
 @testable import SwiftPWALlama
+import SwiftPWAModelStore // ModelSpec
 import Testing
 
 /// End-to-end generation tests against a real GGUF model. They **skip** unless
@@ -31,11 +32,29 @@ struct LlamaBackendTests {
         #expect(caps.structuredOutput)
     }
 
-    @Test("info reports unavailable for a missing model")
+    @Test("info reports unavailable for a missing fixed-path model")
     func infoMissing() async {
         let backend = LlamaBackend(modelPath: "/no/such/model.gguf")
         let caps = await backend.info()
         #expect(!caps.available)
+    }
+
+    @Test("info reports available for a downloadable model before it is fetched")
+    func infoDownloadableNotYetFetched() async throws {
+        // A downloadable backend can obtain its model via ai.ensureModel, so it
+        // is "available" even when the file isn't on disk yet — otherwise a page
+        // routing on `available` could never trigger the download.
+        let spec = try ModelSpec(
+            url: #require(URL(string: "https://example.invalid/model.gguf")),
+            sha256: String(repeating: "0", count: 64),
+            fileName: "model.gguf"
+        )
+        let cache = FileManager.default.temporaryDirectory
+            .appendingPathComponent("llama-info-test-\(UUID().uuidString)", isDirectory: true)
+        let backend = LlamaBackend(model: spec, cacheDirectory: cache)
+        let caps = await backend.info()
+        #expect(caps.available)
+        #expect(caps.backend == AIBackendID.gemmaLlamaCpp)
     }
 
     @Test("generate completes a factual prompt")

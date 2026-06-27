@@ -316,9 +316,16 @@
                 backend, streamed with HTTP range requests. The sample pack is
                 staged to a real path by a small <code>demo.stageSamplePack</code>
                 command (standing in for <code>dialog.openFile</code>).</p>
+                <p><strong>Import pack</strong> exercises the real flow:
+                <code>dialog.openFile</code> → <code>fs.listZip</code> /
+                <code>fs.extractZip</code> on the picked archive. On Android the
+                pick is a <code>content://</code> SAF URI fed straight to the zip
+                ops (read off-bridge via the ContentResolver); on desktop it's a
+                real path. Pick any <code>.zip</code>.</p>
                 <div class="actions">
                     <button id="pack-list" data-requires="fs.listZip">Peek pack</button>
                     <button id="pack-extract" data-requires="fs.extractZip">Install &amp; show</button>
+                    <button id="pack-import" data-requires="dialog.openFile">Import pack (pick a .zip)</button>
                 </div>
                 <progress id="pack-progress" value="0" max="1" hidden></progress>
                 <div id="pack-result" hidden style="margin-top:12px">
@@ -662,6 +669,32 @@
                     log("content pack failed: " + (e.message || e));
                 }
             },
+            packImport: async () => {
+                // The real import flow: let the user pick a .zip, then list +
+                // extract it directly. On Android dialog.openFile returns a
+                // content:// SAF URI — fed straight to fs.listZip/extractZip,
+                // which read it off-bridge (no readBinary/base64 materialize).
+                try {
+                    const picked = await __SWIFT_PWA__.invoke("dialog.openFile", {
+                        title: "Pick a .zip to import",
+                        multiple: false,
+                        filters: [{ name: "Zip archives", extensions: ["zip"] }],
+                    });
+                    if (!picked.paths.length) { log("import: cancelled"); return; }
+                    const from = picked.paths[0];
+                    log("import: picked " + from);
+
+                    const { entries } = await __SWIFT_PWA__.invoke("fs.listZip", { from });
+                    log("fs.listZip → " + entries.length + " entries: " +
+                        entries.slice(0, 8).map((e) => e.path).join(", ") + (entries.length > 8 ? " …" : ""));
+
+                    const { destPath } = await __SWIFT_PWA__.invoke("demo.importDest");
+                    const r = await __SWIFT_PWA__.invoke("fs.extractZip", { from, to: destPath });
+                    log("fs.extractZip → " + r.entries + " entries, " + r.uncompressedBytes + "B into " + destPath);
+                } catch (e) {
+                    log("import failed: " + (e.message || e));
+                }
+            },
             bioStatus: async () => {
                 const r = await __SWIFT_PWA__.invoke("biometric.canAuthenticate");
                 if (r.available) {
@@ -860,6 +893,7 @@
         document.getElementById("fs-remove").onclick = actions.fsRemove;
         document.getElementById("pack-list").onclick    = actions.packList;
         document.getElementById("pack-extract").onclick  = actions.packExtract;
+        document.getElementById("pack-import").onclick   = actions.packImport;
         document.getElementById("bio-status").onclick = actions.bioStatus;
         document.getElementById("bio-auth").onclick   = actions.bioAuth;
         document.getElementById("updater-check").onclick   = actions.updaterCheck;

@@ -110,6 +110,16 @@ func configure(_ ctx: any AppContext) throws {
         return StageResult(zipPath: zipURL.path, destPath: sampleDest.path)
     })
 
+    // Destination for the *user-picked* import flow (the "Import pack" button):
+    // a real path under the `/packs` mount that `fs.extractZip` writes into.
+    // The button feeds `dialog.openFile`'s result straight to `fs.extractZip`
+    // as `from` — on Android that's a `content://` SAF URI, read off-bridge via
+    // the ContentResolver; on desktop it's a real path. Both land here.
+    let importDest = packsDir.appendingPathComponent("imported", isDirectory: true)
+    ctx.registry.register("demo.importDest", typed: { (_: EmptyArgs, _) -> ImportDestResult in
+        ImportDestResult(destPath: importDest.path)
+    })
+
     // Auto-updater. The real backends — `AppleUpdater`,
     // `LinuxAppImageUpdater`, `WindowsUpdater` — only do
     // useful things from inside a bundled artifact pointing
@@ -144,6 +154,12 @@ struct NowResult: Codable, Sendable {
 /// and where the demo should extract it (a `/packs/sample` mount on disk).
 struct StageResult: Codable, Sendable {
     let zipPath: String
+    let destPath: String
+}
+
+/// Returned by `demo.importDest`: where the user-picked-pack import flow
+/// extracts to (a `/packs/imported` mount on disk).
+struct ImportDestResult: Codable, Sendable {
     let destPath: String
 }
 

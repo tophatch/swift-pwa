@@ -41,6 +41,18 @@ struct IOSSigningTests {
         #expect(message.contains("--simulator"))
     }
 
+    @Test("the xcodebuild build phase is always unsigned (never passes CODE_SIGN_IDENTITY)")
+    func buildPhaseIsUnsigned() {
+        // Regression guard: 0.7.0 passed CODE_SIGN_IDENTITY to the build phase,
+        // which fails for a SwiftPM-target product without a DEVELOPMENT_TEAM.
+        // swift-pwa signs the assembled .app post-assembly, so the build phase
+        // must stay unsigned.
+        let args = IPABundler.buildPhaseSigningArgs
+        #expect(args.contains("CODE_SIGNING_ALLOWED=NO"))
+        #expect(args.contains("CODE_SIGNING_REQUIRED=NO"))
+        #expect(!args.contains { $0.hasPrefix("CODE_SIGN_IDENTITY") })
+    }
+
     @Test("build parses --provisioning-profile and --entitlements")
     func buildParsesSigningFlags() throws {
         let cmd = try Build.parse([

@@ -108,11 +108,38 @@ swift-pwa build --target ios \
 # → build/MyApp.ipa  (profile embedded, signed with entitlements)
 ```
 
-The bundler embeds the profile, signs the nested resource bundles, then
-signs the `.app` with your entitlements (`--generate-entitlement-der`). Run
-`swift-pwa doctor --target ios` first — it checks for a valid signing
-identity and flags the classic missing **Apple WWDR intermediate** (a cert
-that's present but untrusted won't sign).
+The bundler runs the `xcodebuild` phase **unsigned** (`CODE_SIGNING_ALLOWED=NO`)
+and does *all* signing afterward on the assembled `.app`: it embeds the
+profile, signs the nested resource bundles, then signs the app with your
+entitlements (`--generate-entitlement-der`). Building unsigned matters — the
+product is a SwiftPM target, which `xcodebuild` can't auto-provision, so
+passing a signing identity to the build phase would fail with *"requires a
+development team"* before the post-assembly signing runs. Because we sign
+after assembly, **no `DEVELOPMENT_TEAM` or `.xcodeproj` is needed** — a
+free-personal-team identity works. Run `swift-pwa doctor --target ios` first —
+it checks for a valid signing identity and flags the classic missing **Apple
+WWDR intermediate** (a cert that's present but untrusted won't sign).
+
+### `--team`: fewer flags when you already have signing set up
+
+If you've already got Xcode-managed signing (an identity in your keychain and
+an installed provisioning profile for the app's bundle id — see below), pass
+just your 10-character **Team ID** and swift-pwa fills in the rest:
+
+```bash
+swift-pwa build --target ios --team ABCDE12345
+# → selects that team's "Apple Development" identity,
+#   finds a matching installed .mobileprovision,
+#   derives entitlements from it, then signs as usual.
+```
+
+It only fills the inputs you didn't pass — any explicit `--sign` /
+`--provisioning-profile` / `--entitlements` wins. It does **not** create a
+profile from nothing (a SwiftPM package has no app-target Xcode project for
+`xcodebuild` to auto-provision); if no installed profile matches, it says so
+and you fall back to the explicit flags. Find your Team ID with
+`security find-identity -v -p codesigning` (the `(……)` suffix) or in the Apple
+Developer portal.
 
 ### Getting a profile + entitlements
 

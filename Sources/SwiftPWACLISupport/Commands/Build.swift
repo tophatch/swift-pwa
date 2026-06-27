@@ -70,6 +70,18 @@ struct Build: AsyncParsableCommand {
 
     @Option(
         help: """
+        iOS device only: a 10-character Apple Developer Team ID. A convenience that fills in \
+        the signing inputs you didn't pass explicitly — it selects that team's "Apple \
+        Development" identity (so --sign is optional) and finds an installed provisioning \
+        profile matching the app's bundle id (so --provisioning-profile / --entitlements are \
+        optional). Requires a profile Xcode/the portal already created for the bundle id; it \
+        does not create one. Explicit flags win. See docs/ios-setup.md.
+        """
+    )
+    var team: String?
+
+    @Option(
+        help: """
         macOS only: notarize the signed .app and staple the ticket, using this `notarytool` \
         keychain-profile name (create one once with `xcrun notarytool store-credentials`). \
         Requires --sign. Automates submit → wait → staple.
@@ -189,13 +201,42 @@ struct Build: AsyncParsableCommand {
             )
             artifact = try await bundler.build()
         case .ios:
+            var signIdentity = sign
+            var profileURL = provisioningProfile.map { URL(fileURLWithPath: $0) }
+            var entitlementsURL = entitlements.map { URL(fileURLWithPath: $0) }
+            // --team fills in only the signing inputs not passed explicitly
+            // (explicit flags win). Device builds only — the simulator skips
+            // signing entirely.
+            if let team, !simulator {
+                let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
+                let resolved = await IOSSigning.resolve(team: team, bundleID: bundleID, scratch: outputDir)
+                if signIdentity == nil, let id = resolved.identity {
+                    signIdentity = id
+                    print("swift-pwa: --team \(team) → signing identity \"\(id)\"")
+                }
+                if profileURL == nil, let profile = resolved.profile {
+                    profileURL = profile
+                    print("swift-pwa: --team \(team) → provisioning profile \(profile.lastPathComponent)")
+                }
+                if entitlementsURL == nil, let ent = resolved.entitlements {
+                    entitlementsURL = ent
+                    print("swift-pwa: --team \(team) → entitlements derived from the profile")
+                }
+                if signIdentity == nil || profileURL == nil {
+                    print("""
+                    swift-pwa: --team \(team) couldn't resolve \
+                    \(signIdentity == nil ? "a signing identity" : "a provisioning profile") — \
+                    pass it explicitly, or create one once in Xcode (see docs/ios-setup.md).
+                    """)
+                }
+            }
             let bundler = IPABundler(
                 manifest: pwa,
                 projectRoot: cwd,
                 outputDir: outputDir,
-                signIdentity: sign,
-                entitlements: entitlements.map { URL(fileURLWithPath: $0) },
-                provisioningProfile: provisioningProfile.map { URL(fileURLWithPath: $0) },
+                signIdentity: signIdentity,
+                entitlements: entitlementsURL,
+                provisioningProfile: profileURL,
                 simulator: simulator
             )
             artifact = try await bundler.build()

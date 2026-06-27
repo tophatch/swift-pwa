@@ -133,6 +133,15 @@ struct Build: AsyncParsableCommand {
     )
     var bootstrapWebview2: Bool = false
 
+    @Flag(
+        help: """
+        Windows portable only: embed web/ into the .exe and emit a single \
+        self-contained .exe instead of a folder. The runtime serves the bundle \
+        from memory. Not compatible with --package-format msix.
+        """
+    )
+    var singleFile: Bool = false
+
     @Option(
         help: """
         Comma-separated Android ABIs to include (e.g. arm64-v8a,x86_64). Overrides pwa.json's \
@@ -261,6 +270,12 @@ struct Build: AsyncParsableCommand {
                 )
             }
             let archValue = try AppxManifestGenerator.Architecture.parse(arch)
+            if singleFile, format == .msix {
+                throw ValidationError(
+                    "swift-pwa: --single-file is for the portable format; MSIX already packages "
+                        + "everything into one installable. Drop --single-file or --package-format msix."
+                )
+            }
             let bundler = WindowsBundler(
                 manifest: pwa,
                 projectRoot: cwd,
@@ -268,7 +283,8 @@ struct Build: AsyncParsableCommand {
                 packageFormat: format,
                 arch: archValue,
                 bootstrapWebView2: bootstrapWebview2,
-                signIdentity: sign
+                signIdentity: sign,
+                singleFile: singleFile
             )
             artifact = try await bundler.build()
         case .android:

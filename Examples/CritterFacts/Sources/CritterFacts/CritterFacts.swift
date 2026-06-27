@@ -101,6 +101,10 @@ func configure(_ ctx: any AppContext) throws {
 /// Locates the bundled `web/` folder: the `.app` resource bundle when built by
 /// `swift-pwa build`, else the SwiftPM resource bundle under plain `swift run`.
 func locateWebRoot() -> URL {
+    // Single-file build (Windows `--single-file`): web/ is embedded in the exe
+    // and served from memory, so the backend ignores this path — return a
+    // placeholder without touching the (absent) resource bundle.
+    if EmbeddedWebAssets.isPresent { return URL(fileURLWithPath: ".") }
     let fm = FileManager.default
     if let main = Bundle.main.resourceURL?.appendingPathComponent("web"),
        fm.fileExists(atPath: main.path) {

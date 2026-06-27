@@ -102,12 +102,16 @@ enum LlamaLinuxArtifact {
     // MARK: - helpers
 
     private static func currentArch() -> String {
-        var u = utsname()
-        uname(&u)
-        return withUnsafeBytes(of: &u.machine) { raw -> String in
-            let ptr = raw.baseAddress!.assumingMemoryBound(to: CChar.self)
-            return String(cString: ptr)
-        }
+        // Compile-time arch — the CLI runs natively on its build host, so this
+        // is the host arch, and it's portable (no `uname`, which isn't in scope
+        // on Windows where this file still has to compile).
+        #if arch(x86_64)
+            return "x86_64"
+        #elseif arch(arm64)
+            return "aarch64"
+        #else
+            return "unknown"
+        #endif
     }
 
     private static func cacheRoot() -> URL {

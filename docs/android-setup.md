@@ -598,7 +598,12 @@ without further configuration.
   through `AndroidContentResolver` (a `FsContentResolver` registered
   process-wide by `AndroidAppContext`), so apps can pass a
   `dialog.openFile` result straight to `fs.readBinary` without
-  branching on prefix. `fs.mkdir` / `remove` / `readDir` / `copy` /
+  branching on prefix. `fs.listZip` / `fs.extractZip` likewise accept a
+  `content://` archive as their `from`: the SAF pick is read off-bridge via
+  the `ContentResolver` (a `ZipInputStream`), so a user-picked pack imports
+  directly with no `readBinary`→`writeBinary` materialize — though the
+  extract **destination** must still be a real path (SAF exposes no writable
+  tree). `fs.mkdir` / `remove` / `readDir` / `copy` /
   `rename` deliberately reject `content://` URIs with a clear error
   (`SAF doesn't expose this operation`) rather than silently
   misbehaving — SAF doesn't have directory-style POSIX semantics for
@@ -631,7 +636,9 @@ without further configuration.
   mismatches), so the Android backend routes extraction *and creation* to
   Kotlin's `java.util.zip` over the JNI bridge (`AndroidArchiveExtractor`,
   with the traversal / symlink / zip-bomb guards enforced Kotlin-side).
-  One create caveat: `compression: "stored"` maps to a single-pass
+  `extractZip` / `listZip` also take a `content://` source directly (a SAF
+  pick) — see the SAF `content://` note above — so importing a user-picked
+  pack needs no materialize step. One create caveat: `compression: "stored"` maps to a single-pass
   deflate-level-0 entry (java.util.zip's true STORED method needs a CRC
   pre-pass — a second read of every file — which a multi-GB export can't
   afford); the output is a valid zip either way. Apps select it per

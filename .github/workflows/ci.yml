@@ -126,50 +126,37 @@ jobs:
         run: LIBRARY_PATH="$PWD/Vendor/llama-linux:${LIBRARY_PATH:-}" swift test --filter SwiftPWALlamaTests -v
 
   windows-llama:
-    # Windows coverage for the opt-in llama.cpp backend. Unlike macos-/linux-llama
-    # this is a LINK CHECK, not a test run: SwiftPM's swift-testing discovery emits
-    # 0-byte stubs on Windows (see the `windows` job), so we can't *run*
-    # SwiftPWALlamaTests — but `swift build --build-tests` still compiles + links
-    # the test bundle, which is what exercises the `.systemLibrary` CLlama target
-    # and the per-arch llama link settings. No GPU on the runners; runtime GPU
-    # enumeration only happens on device (x64: bmsfmv3; arm64: a Snapdragon X box).
+    # Windows coverage for the opt-in llama.cpp backend (x64 / Vulkan). Unlike
+    # macos-/linux-llama this is a LINK CHECK, not a test run: SwiftPM's
+    # swift-testing discovery emits 0-byte stubs on Windows (see the `windows`
+    # job), so we can't *run* SwiftPWALlamaTests — but `swift build --build-tests`
+    # still compiles + links the test bundle, which is what exercises the
+    # `.systemLibrary` CLlama target and the `llama.lib` / `vulkan-1.lib` link
+    # settings. No GPU on the runner; runtime Vulkan enumeration only happens on
+    # device (bmsfmv3). Pinned to windows-2022 for the same MSVC/Clang-STL reason
+    # as the `windows` job.
     #
-    # Two arches, mirroring llama-windows.yml:
-    #   - x64   → Vulkan build on windows-2022 (links llama.lib + vulkan-1.lib).
-    #   - arm64 → CPU-only build NATIVELY on windows-11-arm (links llama.lib only,
-    #             no Vulkan SDK). Proves the arm64 Package.swift link path + the
-    #             `-Arch arm64` build script.
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x64
-            runner: windows-2022
-            gpu: true
-            # Pinned to 6.1.2 for the MSVC/Clang-STL reason the `windows` job documents.
-            swift_version: swift-6.1.2-release
-            swift_build: 6.1.2-RELEASE
-          - arch: arm64
-            runner: windows-11-arm
-            gpu: false
-            # arm64 needs a NATIVE arm64 Windows toolchain — a mismatched x64
-            # Swift against the arm64 MSVC env can't even compile the manifest
-            # (lld-link: msvcrt.lib machine type arm64 conflicts with x64). 6.3.1
-            # is the version the Snapdragon box verified for aarch64-windows-msvc.
-            swift_version: swift-6.3.1-release
-            swift_build: 6.3.1-RELEASE
-    runs-on: ${{ matrix.runner }}
+    # x64 ONLY. The arm64 (Snapdragon X) build is real and device-verified — built
+    # (clang-cl, CPU-only), linked, and run on a Snapdragon X box — but it has NO
+    # CI leg yet: GitHub's windows-11-arm runner can't host a usable Swift
+    # toolchain. gha-setup-swift installs an x64 toolchain there at 6.1.2 (the
+    # arm64 MSVC env then can't even link the manifest: "msvcrt.lib machine type
+    # arm64 conflicts with x64"), and the native arm64 toolchain at 6.3.1 crashes
+    # on launch (access violation, 0xC0000005). Revisit when the arm64
+    # Swift-on-Windows toolchain is reliably installable in the runner image; the
+    # build script + Package.swift arm64 paths are exercised on-device meanwhile.
+    runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
-      - name: Set up MSVC environment (${{ matrix.arch }})
+      - name: Set up MSVC environment (x64)
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: ${{ matrix.arch }}
+          arch: x64
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          swift-version: ${{ matrix.swift_version }}
-          swift-build: ${{ matrix.swift_build }}
+          swift-version: swift-6.1.2-release
+          swift-build: 6.1.2-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         # The full package graph compiles CWebView2Shim, which needs these on
@@ -179,9 +166,8 @@ jobs:
           nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
           nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
       - name: Install the Vulkan SDK (LunarG silent installer)
-        # x64 only — provides glslc + SPIRV-Headers (build llama.lib) and
-        # vulkan-1.lib (the test-bundle link). The arm64 build is CPU-only.
-        if: matrix.gpu
+        # Provides glslc + SPIRV-Headers (build llama.lib) and vulkan-1.lib (the
+        # test-bundle link). Mirrors llama-windows.yml.
         shell: pwsh
         run: |
           $url = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe'
@@ -190,31 +176,31 @@ jobs:
             -ArgumentList '--accept-licenses','--default-answer','--confirm-command','install'
           $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
           "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-      - name: Cache prebuilt llama.lib (Windows ${{ matrix.arch }})
+      - name: Cache prebuilt llama.lib (Windows/Vulkan)
         id: llama-cache
         uses: actions/cache@v4
         with:
           path: Vendor/llama-windows
-          # Keyed on the build script (pins the llama.cpp commit) + arch.
-          key: llama-windows-${{ matrix.arch }}-${{ hashFiles('Scripts/build-llama-windows.ps1') }}
-      - name: Build llama.lib (static)
+          # Keyed on the build script, which pins the llama.cpp commit.
+          key: llama-windows-x64-${{ hashFiles('Scripts/build-llama-windows.ps1') }}
+      - name: Build llama.lib (Vulkan, static)
         if: steps.llama-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        run: pwsh Scripts/build-llama-windows.ps1 -Arch ${{ matrix.arch }}
+        run: pwsh Scripts/build-llama-windows.ps1 -Arch x64
       - name: Add WebView2 / WIL / llama.lib to INCLUDE / LIB
         shell: pwsh
         run: |
           $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
           $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
-          $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\${{ matrix.arch }}"
+          $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
           $llamaLib    = "$pwd\Vendor\llama-windows"
-          $vulkanLib   = if ($env:VULKAN_SDK) { "$env:VULKAN_SDK\Lib" } else { '' }  # vulkan-1.lib (x64 only)
+          $vulkanLib   = "$env:VULKAN_SDK\Lib"   # vulkan-1.lib (loader import lib)
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$llamaLib;$vulkanLib;$env:LIB"
       - name: Build + link-check SwiftPWALlama (gate on)
-        # SWIFT_PWA_LLAMA puts the target in the graph; llama.lib (+ vulkan-1.lib
-        # on x64) resolve off LIB. `--build-tests` links SwiftPWALlamaTests,
-        # exercising the systemLibrary + linker settings without running anything.
+        # SWIFT_PWA_LLAMA puts the target in the graph; llama.lib / vulkan-1.lib
+        # resolve off LIB. `--build-tests` links SwiftPWALlamaTests, exercising
+        # the systemLibrary + linker settings without running anything.
         timeout-minutes: 30
         env:
           SWIFT_PWA_LLAMA: "1"

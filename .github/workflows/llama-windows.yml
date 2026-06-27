@@ -62,20 +62,21 @@ jobs:
           Write-Host "SDK at $($sdk.FullName)"
           "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Set up Swift (arm64 — provides a native arm64 clang-cl)
+      - name: Verify a native arm64 clang-cl is available
         # arm64 only: ggml-cpu hard-errors under MSVC on ARM ("use clang"), so the
-        # build script drives the compile with clang-cl. The Swift toolchain ships
-        # a native-arm64 clang-cl in the same usr\bin as swift.exe, which the
-        # script derives from `swift` — the exact toolchain the Snapdragon-box
-        # build verified. (x64 uses MSVC and needs no Swift here.)
+        # build script drives the compile with clang-cl. The windows-11-arm runner
+        # image ships a native-arm64 LLVM on PATH (C:\Program Files\LLVM\bin), which
+        # the script resolves — no Swift toolchain needed (and the arm64 Swift
+        # toolchain isn't reliably installable in CI anyway: x64-mismatch at 6.1.2,
+        # launch crash at 6.3.1). This step just fails early + legibly if the image
+        # ever drops LLVM. x64 uses MSVC and skips it.
         if: ${{ !matrix.gpu }}
-        uses: compnerd/gha-setup-swift@main
-        with:
-          # A NATIVE arm64 toolchain (6.3.1, box-verified for aarch64-windows-msvc)
-          # so its bundled clang-cl defaults to arm64 — an x64 clang-cl would emit
-          # x64 objects on this runner. (x64 leg uses MSVC and skips this step.)
-          swift-version: swift-6.3.1-release
-          swift-build: 6.3.1-RELEASE
+        shell: pwsh
+        run: |
+          $cc = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
+          if (-not $cc) { throw "clang-cl not on PATH — the build script needs it for the arm64 (ggml-cpu) build." }
+          Write-Host "clang-cl: $($cc.Source)"
+          & $cc.Source --version
 
       - name: Build llama.lib (static)
         id: build

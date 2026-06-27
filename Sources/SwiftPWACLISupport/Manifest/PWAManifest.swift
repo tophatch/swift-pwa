@@ -133,8 +133,25 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Foundation Models don't need this.
         public var localLlama: Bool?
 
-        public init(localLlama: Bool? = nil) {
+        /// Bundle the **Android Gemini Nano** backend (`SwiftPWAGeminiNano` /
+        /// `GeminiNanoBackend`) into the build — the platform built-in
+        /// on-device model (via ML Kit GenAI's Prompt API, backed by AICore),
+        /// the Android counterpart to Apple Foundation Models. When `true` on
+        /// `--target android`, `swift-pwa build` sets `SWIFT_PWA_GEMINI_NANO=1`
+        /// for the underlying `swift build` (so SwiftPM pulls in the
+        /// `SwiftPWAGeminiNano` target) **and** the generated Gradle scaffold
+        /// adds the `com.google.mlkit:genai-prompt` dependency + the Kotlin
+        /// dispatch the backend RPCs into. The app then wires
+        /// `ctx.use(AIPlugin(GeminiNanoBackend()))`.
+        ///
+        /// No app-shipped weights — AICore manages the model and downloads it
+        /// on demand (surfaced through `ai.ensureModel`). Off by default.
+        /// **Android only**; ignored (with a warning) for other targets.
+        public var geminiNano: Bool?
+
+        public init(localLlama: Bool? = nil, geminiNano: Bool? = nil) {
             self.localLlama = localLlama
+            self.geminiNano = geminiNano
         }
     }
 

@@ -79,6 +79,47 @@ struct AndroidBundlerUnitTests {
         #expect(kts.contains("release {"))
     }
 
+    @Test("Gemini Nano: Gradle deps + Kotlin dispatch present iff enabled")
+    func geminiNanoCodegen() {
+        func gradle(_ enable: Bool) -> String {
+            AndroidTemplates.appBuildGradleKts(
+                packageId: "com.example.hi",
+                versionCode: 1,
+                versionName: "1.0.0",
+                minSdk: 28,
+                targetSdk: 34,
+                abis: ["arm64-v8a"],
+                soBaseName: "Hi",
+                signing: nil,
+                enableGeminiNano: enable
+            )
+        }
+        // The ML Kit GenAI + coroutines deps appear only when enabled.
+        #expect(gradle(true).contains("com.google.mlkit:genai-prompt"))
+        #expect(gradle(true).contains("kotlinx-coroutines-android"))
+        #expect(!gradle(false).contains("genai-prompt"))
+        // The dependency placeholder must never leak into output either way.
+        #expect(!gradle(true).contains("__SWIFT_PWA_GENAI"))
+        #expect(!gradle(false).contains("__SWIFT_PWA_GENAI"))
+
+        let on = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: true)
+        let off = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        // Dispatch cases the Swift GeminiNanoBackend RPCs into.
+        for method in ["ai.gemini.info", "ai.gemini.generate", "ai.gemini.generateStream", "ai.gemini.ensureModel"] {
+            #expect(on.contains("\"\(method)\""), "missing dispatch for \(method)")
+            #expect(!off.contains("\"\(method)\""))
+        }
+        // Backing impls + the streaming back-channel push.
+        #expect(on.contains("com.google.mlkit.genai.prompt.Generation.getClient()"))
+        #expect(on.contains("generateContentStream"))
+        #expect(on.contains("bridge.nativeHostEvent"))
+        // No placeholder comment survives in either rendering.
+        #expect(!on.contains("__SWIFT_PWA_GENAI"))
+        #expect(!off.contains("__SWIFT_PWA_GENAI"))
+        // Off variant references no GenAI symbols at all.
+        #expect(!off.contains("mlkit"))
+    }
+
     @Test("appBuildGradleKts emits signingConfigs.release when signing is set")
     func gradleWithSigning() {
         let kts = AndroidTemplates.appBuildGradleKts(
@@ -266,7 +307,7 @@ struct AndroidBundlerUnitTests {
 
     @Test("SwiftPWASystemPlugins maps PackageInstaller status codes to stable names")
     func systemPluginsMapsStatuses() {
-        let kt = AndroidTemplates.swiftPWASystemPluginsKt
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
         // Each status the Swift side decodes must have a mapping
         // entry; missing entries would fall through to "UNKNOWN_<n>"
         // and the Swift router would surface them as
@@ -365,7 +406,7 @@ struct AndroidBundlerUnitTests {
 
     @Test("SwiftPWASystemPlugins exposes fs.* content-URI RPC methods")
     func systemPluginsContentURIDispatch() {
-        let kt = AndroidTemplates.swiftPWASystemPluginsKt
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
         // Three dispatch entries the Swift `AndroidContentResolver`
         // calls into. Renaming either side silently breaks SAF I/O.
         #expect(kt.contains("\"fs.readContentUri\" ->"))
@@ -380,7 +421,7 @@ struct AndroidBundlerUnitTests {
 
     @Test("SwiftPWASystemPlugins pushes install events on the 'updater.install' channel")
     func systemPluginsPushesInstallChannel() {
-        let kt = AndroidTemplates.swiftPWASystemPluginsKt
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
         // Channel name pins the contract between the Kotlin
         // BroadcastReceiver and `AndroidUpdater.installEventChannel`
         // on the Swift side. Keep these two in sync.

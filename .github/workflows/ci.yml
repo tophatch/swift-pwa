@@ -66,6 +66,65 @@ jobs:
           SWIFT_PWA_LLAMA: "1"
         run: swift test --filter SwiftPWALlamaTests -v
 
+  linux-llama:
+    # Linux coverage for the opt-in llama.cpp backend (Vulkan). Mirrors
+    # macos-llama: builds the prebuilt static lib via the same script the
+    # publish workflow uses (cached on the build-script hash → only rebuilds on
+    # a llama.cpp pin bump), then runs the gated suite. The lib is found at link
+    # time via LIBRARY_PATH — no unsafeFlags. The GBNF + API tests run here; the
+    # model-dependent e2e tests skip (no GGUF in CI).
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Swift 6.0
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.0"
+      - run: swift --version
+      - name: Install GTK3 + WebKitGTK + Vulkan link/build deps
+        # GTK3 dev: the default package graph includes the GTK system-library
+        # targets, and `swift test` compiles every test target into one bundle —
+        # so pkgConfig must resolve even though the llama suite doesn't use GTK.
+        # libvulkan-dev: the test executable links `-lvulkan` (the loader). cmake
+        # + ninja build libllama.a.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libvulkan-dev \
+            cmake ninja-build
+      - name: Install Vulkan SDK (LunarG tarball)
+        # Provides SPIRV-Headers' cmake config + glslc for ggml's Vulkan build
+        # (system libvulkan-dev alone is not enough). Version-independent tarball.
+        run: |
+          mkdir -p "$HOME/vulkan-sdk"
+          curl -fsSL -o /tmp/vulkan_sdk.tar.xz "https://sdk.lunarg.com/sdk/download/latest/linux/vulkan_sdk.tar.xz"
+          tar -C "$HOME/vulkan-sdk" -xf /tmp/vulkan_sdk.tar.xz
+      - name: Cache prebuilt libllama.a (Linux/Vulkan)
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: Vendor/llama-linux
+          # Keyed on the build script, which pins the llama.cpp commit — bump
+          # the pin and the cache rebuilds.
+          key: llama-linux-x86_64-${{ hashFiles('Scripts/build-llama-linux.sh') }}
+      - name: Build libllama.a (Vulkan, static)
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        run: |
+          SDK_DIR="$(find "$HOME/vulkan-sdk" -maxdepth 1 -name '1.*' -type d | head -1)"
+          # shellcheck disable=SC1091
+          set +u; . "$SDK_DIR/setup-env.sh"; set -u
+          bash Scripts/build-llama-linux.sh
+      - name: Test SwiftPWALlama (gate on)
+        # libllama.a found via LIBRARY_PATH; SWIFT_PWA_LLAMA puts the target in
+        # the graph. Tiny suite, but give it room (the link pass + first build).
+        timeout-minutes: 20
+        env:
+          SWIFT_PWA_LLAMA: "1"
+        run: LIBRARY_PATH="$PWD/Vendor/llama-linux:${LIBRARY_PATH:-}" swift test --filter SwiftPWALlamaTests -v
+
   linux-gtk3:
     runs-on: ubuntu-24.04
     steps:

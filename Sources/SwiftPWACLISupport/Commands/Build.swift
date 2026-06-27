@@ -182,7 +182,7 @@ struct Build: AsyncParsableCommand {
 
         try Self.preflight(manifest: pwa, projectRoot: cwd)
 
-        Self.applyLocalLlamaGate(manifest: pwa, target: target)
+        try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
@@ -307,14 +307,19 @@ struct Build: AsyncParsableCommand {
     /// Honor `pwa.json`'s `ai.local_llama` by exporting `SWIFT_PWA_LLAMA=1`
     /// into this process's environment, which the underlying `swift build` /
     /// `xcodebuild` children inherit (so SwiftPM's manifest evaluation includes
-    /// the `SwiftPWALlama` target + its prebuilt-xcframework `.binaryTarget`).
-    /// Adopters never set the env var by hand — the pwa.json flag is the knob.
+    /// the `SwiftPWALlama` target + its platform `CLlama` backend). Adopters
+    /// never set the env var by hand — the pwa.json flag is the knob.
     ///
-    /// **Apple-only**, deliberately: the llama xcframework is macOS/iOS, so we
-    /// must NOT set the flag for a `--target linux/windows/android` build —
-    /// that would make the manifest declare an `.binaryTarget` those hosts
-    /// can't resolve, breaking the build. For those targets we warn instead.
-    static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget) {
+    /// Per platform:
+    /// - **Apple (macOS / iOS)** — just set the flag; SwiftPM's `.binaryTarget`
+    ///   downloads + checksum-verifies the llama xcframework (Metal).
+    /// - **Linux** — there's no binary-library target, so additionally fetch the
+    ///   prebuilt `libllama.a` (Vulkan) and prepend its directory to
+    ///   `LIBRARY_PATH` so the child `swift build` resolves `-lllama`. Requires a
+    ///   host Vulkan dev lib (`libvulkan-dev`) at link time + a Vulkan driver at
+    ///   runtime. See `LlamaLinuxArtifact`.
+    /// - **Windows / Android** — not supported yet; warn and ignore.
+    static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         guard manifest.ai?.localLlama == true else { return }
         switch target {
         case .macos, .ios:
@@ -322,10 +327,28 @@ struct Build: AsyncParsableCommand {
                 setenv("SWIFT_PWA_LLAMA", "1", 1)
             #endif
             print("swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend (SwiftPWALlama)")
+        case .linux:
+            #if os(Linux)
+                let libDir = try await LlamaLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
+                setenv("SWIFT_PWA_LLAMA", "1", 1)
+                // Prepend so our lib wins, but keep any existing search path.
+                let existing = ProcessInfo.processInfo.environment["LIBRARY_PATH"]
+                let combined = existing.map { "\(libDir.path):\($0)" } ?? libDir.path
+                setenv("LIBRARY_PATH", combined, 1)
+                print(
+                    "swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend "
+                        + "(SwiftPWALlama, Vulkan); libllama.a from \(libDir.path)"
+                )
+            #else
+                print(
+                    "swift-pwa: ai.local_llama for --target linux must be run on a Linux host — "
+                        + "ignoring it for this build."
+                )
+            #endif
         default:
             print(
-                "swift-pwa: ai.local_llama is set but the llama.cpp backend is Apple-only for now — "
-                    + "ignoring it for the \(target) build."
+                "swift-pwa: ai.local_llama is set but the llama.cpp backend isn't supported on "
+                    + "\(target) yet — ignoring it for this build."
             )
         }
     }

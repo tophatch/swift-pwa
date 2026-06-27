@@ -45,12 +45,12 @@ public struct ModelSpec: Sendable, Equatable {
 /// - **Progress** — `onProgress(bytesDone, totalBytes?)` after each buffer
 ///   flush (`totalBytes` is `nil` when the server sends no length).
 ///
-/// The network download path is **currently macOS/iOS only** — it uses
-/// `URLSession.bytes(for:)`, which swift-corelibs-foundation doesn't ship
-/// yet. On other platforms `ensure` throws `modelDownloadFailed` for a
-/// missing file (cache reuse and checksum still work). Linux/Windows
-/// download lands with the portable backends (llama.cpp), implemented and
-/// verified on those hosts.
+/// The network download path is **cross-platform**: Apple streams via
+/// `URLSession.bytes(for:)`; Linux/Windows (swift-corelibs-foundation, which
+/// doesn't ship `bytes(for:)`) get the same streamed, resumable,
+/// progress-reporting download through a `URLSessionDataDelegate` that writes
+/// each delivered body chunk to the `.part` file. Cache reuse, the `Range`
+/// resume, checksum verification, and the API are identical on every platform.
 public struct ModelDownloader: Sendable {
     /// Directory the models are cached in (created on demand). Typically a
     /// subdirectory of the app's data directory.
@@ -131,20 +131,16 @@ public struct ModelDownloader: Sendable {
         to part: URL,
         onProgress: (@Sendable (Int64, Int64?) -> Void)?
     ) async throws {
-        // The streamed, resumable download uses `URLSession.bytes(for:)`,
-        // which isn't available on swift-corelibs-foundation yet — so the
-        // network path is currently macOS/iOS only. Linux/Windows support
-        // lands with the portable backends (llama.cpp), implemented and
-        // verified on those hosts. Everything else here (cache reuse,
-        // checksum, the API) is cross-platform.
+        let fm = FileManager.default
+        var offset: Int64 = 0
+        if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? Int64 { offset = size }
+
+        var request = URLRequest(url: spec.url)
+        if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
+
         #if canImport(Darwin)
-            let fm = FileManager.default
-            var offset: Int64 = 0
-            if let size = (try? fm.attributesOfItem(atPath: part.path))?[.size] as? Int64 { offset = size }
-
-            var request = URLRequest(url: spec.url)
-            if offset > 0 { request.setValue("bytes=\(offset)-", forHTTPHeaderField: "Range") }
-
+            // Apple ships `URLSession.bytes(for:)`, so we stream the body
+            // directly and buffer it to disk in 1 MiB flushes.
             let (bytes, response) = try await session.bytes(for: request)
             guard let http = response as? HTTPURLResponse else {
                 throw AIError.modelDownloadFailed("no HTTP response from \(spec.url)")
@@ -162,7 +158,7 @@ public struct ModelDownloader: Sendable {
             // `expectedContentLength` is the remaining length for a 206.
             let total: Int64? = http.expectedContentLength >= 0 ? offset + http.expectedContentLength : nil
 
-            if !fm.fileExists(atPath: part.path) { fm.createFile(atPath: part.path, contents: nil) }
+            if !fm.fileExists(atPath: part.path) { _ = fm.createFile(atPath: part.path, contents: nil) }
             let handle = try FileHandle(forWritingTo: part)
             defer { try? handle.close() }
             try handle.seekToEnd()
@@ -185,7 +181,31 @@ public struct ModelDownloader: Sendable {
                 onProgress?(done, total)
             }
         #else
-            throw AIError.modelDownloadFailed("on-device model download is currently macOS/iOS only")
+            // swift-corelibs-foundation has no `bytes(for:)`, but a `dataTask`
+            // still delivers its body incrementally through a
+            // `URLSessionDataDelegate` — so we get the identical streamed,
+            // resumable, progress-reporting download by writing each delivered
+            // chunk to the `.part` file ourselves.
+            let collector = ModelDownloadCollector(part: part, startOffset: offset, onProgress: onProgress)
+            let queue = OperationQueue()
+            queue.maxConcurrentOperationCount = 1 // delegate callbacks stay serial
+            // Build the delegate-bearing session from the injected session's
+            // *configuration* (a delegate can only be set at init): this carries
+            // over caller config such as `protocolClasses` — so an injected mock
+            // transport still applies, keeping the path unit-testable.
+            let delegateSession = URLSession(
+                configuration: session.configuration, delegate: collector, delegateQueue: queue
+            )
+            defer { delegateSession.finishTasksAndInvalidate() }
+
+            try await withTaskCancellationHandler {
+                try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, any Error>) in
+                    let task = delegateSession.dataTask(with: request)
+                    collector.start(task: task, continuation: cont)
+                }
+            } onCancel: {
+                collector.cancel()
+            }
         #endif
     }
 
@@ -203,3 +223,128 @@ public struct ModelDownloader: Sendable {
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
 }
+
+#if !canImport(Darwin)
+    /// Drives a streamed, resumable model download on swift-corelibs-foundation,
+    /// which lacks `URLSession.bytes(for:)`. The session delivers the body
+    /// through `URLSessionDataDelegate` callbacks (serial on the delegate
+    /// queue), each of which we write straight to the `.part` file — matching
+    /// the Apple `bytes(for:)` path's behavior (Range resume, 200-restart,
+    /// progress). `@unchecked Sendable`: the delegate callbacks are serialized
+    /// by the single-concurrency delegate queue, and the lock guards the
+    /// continuation/task hand-off against the cancellation path.
+    private final class ModelDownloadCollector: NSObject, URLSessionDataDelegate, @unchecked Sendable {
+        private let part: URL
+        private let startOffset: Int64
+        private let onProgress: (@Sendable (Int64, Int64?) -> Void)?
+
+        private var handle: FileHandle?
+        private var done: Int64
+        private var total: Int64?
+
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, any Error>?
+        private var task: URLSessionTask?
+        private var finished = false
+
+        init(part: URL, startOffset: Int64, onProgress: (@Sendable (Int64, Int64?) -> Void)?) {
+            self.part = part
+            self.startOffset = startOffset
+            done = startOffset
+            self.onProgress = onProgress
+        }
+
+        /// Resume the data task and remember the continuation to fulfill when it
+        /// completes. Called once, before any delegate callback can fire.
+        func start(task: URLSessionTask, continuation: CheckedContinuation<Void, any Error>) {
+            lock.lock()
+            self.task = task
+            self.continuation = continuation
+            lock.unlock()
+            task.resume()
+        }
+
+        func cancel() {
+            lock.lock()
+            let t = task
+            lock.unlock()
+            t?.cancel() // surfaces as didComplete(error:) → finish(.failure)
+        }
+
+        private func finish(_ result: Result<Void, any Error>) {
+            lock.lock()
+            guard !finished else {
+                lock.unlock()
+                return
+            }
+            finished = true
+            let cont = continuation
+            continuation = nil
+            lock.unlock()
+            try? handle?.close()
+            cont?.resume(with: result)
+        }
+
+        // MARK: URLSessionDataDelegate
+
+        func urlSession(
+            _: URLSession,
+            dataTask _: URLSessionDataTask,
+            didReceive response: URLResponse,
+            completionHandler: @escaping (URLSession.ResponseDisposition) -> Void
+        ) {
+            guard let http = response as? HTTPURLResponse else {
+                finish(.failure(AIError.modelDownloadFailed("no HTTP response from \(part.lastPathComponent)")))
+                completionHandler(.cancel)
+                return
+            }
+            guard (200 ... 299).contains(http.statusCode) else {
+                finish(.failure(AIError.modelDownloadFailed("download failed (HTTP \(http.statusCode))")))
+                completionHandler(.cancel)
+                return
+            }
+
+            let fm = FileManager.default
+            var effectiveOffset = startOffset
+            // Range honored → 206; a plain 200 means the server ignored it, so
+            // discard the stale partial and restart from zero.
+            if startOffset > 0, http.statusCode != 206 {
+                try? fm.removeItem(at: part)
+                effectiveOffset = 0
+                done = 0
+            }
+            total = http.expectedContentLength >= 0 ? effectiveOffset + http.expectedContentLength : nil
+
+            if !fm.fileExists(atPath: part.path) { _ = fm.createFile(atPath: part.path, contents: nil) }
+            do {
+                let h = try FileHandle(forWritingTo: part)
+                try h.seekToEnd() // 0 for a fresh/restarted file, the resume offset for a 206
+                handle = h
+                completionHandler(.allow)
+            } catch {
+                finish(.failure(error))
+                completionHandler(.cancel)
+            }
+        }
+
+        func urlSession(_: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {
+            guard let handle else { return }
+            do {
+                try handle.write(contentsOf: data)
+                done += Int64(data.count)
+                onProgress?(done, total)
+            } catch {
+                finish(.failure(error))
+                dataTask.cancel()
+            }
+        }
+
+        func urlSession(_: URLSession, task _: URLSessionTask, didCompleteWithError error: (any Error)?) {
+            if let error {
+                finish(.failure(AIError.modelDownloadFailed("\(error)")))
+            } else {
+                finish(.success(()))
+            }
+        }
+    }
+#endif

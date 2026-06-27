@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116;
+            --card: #171c24;
+            --ink: #e9eef5;
+            --muted: #8b97a7;
+            --accent: #5fd0a0;
+            --accent-ink: #06231a;
+            --line: #232a35;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
+        body {
+            background: radial-gradient(120% 120% at 50% 0%, #1a212c 0%, var(--bg) 60%);
+            color: var(--ink);
+            font: 16px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column; align-items: center;
+            padding: 32px 20px; gap: 22px; min-height: 100%;
+        }
+        header { text-align: center; }
+        h1 { margin: 0 0 4px; font-size: 26px; letter-spacing: -0.01em; }
+        header p { margin: 0; color: var(--muted); font-size: 14px; }
+        .stage {
+            width: 100%; max-width: 540px; background: var(--card);
+            border: 1px solid var(--line); border-radius: 18px;
+            padding: 28px; display: flex; flex-direction: column; align-items: center;
+            gap: 18px; box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        }
+        .critter { font-size: 76px; line-height: 1; filter: saturate(1.1); }
+        .name { font-size: 18px; font-weight: 600; color: var(--accent); min-height: 22px; }
+        .fact {
+            min-height: 84px; text-align: center; font-size: 18px;
+            color: var(--ink); max-width: 44ch;
+        }
+        .fact .cursor { display: inline-block; width: 8px; background: var(--accent);
+            margin-left: 2px; animation: blink 1s steps(2) infinite; }
+        @keyframes blink { 50% { opacity: 0; } }
+        button {
+            appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 700;
+            background: var(--accent); color: var(--accent-ink);
+            padding: 13px 22px; border-radius: 12px; transition: transform .06s ease, opacity .2s;
+        }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.5; cursor: progress; }
+        .progress { width: 100%; max-width: 540px; }
+        progress { width: 100%; height: 8px; accent-color: var(--accent); }
+        .progress small { color: var(--muted); }
+        footer { color: var(--muted); font-size: 12px; text-align: center; }
+        footer code { color: var(--ink); }
+        .notice {
+            max-width: 540px; background: #2a1d1d; border: 1px solid #5a2e2e;
+            color: #f0c9c9; border-radius: 12px; padding: 14px 16px; font-size: 14px;
+        }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🦉 Critter Facts</h1>
+        <p>One-sentence facts, generated on-device by a local LLM.</p>
+    </header>
+
+    <div id="notice" class="notice" hidden></div>
+
+    <main class="stage">
+        <div id="critter" class="critter">🐾</div>
+        <div id="name" class="name"></div>
+        <div id="fact" class="fact">Tap the button for a fact about a random critter.</div>
+        <button id="go">Tell me a fact</button>
+    </main>
+
+    <div id="progress" class="progress" hidden>
+        <progress id="bar" max="1" value="0"></progress>
+        <small id="progress-label">Downloading model…</small>
+    </div>
+
+    <footer>
+        Backend: <code id="backend">checking…</code> · model downloads once, then runs offline.
+    </footer>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+
+        // A spread of critters (and a couple of honorary plants/fungi) with emoji.
+        const CRITTERS = [
+            ["Octopus", "🐙"], ["Axolotl", "🦎"], ["Pufferfish", "🐡"], ["Barn owl", "🦉"],
+            ["Honeybee", "🐝"], ["Seahorse", "🐠"], ["Tardigrade", "🦠"], ["Mantis shrimp", "🦐"],
+            ["Hummingbird", "🐦"], ["Platypus", "🦫"], ["Cuttlefish", "🦑"], ["Pangolin", "🦔"],
+            ["Venus flytrap", "🪰"], ["Bioluminescent jellyfish", "🪼"], ["Leafcutter ant", "🐜"],
+            ["Arctic fox", "🦊"], ["Chameleon", "🦎"], ["Narwhal", "🐋"], ["Firefly", "🐞"],
+            ["Sequoia tree", "🌲"], ["Mushroom", "🍄"], ["Peacock mantis", "🦗"],
+        ];
+
+        let busy = false;
+        let modelReady = false;
+
+        function showNotice(msg) {
+            const n = $("notice");
+            n.textContent = msg;
+            n.hidden = false;
+        }
+
+        // Detect backend availability up front so we can disable gracefully when
+        // the app was built without `ai.local_llama`.
+        async function init() {
+            try {
+                const caps = await bridge.invoke("ai.info", {});
+                $("backend").textContent = caps.backend || (caps.available ? "ready" : "unavailable");
+                if (!caps.available) {
+                    $("go").disabled = true;
+                    showNotice("No on-device AI backend is available. Build with `swift-pwa build` " +
+                        "(ai.local_llama is set in pwa.json) or run with SWIFT_PWA_LLAMA=1.");
+                }
+            } catch (e) {
+                $("backend").textContent = "unavailable";
+                $("go").disabled = true;
+                showNotice("The ai.* commands aren't registered — this build has no llama backend. " +
+                    "See the CritterFacts README to enable it.");
+            }
+        }
+
+        // Ensure the model is on disk. First run streams download progress; later
+        // runs return ~immediately (cache hit). Resolves when the model is ready.
+        function ensureModel() {
+            if (modelReady) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                $("progress").hidden = false;
+                $("bar").value = 0;
+                $("progress-label").textContent = "Downloading model (first run only)…";
+                const unsub = bridge.subscribe("ai.ensureModel", {}, (e) => {
+                    if (e.type === "progress") {
+                        if (e.totalBytes) {
+                            $("bar").removeAttribute("value");
+                            $("bar").value = e.bytesDone / e.totalBytes;
+                            const mb = (e.bytesDone / 1048576).toFixed(0);
+                            const total = (e.totalBytes / 1048576).toFixed(0);
+                            $("progress-label").textContent = `Downloading model… ${mb} / ${total} MB`;
+                        } else {
+                            $("progress-label").textContent =
+                                `Downloading model… ${(e.bytesDone / 1048576).toFixed(0)} MB`;
+                        }
+                    } else if (e.type === "done") {
+                        modelReady = true;
+                        $("progress").hidden = true;
+                        unsub(); resolve();
+                    } else if (e.type === "error") {
+                        $("progress").hidden = true;
+                        unsub(); reject(new Error(e.message || "model download failed"));
+                    }
+                });
+            });
+        }
+
+        async function tellFact() {
+            if (busy) return;
+            busy = true;
+            $("go").disabled = true;
+
+            const [name, emoji] = CRITTERS[Math.floor(Math.random() * CRITTERS.length)];
+            $("critter").textContent = emoji;
+            $("name").textContent = name;
+            const factEl = $("fact");
+            factEl.innerHTML = '<span class="cursor">&nbsp;</span>';
+
+            try {
+                await ensureModel();
+
+                let text = "";
+                await new Promise((resolve, reject) => {
+                    const unsub = bridge.subscribe("ai.generateStream", {
+                        system: "You are a witty zoologist. Reply with ONE short, surprising, " +
+                            "true sentence. No preamble, no lists, no quotation marks.",
+                        prompt: `Tell me a fun fact about the ${name}.`,
+                        maxTokens: 80,
+                        temperature: 0.7,
+                    }, (e) => {
+                        if (e.type === "delta") {
+                            text += e.text || "";
+                            factEl.innerHTML = escapeHtml(text) + '<span class="cursor">&nbsp;</span>';
+                        } else if (e.type === "done") {
+                            factEl.textContent = text.trim() || "(no answer)";
+                            unsub(); resolve();
+                        } else if (e.type === "error") {
+                            unsub(); reject(new Error(e.message || "generation failed"));
+                        }
+                    });
+                });
+            } catch (e) {
+                factEl.textContent = "⚠️ " + (e.message || e);
+            } finally {
+                busy = false;
+                $("go").disabled = false;
+            }
+        }
+
+        function escapeHtml(s) {
+            return s.replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+        }
+
+        $("go").addEventListener("click", tellFact);
+        init();
+    </script>
+</body>
+</html>

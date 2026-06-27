@@ -78,7 +78,8 @@ func configure(_ ctx: any AppContext) throws {
         // ModelDownloader fetches it once (resumable + checksum-pinned) into the
         // app's data directory, then reuses it. Swap the spec for any GGUF — a
         // bigger model just means a longer first-run download. On Apple it runs
-        // Metal-accelerated; on Linux, Vulkan (GPU if present, else CPU).
+        // Metal-accelerated; on Linux and Windows, Vulkan (GPU if present, else
+        // CPU).
         let modelsDir = ctx.dataDirectory().appendingPathComponent("models", isDirectory: true)
         ctx.use(AIPlugin(LlamaBackend(model: factModelSpec, cacheDirectory: modelsDir)))
     #else

@@ -329,7 +329,54 @@ swift run swift-pwa build --target windows --bootstrap-webview2
 `MicrosoftEdgeWebview2Setup.exe` next to the EXE, and prompts the user
 via a MessageBox before `ShellExecuteEx`-ing it with elevation.
 
-## 4. Architecture sketch
+## 4. Optional — On-device AI (llama.cpp, Vulkan)
+
+The portable on-device AI backend (`SwiftPWALlama` / `LlamaBackend`) runs a
+GGUF model locally, **GPU-accelerated via Vulkan** on Windows x64 — one build
+covers NVIDIA + AMD + Intel through the driver's Vulkan ICD, with CPU fallback
+when no capable device is present. It's the same backend and the same
+`pwa.json` flag as Apple and Linux; only the GPU path differs (Metal / Vulkan →
+Vulkan). See [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) for
+the API.
+
+Enable it per app in `pwa.json`:
+
+```json
+{
+  "ai": { "local_llama": true }
+}
+```
+
+Then build as usual from your VS Developer PowerShell —
+`swift-pwa build --target windows` sees the flag, downloads the prebuilt
+`llama.lib` (checksum-verified, cached under
+`%LOCALAPPDATA%\swift-pwa\llama-windows\`), prepends its directory to `LIB`, and
+links it:
+
+```powershell
+swift run swift-pwa build --target windows
+```
+
+**Build-time prerequisite:** the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows),
+so the link step resolves `vulkan-1.lib` (the loader import library). Install it
+(the winget package id is `KhronosGroup.VulkanSDK`) — it sets `VULKAN_SDK`
+machine-wide, and `swift-pwa build` reads `VULKAN_SDK` to add the SDK's `Lib` to
+the linker search path automatically (alongside the downloaded `llama.lib`). A
+bare GPU driver's `vulkan-1.dll` alone is **not** enough at link time.
+
+**Runtime prerequisite:** the end user's machine needs a **Vulkan 1.2+
+driver / ICD** for GPU acceleration (the GPU vendor's standard Windows driver
+provides both the ICD and `vulkan-1.dll` in `System32`). With no usable ICD the
+model still runs on the CPU.
+
+Building the lib yourself (when hacking on swift-pwa, or to produce the release
+artifact) uses [`Scripts/build-llama-windows.ps1`](../Scripts/build-llama-windows.ps1),
+which needs MSVC (`cl.exe` / `lib.exe` on PATH — run from a VS Developer
+PowerShell) and the **Vulkan SDK** (for `glslc` + SPIRV-Headers). Run the
+script, then point the build at the result with
+`$env:SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR='…\Vendor\llama-windows'`.
+
+## 5. Architecture sketch
 
 ```
 +-----------------------------+        +---------------------------+
@@ -561,3 +608,13 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   to the bundle origin (the bundle itself keeps its native virtual-host
   mapping; only requests under a served prefix are intercepted), with
   range support implemented in the C++ shim.
+- **On-device llama.cpp is x64-only on Windows.** The prebuilt
+  `llama.lib` (see §4) is published for x64; an arm64-Windows build
+  (Snapdragon X) isn't produced yet, so `ai.local_llama` on a
+  `--target windows` build from an arm64 host errors at the CLI's
+  artifact-resolve step. GPU acceleration needs a Vulkan 1.2+ driver / ICD
+  at runtime — without one the model falls back to CPU. CI's `windows-llama`
+  job is a **link check only** (no GPU on the runner, and `swift test` can't
+  run on Windows); real GPU verification happens on the x64 dev box. Linking
+  also needs the Vulkan SDK's `vulkan-1.lib` at build time, beyond the
+  driver's runtime `vulkan-1.dll`.

@@ -20,3 +20,6 @@ Vendor/llama/
 # adopters get the checksummed release asset). Headers under Vendor/llama-headers/
 # ARE committed (the systemLibrary modulemap) — only the built lib is ignored.
 Vendor/llama-linux/
+# Prebuilt llama.cpp Windows static lib (built by Scripts/build-llama-windows.ps1;
+# adopters get the checksummed release asset). Shares Vendor/llama-headers/.
+Vendor/llama-windows/

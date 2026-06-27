@@ -14,7 +14,8 @@ It exercises the whole on-device AI path end to end:
 - **`ai.generateStream`** — tokens stream into the UI as they're produced.
 
 The model runs **Metal-accelerated on Apple** and **Vulkan-accelerated on
-Linux** (GPU if present, CPU fallback otherwise) — same code, same flag.
+Linux and Windows** (GPU if present, CPU fallback otherwise) — same code, same
+flag.
 
 ## Build & run
 
@@ -55,6 +56,24 @@ cd Examples/CritterFacts
 locally built lib instead (e.g. while hacking on swift-pwa), build it with
 `Scripts/build-llama-linux.sh` and export
 `SWIFT_PWA_LLAMA_LINUX_LIB_DIR=<repo>/Vendor/llama-linux`.
+
+### Windows (Vulkan)
+
+Build from a Visual Studio Developer PowerShell. Needs the
+[Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows) to link
+(`vulkan-1.lib`) and a Vulkan driver/ICD at runtime for GPU acceleration (CPU
+otherwise). See
+[docs/windows-setup.md §4](../../docs/windows-setup.md#4-optional--on-device-ai-llamacpp-vulkan).
+
+```powershell
+cd Examples\CritterFacts
+..\..\.build\debug\swift-pwa.exe build --target windows
+.\build\CritterFacts\CritterFacts.exe
+```
+
+`swift-pwa build` downloads the prebuilt `llama.lib` automatically. To use a
+locally built lib instead, build it with `Scripts\build-llama-windows.ps1` and
+export `$env:SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR='<repo>\Vendor\llama-windows'`.
 
 ## Swapping the model
 

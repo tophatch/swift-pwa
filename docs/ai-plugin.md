@@ -269,10 +269,9 @@ on-device AI never link the FoundationModels framework.
 ### Available backend: llama.cpp
 
 `SwiftPWALlama` runs a GGUF model on-device via [llama.cpp](https://github.com/ggml-org/llama.cpp)
-(**Metal**-accelerated on Apple, **Vulkan** on Linux) — the portable
-counterpart to Foundation Models, usable independent of OS-level model
-availability. **Apple (macOS / iOS) and Linux (x86_64)** today; Windows is
-on the roadmap.
+(**Metal**-accelerated on Apple, **Vulkan** on Linux and Windows) — the
+portable counterpart to Foundation Models, usable independent of OS-level model
+availability. **Apple (macOS / iOS), Linux (x86_64), and Windows (x64)** today.
 
 It's **off by default** because it links a prebuilt llama binary
 (~tens of MB). Turn it on per app in `pwa.json`:
@@ -283,22 +282,26 @@ It's **off by default** because it links a prebuilt llama binary
 }
 ```
 
-`swift-pwa build --target macos` (or `ios`, or `linux`) sees that flag and
-sets `SWIFT_PWA_LLAMA=1` for the underlying build, pulling in the
+`swift-pwa build --target macos` (or `ios`, `linux`, `windows`) sees that flag
+and sets `SWIFT_PWA_LLAMA=1` for the underlying build, pulling in the
 `SwiftPWALlama` product. **On Apple** SwiftPM resolves a prebuilt
 `.binaryTarget` xcframework (Metal), downloaded + checksum-verified once and
-cached across projects. **On Linux** there's no binary-library target, so
-the CLI fetches the prebuilt `libllama.a` (Vulkan) from the swift-pwa
-release, checksum-verifies + caches it, and points the build at it via
-`LIBRARY_PATH` (the headers ship in-tree as a `.systemLibrary`, so no
-`unsafeFlags`). When the flag is unset neither is in the package graph —
-non-AI adopters and Windows CI never resolve it. (Building the generated app
-with bare `swift build` instead of `swift-pwa build` won't include llama
-unless you export `SWIFT_PWA_LLAMA=1` yourself — and on Linux also point
-`LIBRARY_PATH` at a directory containing `libllama.a`, or set
-`SWIFT_PWA_LLAMA_LINUX_LIB_DIR` to it.) Linux needs `libvulkan-dev` to link
-and a Vulkan 1.2+ driver/ICD at runtime — see
-[docs/linux-setup.md](linux-setup.md#7-optional--on-device-ai-llamacpp-vulkan).
+cached across projects. **On Linux and Windows** there's no binary-library
+target, so the CLI fetches the prebuilt static lib (Vulkan — `libllama.a` on
+Linux, `llama.lib` on Windows) from the swift-pwa release, checksum-verifies +
+caches it, and points the build at it via the linker search-path env var
+(`LIBRARY_PATH` on Linux, `LIB` on Windows — the same trick `CWebView2Shim`
+uses; the headers ship in-tree as a `.systemLibrary`, so no `unsafeFlags`).
+When the flag is unset neither is in the package graph — non-AI adopters never
+resolve it. (Building the generated app with bare `swift build` instead of
+`swift-pwa build` won't include llama unless you export `SWIFT_PWA_LLAMA=1`
+yourself — and off Apple also point the linker env var at a directory
+containing the static lib, or set `SWIFT_PWA_LLAMA_LINUX_LIB_DIR` /
+`SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR` to it.) Linux needs `libvulkan-dev` and
+Windows the Vulkan SDK's `vulkan-1.lib` to link, plus a Vulkan 1.2+ driver/ICD
+at runtime — see
+[docs/linux-setup.md](linux-setup.md#7-optional--on-device-ai-llamacpp-vulkan)
+and [docs/windows-setup.md](windows-setup.md#4-optional--on-device-ai-llamacpp-vulkan).
 
 Then wire the backend, pointing it at a model:
 
@@ -334,9 +337,12 @@ The prebuilt binaries are built from a pinned llama.cpp commit — the Apple
 xcframework by
 [`Scripts/build-llama-xcframework.sh`](../Scripts/build-llama-xcframework.sh),
 the Linux static lib by
-[`Scripts/build-llama-linux.sh`](../Scripts/build-llama-linux.sh) (same pinned
-commit, GPU backend swapped Metal → Vulkan), each published to its own stable
-release by a `workflow_dispatch` workflow. We package CMake's output rather
+[`Scripts/build-llama-linux.sh`](../Scripts/build-llama-linux.sh), and the
+Windows static lib by
+[`Scripts/build-llama-windows.ps1`](../Scripts/build-llama-windows.ps1) (all the
+same pinned commit; off Apple the GPU backend is swapped Metal → Vulkan), each
+published to its own stable release by a `workflow_dispatch` workflow. We
+package CMake's output rather
 than vendoring ggml source because the source is 135+ per-arch model files
 plus a shader-embed step and per-file SIMD flags SwiftPM can't express — and
 `unsafeFlags` would poison dependency resolution for every adopter.
@@ -373,13 +379,14 @@ small model → none** (the app supplies its own cloud tier on top).
 | Tier | Apple | Android | Windows | Linux |
 | --- | --- | --- | --- | --- |
 | 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | Gemini Nano / ML Kit GenAI (`gemini-nano`) | Windows AI / Phi Silica (`phi-silica`) | — |
-| 2 — downloadable GGUF | **llama.cpp (`gemma-llamacpp`) — shipped ✅** / MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) / **llama.cpp — *next*** | **llama.cpp (Vulkan) — shipped ✅** |
+| 2 — downloadable GGUF | **llama.cpp (`gemma-llamacpp`) — shipped ✅** / MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) / **llama.cpp (Vulkan) — shipped ✅** | **llama.cpp (Vulkan) — shipped ✅** |
 | 3 — none | `none` → `available:false` | | | |
 
-llama.cpp (`gemma-llamacpp`) is the portable tier-2 path: **Apple (Metal)
-and Linux x86_64 (Vulkan) shipped ✅**; Windows packaging is the next step.
-The Swift `LlamaBackend` is platform-agnostic — only the prebuilt binary
-differs per platform (xcframework on Apple, static `libllama.a` on Linux).
+llama.cpp (`gemma-llamacpp`) is the portable tier-2 path: **Apple (Metal),
+Linux x86_64 (Vulkan), and Windows x64 (Vulkan) all shipped ✅**. The Swift
+`LlamaBackend` is platform-agnostic — only the prebuilt binary differs per
+platform (xcframework on Apple, static `libllama.a` on Linux, `llama.lib` on
+Windows).
 
 Vision input rides the same backends where the model is multimodal (e.g.
 Gemini Nano's vision variants, a vision Gemma), gated by the `vision` flag.

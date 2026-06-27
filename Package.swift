@@ -567,6 +567,19 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
             .linkedLibrary("dl"),
             .linkedLibrary("m")
         ]
+    #elseif os(Windows)
+        llamaCTarget = .systemLibrary(name: "CLlama", path: "Vendor/llama-headers")
+        llamaLinkerSettings = [
+            // `.linkedLibrary("llama")` → `llama.lib`, the combined MSVC static
+            // archive (llama + ggml + ggml-vulkan) the CLI stages onto the `LIB`
+            // env path. `vulkan-1` → `vulkan-1.lib`, the Vulkan loader import lib
+            // (the SDK / driver provides `vulkan-1.dll` at runtime). The MSVC C++
+            // runtime is linked automatically via the objects' default-lib
+            // directives, so — unlike Linux's explicit `stdc++` — nothing else is
+            // needed here.
+            .linkedLibrary("llama"),
+            .linkedLibrary("vulkan-1")
+        ]
     #else
         let localXcframework = "Vendor/llama/llama.xcframework"
         llamaCTarget = FileManager.default.fileExists(atPath: localXcframework)

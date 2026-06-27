@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Android manual cross-compile docs now stage the Swift runtime libraries.** [docs/android-setup.md](docs/android-setup.md)'s §4 Option A (scaffold-only, then copy the built `.so` into `jniLibs/`) only mentioned the app `.so`, so a hand-staged APK launched to `UnsatisfiedLinkError: library "libswiftCore.so" not found` — it omitted the Swift stdlib `.so`s and the NDK's `libc++_shared.so` that `--cross-compile-android`'s `stageSwiftRuntime` copies automatically. The docs now list those copies (and recommend Option B, which does it for you).
+
 ## [0.7.1] - 2026-06-27
 
 ### Added

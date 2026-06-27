@@ -206,6 +206,25 @@ cp .build/aarch64-unknown-linux-android28/release/MyApp \
    build/MyApp-android/app/src/main/jniLibs/arm64-v8a/libMyApp.so
 ```
 
+**You must also stage the Swift runtime + C++ shared libraries into the same
+`jniLibs/<abi>/`** — copying only the app `.so` launches to
+`UnsatisfiedLinkError: dlopen failed: library "libswiftCore.so" not found`,
+because nothing else carries the Swift standard library or the NDK's
+`libc++_shared.so`:
+
+```bash
+# Swift stdlib .so's (path is inside your installed Swift Android SDK bundle):
+cp <swift-android-sdk>/swift-resources/usr/lib/swift-aarch64/android/*.so \
+   build/MyApp-android/app/src/main/jniLibs/arm64-v8a/
+# NDK C++ runtime:
+cp <ndk>/toolchains/llvm/prebuilt/<host>/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so \
+   build/MyApp-android/app/src/main/jniLibs/arm64-v8a/
+```
+
+This staging is precisely what **Option B (`--cross-compile-android`) does for
+you** (`stageSwiftRuntime`) — prefer it unless you specifically need the manual
+two-step.
+
 Then `./gradlew assembleDebug` produces `app/build/outputs/apk/debug/app-debug.apk`.
 
 **B. Cross-compile + stage in one step** (requires Swift Android SDK installed; the bundler preflights `swift sdk list` and bails with a clean diagnostic if none is installed):

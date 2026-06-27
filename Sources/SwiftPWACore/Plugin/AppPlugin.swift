@@ -59,7 +59,18 @@ public struct AppPlugin: Plugin {
         let info = Bundle.main.infoDictionary
         if let display = info?["CFBundleDisplayName"] as? String, !display.isEmpty { return display }
         if let name = info?["CFBundleName"] as? String, !name.isEmpty { return name }
-        return ProcessInfo.processInfo.processName
+        return strippingExeExtension(ProcessInfo.processInfo.processName)
+    }
+
+    /// Strip a trailing `.exe` from a process name. On Windows
+    /// `ProcessInfo.processName` includes the extension, which otherwise
+    /// leaks into the display name (`app.name`) and the per-app data/cache
+    /// directory leaf (e.g. `%APPDATA%\MyApp.exe\` instead of `…\MyApp\`).
+    /// A no-op on macOS / Linux / Android, where the process name carries no
+    /// extension. Case-insensitive; only `.exe` is stripped (not arbitrary
+    /// extensions, so a Unix binary named `my.tool` is left intact).
+    static func strippingExeExtension(_ name: String) -> String {
+        name.lowercased().hasSuffix(".exe") ? String(name.dropLast(4)) : name
     }
 
     /// The marketing version (`CFBundleShortVersionString`), falling back

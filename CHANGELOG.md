@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-06-27
+
 ### Added
 
 - **`fs.extractZip` / `fs.listZip` accept a `content://` source on Android.** An Android SAF pick (`dialog.openFile`) hands back a `content://` URI, but the zip ops required a real filesystem path — so importing a user-picked archive forced a `readBinary → base64 → writeBinary` materialize first, the exact JS↔Swift bridge cost the native extractor exists to avoid (and worst on the multi-GB packs that motivated it). The source archive may now be a `content://` URI: the Kotlin handlers open it via `ContentResolver.openInputStream` → `ZipInputStream` (vs random-access `ZipFile` for a real path), so a SAF-picked pack extracts off-bridge in one call. The destination must still be a real path (SAF exposes no writable tree). Guards are preserved — path-traversal + entry-count throughout, and the streaming path enforces the uncompressed-byte cap *during* the copy (stronger than a header-size precheck), applying the ratio guard when entry sizes are known. Desktop is unaffected (`content://` is Android-only). (Android adopter feedback.)

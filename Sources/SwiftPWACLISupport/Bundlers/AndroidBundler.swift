@@ -89,7 +89,7 @@ struct AndroidBundler {
             to: project.appendingPathComponent("settings.gradle.kts"),
             atomically: true, encoding: .utf8
         )
-        try AndroidTemplates.rootBuildGradleKts.write(
+        try AndroidTemplates.rootBuildGradleKts(enableGeminiNano: geminiNanoEnabled).write(
             to: project.appendingPathComponent("build.gradle.kts"),
             atomically: true, encoding: .utf8
         )

@@ -35,15 +35,23 @@ enum AndroidTemplates {
         """
     }
 
-    static let rootBuildGradleKts: String = """
-    // Project-level Gradle config. The Android Gradle Plugin (AGP) version
-    // is pinned; bump it explicitly when rolling Android tooling forward
-    // — silent tracking-latest is exactly what makes scaffolds bit-rot.
-    plugins {
-        id("com.android.application") version "8.5.0" apply false
-        id("org.jetbrains.kotlin.android") version "2.0.0" apply false
+    /// Project-level `build.gradle.kts`. Pins AGP + the Kotlin plugin. The
+    /// Kotlin version is bumped to 2.2.0 when Gemini Nano is enabled because
+    /// the `com.google.mlkit:genai-prompt` artifacts ship Kotlin 2.2.0
+    /// metadata, which a 2.0.0 compiler refuses to read ("incompatible
+    /// version of Kotlin"). Non-AI builds keep the conservative 2.0.0 pin.
+    static func rootBuildGradleKts(enableGeminiNano: Bool = false) -> String {
+        let kotlinVersion = enableGeminiNano ? "2.2.0" : "2.0.0"
+        return """
+        // Project-level Gradle config. The Android Gradle Plugin (AGP) version
+        // is pinned; bump it explicitly when rolling Android tooling forward
+        // — silent tracking-latest is exactly what makes scaffolds bit-rot.
+        plugins {
+            id("com.android.application") version "8.5.0" apply false
+            id("org.jetbrains.kotlin.android") version "\(kotlinVersion)" apply false
+        }
+        """
     }
-    """
 
     static let gradleProperties: String = """
     org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
@@ -1768,7 +1776,9 @@ enum AndroidTemplates {
             genaiScope.launch {
                 try {
                     val response = genaiModel.generateContent(geminiBuildRequest(json))
-                    done(JSONObject().put("text", response.text ?: "").toString(), null)
+                    // GenerateContentResponse.candidates: List<Candidate>; Candidate.text: String.
+                    val text = response.candidates.firstOrNull()?.text ?: ""
+                    done(JSONObject().put("text", text).toString(), null)
                 } catch (t: Throwable) {
                     done(null, "swift-pwa: ai.gemini.generate failed: ${t.message}")
                 }
@@ -1779,8 +1789,10 @@ enum AndroidTemplates {
             val channel = json.optString("channel", "")
             genaiScope.launch {
                 try {
+                    // Each Flow chunk is a GenerateContentResponse carrying the
+                    // newly-generated text in its first candidate (incremental).
                     genaiModel.generateContentStream(geminiBuildRequest(json)).collect { chunk ->
-                        val delta = chunk.text ?: ""
+                        val delta = chunk.candidates.firstOrNull()?.text ?: ""
                         if (delta.isNotEmpty()) {
                             pushGenAiEvent(channel, JSONObject().put("type", "delta").put("text", delta))
                         }

@@ -72,7 +72,13 @@ struct CritterFactsApp {
 /// `run(_:)` signature.
 @MainActor
 func configure(_ ctx: any AppContext) throws {
-    #if canImport(SwiftPWALlama)
+    #if os(Android)
+        // Android's platform built-in: Gemini Nano via ML Kit GenAI (AICore).
+        // Same `ai.*` contract as the llama path below — the page is identical.
+        // No app-shipped weights: `ai.ensureModel` triggers AICore's on-demand
+        // download. Enabled by `ai.gemini_nano: true` in pwa.json.
+        ctx.use(AIPlugin(GeminiNanoBackend()))
+    #elseif canImport(SwiftPWALlama)
         // A tiny (~400 MB), Apache-2.0 instruct model. It's *downloadable*: the
         // page calls `ai.ensureModel` before its first `ai.generate`, and
         // ModelDownloader fetches it once (resumable + checksum-pinned) into the
@@ -90,7 +96,14 @@ func configure(_ ctx: any AppContext) throws {
         )
     #endif
 
-    let content = WindowContent.bundled(directory: locateWebRoot())
+    // Android serves bundled web assets through the WebViewAssetLoader virtual
+    // host (the adapter ignores the directory path); desktop resolves the
+    // real `web/` from the resource bundle.
+    #if os(Android)
+        let content = WindowContent.bundled(directory: URL(fileURLWithPath: "/android_asset/web"))
+    #else
+        let content = WindowContent.bundled(directory: locateWebRoot())
+    #endif
     _ = try ctx.createWindow(WindowConfig(
         title: "Critter Facts",
         size: Size(width: 720, height: 720),

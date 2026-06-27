@@ -33,7 +33,18 @@ let package = Package(
         .executableTarget(
             name: "CritterFacts",
             dependencies: appDependencies,
-            resources: [.copy("web")]
+            resources: [.copy("web")],
+            linkerSettings: [
+                // On Android the binary is loaded by the generated Kotlin
+                // Activity via `System.loadLibrary`, so it must be a shared
+                // object. SwiftPM has no "executable as .so" knob, so inject
+                // the flags: `-no-pie` cancels the toolchain default (mutually
+                // exclusive with `-shared` under lld); `-shared` emits the .so.
+                .unsafeFlags(
+                    ["-Xlinker", "-no-pie", "-Xlinker", "-shared"],
+                    .when(platforms: [.android])
+                ),
+            ]
         ),
     ]
 )

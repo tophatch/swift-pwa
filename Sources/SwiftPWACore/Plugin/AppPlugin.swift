@@ -87,7 +87,11 @@ public struct AppPlugin: Plugin {
     /// Stable identifier used to scope the per-app data / cache
     /// directories on desktop. Prefers the bundle id; falls back to the
     /// (filesystem-safe-ish) app name when unbundled.
-    static func appID() -> String {
+    /// Stable per-app identifier: the bundle id when present, else the
+    /// (`.exe`-stripped) process name. Used to scope the data / cache
+    /// directories, and by backends needing a per-app location (e.g. the
+    /// Windows WebView2 user-data folder).
+    public static func appID() -> String {
         if let id = Bundle.main.bundleIdentifier, !id.isEmpty { return id }
         return appName()
     }

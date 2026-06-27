@@ -87,4 +87,15 @@ struct AppPluginTests {
         let app = makeApp()
         #expect(app.installedPlugins.contains("app"))
     }
+
+    @Test("strippingExeExtension drops a trailing .exe (Windows processName) but nothing else")
+    func stripExeExtension() {
+        // Windows `ProcessInfo.processName` includes `.exe`; it must not leak
+        // into app.name or the data/cache dir leaf.
+        #expect(AppPlugin.strippingExeExtension("CritterFacts.exe") == "CritterFacts")
+        #expect(AppPlugin.strippingExeExtension("CritterFacts.EXE") == "CritterFacts") // case-insensitive
+        #expect(AppPlugin.strippingExeExtension("CritterFacts") == "CritterFacts") // no-op (macOS/Linux)
+        #expect(AppPlugin.strippingExeExtension("my.tool") == "my.tool") // only .exe is stripped
+        #expect(AppPlugin.strippingExeExtension(".exe") == "") // degenerate, but consistent
+    }
 }

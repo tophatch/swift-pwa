@@ -196,6 +196,7 @@ struct Build: AsyncParsableCommand {
 
         try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
         Self.applyGeminiNanoGate(manifest: pwa, target: target)
+        Self.applyPhiSilicaGate(manifest: pwa, target: target)
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
@@ -434,6 +435,29 @@ struct Build: AsyncParsableCommand {
             print(
                 "swift-pwa: ai.gemini_nano is set but Gemini Nano is Android-only — "
                     + "ignoring it for \(target). Use ai.local_llama or a platform built-in instead."
+            )
+        }
+    }
+
+    /// Honor `pwa.json`'s `ai.phi_silica` by exporting `SWIFT_PWA_PHI_SILICA=1`
+    /// so the child `swift build`'s manifest evaluation includes the
+    /// `SwiftPWAPhiSilica` target (Windows Phi Silica via the Windows App SDK).
+    /// Windows-only; warns when set for another target. The Windows App SDK
+    /// headers/bootstrapper still have to be on the build's INCLUDE/LIB path
+    /// (see docs/windows-setup.md) — this only flips the manifest gate.
+    static func applyPhiSilicaGate(manifest: PWAManifest, target: BuildTarget) {
+        guard manifest.ai?.phiSilica == true else { return }
+        switch target {
+        case .windows:
+            #if os(Windows)
+                _ = _putenv_s("SWIFT_PWA_PHI_SILICA", "1")
+            #endif
+            print("swift-pwa: ai.phi_silica → bundling the Windows Phi Silica backend (Windows AI / Windows App SDK)")
+        default:
+            print(
+                "swift-pwa: ai.phi_silica is set but Phi Silica is Windows-only — "
+                    + "ignoring it for \(target). Use the platform's built-in (Foundation Models / "
+                    + "Gemini Nano) or ai.local_llama instead."
             )
         }
     }

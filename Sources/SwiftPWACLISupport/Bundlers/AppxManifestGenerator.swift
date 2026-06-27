@@ -48,6 +48,31 @@ enum AppxManifestGenerator {
         }
         let publisher = "CN=" + identityName
 
+        // The Windows AI APIs (Phi Silica, `ai.phi_silica`) need three things in
+        // the manifest, all verified on a Copilot+ NPU: (1) the `systemAIModels`
+        // restricted capability, (2) a dependency on the Windows App SDK runtime
+        // framework package (so the AI WinRT classes are registered for
+        // activation — without it `CreateAsync`/`GetReadyState` fail with
+        // `Class not registered`), and (3) a min-OS of 10.0.26100.0 (the floor
+        // for the AI APIs). Plus package identity itself (unpackaged → the OS
+        // reports `CapabilityMissing` / `E_ACCESSDENIED`) and, at runtime, a LAF
+        // unlock token (`PhiSilicaBackend(unlockToken:)`). The framework name +
+        // version pin the Windows App SDK 2.x runtime; bump alongside the SDK
+        // the `CPhiSilica` shim builds against.
+        let phiSilica = manifest.ai?.phiSilica == true
+        let phiSilicaCapability = phiSilica
+            ? "\n            <rescap:Capability Name=\"systemAIModels\" />"
+            : ""
+        let phiSilicaFrameworkDependency = phiSilica
+            ? "\n            <PackageDependency Name=\"Microsoft.WindowsAppRuntime.2\""
+            + " MinVersion=\"2.0.1.0\""
+            + " Publisher=\"CN=Microsoft Corporation, O=Microsoft Corporation, L=Redmond, S=Washington, C=US\" />"
+            : ""
+        // The Windows AI APIs require Windows 11 24H2 (build 26100)+.
+        // MaxVersionTested must be >= MinVersion, so bump it in lockstep.
+        let targetMinVersion = phiSilica ? "10.0.26100.0" : "10.0.17763.0"
+        let targetMaxVersion = phiSilica ? "10.0.26100.0" : "10.0.22621.0"
+
         // MSIX versions are Major.Minor.Build.Revision. The PWA
         // manifest's `version` is SemVer-shaped (Major.Minor.Patch).
         // Pad with `.0` if the user supplied three components; pass
@@ -84,8 +109,8 @@ enum AppxManifestGenerator {
 
           <Dependencies>
             <TargetDeviceFamily Name="Windows.Desktop"
-                                MinVersion="10.0.17763.0"
-                                MaxVersionTested="10.0.22621.0" />
+                                MinVersion="\(targetMinVersion)"
+                                MaxVersionTested="\(targetMaxVersion)" />\(phiSilicaFrameworkDependency)
           </Dependencies>
 
           <Resources>
@@ -104,7 +129,7 @@ enum AppxManifestGenerator {
           </Applications>
 
           <Capabilities>
-            <rescap:Capability Name="runFullTrust" />
+            <rescap:Capability Name="runFullTrust" />\(phiSilicaCapability)
           </Capabilities>
 
         </Package>

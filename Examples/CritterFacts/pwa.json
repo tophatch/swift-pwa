@@ -9,7 +9,8 @@
   },
   "ai": {
     "local_llama": true,
-    "gemini_nano": true
+    "gemini_nano": true,
+    "phi_silica": true
   },
   "window": {
     "title": "Critter Facts",

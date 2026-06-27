@@ -149,9 +149,27 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// **Android only**; ignored (with a warning) for other targets.
         public var geminiNano: Bool?
 
-        public init(localLlama: Bool? = nil, geminiNano: Bool? = nil) {
+        /// Bundle the **Windows Phi Silica** backend (`SwiftPWAPhiSilica` /
+        /// `PhiSilicaBackend`) into the build — the platform built-in on-device
+        /// model exposed by the Windows AI APIs in the **Windows App SDK**, the
+        /// Windows counterpart to Apple Foundation Models / Android Gemini
+        /// Nano. When `true` on `--target windows`, `swift-pwa build` sets
+        /// `SWIFT_PWA_PHI_SILICA=1` for the underlying `swift build` (pulling in
+        /// the `SwiftPWAPhiSilica` target + its `CPhiSilica` C++/WinRT shim) and
+        /// arranges the Windows App SDK headers/bootstrapper on the build +
+        /// runtime path.
+        ///
+        /// No app-shipped weights — the model is system-managed (pre-installed
+        /// on Copilot+ NPU PCs; downloaded on demand via `ai.ensureModel` on
+        /// supported GPUs). Off by default — keeps the Windows App SDK
+        /// dependency out of builds that don't want on-device AI. **Windows
+        /// only**; ignored (with a warning) for other targets.
+        public var phiSilica: Bool?
+
+        public init(localLlama: Bool? = nil, geminiNano: Bool? = nil, phiSilica: Bool? = nil) {
             self.localLlama = localLlama
             self.geminiNano = geminiNano
+            self.phiSilica = phiSilica
         }
     }
 

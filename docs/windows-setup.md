@@ -406,7 +406,73 @@ PowerShell) and the **Vulkan SDK** (for `glslc` + SPIRV-Headers). Run the
 script, then point the build at the result with
 `$env:SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR='…\Vendor\llama-windows'`.
 
-## 5. Architecture sketch
+## 5. On-device AI: Phi Silica
+
+The `ai.*` plugin's Windows platform built-in is **Phi Silica**, via the
+[Windows AI APIs](https://learn.microsoft.com/windows/ai/apis/phi-silica)
+(`LanguageModel`) in the **Windows App SDK** — the counterpart to Apple
+Foundation Models / Android Gemini Nano. See
+[docs/ai-plugin.md](ai-plugin.md#available-backend-windows-phi-silica) for the
+cross-platform contract; this section is the Windows build + deployment
+specifics.
+
+Turn it on in `pwa.json` and wire the backend:
+
+```json
+{ "ai": { "phi_silica": true } }
+```
+
+```swift
+import SwiftPWAPhiSilica
+
+runtime.run { ctx in
+    #if os(Windows)
+        ctx.use(AIPlugin(PhiSilicaBackend(unlockToken: myLAFToken)))
+    #endif
+}
+```
+
+`swift-pwa build --target windows` sets `SWIFT_PWA_PHI_SILICA=1` (pulling in the
+`SwiftPWAPhiSilica` target + the `CPhiSilica` C++/WinRT shim) and the MSIX
+manifest generator declares the `systemAIModels` restricted capability.
+
+**Build prerequisites** (in addition to §2's WebView2/WIL): the **Windows App
+SDK** NuGet (`Microsoft.WindowsAppSDK`) must be on the build path. The AI APIs
+ship as `.winmd` metadata, so the C++/WinRT projection headers
+(`winrt/Microsoft.Windows.AI.Text.h`, …) are generated with `cppwinrt.exe`
+against the SDK's `metadata\*.winmd` (`-input <AI metadata> -input <Foundation
+metadata> -input sdk`). Put the generated projection dir + the Foundation +
+Runtime `include` dirs on `INCLUDE`, and the Foundation
+`lib\native\<arch>` (for `Microsoft.WindowsAppRuntime.Bootstrap.lib`) on `LIB`.
+The shim bootstraps the runtime via `MddBootstrapInitialize2` using the SDK's
+own `WindowsAppSDK-VersionInfo.h` constants. Verified building on **arm64**
+(Snapdragon X Copilot+).
+
+**Two hard runtime requirements — both Windows-platform policy, not swift-pwa:**
+
+1. **MSIX package identity.** The Windows AI APIs refuse to run from an
+   *unpackaged* exe — `GetReadyState()` returns `CapabilityMissing` and
+   generation throws `E_ACCESSDENIED`. swift-pwa's default portable exe
+   therefore **cannot** reach Phi Silica; ship it from a
+   **`build --target windows --package-format msix`** build (which declares the
+   `systemAIModels` capability and the `Microsoft.WindowsAppRuntime` framework
+   dependency). With identity in place, `ai.info` reports `available: true` /
+   `Ready` on a Copilot+ NPU.
+2. **A Limited Access Feature unlock token.** `com.microsoft.windows.ai.languagemodel`
+   is a LAF: generation needs a Microsoft-issued token tied to your app's
+   package family name (request via the LAF Access Token Request Form linked
+   from the Phi Silica docs). Pass it as `PhiSilicaBackend(unlockToken:)` — the
+   backend calls `LimitedAccessFeatures.TryUnlockFeature` (the attestation
+   string is auto-built from the running package's identity). Without the token,
+   the model is `Ready` but `generate` throws *"Limited Access Feature is not
+   available"*.
+
+**Hardware.** Phi Silica runs on Copilot+ PC NPUs (best; model pre-installed)
+and NVIDIA RTX 30-series+ GPUs (model downloaded on demand via
+`ai.ensureModel`); AMD GPU support is "coming soon" upstream. A device that
+can't run it reports `available: false` and the app falls back to its own tier.
+
+## 6. Architecture sketch
 
 ```
 +-----------------------------+        +---------------------------+

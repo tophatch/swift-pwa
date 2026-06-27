@@ -13,6 +13,10 @@ import PackageDescription
 // `#if canImport`s it. Built without the flag, you get the window-only shell
 // with a "build with ai.local_llama" note instead of a crash.
 let llamaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil
+// `SwiftPWAPhiSilica` is the analogous env-gated product for the Windows
+// platform built-in (Phi Silica). `swift-pwa build` sets SWIFT_PWA_PHI_SILICA
+// from `ai.phi_silica: true`; add the dependency only then, same as llama.
+let phiSilicaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_PHI_SILICA"] != nil
 
 var appDependencies: [Target.Dependency] = [
     .product(name: "SwiftPWA", package: "swift-pwa"),
@@ -21,6 +25,9 @@ var appDependencies: [Target.Dependency] = [
 ]
 if llamaEnabled {
     appDependencies.append(.product(name: "SwiftPWALlama", package: "swift-pwa"))
+}
+if phiSilicaEnabled {
+    appDependencies.append(.product(name: "SwiftPWAPhiSilica", package: "swift-pwa"))
 }
 
 let package = Package(

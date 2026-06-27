@@ -207,6 +207,51 @@ cd Examples/HelloPWA
 ./build/HelloPWA-x86_64.AppImage
 ```
 
+## 7. Optional — On-device AI (llama.cpp, Vulkan)
+
+The portable on-device AI backend (`SwiftPWALlama` / `LlamaBackend`) runs a
+GGUF model locally, **GPU-accelerated via Vulkan** on Linux x86_64 — one
+build covers NVIDIA + AMD + Intel through the driver's Vulkan ICD, with CPU
+fallback when no capable device is present. It's the same backend and the
+same `pwa.json` flag as Apple; only the GPU path differs (Metal → Vulkan).
+See [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) for the API.
+
+Enable it per app in `pwa.json`:
+
+```json
+{
+  "ai": { "local_llama": true }
+}
+```
+
+**Build-time prerequisite:** the Vulkan loader's dev package, so the link
+step resolves `-lvulkan`:
+
+```bash
+sudo apt-get install -y libvulkan-dev
+```
+
+Then build as usual — `swift-pwa build --target linux` sees the flag,
+downloads the prebuilt `libllama.a` (checksum-verified, cached under
+`~/.cache/swift-pwa/llama-linux/`), and links it:
+
+```bash
+swift-pwa build --target linux
+```
+
+**Runtime prerequisite:** the end user's machine needs a **Vulkan 1.2+
+driver / ICD** for GPU acceleration (Mesa for AMD/Intel — `mesa-vulkan-drivers`
+— or the proprietary NVIDIA driver). With no usable ICD the model still runs
+on the CPU. `linuxdeploy` bundles the Vulkan *loader* (`libvulkan.so.1`) into
+the AppImage automatically; the ICD and GPU driver come from the host.
+
+Building the lib yourself (when hacking on swift-pwa, or to produce the
+release artifact) uses [`Scripts/build-llama-linux.sh`](../Scripts/build-llama-linux.sh),
+which needs the **Vulkan SDK** (for `glslc` + SPIRV-Headers — `libvulkan-dev`
+alone is not enough). Install the [LunarG SDK](https://vulkan.lunarg.com/sdk/home#linux),
+`source <sdk>/setup-env.sh`, run the script, then point the build at the
+result with `SWIFT_PWA_LLAMA_LINUX_LIB_DIR=…/Vendor/llama-linux`.
+
 ## Known limitations on Linux
 
 The Linux backends are hand-rolled against the GTK / WebKitGTK C APIs.
@@ -233,6 +278,12 @@ remain:
 - **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
   absent or non-PNG, the bundler embeds a 1×1 transparent placeholder
   so `linuxdeploy` doesn't hang on its prompt path.
+- **On-device llama.cpp is x86_64-only on Linux.** The prebuilt
+  `libllama.a` (see §7) is published for x86_64; arm64 Linux isn't built
+  yet, so `ai.local_llama` on a `--target linux` build from an aarch64
+  host reports that and is skipped. GPU acceleration further needs a
+  Vulkan 1.2+ driver/ICD at runtime — without one the model falls back to
+  the CPU rather than failing.
 - **Swiftly's bundled toolchain prints noisy warnings** on Ubuntu
   (`libxml2.so.2: no version information available`, `prohibited
   flag(s): -pthread`). Cosmetic; ignore.

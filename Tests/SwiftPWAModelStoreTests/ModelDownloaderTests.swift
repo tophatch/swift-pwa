@@ -93,44 +93,43 @@ struct ModelDownloaderTests {
         return dir
     }
 
-    // The network download path is macOS/iOS only for now (see ModelDownloader);
-    // these exercise it. The cache-hit test below is cross-platform.
-    #if canImport(Darwin)
-        @Test("downloads, verifies the checksum, and reports progress")
-        func freshDownload() async throws {
-            let dir = try tempDir()
-            let body = MockURLProtocol.body(2500)
-            let spec = try ModelSpec(
-                url: #require(URL(string: "mockmodel://m/2500")),
-                sha256: hash(body),
-                fileName: "model.bin"
-            )
-            let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
+    // The network download path is cross-platform: Apple streams via
+    // URLSession.bytes(for:); Linux/Windows use a URLSessionDataDelegate. The
+    // injected mock transport applies on every platform, so these run everywhere.
+    @Test("downloads, verifies the checksum, and reports progress")
+    func freshDownload() async throws {
+        let dir = try tempDir()
+        let body = MockURLProtocol.body(2500)
+        let spec = try ModelSpec(
+            url: #require(URL(string: "mockmodel://m/2500")),
+            sha256: hash(body),
+            fileName: "model.bin"
+        )
+        let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
 
-            let recorder = ProgressRecorder()
-            let url = try await downloader.ensure(spec) { _, total in recorder.record(total: total) }
+        let recorder = ProgressRecorder()
+        let url = try await downloader.ensure(spec) { _, total in recorder.record(total: total) }
 
-            #expect(try Data(contentsOf: url) == body)
-            #expect(recorder.total == .some(.some(2500)))
-        }
+        #expect(try Data(contentsOf: url) == body)
+        #expect(recorder.total == .some(.some(2500)))
+    }
 
-        @Test("a checksum mismatch fails with E_AI_MODEL and leaves no file")
-        func checksumMismatch() async throws {
-            let dir = try tempDir()
-            let spec = try ModelSpec(
-                url: #require(URL(string: "mockmodel://m/1000")),
-                sha256: String(repeating: "0", count: 64),
-                fileName: "m.bin"
-            )
-            let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
+    @Test("a checksum mismatch fails with E_AI_MODEL and leaves no file")
+    func checksumMismatch() async throws {
+        let dir = try tempDir()
+        let spec = try ModelSpec(
+            url: #require(URL(string: "mockmodel://m/1000")),
+            sha256: String(repeating: "0", count: 64),
+            fileName: "m.bin"
+        )
+        let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
 
-            await #expect(throws: AIError.self) { _ = try await downloader.ensure(spec) }
-            #expect(FileManager.default.fileExists(atPath: downloader.localURL(for: spec).path) == false)
-            // partial cleaned up too
-            #expect(FileManager.default
-                .fileExists(atPath: downloader.localURL(for: spec).appendingPathExtension("part").path) == false)
-        }
-    #endif
+        await #expect(throws: AIError.self) { _ = try await downloader.ensure(spec) }
+        #expect(FileManager.default.fileExists(atPath: downloader.localURL(for: spec).path) == false)
+        // partial cleaned up too
+        #expect(FileManager.default
+            .fileExists(atPath: downloader.localURL(for: spec).appendingPathExtension("part").path) == false)
+    }
 
     @Test("a present, matching file is reused without hitting the network")
     func cacheHit() async throws {
@@ -150,41 +149,39 @@ struct ModelDownloaderTests {
         #expect(try Data(contentsOf: url) == cached)
     }
 
-    #if canImport(Darwin)
-        @Test("resumes from a partial .part via a Range request")
-        func resume() async throws {
-            let dir = try tempDir()
-            let full = MockURLProtocol.body(3000)
-            let spec = try ModelSpec(
-                url: #require(URL(string: "mockmodel://m/3000")),
-                sha256: hash(full),
-                fileName: "r.bin"
-            )
-            let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
-            // Seed a partial with the correct first 1200 bytes.
-            try full.subdata(in: 0 ..< 1200).write(to: downloader.localURL(for: spec).appendingPathExtension("part"))
+    @Test("resumes from a partial .part via a Range request")
+    func resume() async throws {
+        let dir = try tempDir()
+        let full = MockURLProtocol.body(3000)
+        let spec = try ModelSpec(
+            url: #require(URL(string: "mockmodel://m/3000")),
+            sha256: hash(full),
+            fileName: "r.bin"
+        )
+        let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
+        // Seed a partial with the correct first 1200 bytes.
+        try full.subdata(in: 0 ..< 1200).write(to: downloader.localURL(for: spec).appendingPathExtension("part"))
 
-            let url = try await downloader.ensure(spec)
-            #expect(try Data(contentsOf: url) == full)
-        }
+        let url = try await downloader.ensure(spec)
+        #expect(try Data(contentsOf: url) == full)
+    }
 
-        @Test("restarts when the server ignores the Range header")
-        func ignoredRange() async throws {
-            let dir = try tempDir()
-            let full = MockURLProtocol.body(2000)
-            let spec = try ModelSpec(
-                url: #require(URL(string: "mockmodel://noresume/2000")),
-                sha256: hash(full),
-                fileName: "n.bin"
-            )
-            let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
-            // Seed a *wrong* partial; the server returns 200 (ignores Range), so
-            // the downloader must discard it and still produce the correct file.
-            try Data(repeating: 0xEE, count: 900)
-                .write(to: downloader.localURL(for: spec).appendingPathExtension("part"))
+    @Test("restarts when the server ignores the Range header")
+    func ignoredRange() async throws {
+        let dir = try tempDir()
+        let full = MockURLProtocol.body(2000)
+        let spec = try ModelSpec(
+            url: #require(URL(string: "mockmodel://noresume/2000")),
+            sha256: hash(full),
+            fileName: "n.bin"
+        )
+        let downloader = ModelDownloader(directory: dir, session: MockURLProtocol.session())
+        // Seed a *wrong* partial; the server returns 200 (ignores Range), so
+        // the downloader must discard it and still produce the correct file.
+        try Data(repeating: 0xEE, count: 900)
+            .write(to: downloader.localURL(for: spec).appendingPathExtension("part"))
 
-            let url = try await downloader.ensure(spec)
-            #expect(try Data(contentsOf: url) == full)
-        }
-    #endif
+        let url = try await downloader.ensure(spec)
+        #expect(try Data(contentsOf: url) == full)
+    }
 }

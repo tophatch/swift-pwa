@@ -13,7 +13,11 @@ private let llamaBackendInitOnce: Void = {
     // surfaces only errors (and their continuations).
     llama_log_set({ level, text, _ in
         guard let text, level.rawValue >= GGML_LOG_LEVEL_ERROR.rawValue else { return }
-        fputs(String(cString: text), stderr)
+        // Write via FileHandle rather than `fputs(_, stderr)`: Glibc exposes
+        // `stderr` as a mutable global `var`, which Swift 6 strict concurrency
+        // rejects inside this `@Sendable` callback (the Darwin overlay doesn't).
+        // FileHandle.standardError is the portable, concurrency-safe route.
+        FileHandle.standardError.write(Data(String(cString: text).utf8))
     }, nil)
 }()
 

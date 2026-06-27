@@ -16,3 +16,7 @@ build/
 # Prebuilt llama.cpp xcframework (built by Scripts/build-llama-xcframework.sh;
 # adopters get the checksummed release asset — never committed).
 Vendor/llama/
+# Prebuilt llama.cpp Linux static lib (built by Scripts/build-llama-linux.sh;
+# adopters get the checksummed release asset). Headers under Vendor/llama-headers/
+# ARE committed (the systemLibrary modulemap) — only the built lib is ignored.
+Vendor/llama-linux/

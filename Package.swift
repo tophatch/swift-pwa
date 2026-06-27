@@ -543,37 +543,64 @@ let package = Package(
 //      dir is gitignored, never committed).
 //   2. otherwise the checksummed release asset (url) — what adopters get.
 if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
-    let localXcframework = "Vendor/llama/llama.xcframework"
-    let llamaBinary: Target = FileManager.default.fileExists(atPath: localXcframework)
-        ? .binaryTarget(name: "CLlama", path: localXcframework)
-        : .binaryTarget(
-            name: "CLlama",
-            // Stable, llama-pin-versioned asset (NOT per swift-pwa release):
-            // built + published by .github/workflows/llama-xcframework.yml and
-            // re-pinned here only when Scripts/build-llama-xcframework.sh bumps
-            // the pinned llama.cpp commit. The `url` is stable; the `checksum`
-            // moves with the pin. (Local dev / swift-pwa CI use the
-            // Vendor/llama path branch above, built by the same script.)
-            url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
-            checksum: "b88b4797978bc566c63b15a44151b02c8a66245e5cf034dcbb1ace31bc9fbbc5"
-        )
+    // `CLlama` is sourced differently per build host (Package.swift evaluates on
+    // the machine doing the build, so `#if os` discriminates the *backend*):
+    //
+    //   * Apple (macOS host, incl. iOS cross-builds) → a prebuilt **xcframework**
+    //     via `.binaryTarget` (Metal embedded). Local `Vendor/llama` dir if the
+    //     build script produced one, else the checksummed release asset.
+    //   * Linux/Windows → a `.systemLibrary` over **vendored, committed headers**
+    //     (`Vendor/llama-headers/`, same llama.cpp pin as the xcframework). The
+    //     prebuilt static lib itself is found at link time via the `LIBRARY_PATH`
+    //     (Linux) / `LIB` (Windows) env var the CLI sets — NO `unsafeFlags`,
+    //     which would poison version-pinned dependency resolution. Everything
+    //     else links through the always-safe `.linkedLibrary`.
+    let llamaCTarget: Target
+    let llamaLinkerSettings: [LinkerSetting]
+    #if os(Linux)
+        llamaCTarget = .systemLibrary(name: "CLlama", path: "Vendor/llama-headers")
+        llamaLinkerSettings = [
+            .linkedLibrary("llama"), // combined static archive: llama + ggml + ggml-vulkan
+            .linkedLibrary("stdc++"), // ggml is C++
+            .linkedLibrary("vulkan"), // loader (libvulkan.so.1); ICD comes from the GPU driver
+            .linkedLibrary("pthread"),
+            .linkedLibrary("dl"),
+            .linkedLibrary("m")
+        ]
+    #else
+        let localXcframework = "Vendor/llama/llama.xcframework"
+        llamaCTarget = FileManager.default.fileExists(atPath: localXcframework)
+            ? .binaryTarget(name: "CLlama", path: localXcframework)
+            : .binaryTarget(
+                name: "CLlama",
+                // Stable, llama-pin-versioned asset (NOT per swift-pwa release):
+                // built + published by .github/workflows/llama-xcframework.yml and
+                // re-pinned here only when Scripts/build-llama-xcframework.sh bumps
+                // the pinned llama.cpp commit. The `url` is stable; the `checksum`
+                // moves with the pin. (Local dev / swift-pwa CI use the
+                // Vendor/llama path branch above, built by the same script.)
+                url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
+                checksum: "b88b4797978bc566c63b15a44151b02c8a66245e5cf034dcbb1ace31bc9fbbc5"
+            )
+        llamaLinkerSettings = [
+            // The combined static lib carries its C++ runtime + Metal /
+            // Accelerate symbols but not their link directives — the
+            // consumer links them. These propagate to the final app.
+            .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
+            .linkedFramework("Metal", .when(platforms: [.macOS, .iOS])),
+            .linkedFramework("MetalKit", .when(platforms: [.macOS, .iOS])),
+            .linkedFramework("Accelerate", .when(platforms: [.macOS, .iOS]))
+        ]
+    #endif
 
     package.products.append(.library(name: "SwiftPWALlama", targets: ["SwiftPWALlama"]))
     package.targets.append(contentsOf: [
-        llamaBinary,
+        llamaCTarget,
         .target(
             name: "SwiftPWALlama",
             dependencies: ["SwiftPWACore", "SwiftPWAModelStore", "CLlama"],
             swiftSettings: swiftSettings,
-            linkerSettings: [
-                // The combined static lib carries its C++ runtime + Metal /
-                // Accelerate symbols but not their link directives — the
-                // consumer links them. These propagate to the final app.
-                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
-                .linkedFramework("Metal", .when(platforms: [.macOS, .iOS])),
-                .linkedFramework("MetalKit", .when(platforms: [.macOS, .iOS])),
-                .linkedFramework("Accelerate", .when(platforms: [.macOS, .iOS]))
-            ]
+            linkerSettings: llamaLinkerSettings
         ),
         .testTarget(
             name: "SwiftPWALlamaTests",

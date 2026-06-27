@@ -109,8 +109,35 @@
 
         private func createEnvironment(into context: WindowsAppContext) {
             let user = Unmanaged.passRetained(EnvBox(context: context)).toOpaque()
-            // `nil` = default user-data folder under %LOCALAPPDATA%.
-            swiftpwa_w2_create_environment(nil, envReadyTrampoline, user)
+            // Point WebView2 at a per-user profile folder. Its default when the
+            // folder is null is `<exe>.WebView2` *next to the executable*, which
+            // pollutes the app bundle (and fails outright on a read-only install
+            // location). A resolved %LOCALAPPDATA% path keeps the profile —
+            // cache, cookies, IndexedDB/localStorage — where browsers keep
+            // theirs and out of the bundle. Falls back to the default (nil) only
+            // if %LOCALAPPDATA% can't be resolved.
+            if let folder = Self.webView2UserDataFolder() {
+                folder.withCString(encodedAs: UTF16.self) { wcs in
+                    swiftpwa_w2_create_environment(wcs, envReadyTrampoline, user)
+                }
+            } else {
+                swiftpwa_w2_create_environment(nil, envReadyTrampoline, user)
+            }
+        }
+
+        /// `%LOCALAPPDATA%\<appID>\WebData`, created if absent. `nil` when
+        /// %LOCALAPPDATA% is unavailable (let WebView2 use its default then).
+        /// Local (not Roaming) matches where Chromium-based browsers keep their
+        /// profiles — it's machine-specific and can be large, so it shouldn't
+        /// roam. The leaf is the generic `WebData` (not the backend name) so the
+        /// path doesn't telegraph the concrete webview implementation.
+        private static func webView2UserDataFolder() -> String? {
+            let env = ProcessInfo.processInfo.environment
+            guard let local = env["LOCALAPPDATA"], !local.isEmpty else { return nil }
+            let base = local.hasSuffix("\\") ? String(local.dropLast()) : local
+            let folder = "\(base)\\\(AppPlugin.appID())\\WebData"
+            try? FileManager.default.createDirectory(atPath: folder, withIntermediateDirectories: true)
+            return folder
         }
 
         /// Pump messages until `cond` returns true. Used during startup

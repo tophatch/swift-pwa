@@ -554,8 +554,6 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
             // the pinned llama.cpp commit. The `url` is stable; the `checksum`
             // moves with the pin. (Local dev / swift-pwa CI use the
             // Vendor/llama path branch above, built by the same script.)
-            // TODO(0.7.1): replace the placeholder checksum with the value the
-            // llama-xcframework workflow prints on its first run.
             url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
             checksum: "b88b4797978bc566c63b15a44151b02c8a66245e5cf034dcbb1ace31bc9fbbc5"
         )

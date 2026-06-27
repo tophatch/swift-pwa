@@ -30,7 +30,7 @@
             do {
                 try configure(context)
             } catch {
-                FileHandle.standardError.write(
+                FileHandle.standardError.writeQuietly(
                     Data("swift-pwa: configure threw: \(error)\n".utf8)
                 )
             }

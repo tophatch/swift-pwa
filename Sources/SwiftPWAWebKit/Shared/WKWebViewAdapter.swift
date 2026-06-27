@@ -132,7 +132,7 @@
                     if webView.responds(to: sel) {
                         webView.perform(sel, with: nil)
                     } else {
-                        FileHandle.standardError.write(Data("""
+                        FileHandle.standardError.writeQuietly(Data("""
                         swift-pwa: WKWebView doesn't respond to _showInspector: on this macOS build.
                         Use Safari's Develop menu (Develop > Open Web Inspector) instead.
 

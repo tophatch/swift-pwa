@@ -56,7 +56,7 @@
                 // wrote the HRESULT to stderr, and we'd rather show
                 // *something* than fail the JS call entirely on a
                 // transient WinRT failure.
-                FileHandle.standardError.write(
+                FileHandle.standardError.writeQuietly(
                     Data(
                         "swift-pwa: WinRT toast failed (0x\(String(UInt32(bitPattern: hr), radix: 16))), falling back to balloon\n"
                             .utf8

@@ -85,7 +85,7 @@
             do {
                 try configure(context)
             } catch {
-                FileHandle.standardError.write(
+                FileHandle.standardError.writeQuietly(
                     Data("swift-pwa: configure threw: \(error)\n".utf8)
                 )
             }
@@ -200,7 +200,7 @@
                 return
             }
 
-            FileHandle.standardError.write(Data("""
+            FileHandle.standardError.writeQuietly(Data("""
             swift-pwa: WebView2 Runtime not found (HRESULT 0x\(String(UInt32(bitPattern: hr), radix: 16))).
             Install the Evergreen Runtime from:
             https://developer.microsoft.com/en-us/microsoft-edge/webview2/
@@ -304,7 +304,7 @@
             return
         }
         if hr != 0 || envPtr == nil {
-            FileHandle.standardError.write(Data(
+            FileHandle.standardError.writeQuietly(Data(
                 "swift-pwa: CreateCoreWebView2Environment failed: 0x\(String(UInt32(bitPattern: hr), radix: 16))\n".utf8
             ))
             context.environmentReady = true

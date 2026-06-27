@@ -208,7 +208,7 @@
             public func saveFile(_: DialogSaveFileArgs, parent _: WindowID?) async throws -> String? {
                 if !savedFileWarned {
                     savedFileWarned = true
-                    FileHandle.standardError.write(Data(
+                    FileHandle.standardError.writeQuietly(Data(
                         """
                         swift-pwa: dialog.saveFile is a no-op on iOS — there is no system save panel. \
                         Use UIDocumentPickerViewController(forExporting:) or UIActivityViewController.

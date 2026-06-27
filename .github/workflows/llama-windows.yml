@@ -71,8 +71,11 @@ jobs:
         if: ${{ !matrix.gpu }}
         uses: compnerd/gha-setup-swift@main
         with:
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          # A NATIVE arm64 toolchain (6.3.1, box-verified for aarch64-windows-msvc)
+          # so its bundled clang-cl defaults to arm64 — an x64 clang-cl would emit
+          # x64 objects on this runner. (x64 leg uses MSVC and skips this step.)
+          swift-version: swift-6.3.1-release
+          swift-build: 6.3.1-RELEASE
 
       - name: Build llama.lib (static)
         id: build

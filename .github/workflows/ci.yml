@@ -146,9 +146,18 @@ jobs:
           - arch: x64
             runner: windows-2022
             gpu: true
+            # Pinned to 6.1.2 for the MSVC/Clang-STL reason the `windows` job documents.
+            swift_version: swift-6.1.2-release
+            swift_build: 6.1.2-RELEASE
           - arch: arm64
             runner: windows-11-arm
             gpu: false
+            # arm64 needs a NATIVE arm64 Windows toolchain — a mismatched x64
+            # Swift against the arm64 MSVC env can't even compile the manifest
+            # (lld-link: msvcrt.lib machine type arm64 conflicts with x64). 6.3.1
+            # is the version the Snapdragon box verified for aarch64-windows-msvc.
+            swift_version: swift-6.3.1-release
+            swift_build: 6.3.1-RELEASE
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
@@ -159,8 +168,8 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          swift-version: ${{ matrix.swift_version }}
+          swift-build: ${{ matrix.swift_build }}
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         # The full package graph compiles CWebView2Shim, which needs these on

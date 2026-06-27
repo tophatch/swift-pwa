@@ -85,6 +85,37 @@ if ($Gpu) {
     Write-Host "glslc: $Glslc"
 }
 
+# Compiler: x64 uses MSVC (`cl`, the CMake default inside vcvars). arm64 MUST use
+# clang-cl - ggml's CPU backend hard-errors "MSVC is not supported for ARM, use
+# clang" (its ARM NEON paths don't build under MSVC's ARM compiler). clang-cl is
+# the MSVC-ABI clang driver, so it still links cleanly with the MSVC-built Swift
+# runtime and lib.exe-combined archive; it ships with the Swift toolchain (same
+# usr\bin as swift.exe), so derive it from `swift` when it isn't already on PATH.
+$ClangCl = $null
+if (-not $Gpu) {
+    # Resolve a clang-cl. Prefer one already on PATH; else the Swift toolchain's
+    # (same usr\bin as swift.exe - this is what verified on the Snapdragon box);
+    # else a standard LLVM install. On an arm64 host each of these defaults its
+    # target to arm64, so no explicit --target is needed.
+    $clCmd = Get-Command clang-cl.exe -ErrorAction SilentlyContinue
+    $ClangCl = if ($clCmd) { $clCmd.Source } else { $null }
+    if (-not $ClangCl) {
+        $swiftCmd = Get-Command swift.exe -ErrorAction SilentlyContinue
+        if ($swiftCmd) {
+            $cand = Join-Path (Split-Path $swiftCmd.Source) 'clang-cl.exe'
+            if (Test-Path $cand) { $ClangCl = $cand }
+        }
+    }
+    if (-not $ClangCl) {
+        $llvm = Join-Path $env:ProgramFiles 'LLVM\bin\clang-cl.exe'
+        if (Test-Path $llvm) { $ClangCl = $llvm }
+    }
+    if (-not $ClangCl) {
+        throw "clang-cl.exe not found - required for the arm64 build (ggml-cpu hard-errors 'MSVC is not supported for ARM, use clang'). It ships with the Swift toolchain (same usr\bin as swift.exe); ensure that's on PATH, or install LLVM."
+    }
+    Write-Host "clang-cl (arm64): $ClangCl"
+}
+
 # --- fetch pinned source ---
 # Full clone (no --depth) so every pinned commit is already present; the fetch
 # below is only a safety net for bumping $LlamaCommit on an existing checkout.
@@ -105,9 +136,9 @@ Write-Host "=== llama.cpp at $(git -C $Src rev-parse --short HEAD) ==="
 
 # CMake options mirror build-llama-linux.sh exactly (no examples/tools/server/
 # app, static, GGML_NATIVE off for portability, Vulkan GPU). Ninja generator -
-# fast and single-config - so `cl` must be on PATH (it is inside vcvars). The
-# LLAMA_BUILD_APP=OFF is REQUIRED: this commit's new app/ dir needs `common`
-# headers we don't build.
+# fast and single-config - so the C/C++ compiler must be on PATH (it is inside
+# vcvars). The LLAMA_BUILD_APP=OFF is REQUIRED: this commit's new app/ dir needs
+# `common` headers we don't build.
 $CMakeArgs = @(
     '-G', 'Ninja'
     '-DCMAKE_BUILD_TYPE=Release'
@@ -126,6 +157,12 @@ $CMakeArgs = @(
 if ($Gpu) {
     $CMakeArgs += "-DVulkan_GLSLC_EXECUTABLE=$Glslc"
     if ($env:VULKAN_SDK) { $CMakeArgs += "-DCMAKE_PREFIX_PATH=$env:VULKAN_SDK" }
+} else {
+    # arm64: drive the build with clang-cl (ggml-cpu requires it on ARM). CMake
+    # wants forward slashes in compiler paths even on Windows.
+    $ClangFwd = $ClangCl -replace '\\', '/'
+    $CMakeArgs += "-DCMAKE_C_COMPILER=$ClangFwd"
+    $CMakeArgs += "-DCMAKE_CXX_COMPILER=$ClangFwd"
 }
 
 cmake -S $Src -B $Build @CMakeArgs

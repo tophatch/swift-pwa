@@ -411,9 +411,14 @@ runtime GPU prerequisite.
 Building the lib yourself (when hacking on swift-pwa, or to produce the release
 artifact) uses [`Scripts/build-llama-windows.ps1`](../Scripts/build-llama-windows.ps1),
 which needs MSVC (`cl.exe` / `lib.exe` on PATH — run from a VS Developer
-PowerShell). For x64 it also needs the **Vulkan SDK** (for `glslc` +
-SPIRV-Headers); for arm64 pass `-Arch arm64` and run from an **arm64** developer
-shell (no Vulkan SDK). Run the script, then point the build at the result with
+PowerShell). For **x64** it also needs the **Vulkan SDK** (for `glslc` +
+SPIRV-Headers). For **arm64** pass `-Arch arm64` and run from an **arm64**
+developer shell (no Vulkan SDK) — but note ggml's CPU backend **refuses MSVC on
+ARM** (`"MSVC is not supported for ARM, use clang"`), so the script drives the
+arm64 compile with **`clang-cl`** instead of `cl`. It auto-finds one: on PATH,
+else the **Swift toolchain's** (the same `usr\bin` as `swift.exe` — so a box with
+Swift installed already has it), else a standard LLVM install. Run the script,
+then point the build at the result with
 `$env:SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR='…\Vendor\llama-windows'`.
 
 ## 5. On-device AI: Phi Silica

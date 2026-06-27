@@ -62,6 +62,18 @@ jobs:
           Write-Host "SDK at $($sdk.FullName)"
           "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
+      - name: Set up Swift (arm64 — provides a native arm64 clang-cl)
+        # arm64 only: ggml-cpu hard-errors under MSVC on ARM ("use clang"), so the
+        # build script drives the compile with clang-cl. The Swift toolchain ships
+        # a native-arm64 clang-cl in the same usr\bin as swift.exe, which the
+        # script derives from `swift` — the exact toolchain the Snapdragon-box
+        # build verified. (x64 uses MSVC and needs no Swift here.)
+        if: ${{ !matrix.gpu }}
+        uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: swift-6.1.2-release
+          swift-build: 6.1.2-RELEASE
+
       - name: Build llama.lib (static)
         id: build
         shell: pwsh

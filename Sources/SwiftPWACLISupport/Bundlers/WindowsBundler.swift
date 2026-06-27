@@ -136,6 +136,11 @@ struct WindowsBundler {
             // the manifest never makes it in.
             try await embedComCtl6Manifest(at: bundledExe)
 
+            // Flip the EXE to the WINDOWS subsystem so double-clicking it in
+            // Explorer doesn't spawn a console window next to the app's own
+            // window. (See suppressConsoleWindow for the why.)
+            try await suppressConsoleWindow(at: bundledExe)
+
             let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)
             if FileManager.default.fileExists(atPath: webSrc.path) {
                 try FileManager.default.copyItem(
@@ -324,6 +329,40 @@ struct WindowsBundler {
             will fall back to MessageBoxW. Run from inside a Visual Studio \
             Developer Shell (which puts the Windows SDK on PATH) to enable \
             the themed TaskDialogIndirect path.
+
+            """.utf8))
+        }
+    }
+
+    // MARK: - Console-window suppression
+
+    /// Flip the bundled EXE to the **WINDOWS** subsystem so launching it from
+    /// Explorer doesn't open a console window alongside the app's own window.
+    ///
+    /// SwiftPM links executables as the **CONSOLE** subsystem (a Swift `@main`
+    /// program enters through the C runtime's `main`, the console startup
+    /// path). Windows allocates a console for a console-subsystem EXE launched
+    /// from Explorer, so the user sees a stray terminal next to the WebView2
+    /// window. `editbin /SUBSYSTEM:WINDOWS` rewrites only the PE subsystem
+    /// field; the entry point stays `mainCRTStartup`, so Swift's `main` still
+    /// runs — no `WinMain` shim and no `unsafeFlags` in the user's package.
+    ///
+    /// Trade-off: with the WINDOWS subsystem, `print` / stderr go nowhere when
+    /// the app is launched from Explorer (correct for a shipped GUI app);
+    /// developers still get logs via `swift run` during iteration.
+    ///
+    /// `editbin.exe` ships with the MSVC toolset and is on PATH inside a Visual
+    /// Studio Developer shell (same as `mt.exe`). If it's missing we warn and
+    /// leave the console-subsystem EXE as-is rather than failing the build.
+    private func suppressConsoleWindow(at exe: URL) async throws {
+        do {
+            try await Shell.run("editbin.exe", ["/SUBSYSTEM:WINDOWS", exe.path])
+        } catch BundlerError.toolMissing {
+            FileHandle.standardError.write(Data("""
+            swift-pwa: warning — editbin.exe not found on PATH; the bundled app \
+            keeps the console subsystem, so launching it from Explorer opens a \
+            console window next to the app. Run from inside a Visual Studio \
+            Developer Shell (which puts editbin on PATH) to suppress it.
 
             """.utf8))
         }

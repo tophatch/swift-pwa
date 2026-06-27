@@ -97,10 +97,12 @@ combine_slice() {
         # Pick the final (universal) product under `.../Release*/`, NOT the
         # per-arch `Objects-normal/<arch>/Binary/` intermediates the Xcode
         # generator also leaves around — matching one of those yields a thin
-        # slice and silently drops x86_64.
-        found="$(find "$bdir" -name "$name" -path '*Release*' \
-            -not -path '*Objects-normal*' -not -path '*.build/*' | head -1)"
-        [ -z "$found" ] && found="$(find "$bdir" -name "$name" -not -path '*Objects-normal*' -not -path '*.build/*' | head -1)"
+        # slice and silently drops x86_64. (Don't filter on `.build` here: the
+        # default WORK dir is `$ROOT/.build/llama-xcframework`, so the whole
+        # path contains `.build/` and such a filter would exclude everything —
+        # the `Objects-normal` exclusion alone skips the thin intermediates.)
+        found="$(find "$bdir" -name "$name" -path '*Release*' -not -path '*Objects-normal*' | head -1)"
+        [ -z "$found" ] && found="$(find "$bdir" -name "$name" -not -path '*Objects-normal*' | head -1)"
         [ -z "$found" ] && { echo "missing $name for $slice" >&2; exit 1; }
         libs+=("$found")
     done

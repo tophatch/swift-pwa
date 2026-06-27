@@ -75,6 +75,29 @@ struct PWAManifestTests {
         #expect(try String(contentsOf: tmp, encoding: .utf8).contains("gemini_nano"))
     }
 
+    @Test("ai.phi_silica decodes from snake_case and round-trips")
+    func aiPhiSilica() throws {
+        let json = #"""
+        {
+          "id": "com.example.hi", "name": "Hi", "version": "1.0.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "Hi", "width": 1024, "height": 768, "resizable": true, "fullscreen": false },
+          "ai": { "phi_silica": true }
+        }
+        """#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.ai?.phiSilica == true)
+        #expect(m.ai?.geminiNano == nil)
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pwa-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try m.write(to: tmp)
+        #expect(try String(contentsOf: tmp, encoding: .utf8).contains("phi_silica"))
+    }
+
     @Test("executable_name round-trips and drives binaryName; otherwise falls back to name")
     func executableNameRoundTrips() throws {
         var m = PWAManifest(

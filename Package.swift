@@ -622,3 +622,54 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
         )
     ])
 }
+
+// MARK: - Optional Windows Phi Silica backend (env-gated, Windows App SDK)
+
+// `SwiftPWAPhiSilica` / `PhiSilicaBackend` exposes Windows Phi Silica (the
+// Windows AI APIs in the Windows App SDK) through the `ai.*` plugin — the
+// Windows tier-1 platform built-in, like Apple Foundation Models and Android
+// Gemini Nano. It's env-gated (NOT in the umbrella) because the `CPhiSilica`
+// C++/WinRT shim links the **Windows App SDK** — its cppwinrt projection
+// headers must be on INCLUDE and the bootstrapper lib on LIB, and the runtime
+// redistributable present at launch (see docs/windows-setup.md). Apps that
+// don't want on-device AI shouldn't take that dependency.
+//
+// `swift-pwa build --target windows` sets `SWIFT_PWA_PHI_SILICA=1` from
+// `ai.phi_silica: true` in pwa.json (the adopter never sets it by hand), at
+// which point this block adds the target/product. When unset, neither the
+// shim nor the Windows App SDK linkage is in the graph.
+//
+// BOX-PENDING: the exact Windows App SDK include/lib names + the bootstrapper
+// lib are confirmed on the Copilot+ verify box (bsp12in, arm64 NPU) — the
+// `linkerSettings` below are the starting point.
+if ProcessInfo.processInfo.environment["SWIFT_PWA_PHI_SILICA"] != nil {
+    package.products.append(.library(name: "SwiftPWAPhiSilica", targets: ["SwiftPWAPhiSilica"]))
+    package.targets.append(contentsOf: [
+        .target(
+            name: "CPhiSilica",
+            path: "Sources/CPhiSilica",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                .define("UNICODE", .when(platforms: [.windows])),
+                .define("_UNICODE", .when(platforms: [.windows])),
+                .define("WIN32_LEAN_AND_MEAN", .when(platforms: [.windows]))
+            ],
+            linkerSettings: [
+                // C++/WinRT dispatch (built-in WinRT) goes through
+                // WindowsApp.lib; the Windows App SDK bootstrapper import lib
+                // (`Microsoft.WindowsAppRuntime.Bootstrap.lib`) is staged onto
+                // LIB by the CLI alongside the SDK headers on INCLUDE.
+                .linkedLibrary("WindowsApp", .when(platforms: [.windows])),
+                .linkedLibrary("Microsoft.WindowsAppRuntime.Bootstrap", .when(platforms: [.windows]))
+            ]
+        ),
+        .target(
+            name: "SwiftPWAPhiSilica",
+            dependencies: [
+                "SwiftPWACore",
+                .target(name: "CPhiSilica", condition: .when(platforms: [.windows]))
+            ],
+            swiftSettings: swiftSettings
+        )
+    ])
+}

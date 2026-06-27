@@ -125,6 +125,76 @@ jobs:
           SWIFT_PWA_LLAMA: "1"
         run: LIBRARY_PATH="$PWD/Vendor/llama-linux:${LIBRARY_PATH:-}" swift test --filter SwiftPWALlamaTests -v
 
+  windows-llama:
+    # Windows coverage for the opt-in llama.cpp backend (Vulkan). Unlike
+    # macos-/linux-llama this is a LINK CHECK, not a test run: SwiftPM's
+    # swift-testing discovery emits 0-byte stubs on Windows (see the `windows`
+    # job), so we can't *run* SwiftPWALlamaTests — but `swift build --build-tests`
+    # still compiles + links the test bundle, which is what exercises the
+    # `.systemLibrary` CLlama target and the `llama.lib` / `vulkan-1.lib` link
+    # settings. No GPU on the runner; runtime Vulkan enumeration only happens on
+    # device (bmsfmv3). Pinned to windows-2022 for the same MSVC/Clang-STL reason
+    # as the `windows` job.
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up MSVC environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Set up Swift for Windows
+        uses: compnerd/gha-setup-swift@main
+        with:
+          swift-version: swift-6.1.2-release
+          swift-build: 6.1.2-RELEASE
+      - run: swift --version
+      - name: Install WebView2 SDK + WIL (NuGet)
+        # The full package graph compiles CWebView2Shim, which needs these on
+        # INCLUDE / LIB even though the llama suite doesn't use WebView2.
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+          nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
+      - name: Install the Vulkan SDK (LunarG silent installer)
+        # Provides glslc + SPIRV-Headers (build llama.lib) and vulkan-1.lib (the
+        # test-bundle link). Mirrors llama-windows.yml.
+        shell: pwsh
+        run: |
+          $url = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe'
+          Invoke-WebRequest -Uri $url -OutFile "$env:TEMP\vulkan_sdk.exe"
+          Start-Process -Wait -FilePath "$env:TEMP\vulkan_sdk.exe" `
+            -ArgumentList '--accept-licenses','--default-answer','--confirm-command','install'
+          $sdk = Get-ChildItem 'C:\VulkanSDK' -Directory | Sort-Object Name -Descending | Select-Object -First 1
+          "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+      - name: Cache prebuilt llama.lib (Windows/Vulkan)
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: Vendor/llama-windows
+          # Keyed on the build script, which pins the llama.cpp commit.
+          key: llama-windows-x64-${{ hashFiles('Scripts/build-llama-windows.ps1') }}
+      - name: Build llama.lib (Vulkan, static)
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        shell: pwsh
+        run: pwsh Scripts/build-llama-windows.ps1
+      - name: Add WebView2 / WIL / llama.lib to INCLUDE / LIB
+        shell: pwsh
+        run: |
+          $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
+          $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
+          $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
+          $llamaLib    = "$pwd\Vendor\llama-windows"
+          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$llamaLib;$env:LIB"
+      - name: Build + link-check SwiftPWALlama (gate on)
+        # SWIFT_PWA_LLAMA puts the target in the graph; llama.lib / vulkan-1.lib
+        # resolve off LIB. `--build-tests` links SwiftPWALlamaTests, exercising
+        # the systemLibrary + linker settings without running anything.
+        timeout-minutes: 30
+        env:
+          SWIFT_PWA_LLAMA: "1"
+        run: swift build --build-tests
+
   linux-gtk3:
     runs-on: ubuntu-24.04
     steps:

@@ -1,5 +1,8 @@
 import ArgumentParser
 import Foundation
+#if os(Windows)
+    import WinSDK // _putenv_s (ucrt) — `setenv` is POSIX-only
+#endif
 
 enum BuildTarget: String, ExpressibleByArgument, CaseIterable {
     case macos, ios, linux, windows, android
@@ -318,7 +321,14 @@ struct Build: AsyncParsableCommand {
     ///   `LIBRARY_PATH` so the child `swift build` resolves `-lllama`. Requires a
     ///   host Vulkan dev lib (`libvulkan-dev`) at link time + a Vulkan driver at
     ///   runtime. See `LlamaLinuxArtifact`.
-    /// - **Windows / Android** — not supported yet; warn and ignore.
+    /// - **Windows** — like Linux, no binary-library target, so fetch the
+    ///   prebuilt `llama.lib` (Vulkan) and prepend its directory to `LIB` (the
+    ///   MSVC-linker search-path env var, the Windows counterpart to Linux's
+    ///   `LIBRARY_PATH` — the same trick `CWebView2Shim` uses) so the child
+    ///   `swift build` resolves `llama.lib`. Requires the Vulkan SDK's
+    ///   `vulkan-1.lib` at link time + a Vulkan driver at runtime. See
+    ///   `LlamaWindowsArtifact`.
+    /// - **Android** — not supported yet; warn and ignore.
     static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         guard manifest.ai?.localLlama == true else { return }
         switch target {
@@ -342,6 +352,32 @@ struct Build: AsyncParsableCommand {
             #else
                 print(
                     "swift-pwa: ai.local_llama for --target linux must be run on a Linux host — "
+                        + "ignoring it for this build."
+                )
+            #endif
+        case .windows:
+            #if os(Windows)
+                let libDir = try await LlamaWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
+                // `_putenv_s` (not POSIX `setenv`) so both the CRT and Win32
+                // environment blocks update — `ProcessInfo.environment` reads the
+                // latter, and `WindowsBundler.resolvePackageEnvOverrides` reads
+                // `LIB` back through it to build the child `swift build`'s env.
+                _ = _putenv_s("SWIFT_PWA_LLAMA", "1")
+                // Prepend so our lib wins, but keep any existing search path. LIB
+                // is `;`-separated on Windows. Case-insensitive lookup: a VS dev
+                // shell exports `Lib` (PowerShell) or `LIB` (cmd).
+                let existing = ProcessInfo.processInfo.environment.first {
+                    $0.key.caseInsensitiveCompare("LIB") == .orderedSame
+                }?.value
+                let combined = existing.map { "\(libDir.path);\($0)" } ?? libDir.path
+                _ = _putenv_s("LIB", combined)
+                print(
+                    "swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend "
+                        + "(SwiftPWALlama, Vulkan); llama.lib from \(libDir.path)"
+                )
+            #else
+                print(
+                    "swift-pwa: ai.local_llama for --target windows must be run on a Windows host — "
                         + "ignoring it for this build."
                 )
             #endif

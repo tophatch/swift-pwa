@@ -29,6 +29,29 @@ struct PWAManifestTests {
         #expect(decoded == original)
     }
 
+    @Test("ai.local_llama decodes from snake_case and round-trips")
+    func aiLocalLlama() throws {
+        let json = #"""
+        {
+          "id": "com.example.hi", "name": "Hi", "version": "1.0.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "Hi", "width": 1024, "height": 768, "resizable": true, "fullscreen": false },
+          "ai": { "local_llama": true }
+        }
+        """#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.ai?.localLlama == true)
+
+        // Round-trips back to the snake_case key.
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pwa-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try m.write(to: tmp)
+        #expect(try String(contentsOf: tmp, encoding: .utf8).contains("local_llama"))
+    }
+
     @Test("executable_name round-trips and drives binaryName; otherwise falls back to name")
     func executableNameRoundTrips() throws {
         var m = PWAManifest(

@@ -521,3 +521,66 @@ let package = Package(
     // both happy under C++20.
     cxxLanguageStandard: .cxx20
 )
+
+// MARK: - Optional llama.cpp backend (env-gated, prebuilt xcframework)
+
+// The portable on-device AI backend (`SwiftPWALlama` / `LlamaBackend`) links a
+// prebuilt llama.cpp xcframework via `.binaryTarget`. A binaryTarget is
+// resolved *eagerly* for every consumer of a package, so we must NOT declare
+// it unconditionally — that would force a ~30MB Apple-only download (and an
+// xcframework resolution Linux/Windows can't satisfy) onto every adopter.
+//
+// Instead it's gated behind `SWIFT_PWA_LLAMA=1`, the same `ProcessInfo`
+// manifest-toggle pattern as `useGtk4` above. Adopters never set it by hand:
+// `swift-pwa build` reads `ai.local_llama: true` from `pwa.json` and sets it in
+// the environment it passes to `swift build` / `xcodebuild`. When unset, this
+// whole block is skipped — the binaryTarget isn't in the graph, so there's
+// nothing to download and nothing for non-Apple hosts to choke on.
+//
+// Source of the xcframework, in priority order:
+//   1. `Vendor/llama/llama.xcframework` if present — local dev + CI building
+//      swift-pwa itself (produced by Scripts/build-llama-xcframework.sh; the
+//      dir is gitignored, never committed).
+//   2. otherwise the checksummed release asset (url) — what adopters get.
+if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
+    let localXcframework = "Vendor/llama/llama.xcframework"
+    let llamaBinary: Target = FileManager.default.fileExists(atPath: localXcframework)
+        ? .binaryTarget(name: "CLlama", path: localXcframework)
+        : .binaryTarget(
+            name: "CLlama",
+            // Stable, llama-pin-versioned asset (NOT per swift-pwa release):
+            // built + published by .github/workflows/llama-xcframework.yml and
+            // re-pinned here only when Scripts/build-llama-xcframework.sh bumps
+            // the pinned llama.cpp commit. The `url` is stable; the `checksum`
+            // moves with the pin. (Local dev / swift-pwa CI use the
+            // Vendor/llama path branch above, built by the same script.)
+            // TODO(0.7.1): replace the placeholder checksum with the value the
+            // llama-xcframework workflow prints on its first run.
+            url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
+            checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+        )
+
+    package.products.append(.library(name: "SwiftPWALlama", targets: ["SwiftPWALlama"]))
+    package.targets.append(contentsOf: [
+        llamaBinary,
+        .target(
+            name: "SwiftPWALlama",
+            dependencies: ["SwiftPWACore", "SwiftPWAModelStore", "CLlama"],
+            swiftSettings: swiftSettings,
+            linkerSettings: [
+                // The combined static lib carries its C++ runtime + Metal /
+                // Accelerate symbols but not their link directives — the
+                // consumer links them. These propagate to the final app.
+                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Metal", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("MetalKit", .when(platforms: [.macOS, .iOS])),
+                .linkedFramework("Accelerate", .when(platforms: [.macOS, .iOS]))
+            ]
+        ),
+        .testTarget(
+            name: "SwiftPWALlamaTests",
+            dependencies: ["SwiftPWALlama", "SwiftPWACore"],
+            swiftSettings: swiftSettings
+        )
+    ])
+}

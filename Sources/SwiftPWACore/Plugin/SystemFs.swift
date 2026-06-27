@@ -273,10 +273,7 @@ public final class SystemFs: Fs, @unchecked Sendable {
 
     public func listZip(path: String) async throws -> [ArchiveEntry] {
         let extractor = try requireExtractor("fs.listZip")
-        if Self.isContentURI(path) {
-            throw contentURIOperationUnsupported("fs.listZip", path: path)
-        }
-        let url = URL(fileURLWithPath: path)
+        let url = try Self.archiveSourceURL(path, op: "fs.listZip")
         do {
             return try await extractor.list(zipAt: url)
         } catch let e as ArchiveError {
@@ -291,10 +288,15 @@ public final class SystemFs: Fs, @unchecked Sendable {
         onProgress: (@Sendable (ExtractProgress) -> Void)?
     ) async throws -> ExtractResult {
         let extractor = try requireExtractor("fs.extractZip")
-        if Self.isContentURI(from) || Self.isContentURI(to) {
-            throw contentURIOperationUnsupported("fs.extractZip", path: "\(from) → \(to)")
+        // The source archive MAY be a content:// URI (an Android SAF pick), so a
+        // user-chosen archive extracts off-bridge instead of forcing a
+        // readBinary→base64→writeBinary materialize first (the cost the native
+        // extractor exists to avoid). The destination must be a real filesystem
+        // path — SAF exposes no writable directory tree to extract into.
+        if Self.isContentURI(to) {
+            throw contentURIOperationUnsupported("fs.extractZip (destination)", path: to)
         }
-        let src = URL(fileURLWithPath: from)
+        let src = try Self.archiveSourceURL(from, op: "fs.extractZip")
         let dst = URL(fileURLWithPath: to)
         do {
             return try await extractor.extract(zipAt: src, to: dst, limits: limits, onProgress: onProgress)
@@ -323,6 +325,19 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     // MARK: - Helpers
+
+    /// The archive **source** URL for a zip op. A `content://` path (an Android
+    /// SAF pick) is preserved as a scheme'd URL so the Android extractor can
+    /// stream it via `ContentResolver`; everything else is a filesystem path.
+    /// Only the Android backend ever produces `content://`, so other extractors
+    /// only ever see file URLs.
+    static func archiveSourceURL(_ path: String, op: String) throws -> URL {
+        guard isContentURI(path) else { return URL(fileURLWithPath: path) }
+        guard let url = URL(string: path) else {
+            throw BridgeError(code: BridgeError.handler, message: "\(op): invalid content:// URI: \(path)")
+        }
+        return url
+    }
 
     private func requireExtractor(_ op: String) throws -> any ArchiveExtractor {
         guard let extractor else {

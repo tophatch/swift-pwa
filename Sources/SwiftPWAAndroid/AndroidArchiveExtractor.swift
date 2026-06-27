@@ -24,7 +24,7 @@
         public func list(zipAt url: URL) async throws -> [ArchiveEntry] {
             let result = try await AndroidRPC.call(
                 "fs.listZipNative",
-                ListZipArgs(from: url.path),
+                ListZipArgs(from: Self.sourceArg(url)),
                 as: ListZipResult.self
             )
             return result.entries
@@ -40,7 +40,7 @@
             let result = try await AndroidRPC.call(
                 "fs.extractZipNative",
                 ExtractZipArgs(
-                    from: url.path,
+                    from: Self.sourceArg(url),
                     to: destination.path,
                     maxUncompressedBytes: limits.maxUncompressedBytes,
                     maxEntries: limits.maxEntries,
@@ -80,6 +80,15 @@
                 totalEntries: result.entries
             ))
             return result
+        }
+
+        /// The `from` argument for the Kotlin zip RPCs. A `content://` SAF pick
+        /// is sent as the full URI string (the Kotlin side opens it via
+        /// `ContentResolver.openInputStream` → `ZipInputStream`); a real file is
+        /// sent as its path (Kotlin uses random-access `ZipFile`). `url.path`
+        /// would be unusable for a `content://` URI.
+        private static func sourceArg(_ url: URL) -> String {
+            url.scheme == "content" ? url.absoluteString : url.path
         }
 
         // MARK: - On-the-wire shapes (match the Kotlin handlers)

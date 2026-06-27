@@ -1423,18 +1423,40 @@ enum AndroidTemplates {
             backgroundExecutor.execute {
                 try {
                     val arr = org.json.JSONArray()
-                    java.util.zip.ZipFile(from).use { zf ->
-                        val e = zf.entries()
-                        while (e.hasMoreElements()) {
-                            val ze = e.nextElement()
-                            arr.put(
-                                JSONObject()
-                                    .put("path", ze.name)
-                                    .put("isDirectory", ze.isDirectory)
-                                    .put("isSymlink", false)
-                                    .put("uncompressedSize", if (ze.size >= 0) ze.size else 0L)
-                                    .put("compressedSize", if (ze.compressedSize >= 0) ze.compressedSize else 0L)
-                            )
+                    fun putEntry(name: String, isDir: Boolean, usize: Long, csize: Long) {
+                        arr.put(
+                            JSONObject()
+                                .put("path", name)
+                                .put("isDirectory", isDir)
+                                .put("isSymlink", false)
+                                .put("uncompressedSize", if (usize >= 0) usize else 0L)
+                                .put("compressedSize", if (csize >= 0) csize else 0L)
+                        )
+                    }
+                    if (from.startsWith("content://")) {
+                        // SAF pick: no usable file path, so stream entries via the
+                        // ContentResolver. ZipInputStream is sequential, so sizes
+                        // come from local headers and may be 0 for streamed
+                        // (data-descriptor) entries.
+                        val input = activity.contentResolver.openInputStream(Uri.parse(from))
+                            ?: run { done(null, "swift-pwa: fs.listZip: ContentResolver could not open $from"); return@execute }
+                        input.use { raw ->
+                            java.util.zip.ZipInputStream(java.io.BufferedInputStream(raw)).use { zis ->
+                                var ze = zis.nextEntry
+                                while (ze != null) {
+                                    putEntry(ze.name, ze.isDirectory, ze.size, ze.compressedSize)
+                                    zis.closeEntry()
+                                    ze = zis.nextEntry
+                                }
+                            }
+                        }
+                    } else {
+                        java.util.zip.ZipFile(from).use { zf ->
+                            val e = zf.entries()
+                            while (e.hasMoreElements()) {
+                                val ze = e.nextElement()
+                                putEntry(ze.name, ze.isDirectory, ze.size, ze.compressedSize)
+                            }
                         }
                     }
                     done(JSONObject().put("entries", arr).toString(), null)
@@ -1461,31 +1483,80 @@ enum AndroidTemplates {
                     val stagingCanon = staging.canonicalPath
                     var totalBytes = 0L
                     var count = 0
-                    java.util.zip.ZipFile(from).use { zf ->
-                        val e = zf.entries()
-                        while (e.hasMoreElements()) {
-                            val ze = e.nextElement()
-                            count++
-                            if (count > maxEntries) throw IllegalStateException("too many entries (limit $maxEntries)")
-                            val outFile = java.io.File(staging, ze.name)
-                            // Path-traversal guard: canonical path must stay in staging.
-                            val canon = outFile.canonicalPath
-                            if (canon != stagingCanon && !canon.startsWith(stagingCanon + java.io.File.separator)) {
-                                throw SecurityException("entry escapes destination (path traversal): ${ze.name}")
+
+                    // Path-traversal guard: an entry's canonical path must stay
+                    // inside staging. Shared by the file + stream paths.
+                    fun guardedOutFile(name: String): java.io.File {
+                        val outFile = java.io.File(staging, name)
+                        val canon = outFile.canonicalPath
+                        if (canon != stagingCanon && !canon.startsWith(stagingCanon + java.io.File.separator)) {
+                            throw SecurityException("entry escapes destination (path traversal): $name")
+                        }
+                        return outFile
+                    }
+
+                    if (from.startsWith("content://")) {
+                        // SAF pick: stream via the ContentResolver (no file path).
+                        // ZipInputStream is sequential and entry sizes can be
+                        // unknown until read, so enforce the byte cap *during* the
+                        // copy (stronger than a header-size precheck) and apply
+                        // the ratio guard only when both sizes are known.
+                        val input = activity.contentResolver.openInputStream(Uri.parse(from))
+                            ?: run { done(null, "swift-pwa: fs.extractZip: ContentResolver could not open $from"); return@execute }
+                        input.use { raw ->
+                            java.util.zip.ZipInputStream(java.io.BufferedInputStream(raw)).use { zis ->
+                                var ze = zis.nextEntry
+                                while (ze != null) {
+                                    count++
+                                    if (count > maxEntries) throw IllegalStateException("too many entries (limit $maxEntries)")
+                                    val outFile = guardedOutFile(ze.name)
+                                    if (ze.isDirectory) {
+                                        outFile.mkdirs()
+                                    } else {
+                                        outFile.parentFile?.mkdirs()
+                                        val usize = ze.size
+                                        val csize = ze.compressedSize
+                                        if (usize >= 0 && csize > 0 && usize.toDouble() / csize.toDouble() > maxRatio) {
+                                            throw IllegalStateException("compression ratio exceeds limit for ${ze.name}")
+                                        }
+                                        java.io.FileOutputStream(outFile).use { output ->
+                                            val buf = ByteArray(64 * 1024)
+                                            var n = zis.read(buf)
+                                            while (n >= 0) {
+                                                totalBytes += n.toLong()
+                                                if (totalBytes > maxBytes) throw IllegalStateException("uncompressed size exceeds limit ($maxBytes)")
+                                                output.write(buf, 0, n)
+                                                n = zis.read(buf)
+                                            }
+                                        }
+                                    }
+                                    zis.closeEntry()
+                                    ze = zis.nextEntry
+                                }
                             }
-                            val usize = if (ze.size >= 0) ze.size else 0L
-                            val csize = if (ze.compressedSize > 0) ze.compressedSize else 1L
-                            if (usize.toDouble() / csize.toDouble() > maxRatio) {
-                                throw IllegalStateException("compression ratio exceeds limit for ${ze.name}")
-                            }
-                            totalBytes += usize
-                            if (totalBytes > maxBytes) throw IllegalStateException("uncompressed size exceeds limit ($maxBytes)")
-                            if (ze.isDirectory) {
-                                outFile.mkdirs()
-                            } else {
-                                outFile.parentFile?.mkdirs()
-                                zf.getInputStream(ze).use { input ->
-                                    java.io.FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                        }
+                    } else {
+                        java.util.zip.ZipFile(from).use { zf ->
+                            val e = zf.entries()
+                            while (e.hasMoreElements()) {
+                                val ze = e.nextElement()
+                                count++
+                                if (count > maxEntries) throw IllegalStateException("too many entries (limit $maxEntries)")
+                                val outFile = guardedOutFile(ze.name)
+                                val usize = if (ze.size >= 0) ze.size else 0L
+                                val csize = if (ze.compressedSize > 0) ze.compressedSize else 1L
+                                if (usize.toDouble() / csize.toDouble() > maxRatio) {
+                                    throw IllegalStateException("compression ratio exceeds limit for ${ze.name}")
+                                }
+                                totalBytes += usize
+                                if (totalBytes > maxBytes) throw IllegalStateException("uncompressed size exceeds limit ($maxBytes)")
+                                if (ze.isDirectory) {
+                                    outFile.mkdirs()
+                                } else {
+                                    outFile.parentFile?.mkdirs()
+                                    zf.getInputStream(ze).use { input ->
+                                        java.io.FileOutputStream(outFile).use { output -> input.copyTo(output) }
+                                    }
                                 }
                             }
                         }

@@ -79,6 +79,9 @@ struct AndroidBundler {
         let versionCode = manifest.android?.versionCode ?? 1
         let minSdk = manifest.android?.minSdk ?? 28
         let targetSdk = manifest.android?.targetSdk ?? 34
+        // `ai.gemini_nano: true` → add the ML Kit GenAI Gradle dep + splice the
+        // `ai.gemini.*` Kotlin dispatch the `GeminiNanoBackend` RPCs into.
+        let geminiNanoEnabled = manifest.ai?.geminiNano == true
 
         // Project-level files.
         let settings = AndroidTemplates.settingsGradleKts(label: label)
@@ -107,7 +110,8 @@ struct AndroidBundler {
             targetSdk: targetSdk,
             abis: abis,
             soBaseName: soBase,
-            signing: signing
+            signing: signing,
+            enableGeminiNano: geminiNanoEnabled
         ).write(
             to: app.appendingPathComponent("build.gradle.kts"),
             atomically: true, encoding: .utf8
@@ -151,7 +155,7 @@ struct AndroidBundler {
             to: runtimeDir.appendingPathComponent("SwiftPWABridge.kt"),
             atomically: true, encoding: .utf8
         )
-        try AndroidTemplates.swiftPWASystemPluginsKt.write(
+        try AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: geminiNanoEnabled).write(
             to: runtimeDir.appendingPathComponent("SwiftPWASystemPlugins.kt"),
             atomically: true, encoding: .utf8
         )

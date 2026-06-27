@@ -75,7 +75,8 @@ enum AndroidTemplates {
         targetSdk: Int,
         abis: [String],
         soBaseName: String,
-        signing: SigningConfig?
+        signing: SigningConfig?,
+        enableGeminiNano: Bool = false
     ) -> String {
         let abiList = abis.map { "\"\($0)\"" }.joined(separator: ", ")
         let signingBlockText = signing.map(signingConfigsBlock(_:)) ?? ""
@@ -159,7 +160,7 @@ enum AndroidTemplates {
             // a future appcompat change can't accidentally remove it.
             implementation("androidx.biometric:biometric:1.1.0")
             implementation("androidx.activity:activity-ktx:1.9.0")
-        }
+        \(enableGeminiNano ? Self.geminiNanoGradleDeps : "")}
         """
         return head + signingBlockText + buildTypesOpen + releaseExtras + buildTypesTail + "\n"
     }
@@ -739,7 +740,28 @@ enum AndroidTemplates {
 
     // MARK: - System plugins (clipboard, dialog, notifications, biometric, updater)
 
-    static let swiftPWASystemPluginsKt: String = #"""
+    /// Render `SwiftPWASystemPlugins.kt`. When `enableGeminiNano` is true,
+    /// splices in the ML Kit GenAI Prompt API imports, the `ai.gemini.*`
+    /// dispatch cases, and their backing methods (the matching Gradle
+    /// dependency is added by ``appBuildGradleKts(...)``); otherwise the three
+    /// placeholders are stripped and the file references no GenAI symbols.
+    static func swiftPWASystemPluginsKt(enableGeminiNano: Bool) -> String {
+        swiftPWASystemPluginsKtTemplate
+            .replacingOccurrences(
+                of: "/*__SWIFT_PWA_GENAI_IMPORTS__*/",
+                with: enableGeminiNano ? geminiNanoImportsKt : ""
+            )
+            .replacingOccurrences(
+                of: "/*__SWIFT_PWA_GENAI_DISPATCH__*/",
+                with: enableGeminiNano ? geminiNanoDispatchKt : ""
+            )
+            .replacingOccurrences(
+                of: "/*__SWIFT_PWA_GENAI_METHODS__*/",
+                with: enableGeminiNano ? geminiNanoMethodsKt : ""
+            )
+    }
+
+    private static let swiftPWASystemPluginsKtTemplate: String = #"""
     package dev.swiftpwa.runtime
 
     import android.app.Activity
@@ -772,6 +794,7 @@ enum AndroidTemplates {
     import java.io.FileOutputStream
     import java.util.UUID
     import java.util.concurrent.Executors
+    /*__SWIFT_PWA_GENAI_IMPORTS__*/
 
     /// Backing implementation for the System* plugin RPC the Swift
     /// side dispatches via `SwiftPWABridge.rpcCall`. One method per
@@ -884,6 +907,7 @@ enum AndroidTemplates {
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
+                /*__SWIFT_PWA_GENAI_DISPATCH__*/
                 else -> done(null, "swift-pwa: unknown rpc method $method")
             }
         }
@@ -1649,6 +1673,165 @@ enum AndroidTemplates {
                 }
             }
         }
+        /*__SWIFT_PWA_GENAI_METHODS__*/
     }
+    """#
+
+    // MARK: - Gemini Nano (ML Kit GenAI Prompt API) Kotlin blocks
+
+    //
+    // Spliced into `SwiftPWASystemPlugins.kt` only when `ai.gemini_nano: true`.
+    // These target `com.google.mlkit:genai-prompt` (beta) + AICore: the model
+    // is platform-managed (no app-shipped weights), `checkStatus()` reports
+    // readiness, and `download()` fetches it on demand. ML Kit symbol paths are
+    // written out fully-qualified so the only imports added are kotlinx
+    // coroutines; the API is beta, so the exact paths are confirmed on-device
+    // against the bundled version (see docs/android-setup.md). The Swift
+    // `GeminiNanoBackend` RPCs into the four `ai.gemini.*` methods below.
+
+    /// The `app/build.gradle.kts` dependency lines for Gemini Nano, spliced
+    /// into the `dependencies { }` block when `ai.gemini_nano: true`. Leading
+    /// `\n` + 12-space indent so it nests under the existing entries; trailing
+    /// 8-space line so the block's closing `}` lands at the right column.
+    private static let geminiNanoGradleDeps: String =
+        "\n            // Gemini Nano (ML Kit GenAI Prompt API) — added by ai.gemini_nano.\n"
+            + "            // Drives AICore's on-device model; the API is coroutine/Flow-based.\n"
+            + "            implementation(\"com.google.mlkit:genai-prompt:1.0.0-beta2\")\n"
+            + "            implementation(\"org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1\")\n"
+            + "        "
+
+    private static let geminiNanoImportsKt: String = """
+    import kotlinx.coroutines.CoroutineScope
+    import kotlinx.coroutines.Dispatchers
+    import kotlinx.coroutines.SupervisorJob
+    import kotlinx.coroutines.launch
+    import kotlinx.coroutines.flow.collect
+    """
+
+    private static let geminiNanoDispatchKt: String = """
+    "ai.gemini.info" -> geminiInfo(done)
+                "ai.gemini.generate" -> geminiGenerate(json, done)
+                "ai.gemini.generateStream" -> geminiGenerateStream(json, done)
+                "ai.gemini.ensureModel" -> geminiEnsureModel(json, done)
+    """
+
+    private static let geminiNanoMethodsKt: String = #"""
+    // -----------------------------------------------------------
+        // Gemini Nano (ML Kit GenAI Prompt API)
+        // -----------------------------------------------------------
+
+        // Background scope for the suspend/Flow GenAI calls. SupervisorJob so
+        // one failed generation doesn't cancel the scope for the next.
+        private val genaiScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
+        // The generative client is cheap to hold and reused across calls.
+        // AICore arbitrates device compute, so concurrent requests are fine.
+        private val genaiModel: com.google.mlkit.genai.prompt.GenerativeModel by lazy {
+            com.google.mlkit.genai.prompt.Generation.getClient()
+        }
+
+        // Gemini Nano has no separate "system" role; fold any system prompt
+        // into the text part. temperature / maxOutputTokens map from the
+        // cross-platform AIGenerateRequest knobs.
+        private fun geminiBuildRequest(json: JSONObject): com.google.mlkit.genai.prompt.GenerateContentRequest {
+            val system = json.optString("system", "")
+            val prompt = json.optString("prompt", "")
+            val full = if (system.isNotEmpty()) "$system\n\n$prompt" else prompt
+            return com.google.mlkit.genai.prompt.generateContentRequest(
+                com.google.mlkit.genai.prompt.TextPart(full)
+            ) {
+                if (json.has("temperature")) temperature = json.getDouble("temperature").toFloat()
+                if (json.has("maxTokens")) maxOutputTokens = json.getInt("maxTokens")
+            }
+        }
+
+        private fun geminiInfo(done: (String?, String?) -> Unit) {
+            genaiScope.launch {
+                try {
+                    val status = genaiModel.checkStatus()
+                    // DOWNLOADABLE / DOWNLOADING still count as available — the
+                    // page routes on `available` and triggers ai.ensureModel.
+                    val available = status != com.google.mlkit.genai.common.FeatureStatus.UNAVAILABLE
+                    val result = JSONObject()
+                        .put("available", available)
+                        .put("model", "gemini-nano")
+                    done(result.toString(), null)
+                } catch (t: Throwable) {
+                    // No AICore / GenAI on this device — report unavailable
+                    // rather than failing, so the app falls back to its tier.
+                    done(JSONObject().put("available", false).toString(), null)
+                }
+            }
+        }
+
+        private fun geminiGenerate(json: JSONObject, done: (String?, String?) -> Unit) {
+            genaiScope.launch {
+                try {
+                    val response = genaiModel.generateContent(geminiBuildRequest(json))
+                    done(JSONObject().put("text", response.text ?: "").toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: ai.gemini.generate failed: ${t.message}")
+                }
+            }
+        }
+
+        private fun geminiGenerateStream(json: JSONObject, done: (String?, String?) -> Unit) {
+            val channel = json.optString("channel", "")
+            genaiScope.launch {
+                try {
+                    genaiModel.generateContentStream(geminiBuildRequest(json)).collect { chunk ->
+                        val delta = chunk.text ?: ""
+                        if (delta.isNotEmpty()) {
+                            pushGenAiEvent(channel, JSONObject().put("type", "delta").put("text", delta))
+                        }
+                    }
+                    pushGenAiEvent(channel, JSONObject().put("type", "done"))
+                    done(null, null)
+                } catch (t: Throwable) {
+                    val msg = t.message ?: "generation failed"
+                    pushGenAiEvent(channel, JSONObject().put("type", "error").put("message", msg))
+                    done(null, "swift-pwa: ai.gemini.generateStream failed: $msg")
+                }
+            }
+        }
+
+        private fun geminiEnsureModel(json: JSONObject, done: (String?, String?) -> Unit) {
+            val channel = json.optString("channel", "")
+            genaiScope.launch {
+                try {
+                    val status = genaiModel.checkStatus()
+                    if (status == com.google.mlkit.genai.common.FeatureStatus.AVAILABLE) {
+                        pushGenAiEvent(channel, JSONObject().put("type", "done"))
+                        done(null, null)
+                        return@launch
+                    }
+                    // AICore manages the bytes; we forward a coarse progress
+                    // tick per download-status emission (byte counts aren't
+                    // always exposed by the beta API).
+                    genaiModel.download().collect {
+                        pushGenAiEvent(channel, JSONObject().put("type", "progress"))
+                    }
+                    pushGenAiEvent(channel, JSONObject().put("type", "done"))
+                    done(null, null)
+                } catch (t: Throwable) {
+                    val msg = t.message ?: "download failed"
+                    pushGenAiEvent(channel, JSONObject().put("type", "error").put("message", msg))
+                    done(null, "swift-pwa: ai.gemini.ensureModel failed: $msg")
+                }
+            }
+        }
+
+        // Push a GenAI stream frame as a host event on `channel`; the Swift
+        // GeminiNanoBackend's AsyncThrowingStream consumes it. Mirrors the
+        // updater's pushInstallEvent.
+        private fun pushGenAiEvent(channel: String, payload: JSONObject) {
+            if (channel.isEmpty()) return
+            payload.put("channel", channel)
+            try {
+                bridge.nativeHostEvent(payload.toString())
+            } catch (t: Throwable) {
+                android.util.Log.e("swift-pwa", "failed to push genai event: ${t.message}")
+            }
+        }
     """#
 }

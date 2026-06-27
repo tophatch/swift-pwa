@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **On-device AI reaches Android — the Gemini Nano platform built-in.** A new `GeminiNanoBackend` brings the `ai.*` plugin to Android via [ML Kit GenAI's Prompt API](https://developers.google.com/ml-kit/genai/prompt/android) (backed by AICore) — the Android counterpart to Apple Foundation Models, filling the tier-1 *platform-built-in* slot on Android. No app-shipped weights: AICore manages the model and downloads it on demand. Provides text (`ai.generate`), **true token streaming** (`ai.generateStream`, via ML Kit's `generateContentStream`, flowing back as host events on a per-call channel — the same `nativeHostEvent` mechanism the updater uses), and on-demand model fetch (`ai.ensureModel`). `ai.info` reports `available: true` even before the one-time download (so a page routes on it and triggers the fetch), matching the downloadable-llama stance. Opt in with **`ai.gemini_nano: true`** in `pwa.json`: on a `--target android` build the CLI adds the `com.google.mlkit:genai-prompt` (+ `kotlinx-coroutines-android`) Gradle dependency and splices the `ai.gemini.*` Kotlin dispatch into the generated scaffold; the Swift backend ships inside `SwiftPWAAndroid` (a thin RPC client, no binary artifact), so it's reachable via `import SwiftPWA` and needs no separate product or env gate. Structured output uses the shared prompt-and-validate fallback for now (`structuredOutput: false`); the base model is text-only. `genai-prompt` is a beta dependency — the generated Kotlin uses fully-qualified ML Kit symbol names (only `kotlinx.coroutines` is imported) so a future beta rename is a localized edit. See [docs/ai-plugin.md](docs/ai-plugin.md#available-backend-android-gemini-nano) and [docs/android-setup.md](docs/android-setup.md#9-on-device-ai-gemini-nano).
+
 ## [0.7.3] - 2026-06-27
 
 ### Added

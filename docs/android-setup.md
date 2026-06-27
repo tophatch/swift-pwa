@@ -588,6 +588,61 @@ The `pwa.json` `android.signing.keystore` path resolves relative to
 the project root, so `release.jks` decoded into the project root works
 without further configuration.
 
+## 9. On-device AI: Gemini Nano
+
+The `ai.*` plugin's Android platform built-in is **Gemini Nano**, via
+[ML Kit GenAI's Prompt API](https://developers.google.com/ml-kit/genai/prompt/android)
+(backed by AICore) — the counterpart to Apple Foundation Models. See
+[docs/ai-plugin.md](ai-plugin.md#available-backend-android-gemini-nano) for the
+cross-platform contract; this section is the Android specifics.
+
+Turn it on in `pwa.json` and wire the backend (which ships inside
+`SwiftPWAAndroid`, so it's reachable via `import SwiftPWA`):
+
+```json
+{ "ai": { "gemini_nano": true } }
+```
+
+```swift
+import SwiftPWA
+
+runtime.run { ctx in
+    #if os(Android)
+        ctx.use(AIPlugin(GeminiNanoBackend()))
+    #endif
+}
+```
+
+`swift-pwa build --target android` then adds the
+`com.google.mlkit:genai-prompt` (+ `kotlinx-coroutines-android`) Gradle
+dependency and splices the `ai.gemini.*` Kotlin dispatch into the generated
+`SwiftPWASystemPlugins.kt`. The Swift `GeminiNanoBackend` is a thin client:
+each `ai.*` call RPCs into that Kotlin, which drives the ML Kit
+`GenerativeModel`. Token streaming (`ai.generateStream`) flows back as host
+events on a per-call channel — the same `nativeHostEvent` mechanism the updater
+uses for `PackageInstaller` status (§6.1.2).
+
+**Model download.** No weights ship in the APK — AICore manages the model and
+fetches it on demand. `ai.info` reports `available: true` even before that
+one-time download (so the page can route on it), and the page triggers the
+fetch with `ai.ensureModel`, which streams coarse progress and a terminal
+`done`. A device without AICore / Gemini Nano reports `available: false` and
+the app falls back to its own tier.
+
+**Device support.** The Prompt API runs best on the Pixel 10 series (Nano-v3);
+it also runs on the Pixel 9 series, Galaxy Z Fold7, Galaxy S25/S26, Xiaomi 15,
+and other AICore-capable devices (on the less-capable Nano-v2 there). A device
+without AICore simply reports unavailable. Debug on-device the same way as any
+WebView content — `adb forward` + `chrome://inspect` (§6 architecture notes).
+
+**Beta caveat.** `genai-prompt` is a beta dependency; the generated Kotlin
+targets `1.0.0-beta2` and uses fully-qualified ML Kit symbol names so the only
+imports it adds are `kotlinx.coroutines`. If a future ML Kit beta renames a
+symbol, the generated `SwiftPWASystemPlugins.kt` is plain Kotlin you can adjust
+in place (it's regenerated on each `swift-pwa build`, so fold the fix back into
+your build flow). Structured output (`ai.generateJSON`) uses the shared
+prompt-and-validate fallback for now (`structuredOutput: false`).
+
 ## 8. Known limitations
 
 - **SAF dialog results are `content://` URIs, not filesystem paths.**

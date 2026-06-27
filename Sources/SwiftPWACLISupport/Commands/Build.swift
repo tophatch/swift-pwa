@@ -195,6 +195,7 @@ struct Build: AsyncParsableCommand {
         try Self.preflight(manifest: pwa, projectRoot: cwd)
 
         try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
+        Self.applyGeminiNanoGate(manifest: pwa, target: target)
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
@@ -413,6 +414,26 @@ struct Build: AsyncParsableCommand {
             print(
                 "swift-pwa: ai.local_llama is set but the llama.cpp backend isn't supported on "
                     + "\(target) yet — ignoring it for this build."
+            )
+        }
+    }
+
+    /// Honor `pwa.json`'s `ai.gemini_nano`. Unlike llama, the Gemini Nano
+    /// backend (`GeminiNanoBackend`) is compiled into `SwiftPWAAndroid`
+    /// unconditionally — it's a thin RPC client with no binary artifact — so
+    /// there's no SwiftPM env gate to set here. The `AndroidBundler` reads the
+    /// flag directly to add the `com.google.mlkit:genai-prompt` Gradle
+    /// dependency and splice the `ai.gemini.*` Kotlin dispatch. This just
+    /// prints a confirmation on Android and warns when the flag is set for a
+    /// target that can't use it (Gemini Nano is Android-only).
+    static func applyGeminiNanoGate(manifest: PWAManifest, target: BuildTarget) {
+        guard manifest.ai?.geminiNano == true else { return }
+        if target == .android {
+            print("swift-pwa: ai.gemini_nano → bundling the Android Gemini Nano backend (ML Kit GenAI)")
+        } else {
+            print(
+                "swift-pwa: ai.gemini_nano is set but Gemini Nano is Android-only — "
+                    + "ignoring it for \(target). Use ai.local_llama or a platform built-in instead."
             )
         }
     }

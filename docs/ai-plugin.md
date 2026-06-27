@@ -333,6 +333,57 @@ construct outside it (e.g. `anyOf`, `$ref`) transparently falls back to the
 shared prompt-and-validate path so the command still works. Text-only for
 now, so vision / image / audio stay off.
 
+### Available backend: Android Gemini Nano
+
+`GeminiNanoBackend` is the **Android** platform built-in — the on-device
+Gemini Nano model exposed through [ML Kit GenAI's Prompt API](https://developers.google.com/ml-kit/genai/prompt/android)
+(backed by AICore). It's the Android counterpart to Apple Foundation Models:
+no app-shipped weights, free, private, on-device. It ships **inside the Android
+backend** (`SwiftPWAAndroid`), so it's available via `import SwiftPWA` — no
+separate product to add.
+
+Turn it on per app in `pwa.json`:
+
+```json
+{
+  "ai": { "gemini_nano": true }
+}
+```
+
+`swift-pwa build --target android` sees that flag and (a) adds the
+`com.google.mlkit:genai-prompt` Gradle dependency to the generated scaffold and
+(b) splices the `ai.gemini.*` Kotlin dispatch that the backend RPCs into. Then
+wire it (guard with `#if os(Android)` so the same `App.swift` still builds for
+your desktop targets):
+
+```swift
+import SwiftPWA
+
+runtime.run { ctx in
+    #if os(Android)
+        ctx.use(AIPlugin(GeminiNanoBackend()))
+    #endif
+}
+```
+
+It provides text (`generate`), **true token streaming** (`generateStream`, via
+ML Kit's `generateContentStream`), and on-demand model download
+(`ensureModel`). The model is managed by AICore — `info()` reports
+`available: true` whenever the device can serve it, **including the
+not-yet-downloaded state**, so a page routes on `available` and triggers the
+one-time fetch via `ai.ensureModel` (same stance as the downloadable-llama
+tier). Only a device without AICore / Gemini Nano reports `available: false`.
+Structured output uses the shared prompt-and-validate fallback
+(`structuredOutput: false`) for now; the base model is text-only, so vision /
+image / audio stay off.
+
+Without `gemini_nano: true` the Kotlin dispatch isn't generated, so the RPCs
+resolve to "unknown method" and the backend reports `available: false` — wiring
+`GeminiNanoBackend()` is harmless either way, the app just falls back to its own
+tier as it would on an unsupported device. Device support, the `adb` debug
+loop, and the ML Kit beta caveats live in
+[docs/android-setup.md](android-setup.md#9-on-device-ai-gemini-nano).
+
 The prebuilt binaries are built from a pinned llama.cpp commit — the Apple
 xcframework by
 [`Scripts/build-llama-xcframework.sh`](../Scripts/build-llama-xcframework.sh),
@@ -378,7 +429,7 @@ small model → none** (the app supplies its own cloud tier on top).
 
 | Tier | Apple | Android | Windows | Linux |
 | --- | --- | --- | --- | --- |
-| 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | Gemini Nano / ML Kit GenAI (`gemini-nano`) | Windows AI / Phi Silica (`phi-silica`) | — |
+| 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | **Gemini Nano / ML Kit GenAI (`gemini-nano`) — shipped ✅** | Windows AI / Phi Silica (`phi-silica`) | — |
 | 2 — downloadable GGUF | **llama.cpp (`gemma-llamacpp`) — shipped ✅** / MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) / **llama.cpp (Vulkan) — shipped ✅** | **llama.cpp (Vulkan) — shipped ✅** |
 | 3 — none | `none` → `available:false` | | | |
 

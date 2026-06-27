@@ -46,6 +46,22 @@ struct AppxManifestGeneratorTests {
         #expect(xml.contains("<rescap:Capability Name=\"systemAIModels\" />"))
         // Still rescap-namespaced and alongside runFullTrust.
         #expect(xml.contains("<rescap:Capability Name=\"runFullTrust\""))
+        // The WinAppSDK runtime framework dependency — required for the AI WinRT
+        // classes to activate (else CreateAsync fails "Class not registered").
+        #expect(xml.contains("<PackageDependency Name=\"Microsoft.WindowsAppRuntime.2\""))
+        #expect(xml.contains("Publisher=\"CN=Microsoft Corporation"))
+        // Min-OS bumped to the AI-APIs floor (Windows 11 24H2 / build 26100),
+        // with MaxVersionTested >= MinVersion.
+        #expect(xml.contains("MinVersion=\"10.0.26100.0\""))
+        #expect(xml.contains("MaxVersionTested=\"10.0.26100.0\""))
+    }
+
+    @Test("Without ai.phi_silica: no framework dependency, default min-OS")
+    func noPhiSilicaDefaults() {
+        let xml = AppxManifestGenerator.render(manifest: base())
+        #expect(!xml.contains("PackageDependency"))
+        #expect(!xml.contains("systemAIModels"))
+        #expect(xml.contains("MinVersion=\"10.0.17763.0\""))
     }
 
     @Test("Three-component versions get padded to four for MSIX schema compliance")

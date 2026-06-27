@@ -32,7 +32,7 @@
             warned = true
             let msg = "swift-pwa: TrayPlugin is a no-op on the GTK4 backend"
                 + " — `GtkStatusIcon` is gone and AppIndicator support is not yet wired in.\n"
-            FileHandle.standardError.write(Data(msg.utf8))
+            FileHandle.standardError.writeQuietly(Data(msg.utf8))
         }
     }
 #endif

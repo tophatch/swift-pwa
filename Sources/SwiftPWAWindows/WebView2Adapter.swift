@@ -392,7 +392,7 @@
         // `passRetained` in init; balance with `takeRetainedValue` here.
         let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeRetainedValue()
         if hr != 0 {
-            FileHandle.standardError.write(Data(
+            FileHandle.standardError.writeQuietly(Data(
                 "swift-pwa: CreateCoreWebView2Controller failed: 0x\(String(UInt32(bitPattern: hr), radix: 16))\n".utf8
             ))
         }

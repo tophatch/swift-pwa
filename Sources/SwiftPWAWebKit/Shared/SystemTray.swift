@@ -112,7 +112,7 @@
             private func warnOnce() {
                 guard !warned else { return }
                 warned = true
-                FileHandle.standardError.write(Data(
+                FileHandle.standardError.writeQuietly(Data(
                     "swift-pwa: TrayPlugin is a no-op on iOS — system has no tray.\n".utf8
                 ))
             }

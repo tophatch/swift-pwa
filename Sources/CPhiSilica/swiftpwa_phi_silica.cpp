@@ -30,13 +30,18 @@
 #include <unknwn.h>
 #include <winrt/base.h>
 #include <winrt/Windows.Foundation.h>
+#include <winrt/Windows.ApplicationModel.h>
 #include <winrt/Microsoft.Windows.AI.h>
 #include <winrt/Microsoft.Windows.AI.Text.h>
 
-// Windows App SDK bootstrapper (C API) for unpackaged apps.
+// Windows App SDK bootstrapper (C API) for unpackaged apps + the SDK's own
+// version constants (so the bootstrap binds the matching runtime release
+// rather than a hard-coded guess).
 #include <MddBootstrap.h>
+#include <WindowsAppSDK-VersionInfo.h>
 
 namespace WF = winrt::Windows::Foundation;
+namespace WAM = winrt::Windows::ApplicationModel;
 namespace AI = winrt::Microsoft::Windows::AI;
 namespace AIT = winrt::Microsoft::Windows::AI::Text;
 
@@ -46,12 +51,11 @@ bool g_bootstrapped = false;
 
 swiftpwa_phi_silica_ready_state map_ready(AI::AIFeatureReadyState s) {
     switch (s) {
-        case AI::AIFeatureReadyState::Ready:        return SWIFTPWA_PHI_READY;
-        case AI::AIFeatureReadyState::NotReady:     return SWIFTPWA_PHI_NOT_READY;
-        case AI::AIFeatureReadyState::EnsureNeeded: return SWIFTPWA_PHI_ENSURE_NEEDED;
-        case AI::AIFeatureReadyState::NotSupportedOnCurrentSystem:
-            return SWIFTPWA_PHI_NOT_SUPPORTED;
-        default: return SWIFTPWA_PHI_ERROR;
+        case AI::AIFeatureReadyState::Ready:    return SWIFTPWA_PHI_READY;
+        case AI::AIFeatureReadyState::NotReady: return SWIFTPWA_PHI_NOT_READY;
+        // NotSupportedOnCurrentSystem / DisabledByUser / CapabilityMissing all
+        // mean "can't use it here" → the backend reports available:false.
+        default: return SWIFTPWA_PHI_NOT_SUPPORTED;
     }
 }
 
@@ -71,24 +75,50 @@ extern "C" {
 bool swiftpwa_phi_silica_init(void) {
     if (g_bootstrapped) return true;
     if (!ensure_apartment()) return false;
-    // Initialize the Windows App SDK runtime for this (unpackaged) process.
-    // The release/version tag are pinned to the SDK the build links against;
-    // TODO(box): confirm the exact UINT32 majorMinor + versionTag for the
-    // installed runtime (e.g. 0x00010008 for 1.8). MddBootstrapInitialize2
-    // returns an HRESULT; a failure means the runtime redistributable is
-    // absent — report unavailable rather than crash.
-    const UINT32 majorMinor = 0x00010008; // 1.8 — adjust on the box
+    // Initialize the Windows App SDK runtime for this (unpackaged) process,
+    // using the version constants from the SDK we built against
+    // (WindowsAppSDK-VersionInfo.h) so the bootstrap binds the matching
+    // runtime release. `OnNoMatch_NOOP`-free: a failure (runtime absent)
+    // returns false → the backend reports unavailable rather than crashing.
     PACKAGE_VERSION minVersion{};
     HRESULT hr = MddBootstrapInitialize2(
-        majorMinor, L"", minVersion, MddBootstrapInitializeOptions_OnNoMatch_ShowUI);
+        WINDOWSAPPSDK_RELEASE_MAJORMINOR,
+        WINDOWSAPPSDK_RELEASE_VERSION_TAG_W,
+        minVersion,
+        MddBootstrapInitializeOptions_OnPackageIdentity_NOOP);
     if (FAILED(hr)) return false;
     g_bootstrapped = true;
     return true;
 }
 
+bool swiftpwa_phi_silica_unlock(const wchar_t *token) {
+    if (!swiftpwa_phi_silica_init()) return false;
+    try {
+        const winrt::hstring featureId = L"com.microsoft.windows.ai.languagemodel";
+        // Standard LAF attestation format: "<PFN> has registered their use of
+        // <featureId> with Microsoft and agrees to the terms of use." Built from
+        // the running package's identity (throws if unpackaged → caught below).
+        winrt::hstring pfn = WAM::Package::Current().Id().FamilyName();
+        winrt::hstring attestation = pfn + L" has registered their use of " + featureId
+            + L" with Microsoft and agrees to the terms of use.";
+        auto result = WAM::LimitedAccessFeatures::TryUnlockFeature(
+            featureId, token ? winrt::hstring{token} : winrt::hstring{L""}, attestation);
+        auto status = result.Status();
+        return status == WAM::LimitedAccessFeatureStatus::Available
+            || status == WAM::LimitedAccessFeatureStatus::AvailableWithoutToken;
+    } catch (...) {
+        return false;
+    }
+}
+
 swiftpwa_phi_silica_ready_state swiftpwa_phi_silica_ready_state_query(void) {
     if (!swiftpwa_phi_silica_init()) return SWIFTPWA_PHI_ERROR;
     try {
+        // CapabilityMissing / DisabledByUser / NotCompatibleWithSystemHardware /
+        // OSUpdateNeeded all collapse to NOT_SUPPORTED in map_ready. An
+        // unpackaged process gets CapabilityMissing here (the Windows AI APIs
+        // need package identity + the systemAIModels capability — see
+        // docs/windows-setup.md), so the backend reports available:false.
         return map_ready(AIT::LanguageModel::GetReadyState());
     } catch (...) {
         return SWIFTPWA_PHI_ERROR;
@@ -133,6 +163,14 @@ void swiftpwa_phi_silica_generate(
                 auto result = sender.GetResults();
                 cb(result.Text().c_str(), nullptr, user_data);
             } else {
+                // Surface the real failure: GetResults() rethrows the
+                // underlying hresult_error on a non-Completed async op.
+                try {
+                    sender.GetResults();
+                } catch (winrt::hresult_error const &e) {
+                    cb(nullptr, e.message().c_str(), user_data);
+                    return;
+                } catch (...) {}
                 cb(nullptr, L"GenerateResponseAsync failed", user_data);
             }
         });

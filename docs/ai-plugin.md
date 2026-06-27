@@ -384,6 +384,56 @@ tier as it would on an unsupported device. Device support, the `adb` debug
 loop, and the ML Kit beta caveats live in
 [docs/android-setup.md](android-setup.md#9-on-device-ai-gemini-nano).
 
+### Available backend: Windows Phi Silica
+
+`PhiSilicaBackend` is the **Windows** platform built-in — the on-device Phi
+Silica model via the [Windows AI APIs](https://learn.microsoft.com/windows/ai/apis/phi-silica)
+(`LanguageModel`) in the **Windows App SDK**. The Windows counterpart to Apple
+Foundation Models / Android Gemini Nano: system-managed model (pre-installed on
+Copilot+ NPU PCs), free, private, on-device.
+
+It's **off by default** because — unlike the built-in-WinRT toast/biometric
+shims — it links the Windows App SDK (cppwinrt projection + the unpackaged-app
+bootstrapper). Turn it on per app:
+
+```json
+{ "ai": { "phi_silica": true } }
+```
+
+`swift-pwa build --target windows` then sets `SWIFT_PWA_PHI_SILICA=1` (pulling
+in the env-gated `SwiftPWAPhiSilica` target + its `CPhiSilica` C++/WinRT shim)
+and the MSIX manifest generator declares the required `systemAIModels`
+restricted capability. Wire it (guard with `#if os(Windows)`):
+
+```swift
+import SwiftPWAPhiSilica
+
+runtime.run { ctx in
+    #if os(Windows)
+        ctx.use(AIPlugin(PhiSilicaBackend(unlockToken: myLAFToken)))
+    #endif
+}
+```
+
+It provides text (`generate`), token streaming (`generateStream`), and
+on-demand model readiness (`ensureModel`). `info()` reports `available: true`
+when the model is `Ready` or merely needs a one-time `EnsureReadyAsync`; only an
+unsupported/locked config reports `false`. Structured output uses the shared
+prompt-and-validate fallback for now (`structuredOutput: false`); text-only.
+
+> **Two Windows-platform requirements (not swift-pwa's doing).** The Windows AI
+> APIs require **MSIX package identity** — an *unpackaged* exe (swift-pwa's
+> default Windows artifact) gets `CapabilityMissing` / `E_ACCESSDENIED`, so you
+> must ship Phi Silica from a **`--package-format msix`** build. They are also a
+> **Limited Access Feature**: generation needs a Microsoft-issued unlock token
+> for `com.microsoft.windows.ai.languagemodel` (per package family name, from
+> the [LAF Access Token Request Form](https://learn.microsoft.com/windows/ai/apis/phi-silica)),
+> passed via `PhiSilicaBackend(unlockToken:)` — the backend calls
+> `LimitedAccessFeatures.TryUnlockFeature` (attestation auto-built from the
+> running package's identity). AMD GPUs are "coming soon" upstream; today this
+> is NPU (Copilot+) / NVIDIA-RTX only. See
+> [docs/windows-setup.md](windows-setup.md#5-on-device-ai-phi-silica).
+
 The prebuilt binaries are built from a pinned llama.cpp commit — the Apple
 xcframework by
 [`Scripts/build-llama-xcframework.sh`](../Scripts/build-llama-xcframework.sh),
@@ -429,7 +479,7 @@ small model → none** (the app supplies its own cloud tier on top).
 
 | Tier | Apple | Android | Windows | Linux |
 | --- | --- | --- | --- | --- |
-| 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | **Gemini Nano / ML Kit GenAI (`gemini-nano`) — shipped ✅** | Windows AI / Phi Silica (`phi-silica`) | — |
+| 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | **Gemini Nano / ML Kit GenAI (`gemini-nano`) — shipped ✅** | **Windows AI / Phi Silica (`phi-silica`) — implemented; needs MSIX + LAF token** | — |
 | 2 — downloadable GGUF | **llama.cpp (`gemma-llamacpp`) — shipped ✅** / MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) / **llama.cpp (Vulkan) — shipped ✅** | **llama.cpp (Vulkan) — shipped ✅** |
 | 3 — none | `none` → `available:false` | | | |
 

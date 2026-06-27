@@ -31,14 +31,36 @@
     /// shared prompt-and-validate fallback for now (`structuredOutput: false`);
     /// the base model is text-only.
     public struct PhiSilicaBackend: AIBackend {
-        public init() {}
+        /// Microsoft-issued **Limited Access Feature** unlock token for
+        /// `com.microsoft.windows.ai.languagemodel`, obtained per app (tied to
+        /// the MSIX package family name) from the LAF Access Token Request Form.
+        /// Required for generation: without it the model reports `Ready` but
+        /// `generate` throws "Limited Access Feature is not available". Pass it
+        /// from your own config/secret store (don't hard-code). `nil` skips the
+        /// unlock — fine for probing `info()` or on a build that already has the
+        /// feature available without a token.
+        private let unlockToken: String?
+
+        public init(unlockToken: String? = nil) {
+            self.unlockToken = unlockToken
+        }
+
+        /// Unlock the LAF (idempotent, process-wide) before any model call. The
+        /// shim builds the attestation from the running package's identity, so
+        /// only the token is needed here.
+        private func ensureUnlocked() {
+            guard let token = unlockToken, !token.isEmpty else { return }
+            token.withCString(encodedAs: UTF16.self) { _ = swiftpwa_phi_silica_unlock($0) }
+        }
 
         // MARK: - info
 
         public func info() async -> AICapabilities {
+            ensureUnlocked()
             let state = swiftpwa_phi_silica_ready_state_query()
             let available = switch state {
-            case SWIFTPWA_PHI_READY, SWIFTPWA_PHI_NOT_READY, SWIFTPWA_PHI_ENSURE_NEEDED:
+            case SWIFTPWA_PHI_READY, SWIFTPWA_PHI_NOT_READY:
+                // Ready, or present-but-needs-ensure → route + trigger ensureModel.
                 true
             default: // SWIFTPWA_PHI_NOT_SUPPORTED, SWIFTPWA_PHI_ERROR
                 false
@@ -55,6 +77,7 @@
         // MARK: - generate (unary)
 
         public func generate(_ request: AIGenerateRequest) async throws -> AIGenerateResult {
+            ensureUnlocked()
             let prompt = Self.foldedPrompt(request)
             let text = try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String, any Error>) in
                 let box = DoneBox(cont: cont)
@@ -69,6 +92,7 @@
         // MARK: - generateStream
 
         public func generateStream(_ request: AIGenerateRequest) -> AsyncThrowingStream<AIChunk, any Error> {
+            ensureUnlocked()
             let prompt = Self.foldedPrompt(request)
             return AsyncThrowingStream { continuation in
                 let sink = StreamSink(continuation: continuation)
@@ -86,7 +110,8 @@
         // MARK: - ensureModel
 
         public func ensureModel(_: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error> {
-            AsyncThrowingStream { continuation in
+            ensureUnlocked()
+            return AsyncThrowingStream { continuation in
                 let box = EnsureBox(continuation: continuation)
                 let opaque = Unmanaged.passRetained(box).toOpaque()
                 swiftpwa_phi_silica_ensure_ready(phiEnsureCallback, opaque)

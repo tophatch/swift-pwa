@@ -32,6 +32,20 @@ struct AppxManifestGeneratorTests {
         #expect(xml.contains("Executable=\"Hello.exe\""))
         #expect(xml.contains("EntryPoint=\"Windows.FullTrustApplication\""))
         #expect(xml.contains("<rescap:Capability Name=\"runFullTrust\""))
+        // No AI capability unless ai.phi_silica is set.
+        #expect(!xml.contains("systemAIModels"))
+    }
+
+    @Test("ai.phi_silica adds the systemAIModels restricted capability")
+    func phiSilicaCapability() {
+        var m = base()
+        m.ai = .init(phiSilica: true)
+        let xml = AppxManifestGenerator.render(manifest: m)
+        // The Windows AI APIs need this restricted capability + package
+        // identity; declaring it is what lets a packaged build reach Phi Silica.
+        #expect(xml.contains("<rescap:Capability Name=\"systemAIModels\" />"))
+        // Still rescap-namespaced and alongside runFullTrust.
+        #expect(xml.contains("<rescap:Capability Name=\"runFullTrust\""))
     }
 
     @Test("Three-component versions get padded to four for MSIX schema compliance")

@@ -29,12 +29,13 @@
 extern "C" {
 #endif
 
-// Mirrors WinRT's `Microsoft.Windows.AI.AIFeatureReadyState`.
+// Collapses WinRT's `Microsoft.Windows.AI.AIFeatureReadyState`
+// (Ready / NotReady / NotSupportedOnCurrentSystem / DisabledByUser /
+// CapabilityMissing) into what the backend's `available` flag needs.
 typedef enum {
     SWIFTPWA_PHI_READY = 0,          // Ready — model installed, usable now.
-    SWIFTPWA_PHI_NOT_READY = 1,      // NotReady — transient / model absent.
-    SWIFTPWA_PHI_ENSURE_NEEDED = 2,  // EnsureNeeded — call ensure to download.
-    SWIFTPWA_PHI_NOT_SUPPORTED = 3,  // NotSupportedOnCurrentSystem.
+    SWIFTPWA_PHI_NOT_READY = 1,      // NotReady — present but needs ensure/warm-up.
+    SWIFTPWA_PHI_NOT_SUPPORTED = 3,  // NotSupported / DisabledByUser / CapabilityMissing.
     SWIFTPWA_PHI_ERROR = -1,         // Exception (LAF locked, no runtime, …).
 } swiftpwa_phi_silica_ready_state;
 
@@ -55,6 +56,16 @@ typedef void (*swiftpwa_phi_silica_delta_callback)(
 // activation context). Returns false when the runtime redistributable is
 // absent — the backend then reports `available: false`.
 bool swiftpwa_phi_silica_init(void);
+
+// Unlock the Windows AI language-model **Limited Access Feature**
+// (`com.microsoft.windows.ai.languagemodel`) with a Microsoft-issued token
+// (obtained per app from the LAF Access Token Request Form, tied to the app's
+// package family name). The attestation string is built automatically from the
+// running package's identity, so the app supplies only the token. Returns true
+// when the feature is unlocked (or available without a token). Requires package
+// identity (MSIX) — fails on an unpackaged exe. Without this, generation throws
+// "Limited Access Feature is not available" even when the model is Ready.
+bool swiftpwa_phi_silica_unlock(const wchar_t *token);
 
 // Synchronous readiness probe (`LanguageModel::GetReadyState()`). Cheap;
 // safe to call from `ai.info`. Returns SWIFTPWA_PHI_ERROR if the feature is

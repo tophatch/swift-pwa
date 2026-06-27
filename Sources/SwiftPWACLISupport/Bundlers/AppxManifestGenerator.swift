@@ -48,6 +48,16 @@ enum AppxManifestGenerator {
         }
         let publisher = "CN=" + identityName
 
+        // The Windows AI APIs (Phi Silica, `ai.phi_silica`) are gated behind
+        // the `systemAIModels` restricted capability AND package identity — an
+        // unpackaged exe gets `AIFeatureReadyState.CapabilityMissing` /
+        // E_ACCESSDENIED. Declaring it here is what lets a packaged (MSIX)
+        // CritterFacts/adopter actually reach the model. Leading newline so it
+        // nests under the fixed `runFullTrust` line.
+        let phiSilicaCapability = manifest.ai?.phiSilica == true
+            ? "\n            <rescap:Capability Name=\"systemAIModels\" />"
+            : ""
+
         // MSIX versions are Major.Minor.Build.Revision. The PWA
         // manifest's `version` is SemVer-shaped (Major.Minor.Patch).
         // Pad with `.0` if the user supplied three components; pass
@@ -104,7 +114,7 @@ enum AppxManifestGenerator {
           </Applications>
 
           <Capabilities>
-            <rescap:Capability Name="runFullTrust" />
+            <rescap:Capability Name="runFullTrust" />\(phiSilicaCapability)
           </Capabilities>
 
         </Package>

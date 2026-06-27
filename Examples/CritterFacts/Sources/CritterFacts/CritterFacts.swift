@@ -9,6 +9,9 @@ import SwiftPWAModelStore // ModelSpec
 #if canImport(SwiftPWALlama)
     import SwiftPWALlama
 #endif
+#if canImport(SwiftPWAPhiSilica)
+    import SwiftPWAPhiSilica
+#endif
 
 #if canImport(SwiftPWALlama)
     /// The downloadable model (tiny, ~400 MB, Apache-2.0) — shared by the
@@ -26,7 +29,16 @@ import SwiftPWAModelStore // ModelSpec
 @main
 struct CritterFactsApp {
     static func main() async throws {
-        #if canImport(SwiftPWALlama)
+        #if os(Windows) && canImport(SwiftPWAPhiSilica)
+            // Headless self-test for the Windows Phi Silica path: one generation
+            // on the NPU, print it, exit — no WebView. The Windows analogue of
+            // the llama smoke below; the way Phi Silica is verified on a
+            // Copilot+ box without driving the WebView2 UI over a remote shell.
+            if ProcessInfo.processInfo.environment["CRITTERFACTS_SMOKE"] != nil {
+                await runPhiSmoke()
+                return
+            }
+        #elseif canImport(SwiftPWALlama)
             // Headless self-test: build the backend, generate one fact, print it,
             // and exit — no WebView. Verifies the on-device path end to end
             // (including a packaged AppImage's bundled Vulkan loader) without
@@ -41,6 +53,41 @@ struct CritterFactsApp {
         try runtime.run(configure)
     }
 }
+
+#if os(Windows) && canImport(SwiftPWAPhiSilica)
+    /// One headless Phi Silica generation: info → ensure → generate. Writes the
+    /// outcome to the file named by `PHI_SMOKE_OUT` (and prints it) so it can be
+    /// read back when launched as a packaged app (which has no console). Records
+    /// the error rather than crashing, so a policy/availability failure is
+    /// captured rather than lost.
+    func runPhiSmoke() async {
+        var lines: [String] = []
+        do {
+            let backend = PhiSilicaBackend(
+                unlockToken: ProcessInfo.processInfo.environment["PHI_SILICA_LAF_TOKEN"]
+            )
+            let caps = await backend.info()
+            lines.append("PHI_INFO available=\(caps.available) backend=\(caps.backend)")
+            for try await _ in backend.ensureModel(AIEnsureModelRequest()) {} // no-op if Ready
+            let result = try await backend.generate(AIGenerateRequest(
+                system: "You are a witty zoologist. Reply with ONE short, surprising, true "
+                    + "sentence. No preamble, no lists, no quotation marks.",
+                prompt: "Tell me a fun fact about the octopus.",
+                maxTokens: 60,
+                temperature: 0.7
+            ))
+            lines.append("CRITTERFACTS_SMOKE_OK backend=\(result.backend)")
+            lines.append("TEXT: \(result.text)")
+        } catch {
+            lines.append("CRITTERFACTS_SMOKE_ERR \(error)")
+        }
+        let out = lines.joined(separator: "\n") + "\n"
+        print(out, terminator: "")
+        if let path = ProcessInfo.processInfo.environment["PHI_SMOKE_OUT"], !path.isEmpty {
+            try? Data(out.utf8).write(to: URL(fileURLWithPath: path))
+        }
+    }
+#endif
 
 #if canImport(SwiftPWALlama)
     /// One headless generation. Uses `SMOKE_MODEL` (a local GGUF path) when set,
@@ -78,6 +125,16 @@ func configure(_ ctx: any AppContext) throws {
         // No app-shipped weights: `ai.ensureModel` triggers AICore's on-demand
         // download. Enabled by `ai.gemini_nano: true` in pwa.json.
         ctx.use(AIPlugin(GeminiNanoBackend()))
+    #elseif os(Windows) && canImport(SwiftPWAPhiSilica)
+        // Windows' platform built-in: Phi Silica via the Windows AI APIs
+        // (Windows App SDK). Preferred over llama on Windows when
+        // `ai.phi_silica: true` — system-managed model, no app-shipped weights.
+        // The Limited Access Feature unlock token (per package family name,
+        // from Microsoft) is a secret, so it comes from the environment rather
+        // than checked-in config. Requires an MSIX-packaged build to use.
+        ctx.use(AIPlugin(PhiSilicaBackend(
+            unlockToken: ProcessInfo.processInfo.environment["PHI_SILICA_LAF_TOKEN"]
+        )))
     #elseif canImport(SwiftPWALlama)
         // A tiny (~400 MB), Apache-2.0 instruct model. It's *downloadable*: the
         // page calls `ai.ensureModel` before its first `ai.generate`, and

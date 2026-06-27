@@ -33,6 +33,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var android: AndroidSection?
     public var updater: UpdaterSection?
     public var build: BuildSection?
+    public var ai: AISection?
 
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
@@ -115,6 +116,26 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// swift-pwa's own (override on collision). See
         /// ``MacOSSection/infoPlist``.
         public var infoPlist: [String: JSONValue]?
+    }
+
+    /// On-device AI configuration for the `ai.*` plugin.
+    public struct AISection: Codable, Sendable, Equatable {
+        /// Bundle the portable on-device **llama.cpp** backend
+        /// (`SwiftPWALlama` / `LlamaBackend`) into the build. When `true`,
+        /// `swift-pwa build` sets `SWIFT_PWA_LLAMA=1` for the underlying
+        /// `swift build` / `xcodebuild`, so SwiftPM pulls in the prebuilt
+        /// llama xcframework (`.binaryTarget`, downloaded + checksum-verified
+        /// once, cached) and the app can `ctx.use(AIPlugin(LlamaBackend(...)))`.
+        ///
+        /// Off by default — keeps the ~30MB Apple-only binary out of builds
+        /// that don't want it. **Apple (macOS / iOS) only** for now; ignored
+        /// (with a warning) for other targets. Apps that only use Apple
+        /// Foundation Models don't need this.
+        public var localLlama: Bool?
+
+        public init(localLlama: Bool? = nil) {
+            self.localLlama = localLlama
+        }
     }
 
     public struct LinuxSection: Codable, Sendable, Equatable {

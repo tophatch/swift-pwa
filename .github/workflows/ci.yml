@@ -39,6 +39,33 @@ jobs:
             -derivedDataPath build/ios-sim \
             build
 
+  macos-llama:
+    # Coverage for the opt-in llama.cpp backend. It's env-gated
+    # (SWIFT_PWA_LLAMA) so the default `macos` job above never compiles it —
+    # this job builds the prebuilt xcframework (macOS slice) via the same
+    # script CI/release uses, then runs the gated suite. The GBNF unit tests +
+    # compile run here; the model-dependent e2e tests skip (no GGUF in CI,
+    # mirroring the Foundation Models e2e).
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - run: swift --version
+      - name: Cache prebuilt llama xcframework
+        id: llama-cache
+        uses: actions/cache@v4
+        with:
+          path: Vendor/llama
+          # Keyed on the build script, which pins the llama.cpp commit — bump
+          # the pin and the cache rebuilds.
+          key: llama-xcframework-macos-${{ hashFiles('Scripts/build-llama-xcframework.sh') }}
+      - name: Build llama xcframework (macOS slice)
+        if: steps.llama-cache.outputs.cache-hit != 'true'
+        run: bash Scripts/build-llama-xcframework.sh macos
+      - name: Test SwiftPWALlama (gate on)
+        env:
+          SWIFT_PWA_LLAMA: "1"
+        run: swift test --filter SwiftPWALlamaTests -v
+
   linux-gtk3:
     runs-on: ubuntu-24.04
     steps:

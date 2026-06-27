@@ -15,10 +15,14 @@ import Foundation
 /// present. It is **not** a full JSON Schema validator: a backend that
 /// needs strict conformance should constrain decoding natively (and
 /// override `generateJSON`) rather than rely on this path.
-enum AIStructuredFallback {
+public enum AIStructuredFallback {
     /// `generate` is injected (rather than taking the whole backend) so
     /// this is trivially unit-testable with a canned-response double.
-    static func run(
+    ///
+    /// Public so an out-of-module backend (e.g. `SwiftPWALlama`) that
+    /// overrides `generateJSON` can still reach this shared fallback for
+    /// schemas its native constraint path can't express.
+    public static func run(
         _ request: AIGenerateJSONRequest,
         generate: (AIGenerateRequest) async throws -> AIGenerateResult
     ) async throws -> JSONValue {

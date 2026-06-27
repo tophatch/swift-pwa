@@ -1,17 +1,22 @@
 name: llama windows
 
-# Build the prebuilt llama.cpp Windows static lib (llama.lib, Vulkan GPU backend)
-# that `SwiftPWALlama` links on Windows, and publish it as a STABLE release asset.
+# Build the prebuilt llama.cpp Windows static libs (llama.lib) that
+# `SwiftPWALlama` links on Windows, and publish them as STABLE release assets.
 #
 # The Windows analogue of llama-linux.yml / llama-xcframework.yml. Run manually
 # (workflow_dispatch) only when the pinned llama.cpp commit in
 # Scripts/build-llama-windows.ps1 changes — the artifact depends on that commit,
-# NOT on the swift-pwa version, so it lives on its own long-lived
-# `llama-vendor-windows-x64` release.
+# NOT on the swift-pwa version, so each arch lives on its own long-lived
+# `llama-vendor-windows-<arch>` release.
 #
-# Self-completing: after building + publishing llama.lib, it pins the new SHA-256
-# into `LlamaWindowsArtifact.sha256_x64` (the CLI downloader's pin) and opens a
-# PR. So the operation is "Run workflow" → merge the PR it opens.
+# Two arches, different GPU stories (see Scripts/build-llama-windows.ps1):
+#   - x64   → Vulkan GPU backend, built on windows-2022 with the Vulkan SDK.
+#   - arm64 → CPU-only (no arm64 ggml-vulkan yet), built NATIVELY on the
+#             windows-11-arm runner — no Vulkan SDK, no cross-compile.
+#
+# Self-completing: after building + publishing each arch's llama.lib, it pins the
+# new SHA-256 into `LlamaWindowsArtifact.sha256_<arch>` (the CLI downloader's pin)
+# and opens a PR. So the operation is "Run workflow" → merge the PRs it opens.
 #
 # NOTE: workflow_dispatch only appears once this file is on the default branch.
 on:
@@ -23,19 +28,30 @@ permissions:
 
 jobs:
   build:
-    runs-on: windows-2022 # x64
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x64
+            runner: windows-2022
+            gpu: true
+          - arch: arm64
+            runner: windows-11-arm
+            gpu: false
+    runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v5
 
       - name: Set up the MSVC build environment (cl.exe / lib.exe on PATH)
         uses: ilammy/msvc-dev-cmd@v1
         with:
-          arch: x64
+          arch: ${{ matrix.arch }}
 
       - name: Install the Vulkan SDK (LunarG silent installer)
-        # The SDK provides SPIRV-Headers' cmake config + glslc + vulkan-1.lib,
-        # which ggml's Vulkan backend needs at configure/link — a bare driver's
-        # vulkan-1.dll alone is not enough. Mirrors the Linux job's LunarG tarball.
+        # x64 only — the SDK provides SPIRV-Headers' cmake config + glslc +
+        # vulkan-1.lib, which ggml's Vulkan backend needs at configure/link. The
+        # arm64 build is CPU-only and skips this entirely.
+        if: matrix.gpu
         shell: pwsh
         run: |
           $url = 'https://sdk.lunarg.com/sdk/download/latest/windows/vulkan_sdk.exe'
@@ -46,57 +62,61 @@ jobs:
           Write-Host "SDK at $($sdk.FullName)"
           "VULKAN_SDK=$($sdk.FullName)" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      - name: Build llama.lib (Vulkan, static)
+      - name: Build llama.lib (static)
         id: build
         shell: pwsh
         run: |
-          pwsh Scripts/build-llama-windows.ps1
-          $asset = 'Vendor/llama-windows/llama-windows-x64.lib'
+          pwsh Scripts/build-llama-windows.ps1 -Arch ${{ matrix.arch }}
+          $asset = "Vendor/llama-windows/llama-windows-${{ matrix.arch }}.lib"
           $sha = (Get-FileHash -Algorithm SHA256 $asset).Hash.ToLower()
           "sha256=$sha" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
           "asset=$asset" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
 
-      - name: Publish to the stable llama-vendor-windows-x64 release
+      - name: Publish to the stable llama-vendor-windows-${{ matrix.arch }} release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: llama-vendor-windows-x64
-          name: llama.cpp Windows static lib (Vulkan, vendored)
+          tag_name: llama-vendor-windows-${{ matrix.arch }}
+          name: llama.cpp Windows static lib (${{ matrix.arch }}, vendored)
           prerelease: true
           files: ${{ steps.build.outputs.asset }}
 
       - name: Pin the checksum in LlamaWindowsArtifact.swift
-        # Replace the CLI downloader's pinned x64 checksum. The value is the
+        # Replace the CLI downloader's pinned per-arch checksum. The value is the
         # sha256 of the exact file just uploaded, so the pin matches by
         # construction — no CI re-verification needed.
         shell: pwsh
         run: |
           $f = 'Sources/SwiftPWACLISupport/LlamaWindowsArtifact.swift'
           $sha = '${{ steps.build.outputs.sha256 }}'
+          $field = 'sha256_${{ matrix.arch }}'
           (Get-Content $f -Raw) `
-            -replace '(static let sha256_x64 = )"[0-9a-f]{64}"', "`$1`"$sha`"" |
+            -replace "(static let $field = )`"[0-9a-f]{64}`"", "`$1`"$sha`"" |
             Set-Content $f -NoNewline
-          Write-Host "::notice::Pinned LlamaWindowsArtifact.sha256_x64 = $sha"
+          Write-Host "::notice::Pinned LlamaWindowsArtifact.$field = $sha"
 
       - name: Open PR with the pinned checksum
         uses: peter-evans/create-pull-request@v7
         with:
-          branch: chore/pin-llama-windows-checksum
-          title: "chore(ai): pin llama Windows llama.lib checksum"
+          branch: chore/pin-llama-windows-checksum-${{ matrix.arch }}
+          title: "chore(ai): pin llama Windows ${{ matrix.arch }} llama.lib checksum"
           commit-message: |
-            chore(ai): pin llama Windows llama.lib checksum
+            chore(ai): pin llama Windows ${{ matrix.arch }} llama.lib checksum
 
-            Auto-generated by the llama-windows workflow after publishing llama.lib
-            to the llama-vendor-windows-x64 release. The checksum is of the exact
-            uploaded artifact, so it matches by construction.
+            Auto-generated by the llama-windows workflow after publishing the
+            ${{ matrix.arch }} llama.lib to the llama-vendor-windows-${{ matrix.arch }}
+            release. The checksum is of the exact uploaded artifact, so it matches
+            by construction.
 
             Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>
           body: |
-            Pins `LlamaWindowsArtifact.sha256_x64` (the CLI downloader's pin) to
-            the artifact just published to the `llama-vendor-windows-x64` release
-            by the **llama-windows** workflow.
+            Pins `LlamaWindowsArtifact.sha256_${{ matrix.arch }}` (the CLI
+            downloader's pin) to the artifact just published to the
+            `llama-vendor-windows-${{ matrix.arch }}` release by the
+            **llama-windows** workflow.
 
+            - arch: `${{ matrix.arch }}`
             - checksum: `${{ steps.build.outputs.sha256 }}`
-            - url: `https://github.com/${{ github.repository }}/releases/download/llama-vendor-windows-x64/llama-windows-x64.lib`
+            - url: `https://github.com/${{ github.repository }}/releases/download/llama-vendor-windows-${{ matrix.arch }}/llama-windows-${{ matrix.arch }}.lib`
 
             Correct by construction (the checksum is of the exact uploaded file).
 

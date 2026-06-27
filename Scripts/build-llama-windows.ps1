@@ -25,18 +25,36 @@
   the Linux build (platform-agnostic, same llama.cpp pin) and are NOT touched
   here, to avoid CRLF churn.
 
+  Architecture: pass -Arch x64 (default) or -Arch arm64. x64 builds the Vulkan
+  GPU backend (needs the Vulkan SDK, as above). arm64 (Snapdragon X Copilot+) is
+  CPU-only for now (a deliberate MVP — not a ggml/Vulkan limitation; a
+  Vulkan/Adreno build is a follow-up once the SDK's arm64 link tooling is sorted),
+  so it needs NEITHER glslc NOR the Vulkan SDK, just the arm64 MSVC toolset (run
+  from an arm64 / amd64_arm64 developer shell so cl.exe + lib.exe target arm64).
+  The produced asset is named per arch (llama-windows-<arch>.lib).
+
 .EXAMPLE
   pwsh Scripts/build-llama-windows.ps1
+  pwsh Scripts/build-llama-windows.ps1 -Arch arm64
   $env:LLAMA_COMMIT='<sha>'; pwsh Scripts/build-llama-windows.ps1
 #>
+param(
+    [ValidateSet('x64', 'arm64')]
+    [string]$Arch = $(if ($env:LLAMA_WIN_ARCH) { $env:LLAMA_WIN_ARCH } else { 'x64' })
+)
 $ErrorActionPreference = 'Stop'
+
+# Vulkan is the x64 GPU backend; arm64 ships CPU-only for now (MVP — a
+# Vulkan/Adreno arm64 build is a follow-up). This single switch drives every
+# Vulkan-specific step.
+$Gpu = ($Arch -eq 'x64')
 
 # Pinned llama.cpp commit - keep in lockstep with build-llama-linux.sh /
 # build-llama-xcframework.sh so all three backends expose the same ABI/headers.
 $LlamaRepo   = 'https://github.com/ggml-org/llama.cpp.git'
 $LlamaCommit = if ($env:LLAMA_COMMIT) { $env:LLAMA_COMMIT } else { '5a6a0dd' }
 
-$Arch = 'x64' # only target for now (matches the Windows arch vocabulary)
+Write-Host "=== target arch: $Arch (GPU backend: $(if ($Gpu) { 'Vulkan' } else { 'CPU-only' })) ==="
 $Root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $Work  = if ($env:WORK) { $env:WORK } else { Join-Path $Root '.build\llama-windows' }
 $Out   = if ($env:OUT)  { $env:OUT }  else { Join-Path $Root 'Vendor\llama-windows' } # gitignored
@@ -54,13 +72,18 @@ if (-not (Get-Command lib.exe -ErrorAction SilentlyContinue)) {
 }
 # Avoid the PS7-only `?.` operator - this script must run under stock Windows
 # PowerShell 5.1 (what ships with Windows), not just pwsh.
-$glslcCmd = Get-Command glslc.exe -ErrorAction SilentlyContinue
-$Glslc = if ($glslcCmd) { $glslcCmd.Source } else { $null }
-if (-not $Glslc -and $env:VULKAN_SDK) { $Glslc = Join-Path $env:VULKAN_SDK 'Bin\glslc.exe' }
-if (-not (Test-Path $Glslc)) {
-    throw "glslc.exe not found. Install the Vulkan SDK and set `$env:VULKAN_SDK (system vulkan-1.dll alone is NOT enough - the SDK provides glslc + SPIRV-Headers)."
+# Vulkan toolchain (glslc + SDK) is only needed for the x64 GPU build; the arm64
+# CPU-only build skips it entirely.
+$Glslc = $null
+if ($Gpu) {
+    $glslcCmd = Get-Command glslc.exe -ErrorAction SilentlyContinue
+    $Glslc = if ($glslcCmd) { $glslcCmd.Source } else { $null }
+    if (-not $Glslc -and $env:VULKAN_SDK) { $Glslc = Join-Path $env:VULKAN_SDK 'Bin\glslc.exe' }
+    if (-not (Test-Path $Glslc)) {
+        throw "glslc.exe not found. Install the Vulkan SDK and set `$env:VULKAN_SDK (system vulkan-1.dll alone is NOT enough - the SDK provides glslc + SPIRV-Headers)."
+    }
+    Write-Host "glslc: $Glslc"
 }
-Write-Host "glslc: $Glslc"
 
 # --- fetch pinned source ---
 # Full clone (no --depth) so every pinned commit is already present; the fetch
@@ -89,7 +112,7 @@ $CMakeArgs = @(
     '-G', 'Ninja'
     '-DCMAKE_BUILD_TYPE=Release'
     '-DBUILD_SHARED_LIBS=OFF'
-    '-DGGML_VULKAN=ON'
+    "-DGGML_VULKAN=$(if ($Gpu) { 'ON' } else { 'OFF' })"
     '-DGGML_OPENMP=OFF'
     '-DGGML_NATIVE=OFF'
     '-DLLAMA_BUILD_COMMON=OFF'
@@ -99,9 +122,11 @@ $CMakeArgs = @(
     '-DLLAMA_BUILD_SERVER=OFF'
     '-DLLAMA_BUILD_APP=OFF'
     '-DLLAMA_CURL=OFF'
-    "-DVulkan_GLSLC_EXECUTABLE=$Glslc"
 )
-if ($env:VULKAN_SDK) { $CMakeArgs += "-DCMAKE_PREFIX_PATH=$env:VULKAN_SDK" }
+if ($Gpu) {
+    $CMakeArgs += "-DVulkan_GLSLC_EXECUTABLE=$Glslc"
+    if ($env:VULKAN_SDK) { $CMakeArgs += "-DCMAKE_PREFIX_PATH=$env:VULKAN_SDK" }
+}
 
 cmake -S $Src -B $Build @CMakeArgs
 if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }

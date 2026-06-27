@@ -7,8 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`fs.extractZip` / `fs.listZip` accept a `content://` source on Android.** An Android SAF pick (`dialog.openFile`) hands back a `content://` URI, but the zip ops required a real filesystem path — so importing a user-picked archive forced a `readBinary → base64 → writeBinary` materialize first, the exact JS↔Swift bridge cost the native extractor exists to avoid (and worst on the multi-GB packs that motivated it). The source archive may now be a `content://` URI: the Kotlin handlers open it via `ContentResolver.openInputStream` → `ZipInputStream` (vs random-access `ZipFile` for a real path), so a SAF-picked pack extracts off-bridge in one call. The destination must still be a real path (SAF exposes no writable tree). Guards are preserved — path-traversal + entry-count throughout, and the streaming path enforces the uncompressed-byte cap *during* the copy (stronger than a header-size precheck), applying the ratio guard when entry sizes are known. Desktop is unaffected (`content://` is Android-only). (Android adopter feedback.)
+
 ### Fixed
 
+- **The prebuilt single-file `swift-pwa` binary can build Android again.** `build --target android` from a prebuilt CLI trapped with `Fatal error: could not load resource bundle … swift-pwa_SwiftPWACore.bundle`: the Android bundler staged `bridge.js` via `SwiftPWACore.BridgeScript.source()`, which reads `Bundle.module` — and a single-file binary has no co-located `SwiftPWACore.bundle`. (Only the Android path hit it; the CLI stages `bridge.js` into the APK, whereas desktop apps get it from their own linked Core at runtime.) Since the Quickstart points users at the prebuilt binary, this blocked Android for the common case. `bridge.js` is now base64-embedded into the CLI (`BridgeJSData`, mirroring the Gradle-wrapper embed) and staged from there; a test guards it against drifting from the canonical Core resource. (Android adopter feedback.)
 - **Android manual cross-compile docs now stage the Swift runtime libraries.** [docs/android-setup.md](docs/android-setup.md)'s §4 Option A (scaffold-only, then copy the built `.so` into `jniLibs/`) only mentioned the app `.so`, so a hand-staged APK launched to `UnsatisfiedLinkError: library "libswiftCore.so" not found` — it omitted the Swift stdlib `.so`s and the NDK's `libc++_shared.so` that `--cross-compile-android`'s `stageSwiftRuntime` copies automatically. The docs now list those copies (and recommend Option B, which does it for you).
 
 ## [0.7.1] - 2026-06-27

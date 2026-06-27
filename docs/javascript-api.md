@@ -182,6 +182,12 @@ into `app.dataDir()` → reference the media via a
 [`serveDirectory`](swift-api.md#serving-extra-directories-content-packs)
 mount. Available on macOS / iOS / Linux / Android (Windows: pending).
 
+On **Android**, `dialog.openFile` returns a `content://` SAF URI, and you can
+pass it straight to `fs.listZip` / `fs.extractZip` as `from` — they read it
+via the system `ContentResolver`, so a user-picked archive extracts off-bridge
+with no `readBinary`/`writeBinary` materialize step. (The destination `to` must
+still be a real path under `app.dataDir()`; SAF exposes no writable tree.)
+
 **Zip creation (authoring / re-exporting a pack)** — the inverse of
 `fs.extractZip`, gated on the same injected extractor. For the common
 case (a small pack) build the `.zip` in the browser as a `Blob`; reach for

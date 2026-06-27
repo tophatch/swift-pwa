@@ -299,6 +299,15 @@ The bundler produces a portable folder. Drop it on any Windows 10 21H2+
 or Windows 11 box that has the WebView2 Runtime, and double-click
 `MyApp.exe`.
 
+The bundled EXE is flipped to the **WINDOWS** subsystem (via `editbin
+/SUBSYSTEM:WINDOWS`) so it launches as a GUI app with no stray console
+window — SwiftPM otherwise links it as a console app, which makes Explorer
+open a terminal alongside the window. `editbin` ships with the MSVC toolset
+and is on PATH inside a VS Developer shell; if it's missing the build still
+succeeds but warns, and the EXE keeps its console. (A consequence: `print` /
+stderr don't appear when the app is launched from Explorer — use `swift run`
+during development to see logs.)
+
 For an MSIX/Appx package instead of a portable folder:
 
 ```powershell

@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-06-27
+
 ### Added
 
 - **`swift-pwa build --target windows --single-file` — ship a Windows portable app as one `.exe`.** The portable format was a *folder* (`<App>.exe` + `web/` + `pwa.json`) — awkward to distribute. `--single-file` now **embeds `web/` as an overlay appended to the exe** and emits a single self-contained `build\<App>.exe`; at runtime the app reads its own executable's overlay and **serves the bundle from memory** through the existing WebView2 `WebResourceRequested` path (no extraction to disk). Detected transparently — a `.bundled(directory:)` app needs no code change; the runtime serves embedded assets when present and falls back to the disk `web/` otherwise. Appending after the PE image is the standard "overlay" technique (the loader ignores trailing bytes), so the exe still runs; the append happens after the manifest-embed + subsystem-flip steps. Windows-only (the one platform whose artifact was a loose folder — `.app`/AppImage/`.ipa`/`.apk` already bundle `web/` inside); not combinable with `--package-format msix` (MSIX already packages everything). Current limits: full-body responses only (no range serving — ship large media via `serveDirectory`, which stays disk/range-aware), uncompressed overlay, no SPA deep-link fallback. See [docs/windows-setup.md](docs/windows-setup.md).

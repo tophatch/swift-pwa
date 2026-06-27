@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.7.2`](https://github.com/tophatch/swift-pwa/releases/tag/v0.7.2) is the current release — macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class. See the [feature matrix](#feature-matrix), the per-platform [setup docs](docs/), and [`CHANGELOG.md`](CHANGELOG.md).
+> **Status:** [`v0.7.3`](https://github.com/tophatch/swift-pwa/releases/tag/v0.7.3) is the current release — macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class, with **built-in on-device AI** (Apple Foundation Models + GPU-accelerated llama.cpp) shipping on macOS, Linux, and Windows. See the [feature matrix](#feature-matrix), the per-platform [setup docs](docs/), and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Why
 
@@ -16,16 +16,19 @@ If you write Swift, today's options for shipping a thin-client app are uncomfort
 
 `swift-pwa` is the option for Swift shops: one Swift package, one JS API (`__SWIFT_PWA__.invoke()`), one CLI. The same source produces `.app`, `.ipa`, `.AppImage`, portable Windows `.exe`, MSIX, and an Android Gradle project that builds to APK / AAB.
 
-|                  | **swift-pwa**  | Tauri    | Wails    | Electron |
-|------------------|----------------|----------|----------|----------|
-| Host language    | Swift          | Rust     | Go       | Node.js  |
-| Webview          | System         | System   | System   | Bundled  |
-| Bundle size      | ~5-15 MB       | ~5-15 MB | ~5-15 MB | ~80+ MB  |
-| macOS            | Yes            | Yes      | Yes      | Yes      |
-| Linux            | Yes            | Yes      | Yes      | Yes      |
-| Windows          | Yes            | Yes      | Yes      | Yes      |
-| iOS              | Yes            | Yes      | No       | No       |
-| Android          | Yes            | Yes      | No       | No       |
+And **on-device AI is built in, not bring-your-own.** A single `ai.*` JS API (`ai.generate` / `ai.generateStream` / schema-constrained `ai.generateJSON`, plus a resumable, checksum-pinned model downloader) is backed by real on-device engines — **Apple Foundation Models** on Apple hardware and **GPU-accelerated llama.cpp** (Metal on Apple, **Vulkan** on Linux + Windows, one artifact covering NVIDIA / AMD / Intel) — opt-in with a single `ai.local_llama` flag. In Electron / Tauri / Wails, local inference is a DIY integration: bundle a sidecar (Ollama, `candle`), stand up a Python + llama.cpp backend, or reach for a third-party plugin. Here it's a first-class, cross-platform part of the framework.
+
+|                   | **swift-pwa**       | Tauri    | Wails    | Electron |
+|-------------------|---------------------|----------|----------|----------|
+| Host language     | Swift               | Rust     | Go       | Node.js  |
+| Webview           | System              | System   | System   | Bundled  |
+| Bundle size       | ~5-15 MB            | ~5-15 MB | ~5-15 MB | ~80+ MB  |
+| macOS             | Yes                 | Yes      | Yes      | Yes      |
+| Linux             | Yes                 | Yes      | Yes      | Yes      |
+| Windows           | Yes                 | Yes      | Yes      | Yes      |
+| iOS               | Yes                 | Yes      | No       | No       |
+| Android           | Yes                 | Yes      | No       | No       |
+| On-device AI      | Built-in (`ai.*`)   | DIY      | DIY      | DIY      |
 
 ## Quickstart
 
@@ -275,6 +278,7 @@ The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `s
 - **v0.6.3** (released) — **runtime content packs**: import a large `.zip` of media at runtime and serve it to the page. **`ctx.serveDirectory(_:at:)`** serves a writable directory on the bundle origin under an app-chosen prefix (`/packs/…`), range-aware on every backend so big `<video>` streams off disk; **`fs.extractZip`** / **`fs.listZip`** (+ a streaming progress subscription) extract natively, path-to-path — bytes never cross the bridge — with traversal / symlink / zip-bomb guards. All five platforms (ZIPFoundation on Apple+Linux, `tar.exe` on Windows, `java.util.zip`-via-JNI on Android), device-verified on Android. See [docs/swift-api.md](docs/swift-api.md#serving-extra-directories-content-packs).
 - **v0.6.4** (released) — **`fs.createZip`**, the symmetric counterpart to `fs.extractZip`, for in-app pack authoring / re-export: zip a folder path-to-path (bytes never cross the bridge), with `compression: "stored"` (default — pack media is already compressed) or `"deflate"`, and a streaming progress subscription. The everyday small-pack case still zips in-browser as a `Blob`; `createZip` is the giant-file escape hatch (a multi-GB media folder, or re-exporting an installed pack whose source is a `dataDir` folder). Same backends as extraction. See the [content-packs tutorial](docs/tutorials/importing-content-packs.md). Also hardens CI: the Linux test step now tolerates a swift-corelibs process-exit hang (retry-on-timeout, without masking real failures).
 - **v0.6.5** (released) — a developer-experience pass from adopter feedback: **`macos.info_plist` / `ios.info_plist`** passthrough merges arbitrary keys (ATS, usage strings, URL schemes) into the generated `Info.plist`; **`build.postbuild`** runs an after-bundling step with the artifact path in `SWIFT_PWA_ARTIFACT`; **`swift-pwa dev`** binds a **fixed port** so OPFS / localStorage / IndexedDB persist across launches; **`build`/`doctor` warn on Android `package_id` ↔ `@_cdecl` drift** (the silent `UnsatisfiedLinkError` footgun); a prebuilt CLI no longer crashes resolving its resource bundle (`Bundle.module` trap fixed); a manifest **`web.entry`** is now honored by the generated native window; and the **`safe.bareRepository`** git warning is silenced for the CLI's child processes.
+- **v0.7.3** (released) — **on-device AI reaches every desktop OS.** The llama.cpp backend now runs on **Windows x64** and **Linux x86_64**, GPU-accelerated via **Vulkan** (one artifact for NVIDIA / AMD / Intel), alongside Apple's Metal — so `ai.local_llama` is GPU-accelerated across macOS / Linux / Windows from one codebase (verified generating tokens on an RTX 5080 and an AMD Radeon 780M). Off-Apple linking uses a `.systemLibrary` + an env-set linker search path (`LIBRARY_PATH` / `LIB`), never `unsafeFlags`. Plus a Windows distribution-polish pass driven by running the new **`Examples/CritterFacts`** demo (local-LLM fun facts, streamed on the GPU): **`build --target windows --single-file`** ships a portable app as one self-contained `.exe` (`web/` embedded in the binary, served from memory); the bundled exe is a clean GUI app (no stray console window) whose WebView2 profile lives in `%LOCALAPPDATA%` instead of polluting the bundle; and a class of diagnostic-stderr crashes on console-less GUI apps is fixed.
 - **v0.7.2** (released) — Android content-pack import from adopter feedback: **`fs.extractZip` / `fs.listZip` accept a `content://` SAF source** (a user-picked archive extracts off-bridge via the `ContentResolver` → `ZipInputStream`, no base64 materialize), and the **prebuilt single-file CLI builds Android again** (`bridge.js` is embedded in the CLI rather than read from `SwiftPWACore`'s resource bundle, which a single-file binary can't resolve). Plus a cross-compile docs fix for staging the Swift runtime libs.
 - **v0.7.1** (released) — the portable on-device **llama.cpp** backend (`SwiftPWALlama` / `LlamaBackend`): runs a GGUF model on-device (Metal-accelerated), text + token streaming + GBNF-constrained JSON, shipped as a prebuilt xcframework consumed via an env-gated `.binaryTarget` and turned on per app with `ai.local_llama` in `pwa.json`. **Apple first** (Linux/Windows packaging — with Vulkan for the GPU path — to follow). Plus iOS signing fixes from adopter feedback: device builds no longer fail without a development team (the xcodebuild phase is built unsigned; swift-pwa signs post-assembly), and a new `--team` convenience that fills in the signing identity + an installed provisioning profile.
 - **v0.7.0** (released) — the **`ai.*` plugin**: on-device LLM inference behind the bridge (`ai.info` / `ai.generate` / `ai.generateJSON` / streaming, plus multimodal vision + audio input, `ai.generateImage`, and `ai.generateAudio`/TTS), with the first real backend — **Apple Foundation Models** (native schema-constrained JSON) — and a resumable, checksum-pinned `ai.ensureModel` model downloader. Plus an adopter-DX round: iOS **universal (iPad)** default, **`window.background_color`** (native surface colour before first paint, every backend), and **installable iOS device builds** (`--provisioning-profile` / `--entitlements`, fail-fast, `doctor --target ios`). Also folds in the embedded Gradle wrapper + the `BSDTarListParser` Linux test fix.

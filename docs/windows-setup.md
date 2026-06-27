@@ -358,9 +358,11 @@ swift run swift-pwa build --target windows
 ```
 
 **Build-time prerequisite:** the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows),
-so the link step resolves `vulkan-1.lib`. Install it (the winget package id is
-`KhronosGroup.VulkanSDK`) — it sets `VULKAN_SDK` machine-wide. A bare GPU
-driver's `vulkan-1.dll` alone is **not** enough at link time.
+so the link step resolves `vulkan-1.lib` (the loader import library). Install it
+(the winget package id is `KhronosGroup.VulkanSDK`) — it sets `VULKAN_SDK`
+machine-wide, and `swift-pwa build` reads `VULKAN_SDK` to add the SDK's `Lib` to
+the linker search path automatically (alongside the downloaded `llama.lib`). A
+bare GPU driver's `vulkan-1.dll` alone is **not** enough at link time.
 
 **Runtime prerequisite:** the end user's machine needs a **Vulkan 1.2+
 driver / ICD** for GPU acceleration (the GPU vendor's standard Windows driver

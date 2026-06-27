@@ -184,8 +184,9 @@ jobs:
           $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
           $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
           $llamaLib    = "$pwd\Vendor\llama-windows"
+          $vulkanLib   = "$env:VULKAN_SDK\Lib"   # vulkan-1.lib (loader import lib)
           Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$llamaLib;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$llamaLib;$vulkanLib;$env:LIB"
       - name: Build + link-check SwiftPWALlama (gate on)
         # SWIFT_PWA_LLAMA puts the target in the graph; llama.lib / vulkan-1.lib
         # resolve off LIB. `--build-tests` links SwiftPWALlamaTests, exercising

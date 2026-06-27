@@ -363,13 +363,25 @@ struct Build: AsyncParsableCommand {
                 // latter, and `WindowsBundler.resolvePackageEnvOverrides` reads
                 // `LIB` back through it to build the child `swift build`'s env.
                 _ = _putenv_s("SWIFT_PWA_LLAMA", "1")
-                // Prepend so our lib wins, but keep any existing search path. LIB
-                // is `;`-separated on Windows. Case-insensitive lookup: a VS dev
-                // shell exports `Lib` (PowerShell) or `LIB` (cmd).
-                let existing = ProcessInfo.processInfo.environment.first {
-                    $0.key.caseInsensitiveCompare("LIB") == .orderedSame
-                }?.value
-                let combined = existing.map { "\(libDir.path);\($0)" } ?? libDir.path
+                // Build the LIB search path: our llama.lib dir, plus the Vulkan
+                // SDK's `Lib` (for `vulkan-1.lib`, the loader import library that
+                // `.linkedLibrary("vulkan-1")` needs at link time — the SDK sets
+                // VULKAN_SDK but does NOT add its Lib to LIB), plus whatever's
+                // already there. `;`-separated; case-insensitive LIB lookup since
+                // a VS dev shell exports `Lib` (PowerShell) or `LIB` (cmd).
+                let env = ProcessInfo.processInfo.environment
+                var search = [libDir.path]
+                if let sdk = env["VULKAN_SDK"], !sdk.isEmpty {
+                    search.append("\(sdk)\\Lib")
+                } else {
+                    print(
+                        "swift-pwa: warning — VULKAN_SDK is not set, so the link step can't find "
+                            + "vulkan-1.lib. Install the Vulkan SDK (it sets VULKAN_SDK); see "
+                            + "docs/windows-setup.md."
+                    )
+                }
+                let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
+                let combined = (existing.map { search + [$0] } ?? search).joined(separator: ";")
                 _ = _putenv_s("LIB", combined)
                 print(
                     "swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend "

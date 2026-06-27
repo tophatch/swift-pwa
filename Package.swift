@@ -617,7 +617,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
         ),
         .testTarget(
             name: "SwiftPWALlamaTests",
-            dependencies: ["SwiftPWALlama", "SwiftPWACore"],
+            dependencies: ["SwiftPWALlama", "SwiftPWACore", "SwiftPWAModelStore"],
             swiftSettings: swiftSettings
         )
     ])

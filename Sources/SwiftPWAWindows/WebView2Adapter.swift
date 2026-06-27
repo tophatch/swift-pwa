@@ -46,6 +46,12 @@
         /// resolves served mounts through it.
         private nonisolated(unsafe) var assetProvider: AssetProvider
 
+        /// Set in `load(_:)` when this is a single-file build (the exe carries
+        /// a web-asset overlay): bundle-origin requests are then served from
+        /// memory instead of the disk virtual-host mapping. `nil` for a normal
+        /// folder build. Read/written only on the UI thread.
+        private nonisolated(unsafe) var embeddedAssets: EmbeddedWebAssets?
+
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache
         // the most recently issued one so `respond` can find its way
         // back to the owner; freeing happens with the controller.
@@ -155,7 +161,14 @@
                 return
             }
             guard assetProvider.isServedPrefix(url) else {
-                swiftpwa_w2_resource_passthrough(view, token)
+                // Not a `serveDirectory` mount. In a single-file build, serve
+                // the bundle origin from the exe overlay; otherwise hand back to
+                // the native virtual-host mapping (disk web/).
+                if let embedded = embeddedAssets {
+                    serveEmbedded(url: url, token: token, embedded: embedded, view: view)
+                } else {
+                    swiftpwa_w2_resource_passthrough(view, token)
+                }
                 return
             }
             guard let resolved = assetProvider.resolve(url) else {
@@ -188,6 +201,33 @@
                     case .unsatisfiable:
                         swiftpwa_w2_resource_respond_file(view, token, 416, mime, pathW, 0, 0, total)
                     }
+                }
+            }
+        }
+
+        /// Serve a bundle-origin request from the in-exe overlay (single-file
+        /// build). Full-body responses (200) — range serving isn't needed for
+        /// the typical html/js/css/small-image bundle; large media should ship
+        /// via `serveDirectory` (disk, range-aware) instead. A request to `/`
+        /// maps to `index.html`.
+        private func serveEmbedded(
+            url: URL, token: UInt64, embedded: EmbeddedWebAssets, view: OpaquePointer
+        ) {
+            var path = url.path
+            if path.isEmpty || path == "/" { path = "/index.html" }
+            guard let data = embedded.data(for: path) else {
+                "text/plain; charset=utf-8".withCString { mime in
+                    swiftpwa_w2_resource_respond(view, token, 404, mime, nil, 0)
+                }
+                return
+            }
+            let mime = embedded.mimeType(for: path)
+            mime.withCString { mimeC in
+                data.withUnsafeBytes { raw in
+                    swiftpwa_w2_resource_respond(
+                        view, token, 200, mimeC,
+                        raw.bindMemory(to: UInt8.self).baseAddress, Int32(data.count)
+                    )
                 }
             }
         }
@@ -247,6 +287,20 @@
             guard let view else { return }
             switch content {
             case let .bundled(directory, entry):
+                // Single-file build: the web bundle is an overlay in our own
+                // exe, not a folder on disk. Serve it from memory through the
+                // resource-interception hook (set up in `_onControllerReady`)
+                // and skip the disk virtual-host mapping. Detected transparently
+                // so a `.bundled(directory:)` app needs no code change — the
+                // (absent) `directory` is simply ignored.
+                if let embedded = EmbeddedWebAssets.current {
+                    embeddedAssets = embedded
+                    let urlString = "https://swift-pwa.local/\(entry)"
+                    urlString.withCString(encodedAs: UTF16.self) { urlW in
+                        swiftpwa_w2_view_navigate(view, urlW)
+                    }
+                    return
+                }
                 // Use the platform's native path representation —
                 // `URL.path` on Windows can return a POSIX-shaped
                 // string with forward slashes, which

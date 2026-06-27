@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import SwiftPWACore // EmbeddedWebAssets (single-file overlay)
 
 // On Apple, `URLSession` lives in Foundation; on swift-corelibs-foundation
 // (Linux + Windows) the networking pieces moved to a separate
@@ -56,6 +57,9 @@ struct WindowsBundler {
     var arch: AppxManifestGenerator.Architecture = .x64
     var bootstrapWebView2: Bool = false
     var signIdentity: String?
+    /// Embed `web/` as an overlay in the exe and emit a single `.exe` instead
+    /// of a folder (portable format only). See `embedWebOverlay`.
+    var singleFile: Bool = false
 
     func build() async throws -> URL {
         #if !os(Windows)
@@ -141,6 +145,21 @@ struct WindowsBundler {
             // window. (See suppressConsoleWindow for the why.)
             try await suppressConsoleWindow(at: bundledExe)
 
+            // Single-file: embed web/ as an exe overlay and emit one `.exe`,
+            // no sibling web/ or pwa.json. The runtime reads its own overlay
+            // and serves the bundle from memory (EmbeddedWebAssets).
+            if singleFile {
+                try embedWebOverlay(into: bundledExe)
+                let singleExe = outputDir.appendingPathComponent(exeName)
+                if FileManager.default.fileExists(atPath: singleExe.path) {
+                    try FileManager.default.removeItem(at: singleExe)
+                }
+                try FileManager.default.moveItem(at: bundledExe, to: singleExe)
+                try? FileManager.default.removeItem(at: bundleDir)
+                print("swift-pwa: single-file build — web/ embedded into \(exeName)")
+                return singleExe
+            }
+
             let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)
             if FileManager.default.fileExists(atPath: webSrc.path) {
                 try FileManager.default.copyItem(
@@ -173,6 +192,42 @@ struct WindowsBundler {
                 return try await buildMSIX(stagingDir: bundleDir)
             }
         #endif
+    }
+
+    /// Append the project's `web/` directory to the exe as an
+    /// `EmbeddedWebAssets` overlay (the runtime serves it from memory). Walks
+    /// `web/` recursively, preserving relative paths (forward-slashed, the form
+    /// request URLs use). A no-op-safe append after the PE image — the loader
+    /// ignores trailing bytes.
+    private func embedWebOverlay(into exe: URL) throws {
+        let webRoot = projectRoot.appendingPathComponent(manifest.web.directory)
+        guard FileManager.default.fileExists(atPath: webRoot.path) else {
+            throw ValidationError(
+                "swift-pwa: --single-file needs a web bundle at \(webRoot.path), but it's missing."
+            )
+        }
+        var files: [(path: String, data: Data)] = []
+        let base = webRoot.standardizedFileURL.path
+        if let walker = FileManager.default.enumerator(at: webRoot, includingPropertiesForKeys: [.isRegularFileKey]) {
+            for case let url as URL in walker {
+                let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
+                guard values?.isRegularFile == true else { continue }
+                let full = url.standardizedFileURL.path
+                guard full.hasPrefix(base) else { continue }
+                var rel = String(full.dropFirst(base.count))
+                while rel.hasPrefix("/") || rel.hasPrefix("\\") { rel.removeFirst() }
+                rel = rel.replacingOccurrences(of: "\\", with: "/")
+                try files.append((path: rel, data: Data(contentsOf: url)))
+            }
+        }
+        guard !files.isEmpty else {
+            throw ValidationError("swift-pwa: --single-file found no files under \(webRoot.path).")
+        }
+        let overlay = try EmbeddedWebAssets.makeOverlay(files: files)
+        let handle = try FileHandle(forWritingTo: exe)
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: overlay)
     }
 
     // MARK: - swift-pwa NuGet packages auto-detect

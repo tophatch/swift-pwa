@@ -456,15 +456,24 @@ enum Templates {
                 #if os(Android)
                     let webRoot = URL(fileURLWithPath: "/android_asset/web")
                 #else
-                    let webRoot = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
-                        .appendingPathComponent("web")
-                    if !FileManager.default.fileExists(atPath: webRoot.path) {
-                        // Fail loudly rather than hand a blank window to the
-                        // user: the WKWebView / WebKitGTK / WebView2 schemes
-                        // all surface "missing index.html" as a silently
-                        // blank page, which is the hardest possible thing
-                        // to debug.
-                        fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
+                    let webRoot: URL
+                    if EmbeddedWebAssets.isPresent {
+                        // Single-file build (Windows `--single-file`): web/ is
+                        // embedded in the exe and served from memory, so the
+                        // backend ignores this path — and there's no disk web/
+                        // to check.
+                        webRoot = URL(fileURLWithPath: ".")
+                    } else {
+                        webRoot = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
+                            .appendingPathComponent("web")
+                        if !FileManager.default.fileExists(atPath: webRoot.path) {
+                            // Fail loudly rather than hand a blank window to the
+                            // user: the WKWebView / WebKitGTK / WebView2 schemes
+                            // all surface "missing index.html" as a silently
+                            // blank page, which is the hardest possible thing
+                            // to debug.
+                            fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
+                        }
                     }
                 #endif
                 // `entry` is seeded from pwa.json's `web.entry` at `init`

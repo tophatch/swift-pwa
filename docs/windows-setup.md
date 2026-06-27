@@ -308,6 +308,27 @@ succeeds but warns, and the EXE keeps its console. (A consequence: `print` /
 stderr don't appear when the app is launched from Explorer — use `swift run`
 during development to see logs.)
 
+### Single-file distribution
+
+To ship the portable app as **one self-contained `.exe`** instead of a folder,
+add `--single-file`:
+
+```powershell
+swift run swift-pwa build --target windows --single-file   # → build\MyApp.exe (just the exe)
+```
+
+This embeds `web/` as an overlay appended to the exe; at runtime the app reads
+its own executable and serves the bundle from memory (no extraction, no sibling
+`web/`/`pwa.json`). A `.bundled(directory:)` app needs no code change — the
+runtime serves the embedded assets when present and falls back to disk `web/`
+otherwise. Current limits: assets are served as full-body responses (no HTTP
+range — ship large media via `ctx.serveDirectory(_:at:)`, which stays
+range-aware off disk), the overlay is uncompressed, and there's no SPA
+deep-link fallback (a request for an unknown path 404s rather than returning
+`index.html`). Not combinable with `--package-format msix` (MSIX already
+packages everything into one installable). Code-signing a single-file exe
+(Authenticode over the overlay) isn't wired yet.
+
 For an MSIX/Appx package instead of a portable folder:
 
 ```powershell

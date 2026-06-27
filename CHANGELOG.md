@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Portable on-device backend: llama.cpp (`SwiftPWALlama` / `LlamaBackend`), Apple first.** The cross-platform counterpart to Foundation Models — runs a GGUF model on-device (Metal-accelerated) wherever the prebuilt llama xcframework ships, independent of OS-level model availability. Text (`generate`), token streaming (`generateStream`), and **native schema-constrained** `generateJSON` via a GBNF grammar compiled from the request's JSON Schema (`structuredOutput: true`; schemas outside the supported subset fall back to the shared prompt-and-validate path). `ai.ensureModel` is wired to `ModelDownloader` for the downloadable-model tier. Construct with a fixed `modelPath:` or a downloadable `model:cacheDirectory:` spec, then `ctx.use(AIPlugin(LlamaBackend(...)))`. Why a **prebuilt xcframework** rather than vendored source: ggml is 135+ per-arch model files, a C++/ObjC Metal backend with a shader-embed step, and per-file SIMD flags SwiftPM can't express (`unsafeFlags` would poison every adopter's dependency resolution); llama.cpp's own CMake builds it correctly, so we package its output. Built from a pinned commit by `Scripts/build-llama-xcframework.sh`. Off by default — enabled per app via **`ai.local_llama: true`** in `pwa.json`, which makes `swift-pwa build` set `SWIFT_PWA_LLAMA=1` so SwiftPM pulls in the `.binaryTarget` (downloaded + checksum-verified once, cached); when unset the binary is never resolved, so non-AI adopters and Linux/Windows CI are unaffected. Linux/Windows packaging is deferred (verified on those hosts when it lands). See [docs/ai-plugin.md](docs/ai-plugin.md#available-backend-llamacpp).
+
+### Changed
+
+- **`AIStructuredFallback` is now public** so an out-of-module backend that overrides `generateJSON` (e.g. `LlamaBackend`, for schemas its native grammar can't express) can still reach the shared prompt-and-validate fallback.
+
 ## [0.7.0] - 2026-06-26
 
 ### Added

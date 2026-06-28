@@ -27,11 +27,13 @@
 
   Architecture: pass -Arch x64 (default) or -Arch arm64. x64 builds the Vulkan
   GPU backend (needs the Vulkan SDK, as above). arm64 (Snapdragon X Copilot+) is
-  CPU-only for now (a deliberate MVP — not a ggml/Vulkan limitation; a
-  Vulkan/Adreno build is a follow-up once the SDK's arm64 link tooling is sorted),
-  so it needs NEITHER glslc NOR the Vulkan SDK, just the arm64 MSVC toolset (run
-  from an arm64 / amd64_arm64 developer shell so cl.exe + lib.exe target arm64).
-  The produced asset is named per arch (llama-windows-<arch>.lib).
+  CPU-only by default (correct + shipped) and compiles with clang-cl (ggml-cpu
+  refuses MSVC on ARM), so it needs no Vulkan SDK. EXPERIMENTAL: set
+  LLAMA_WIN_ARM64_VULKAN=1 to build the arm64 Adreno Vulkan variant — it builds
+  and runs but the Adreno X1's Vulkan compute currently returns INCORRECT output
+  (Qualcomm driver / ggml shader immaturity), so it's for re-testing only, not
+  shipping; that path needs the warm (Windows-ARM) Vulkan SDK for glslc +
+  vulkan-1.lib. The produced asset is named per arch (llama-windows-<arch>.lib).
 
 .EXAMPLE
   pwsh Scripts/build-llama-windows.ps1
@@ -44,10 +46,24 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 
-# Vulkan is the x64 GPU backend; arm64 ships CPU-only for now (MVP — a
-# Vulkan/Adreno arm64 build is a follow-up). This single switch drives every
-# Vulkan-specific step.
-$Gpu = ($Arch -eq 'x64')
+# GPU (Vulkan) build selection, per arch:
+#   x64   → Vulkan by default (mature NVIDIA/AMD/Intel drivers); LLAMA_WIN_CPU_ONLY=1 forces CPU.
+#   arm64 → CPU by default (correct + shipped). The Adreno Vulkan build is
+#           EXPERIMENTAL: it builds, links, and runs, but the Adreno X1's Vulkan
+#           compute currently returns INCORRECT output (Qualcomm driver / ggml
+#           shader immaturity — the CPU path is fine; see docs/windows-setup.md).
+#           Opt in with LLAMA_WIN_ARM64_VULKAN=1 to build the GPU variant for
+#           re-testing as the driver / ggml matures.
+# This switch drives every Vulkan-specific step.
+if ($Arch -eq 'arm64') {
+    $Gpu = [bool]$env:LLAMA_WIN_ARM64_VULKAN
+} else {
+    $Gpu = -not $env:LLAMA_WIN_CPU_ONLY
+}
+# arm64 MUST compile with clang-cl regardless of GPU: ggml's CPU backend
+# hard-errors "MSVC is not supported for ARM, use clang" at configure. x64 uses
+# the MSVC `cl` default. Independent of $Gpu (an arm64 CPU-only build still needs it).
+$UseClangCl = ($Arch -eq 'arm64')
 
 # Pinned llama.cpp commit - keep in lockstep with build-llama-linux.sh /
 # build-llama-xcframework.sh so all three backends expose the same ABI/headers.
@@ -72,8 +88,8 @@ if (-not (Get-Command lib.exe -ErrorAction SilentlyContinue)) {
 }
 # Avoid the PS7-only `?.` operator - this script must run under stock Windows
 # PowerShell 5.1 (what ships with Windows), not just pwsh.
-# Vulkan toolchain (glslc + SDK) is only needed for the x64 GPU build; the arm64
-# CPU-only build skips it entirely.
+# Vulkan toolchain (glslc + SDK) is needed for any GPU build (both arches now);
+# a CPU-only build (LLAMA_WIN_CPU_ONLY) skips it entirely.
 $Glslc = $null
 if ($Gpu) {
     $glslcCmd = Get-Command glslc.exe -ErrorAction SilentlyContinue
@@ -92,7 +108,7 @@ if ($Gpu) {
 # runtime and lib.exe-combined archive; it ships with the Swift toolchain (same
 # usr\bin as swift.exe), so derive it from `swift` when it isn't already on PATH.
 $ClangCl = $null
-if (-not $Gpu) {
+if ($UseClangCl) {
     # Resolve a clang-cl. Prefer one already on PATH; else the Swift toolchain's
     # (same usr\bin as swift.exe - this is what verified on the Snapdragon box);
     # else a standard LLVM install. On an arm64 host each of these defaults its
@@ -154,10 +170,13 @@ $CMakeArgs = @(
     '-DLLAMA_BUILD_APP=OFF'
     '-DLLAMA_CURL=OFF'
 )
+# Vulkan toolchain (GPU build, either arch) and clang-cl (arm64, either GPU/CPU)
+# are independent — an arm64 GPU build needs BOTH.
 if ($Gpu) {
     $CMakeArgs += "-DVulkan_GLSLC_EXECUTABLE=$Glslc"
     if ($env:VULKAN_SDK) { $CMakeArgs += "-DCMAKE_PREFIX_PATH=$env:VULKAN_SDK" }
-} else {
+}
+if ($UseClangCl) {
     # arm64: drive the build with clang-cl (ggml-cpu requires it on ARM). CMake
     # wants forward slashes in compiler paths even on Windows.
     $ClangFwd = $ClangCl -replace '\\', '/'

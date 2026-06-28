@@ -368,12 +368,25 @@ platform; what differs by architecture is the compute path:
 |Host arch|Compute|Notes|
 |---|---|---|
 |**x64**|**Vulkan GPU** (CPU fallback)|One build covers NVIDIA + AMD + Intel via the driver's Vulkan ICD.|
-|**arm64** (Snapdragon X Copilot+)|**CPU-only**|CPU-first MVP — runs on the CPU. Small models (0.5–3B) are comfortable on Snapdragon X. A Vulkan/Adreno GPU build is a planned follow-up.|
+|**arm64** (Snapdragon X Copilot+)|**CPU**|Runs on the CPU. Small models (0.5–3B) are comfortable on Snapdragon X. (A GPU path exists but is experimental — see below.)|
 
 On **arm64** this is also the *unpackaged, any-GGUF, no-token* fallback to
 [Phi Silica](#5-on-device-ai-phi-silica), whose generation needs an MSIX package
 **and** a Microsoft LAF token — llama needs neither. See
 [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) for the API.
+
+> **Experimental — arm64 Adreno GPU.** The Snapdragon Adreno *is* a Vulkan 1.3
+> device, and the arm64 Vulkan build path works end to end (the LunarG **warm**
+> Windows-ARM SDK provides `glslc` + an arm64 `vulkan-1.lib`; ggml-vulkan compiles
+> with `clang-cl`; the loader finds the Adreno ICD). **But the Adreno X1's Vulkan
+> *compute* currently returns incorrect output** — verified directly: the same
+> model + binary is coherent on the CPU and garbage the moment the Adreno is used,
+> and it's immune to every ggml-vulkan correctness flag. This is upstream
+> (Qualcomm Vulkan driver / ggml shader) immaturity, not swift-pwa. So arm64 ships
+> **CPU-only**, and the GPU build is gated behind an opt-in for re-testing as the
+> stack matures: build the lib with `LLAMA_WIN_ARM64_VULKAN=1 pwsh
+> Scripts/build-llama-windows.ps1 -Arch arm64`, and set the same `LLAMA_WIN_ARM64_VULKAN`
+> when building your app so `vulkan-1` links. Do **not** ship it — output is wrong.
 
 Enable it per app in `pwa.json`:
 

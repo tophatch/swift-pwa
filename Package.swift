@@ -569,34 +569,29 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
         ]
     #elseif os(Windows)
         llamaCTarget = .systemLibrary(name: "CLlama", path: "Vendor/llama-headers")
-        // The manifest is compiled for the build host, and Windows builds are
-        // native (host arch == target arch — there's no cross-build, an arm64
-        // MSIX is produced on an arm64 host), so `#if arch(...)` here correctly
-        // selects the link set for the lib the CLI will stage. This mirrors
-        // `LlamaWindowsArtifact.currentArch()`, which keys the download the same way.
+        // `.linkedLibrary("llama")` → `llama.lib`, the combined MSVC static archive
+        // the CLI stages onto the `LIB` env path. The MSVC C++ runtime is linked
+        // automatically via the objects' default-lib directives, so — unlike
+        // Linux's explicit `stdc++` — nothing else is needed. `vulkan-1` →
+        // `vulkan-1.lib`, the Vulkan loader import lib, links ONLY for the Vulkan
+        // builds (which reference its symbols):
+        //   x64   → always Vulkan (mature NVIDIA/AMD/Intel drivers).
+        //   arm64 → CPU-only by default (its shipped/pinned lib has NO ggml-vulkan,
+        //           so linking vulkan-1 would be a needless dep requiring the SDK).
+        //           The EXPERIMENTAL Adreno Vulkan lib (LLAMA_WIN_ARM64_VULKAN in
+        //           the build script) DOES reference vulkan-1 — set the same env
+        //           var here so it links. (Adreno X1 Vulkan output is currently
+        //           garbage — experimental, for re-testing; see docs.)
+        // Windows builds are native (host arch == target arch), so `#if arch` here
+        // matches the lib the CLI stages.
         #if arch(arm64)
-            // arm64 (Snapdragon X Copilot+): CPU-only for now — a deliberate MVP,
-            // not a ggml/Vulkan limitation (Adreno has a Vulkan ICD; ggml-vulkan
-            // shaders are arch-neutral SPIR-V). The prebuilt arm64 `llama.lib` is
-            // built without the Vulkan backend, so there's no `vulkan-1` to link —
-            // just the combined static archive (llama + ggml + ggml-cpu). The MSVC
-            // C++ runtime is linked automatically via the objects' default-lib
-            // directives. A Vulkan/Adreno arm64 build is a planned follow-up.
-            llamaLinkerSettings = [
-                .linkedLibrary("llama")
-            ]
+            if ProcessInfo.processInfo.environment["LLAMA_WIN_ARM64_VULKAN"] != nil {
+                llamaLinkerSettings = [.linkedLibrary("llama"), .linkedLibrary("vulkan-1")]
+            } else {
+                llamaLinkerSettings = [.linkedLibrary("llama")]
+            }
         #else
-            // x64: Vulkan GPU build. `.linkedLibrary("llama")` → `llama.lib`, the
-            // combined MSVC static archive (llama + ggml + ggml-vulkan) the CLI
-            // stages onto the `LIB` env path. `vulkan-1` → `vulkan-1.lib`, the
-            // Vulkan loader import lib (the SDK / driver provides `vulkan-1.dll`
-            // at runtime). The MSVC C++ runtime is linked automatically via the
-            // objects' default-lib directives, so — unlike Linux's explicit
-            // `stdc++` — nothing else is needed here.
-            llamaLinkerSettings = [
-                .linkedLibrary("llama"),
-                .linkedLibrary("vulkan-1")
-            ]
+            llamaLinkerSettings = [.linkedLibrary("llama"), .linkedLibrary("vulkan-1")]
         #endif
     #else
         let localXcframework = "Vendor/llama/llama.xcframework"

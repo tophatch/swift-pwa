@@ -732,13 +732,15 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   to the bundle origin (the bundle itself keeps its native virtual-host
   mapping; only requests under a served prefix are intercepted), with
   range support implemented in the C++ shim.
-- **On-device llama.cpp is x64-only on Windows.** The prebuilt
-  `llama.lib` (see §4) is published for x64; an arm64-Windows build
-  (Snapdragon X) isn't produced yet, so `ai.local_llama` on a
-  `--target windows` build from an arm64 host errors at the CLI's
-  artifact-resolve step. GPU acceleration needs a Vulkan 1.2+ driver / ICD
-  at runtime — without one the model falls back to CPU. CI's `windows-llama`
-  job is a **link check only** (no GPU on the runner, and `swift test` can't
-  run on Windows); real GPU verification happens on the x64 dev box. Linking
-  also needs the Vulkan SDK's `vulkan-1.lib` at build time, beyond the
-  driver's runtime `vulkan-1.dll`.
+- **On-device llama.cpp on Windows: x64 is GPU (Vulkan), arm64 is CPU.** The
+  prebuilt `llama.lib` (see §4) is published for both arches — x64 is the
+  **Vulkan** GPU build (NVIDIA/AMD/Intel via the driver ICD; needs the Vulkan
+  SDK's `vulkan-1.lib` at link time and a Vulkan 1.2+ driver / ICD at runtime,
+  else CPU fallback), and **arm64** (Snapdragon X) is **CPU-only** (built with
+  `clang-cl`, no Vulkan SDK). An experimental arm64 Adreno-Vulkan build path
+  exists behind `LLAMA_WIN_ARM64_VULKAN` but is **not shipped** — the Adreno
+  X1's Vulkan compute currently returns incorrect output (upstream Qualcomm /
+  ggml immaturity). CI's `windows-llama` job is a **link check only** and stays
+  **x64** (no GPU on runners, `swift test` can't run on Windows, and the arm64
+  Swift-on-Windows toolchain isn't CI-viable yet); arm64 is device-verified on a
+  Snapdragon X box and real GPU verification happens on the x64 dev box.

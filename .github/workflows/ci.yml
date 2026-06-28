@@ -126,7 +126,7 @@ jobs:
         run: LIBRARY_PATH="$PWD/Vendor/llama-linux:${LIBRARY_PATH:-}" swift test --filter SwiftPWALlamaTests -v
 
   windows-llama:
-    # Windows coverage for the opt-in llama.cpp backend (Vulkan). Unlike
+    # Windows coverage for the opt-in llama.cpp backend (x64 / Vulkan). Unlike
     # macos-/linux-llama this is a LINK CHECK, not a test run: SwiftPM's
     # swift-testing discovery emits 0-byte stubs on Windows (see the `windows`
     # job), so we can't *run* SwiftPWALlamaTests — but `swift build --build-tests`
@@ -135,6 +135,16 @@ jobs:
     # settings. No GPU on the runner; runtime Vulkan enumeration only happens on
     # device (bmsfmv3). Pinned to windows-2022 for the same MSVC/Clang-STL reason
     # as the `windows` job.
+    #
+    # x64 ONLY. The arm64 (Snapdragon X) build is real and device-verified — built
+    # (clang-cl, CPU-only), linked, and run on a Snapdragon X box — but it has NO
+    # CI leg yet: GitHub's windows-11-arm runner can't host a usable Swift
+    # toolchain. gha-setup-swift installs an x64 toolchain there at 6.1.2 (the
+    # arm64 MSVC env then can't even link the manifest: "msvcrt.lib machine type
+    # arm64 conflicts with x64"), and the native arm64 toolchain at 6.3.1 crashes
+    # on launch (access violation, 0xC0000005). Revisit when the arm64
+    # Swift-on-Windows toolchain is reliably installable in the runner image; the
+    # build script + Package.swift arm64 paths are exercised on-device meanwhile.
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v5
@@ -176,7 +186,7 @@ jobs:
       - name: Build llama.lib (Vulkan, static)
         if: steps.llama-cache.outputs.cache-hit != 'true'
         shell: pwsh
-        run: pwsh Scripts/build-llama-windows.ps1
+        run: pwsh Scripts/build-llama-windows.ps1 -Arch x64
       - name: Add WebView2 / WIL / llama.lib to INCLUDE / LIB
         shell: pwsh
         run: |

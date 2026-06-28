@@ -340,12 +340,13 @@ struct Build: AsyncParsableCommand {
     ///   host Vulkan dev lib (`libvulkan-dev`) at link time + a Vulkan driver at
     ///   runtime. See `LlamaLinuxArtifact`.
     /// - **Windows** — like Linux, no binary-library target, so fetch the
-    ///   prebuilt `llama.lib` (Vulkan) and prepend its directory to `LIB` (the
+    ///   prebuilt `llama.lib` and prepend its directory to `LIB` (the
     ///   MSVC-linker search-path env var, the Windows counterpart to Linux's
     ///   `LIBRARY_PATH` — the same trick `CWebView2Shim` uses) so the child
-    ///   `swift build` resolves `llama.lib`. Requires the Vulkan SDK's
-    ///   `vulkan-1.lib` at link time + a Vulkan driver at runtime. See
-    ///   `LlamaWindowsArtifact`.
+    ///   `swift build` resolves `llama.lib`. On **x64** the lib is the Vulkan
+    ///   build, so this also needs the Vulkan SDK's `vulkan-1.lib` at link time
+    ///   + a Vulkan driver at runtime; on **arm64** (Copilot+) the lib is
+    ///   **CPU-only**, so no Vulkan SDK is needed. See `LlamaWindowsArtifact`.
     /// - **Android** — not supported yet; warn and ignore.
     static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         guard manifest.ai?.localLlama == true else { return }
@@ -381,29 +382,36 @@ struct Build: AsyncParsableCommand {
                 // latter, and `WindowsBundler.resolvePackageEnvOverrides` reads
                 // `LIB` back through it to build the child `swift build`'s env.
                 _ = _putenv_s("SWIFT_PWA_LLAMA", "1")
-                // Build the LIB search path: our llama.lib dir, plus the Vulkan
-                // SDK's `Lib` (for `vulkan-1.lib`, the loader import library that
-                // `.linkedLibrary("vulkan-1")` needs at link time — the SDK sets
-                // VULKAN_SDK but does NOT add its Lib to LIB), plus whatever's
-                // already there. `;`-separated; case-insensitive LIB lookup since
-                // a VS dev shell exports `Lib` (PowerShell) or `LIB` (cmd).
+                // Build the LIB search path: our llama.lib dir, plus (x64 only)
+                // the Vulkan SDK's `Lib` (for `vulkan-1.lib`, the loader import
+                // library that `.linkedLibrary("vulkan-1")` needs at link time —
+                // the SDK sets VULKAN_SDK but does NOT add its Lib to LIB), plus
+                // whatever's already there. `;`-separated; case-insensitive LIB
+                // lookup since a VS dev shell exports `Lib` (PowerShell) or `LIB`
+                // (cmd). On arm64 the lib is CPU-only — no Vulkan backend, hence
+                // no `vulkan-1` to find — so we skip the SDK entirely.
                 let env = ProcessInfo.processInfo.environment
                 var search = [libDir.path]
-                if let sdk = env["VULKAN_SDK"], !sdk.isEmpty {
-                    search.append("\(sdk)\\Lib")
-                } else {
-                    print(
-                        "swift-pwa: warning — VULKAN_SDK is not set, so the link step can't find "
-                            + "vulkan-1.lib. Install the Vulkan SDK (it sets VULKAN_SDK); see "
-                            + "docs/windows-setup.md."
-                    )
-                }
+                #if arch(arm64)
+                    let backend = "CPU"
+                #else
+                    let backend = "Vulkan"
+                    if let sdk = env["VULKAN_SDK"], !sdk.isEmpty {
+                        search.append("\(sdk)\\Lib")
+                    } else {
+                        print(
+                            "swift-pwa: warning — VULKAN_SDK is not set, so the link step can't find "
+                                + "vulkan-1.lib. Install the Vulkan SDK (it sets VULKAN_SDK); see "
+                                + "docs/windows-setup.md."
+                        )
+                    }
+                #endif
                 let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
                 let combined = (existing.map { search + [$0] } ?? search).joined(separator: ";")
                 _ = _putenv_s("LIB", combined)
                 print(
                     "swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend "
-                        + "(SwiftPWALlama, Vulkan); llama.lib from \(libDir.path)"
+                        + "(SwiftPWALlama, \(backend)); llama.lib from \(libDir.path)"
                 )
             #else
                 print(

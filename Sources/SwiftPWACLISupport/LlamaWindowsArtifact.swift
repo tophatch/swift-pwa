@@ -17,8 +17,20 @@ import Foundation
 /// MSVC-linker search-path env var, the Windows counterpart to Linux's
 /// `LIBRARY_PATH` — the same trick `CWebView2Shim` already relies on. Built +
 /// published by `.github/workflows/llama-windows.yml` from the same pinned
-/// llama.cpp commit as the Linux lib + the Apple xcframework; `sha256_x64` below
-/// is auto-pinned by that workflow.
+/// llama.cpp commit as the Linux lib + the Apple xcframework; the per-arch
+/// `sha256_*` pins below are auto-pinned by that workflow.
+///
+/// Two arches ship, with different compute paths: **x64** is the Vulkan-GPU
+/// build (one artifact for NVIDIA/AMD/Intel via the driver ICD, CPU fallback);
+/// **arm64** (Snapdragon X Copilot+) is **CPU-only** for now. arm64 CPU-only is
+/// a deliberate MVP, not a ggml/Vulkan limitation — Adreno has a conformant
+/// Vulkan ICD and ggml-vulkan's shaders are arch-neutral SPIR-V; CPU-only just
+/// carries no SDK/driver dependency, so it's the de-risked first slice (a
+/// Vulkan/Adreno build is a planned follow-up, gated on the Vulkan SDK's arm64
+/// link tooling). The arm64 `llama.lib` is built without the Vulkan backend, so
+/// Package.swift's arm64 branch links no `vulkan-1`. arm64 is the natural
+/// unpackaged / any-GGUF / no-LAF-token fallback to Phi Silica on Copilot+
+/// devices. See docs/windows-setup.md.
 ///
 /// Resolution order (mirrors the Linux escape hatch):
 ///   1. `SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR` env — a directory containing
@@ -35,9 +47,11 @@ enum LlamaWindowsArtifact {
         "https://github.com/tophatch/swift-pwa/releases/download/" +
         "llama-vendor-windows-<arch>/llama-windows-<arch>.lib"
 
-    /// SHA-256 of the x64 `llama.lib`. Auto-pinned by the publish workflow; the
-    /// all-zero placeholder fails closed until the first publish runs.
+    /// SHA-256 of the prebuilt `llama.lib`, per arch (x64 = Vulkan, arm64 =
+    /// CPU-only). Auto-pinned by the publish workflow; an all-zero placeholder
+    /// fails closed until that arch's first publish runs.
     static let sha256_x64 = "4a6ff29e879e92ecf0966cae8f15df5bb743ba13168c7ddd1aa1cae9bd81130e"
+    static let sha256_arm64 = "0000000000000000000000000000000000000000000000000000000000000000"
 
     struct ArtifactError: Error, CustomStringConvertible {
         let description: String
@@ -68,16 +82,24 @@ enum LlamaWindowsArtifact {
 
         // 3. download the pinned release asset
         let arch = currentArch()
-        guard arch == "x64", sha256_x64 != String(repeating: "0", count: 64) else {
+        let zero = String(repeating: "0", count: 64)
+        let want: String
+        switch arch {
+        case "x64": want = sha256_x64
+        case "arm64": want = sha256_arm64
+        default:
             throw ArtifactError(
-                description: arch == "x64"
-                    ? "no pinned llama.lib checksum yet — run the llama-windows publish workflow, "
-                    + "or build locally with Scripts\\build-llama-windows.ps1 and set "
-                    + "SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR to its Vendor\\llama-windows dir"
-                    : "the llama.cpp Windows backend is x64-only for now (host arch: \(arch))"
+                description: "the llama.cpp Windows backend supports x64 + arm64 (host arch: \(arch))"
             )
         }
-        let want = sha256_x64
+        guard want != zero else {
+            throw ArtifactError(
+                description: "no pinned llama.lib checksum for \(arch) yet — run the llama-windows "
+                    + "publish workflow (it builds both arches), or build locally with "
+                    + "Scripts\\build-llama-windows.ps1 -Arch \(arch) and set "
+                    + "SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR to its Vendor\\llama-windows dir"
+            )
+        }
         let cacheDir = cacheRoot().appendingPathComponent(want, isDirectory: true)
         let lib = cacheDir.appendingPathComponent("llama.lib")
         if fm.fileExists(atPath: lib.path), (try? sha256Hex(ofFileAt: lib)) == want {

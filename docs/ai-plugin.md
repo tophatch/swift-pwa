@@ -269,9 +269,13 @@ on-device AI never link the FoundationModels framework.
 ### Available backend: llama.cpp
 
 `SwiftPWALlama` runs a GGUF model on-device via [llama.cpp](https://github.com/ggml-org/llama.cpp)
-(**Metal**-accelerated on Apple, **Vulkan** on Linux and Windows) — the
-portable counterpart to Foundation Models, usable independent of OS-level model
-availability. **Apple (macOS / iOS), Linux (x86_64), and Windows (x64)** today.
+(**Metal**-accelerated on Apple, **Vulkan** on Linux and Windows x64, **CPU** on
+Windows arm64) — the portable counterpart to Foundation Models, usable
+independent of OS-level model availability. **Apple (macOS / iOS), Linux
+(x86_64), and Windows (x64 Vulkan + arm64 CPU)** today. On Windows **arm64**
+(Snapdragon X Copilot+) it's also the unpackaged, any-GGUF, no-token fallback to
+[Phi Silica](#available-backend-windows-phi-silica), which needs MSIX + a LAF
+token to generate.
 
 It's **off by default** because it links a prebuilt llama binary
 (~tens of MB). Turn it on per app in `pwa.json`:
@@ -298,10 +302,11 @@ resolve it. (Building the generated app with bare `swift build` instead of
 yourself — and off Apple also point the linker env var at a directory
 containing the static lib, or set `SWIFT_PWA_LLAMA_LINUX_LIB_DIR` /
 `SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR` to it.) Linux needs `libvulkan-dev` and
-Windows the Vulkan SDK's `vulkan-1.lib` to link, plus a Vulkan 1.2+ driver/ICD
-at runtime — see
+Windows **x64** the Vulkan SDK's `vulkan-1.lib` to link, plus a Vulkan 1.2+
+driver/ICD at runtime; Windows **arm64** is CPU-only, so it needs neither (it
+links `llama.lib` alone) — see
 [docs/linux-setup.md](linux-setup.md#7-optional--on-device-ai-llamacpp-vulkan)
-and [docs/windows-setup.md](windows-setup.md#4-optional--on-device-ai-llamacpp-vulkan).
+and [docs/windows-setup.md](windows-setup.md#4-optional--on-device-ai-llamacpp).
 
 Then wire the backend, pointing it at a model:
 
@@ -480,14 +485,15 @@ small model → none** (the app supplies its own cloud tier on top).
 | Tier | Apple | Android | Windows | Linux |
 | --- | --- | --- | --- | --- |
 | 1 — platform built-in | **Foundation Models (`apple-foundation-models`) — shipped ✅** | **Gemini Nano / ML Kit GenAI (`gemini-nano`) — shipped ✅** | **Windows AI / Phi Silica (`phi-silica`) — implemented; needs MSIX + LAF token** | — |
-| 2 — downloadable GGUF | **llama.cpp (`gemma-llamacpp`) — shipped ✅** / MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) / **llama.cpp (Vulkan) — shipped ✅** | **llama.cpp (Vulkan) — shipped ✅** |
+| 2 — downloadable GGUF | **llama.cpp (`gemma-llamacpp`) — shipped ✅** / MLX-Swift (`gemma-mlx`) | MediaPipe LLM Inference (`gemma-mediapipe`) | ONNX Runtime GenAI (`gemma-onnx`) / **llama.cpp — shipped ✅ (x64 Vulkan + arm64 CPU)** | **llama.cpp (Vulkan) — shipped ✅** |
 | 3 — none | `none` → `available:false` | | | |
 
 llama.cpp (`gemma-llamacpp`) is the portable tier-2 path: **Apple (Metal),
-Linux x86_64 (Vulkan), and Windows x64 (Vulkan) all shipped ✅**. The Swift
-`LlamaBackend` is platform-agnostic — only the prebuilt binary differs per
+Linux x86_64 (Vulkan), and Windows (x64 Vulkan + arm64 CPU) all shipped ✅**. The
+Swift `LlamaBackend` is platform-agnostic — only the prebuilt binary differs per
 platform (xcframework on Apple, static `libllama.a` on Linux, `llama.lib` on
-Windows).
+Windows). On Windows arm64 it's CPU-only for now (a Vulkan/Adreno GPU build is a
+planned follow-up); it's the unpackaged, no-token fallback to Phi Silica there.
 
 Vision input rides the same backends where the model is multimodal (e.g.
 Gemini Nano's vision variants, a vision Gemma), gated by the `vision` flag.

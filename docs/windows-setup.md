@@ -359,15 +359,21 @@ swift run swift-pwa build --target windows --bootstrap-webview2
 `MicrosoftEdgeWebview2Setup.exe` next to the EXE, and prompts the user
 via a MessageBox before `ShellExecuteEx`-ing it with elevation.
 
-## 4. Optional — On-device AI (llama.cpp, Vulkan)
+## 4. Optional — On-device AI (llama.cpp)
 
 The portable on-device AI backend (`SwiftPWALlama` / `LlamaBackend`) runs a
-GGUF model locally, **GPU-accelerated via Vulkan** on Windows x64 — one build
-covers NVIDIA + AMD + Intel through the driver's Vulkan ICD, with CPU fallback
-when no capable device is present. It's the same backend and the same
-`pwa.json` flag as Apple and Linux; only the GPU path differs (Metal / Vulkan →
-Vulkan). See [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) for
-the API.
+GGUF model locally. It's the same backend and the same `pwa.json` flag on every
+platform; what differs by architecture is the compute path:
+
+|Host arch|Compute|Notes|
+|---|---|---|
+|**x64**|**Vulkan GPU** (CPU fallback)|One build covers NVIDIA + AMD + Intel via the driver's Vulkan ICD.|
+|**arm64** (Snapdragon X Copilot+)|**CPU-only**|CPU-first MVP — runs on the CPU. Small models (0.5–3B) are comfortable on Snapdragon X. A Vulkan/Adreno GPU build is a planned follow-up.|
+
+On **arm64** this is also the *unpackaged, any-GGUF, no-token* fallback to
+[Phi Silica](#5-on-device-ai-phi-silica), whose generation needs an MSIX package
+**and** a Microsoft LAF token — llama needs neither. See
+[docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) for the API.
 
 Enable it per app in `pwa.json`:
 
@@ -387,23 +393,32 @@ links it:
 swift run swift-pwa build --target windows
 ```
 
-**Build-time prerequisite:** the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows),
+**Build-time prerequisite (x64 only):** the [Vulkan SDK](https://vulkan.lunarg.com/sdk/home#windows),
 so the link step resolves `vulkan-1.lib` (the loader import library). Install it
 (the winget package id is `KhronosGroup.VulkanSDK`) — it sets `VULKAN_SDK`
 machine-wide, and `swift-pwa build` reads `VULKAN_SDK` to add the SDK's `Lib` to
 the linker search path automatically (alongside the downloaded `llama.lib`). A
-bare GPU driver's `vulkan-1.dll` alone is **not** enough at link time.
+bare GPU driver's `vulkan-1.dll` alone is **not** enough at link time. On
+**arm64** the lib is CPU-only, so **no Vulkan SDK is needed** — the build links
+`llama.lib` alone.
 
-**Runtime prerequisite:** the end user's machine needs a **Vulkan 1.2+
+**Runtime prerequisite (x64):** the end user's machine needs a **Vulkan 1.2+
 driver / ICD** for GPU acceleration (the GPU vendor's standard Windows driver
 provides both the ICD and `vulkan-1.dll` in `System32`). With no usable ICD the
-model still runs on the CPU.
+model still runs on the CPU. On **arm64** inference is on the CPU, so there's no
+runtime GPU prerequisite.
 
 Building the lib yourself (when hacking on swift-pwa, or to produce the release
 artifact) uses [`Scripts/build-llama-windows.ps1`](../Scripts/build-llama-windows.ps1),
 which needs MSVC (`cl.exe` / `lib.exe` on PATH — run from a VS Developer
-PowerShell) and the **Vulkan SDK** (for `glslc` + SPIRV-Headers). Run the
-script, then point the build at the result with
+PowerShell). For **x64** it also needs the **Vulkan SDK** (for `glslc` +
+SPIRV-Headers). For **arm64** pass `-Arch arm64` and run from an **arm64**
+developer shell (no Vulkan SDK) — but note ggml's CPU backend **refuses MSVC on
+ARM** (`"MSVC is not supported for ARM, use clang"`), so the script drives the
+arm64 compile with **`clang-cl`** instead of `cl`. It auto-finds one: on PATH,
+else the **Swift toolchain's** (the same `usr\bin` as `swift.exe` — so a box with
+Swift installed already has it), else a standard LLVM install. Run the script,
+then point the build at the result with
 `$env:SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR='…\Vendor\llama-windows'`.
 
 ## 5. On-device AI: Phi Silica

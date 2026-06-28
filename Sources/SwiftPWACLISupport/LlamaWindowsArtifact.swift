@@ -51,7 +51,7 @@ enum LlamaWindowsArtifact {
     /// CPU-only). Auto-pinned by the publish workflow; an all-zero placeholder
     /// fails closed until that arch's first publish runs.
     static let sha256_x64 = "4a6ff29e879e92ecf0966cae8f15df5bb743ba13168c7ddd1aa1cae9bd81130e"
-    static let sha256_arm64 = "0000000000000000000000000000000000000000000000000000000000000000"
+    static let sha256_arm64 = "3fb41abb8d8383bb02bcb747dda73b20ab10ed93eb63ed7a9919933a2b9486bb"
 
     struct ArtifactError: Error, CustomStringConvertible {
         let description: String

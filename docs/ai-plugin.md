@@ -492,8 +492,11 @@ llama.cpp (`gemma-llamacpp`) is the portable tier-2 path: **Apple (Metal),
 Linux x86_64 (Vulkan), and Windows (x64 Vulkan + arm64 CPU) all shipped ✅**. The
 Swift `LlamaBackend` is platform-agnostic — only the prebuilt binary differs per
 platform (xcframework on Apple, static `libllama.a` on Linux, `llama.lib` on
-Windows). On Windows arm64 it's CPU-only for now (a Vulkan/Adreno GPU build is a
-planned follow-up); it's the unpackaged, no-token fallback to Phi Silica there.
+Windows). On Windows arm64 it's CPU (the unpackaged, no-token fallback to Phi
+Silica there); an Adreno GPU/Vulkan build path exists behind an experimental
+opt-in but isn't shipped — the Adreno X1's Vulkan compute currently returns
+incorrect output (upstream Qualcomm-driver / ggml-shader immaturity). See
+[docs/windows-setup.md](windows-setup.md#4-optional--on-device-ai-llamacpp).
 
 Vision input rides the same backends where the model is multimodal (e.g.
 Gemini Nano's vision variants, a vision Gemma), gated by the `vision` flag.

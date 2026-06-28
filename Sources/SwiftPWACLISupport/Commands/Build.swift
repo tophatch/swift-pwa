@@ -346,7 +346,9 @@ struct Build: AsyncParsableCommand {
     ///   `swift build` resolves `llama.lib`. On **x64** the lib is the Vulkan
     ///   build, so this also needs the Vulkan SDK's `vulkan-1.lib` at link time
     ///   + a Vulkan driver at runtime; on **arm64** (Copilot+) the lib is
-    ///   **CPU-only**, so no Vulkan SDK is needed. See `LlamaWindowsArtifact`.
+    ///   **CPU-only** by default, so no Vulkan SDK is needed — unless the
+    ///   experimental `LLAMA_WIN_ARM64_VULKAN` opt-in is set (Adreno Vulkan; output
+    ///   currently garbage, for re-testing only). See `LlamaWindowsArtifact`.
     /// - **Android** — not supported yet; warn and ignore.
     static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         guard manifest.ai?.localLlama == true else { return }
@@ -388,14 +390,20 @@ struct Build: AsyncParsableCommand {
                 // the SDK sets VULKAN_SDK but does NOT add its Lib to LIB), plus
                 // whatever's already there. `;`-separated; case-insensitive LIB
                 // lookup since a VS dev shell exports `Lib` (PowerShell) or `LIB`
-                // (cmd). On arm64 the lib is CPU-only — no Vulkan backend, hence
-                // no `vulkan-1` to find — so we skip the SDK entirely.
+                // (cmd). The Vulkan SDK's Lib is appended only for a Vulkan build:
+                // x64 always; arm64 only under the EXPERIMENTAL `LLAMA_WIN_ARM64_VULKAN`
+                // opt-in (default arm64 is CPU-only — no `vulkan-1` to find — and the
+                // Adreno X1's Vulkan output is currently garbage; see docs).
                 let env = ProcessInfo.processInfo.environment
                 var search = [libDir.path]
                 #if arch(arm64)
-                    let backend = "CPU"
+                    let wantVulkan = env["LLAMA_WIN_ARM64_VULKAN"] != nil
+                    let backend = wantVulkan ? "Vulkan — EXPERIMENTAL/arm64" : "CPU"
                 #else
+                    let wantVulkan = true
                     let backend = "Vulkan"
+                #endif
+                if wantVulkan {
                     if let sdk = env["VULKAN_SDK"], !sdk.isEmpty {
                         search.append("\(sdk)\\Lib")
                     } else {
@@ -405,7 +413,7 @@ struct Build: AsyncParsableCommand {
                                 + "docs/windows-setup.md."
                         )
                     }
-                #endif
+                }
                 let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
                 let combined = (existing.map { search + [$0] } ?? search).joined(separator: ";")
                 _ = _putenv_s("LIB", combined)

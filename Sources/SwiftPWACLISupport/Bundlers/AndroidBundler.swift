@@ -82,6 +82,14 @@ struct AndroidBundler {
         // `ai.gemini_nano: true` → add the ML Kit GenAI Gradle dep + splice the
         // `ai.gemini.*` Kotlin dispatch the `GeminiNanoBackend` RPCs into.
         let geminiNanoEnabled = manifest.ai?.geminiNano == true
+        // `window.background_color` → paint the launch window, system bars, and
+        // WebView surface to match (no white flash before first paint). Parsed
+        // here so an invalid hex degrades to the stock theme rather than
+        // emitting a broken resource. Mirrors the other backends, which all
+        // honour the same field.
+        let windowBackground = manifest.window.backgroundColor
+            .flatMap(RGBColor.init(hex:))
+            .map(AndroidTemplates.WindowBackground.init)
 
         // Project-level files.
         let settings = AndroidTemplates.settingsGradleKts(label: label)
@@ -131,16 +139,32 @@ struct AndroidBundler {
         // density at build time, so a single PNG is enough — no pre-resize.
         let iconStaged = try stageLauncherIcon(into: main)
 
-        try AndroidTemplates.androidManifestXml(packageId: pkg, label: label, hasIcon: iconStaged).write(
+        try AndroidTemplates.androidManifestXml(
+            packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil
+        ).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
             atomically: true, encoding: .utf8
         )
+
+        // res/values/swift_pwa_theme.xml — the `Theme.SwiftPWA` the manifest
+        // points at when `window.background_color` is set. Only written when a
+        // colour is configured (the manifest references the stock theme
+        // otherwise).
+        if let windowBackground {
+            let values = main.appendingPathComponent("res/values")
+            try FileManager.default.createDirectory(at: values, withIntermediateDirectories: true)
+            try AndroidTemplates.swiftPWAThemeXml(windowBackground).write(
+                to: values.appendingPathComponent("swift_pwa_theme.xml"),
+                atomically: true, encoding: .utf8
+            )
+        }
 
         // Kotlin sources go under `java/<package-as-path>/...`
         let kotlinDir = main.appendingPathComponent("java/" + pkg.replacingOccurrences(of: ".", with: "/"))
         try FileManager.default.createDirectory(at: kotlinDir, withIntermediateDirectories: true)
         try AndroidTemplates.mainActivityKt(
-            packageId: pkg, soBaseName: soBase, serveMounts: manifest.build?.serve ?? []
+            packageId: pkg, soBaseName: soBase, serveMounts: manifest.build?.serve ?? [],
+            backgroundColorHex: windowBackground?.hex
         ).write(
             to: kotlinDir.appendingPathComponent("MainActivity.kt"),
             atomically: true, encoding: .utf8

@@ -1,4 +1,5 @@
 import Foundation
+import SwiftPWACore
 
 /// Templated content for the generated Android Gradle project.
 /// Kept as a single namespace because every file is small and
@@ -211,11 +212,23 @@ enum AndroidTemplates {
         """
     }
 
-    static func androidManifestXml(packageId: String, label: String, hasIcon: Bool) -> String {
+    static func androidManifestXml(
+        packageId: String,
+        label: String,
+        hasIcon: Bool,
+        customTheme: Bool = false
+    ) -> String {
         // When the project ships an icon, reference the launcher mipmap the
         // bundler drops into res/mipmap/. aapt/Gradle handle density scaling
         // from the single source PNG at build time — no pre-resizing needed.
         let iconAttr = hasIcon ? "\n            android:icon=\"@mipmap/ic_launcher\"" : ""
+        // `window.background_color` set → reference the generated
+        // `Theme.SwiftPWA` (in res/values/swift_pwa_theme.xml) so the launch
+        // window + system bars paint in that colour instead of the stock
+        // light-theme white. Theme.SwiftPWA still descends from
+        // Theme.AppCompat.Light.NoActionBar, so the AppCompat inflation
+        // constraint below still holds.
+        let themeName = customTheme ? "@style/Theme.SwiftPWA" : "Theme.AppCompat.Light.NoActionBar"
         return """
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"
@@ -250,13 +263,15 @@ enum AndroidTemplates {
                 android:allowBackup="true"
                 android:supportsRtl="true"
                 android:usesCleartextTraffic="false"
-                android:theme="@style/Theme.AppCompat.Light.NoActionBar"
+                android:theme="\(themeName)"
                 tools:targetApi="34">
-                <!-- Theme is `Theme.AppCompat.Light.NoActionBar` because
-                     `MainActivity` extends `AppCompatActivity` (required
-                     by the BiometricPrompt + SAF launcher plumbing) and
-                     AppCompat refuses to inflate against a non-AppCompat
-                     theme: `IllegalStateException: You need to use a
+                <!-- The base theme is `Theme.AppCompat.Light.NoActionBar`
+                     (directly, or via `Theme.SwiftPWA` when
+                     `window.background_color` is set) because `MainActivity`
+                     extends `AppCompatActivity` (required by the
+                     BiometricPrompt + SAF launcher plumbing) and AppCompat
+                     refuses to inflate against a non-AppCompat theme:
+                     `IllegalStateException: You need to use a
                      Theme.AppCompat theme (or descendant) with this
                      activity.` `NoActionBar` because the WebView fills
                      the screen and the system action bar would just
@@ -278,14 +293,65 @@ enum AndroidTemplates {
         """
     }
 
+    /// Resolved `window.background_color` for the Android backend. `hex` is a
+    /// normalized opaque `#RRGGBB`; `lightStatusBar` drives
+    /// `windowLightStatusBar` / `windowLightNavigationBar` — true (dark icons)
+    /// when the surface is light, so the status/navigation glyphs stay legible.
+    struct WindowBackground {
+        var hex: String
+        var lightStatusBar: Bool
+
+        /// Build from a parsed colour. Relative-luminance threshold at 0.5:
+        /// a light fill wants dark system-bar icons and vice-versa.
+        init(_ rgb: RGBColor) {
+            let (r, g, b) = rgb.bytes
+            hex = String(format: "#%02X%02X%02X", r, g, b)
+            let luminance = 0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue
+            lightStatusBar = luminance > 0.5
+        }
+    }
+
+    /// `res/values/swift_pwa_theme.xml` — defines `Theme.SwiftPWA`, the
+    /// activity theme referenced by the manifest when `window.background_color`
+    /// is set. Painting `android:windowBackground` is what kills the white
+    /// launch flash before the WebView's first paint (the WebView's own
+    /// `setBackgroundColor` covers the gap between inflation and first paint);
+    /// matching the status + navigation bars removes the "this is just a
+    /// webview" framing. Emitted only when a colour is configured, so non-themed
+    /// apps keep the stock AppCompat light theme untouched.
+    static func swiftPWAThemeXml(_ bg: WindowBackground) -> String {
+        """
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <color name="swift_pwa_window_background">\(bg.hex)</color>
+            <style name="Theme.SwiftPWA" parent="Theme.AppCompat.Light.NoActionBar">
+                <item name="android:windowBackground">@color/swift_pwa_window_background</item>
+                <item name="android:statusBarColor">@color/swift_pwa_window_background</item>
+                <item name="android:navigationBarColor">@color/swift_pwa_window_background</item>
+                <item name="android:windowLightStatusBar">\(bg.lightStatusBar)</item>
+                <item name="android:windowLightNavigationBar">\(bg.lightStatusBar)</item>
+            </style>
+        </resources>
+        """
+    }
+
     // MARK: - Kotlin
 
     static func mainActivityKt(
         packageId: String,
         soBaseName: String,
-        serveMounts: [PWAManifest.ServeMount] = []
+        serveMounts: [PWAManifest.ServeMount] = [],
+        backgroundColorHex: String? = nil
     ) -> String {
-        """
+        // `window.background_color` set → paint the WebView's own surface to
+        // match before its first paint. The activity theme's windowBackground
+        // covers the launch flash up to inflation; this covers inflation →
+        // first paint (the WebView is otherwise opaque white). Color.parseColor
+        // accepts the same `#RRGGBB` the theme colour uses.
+        let backgroundColorLine = backgroundColorHex.map {
+            "\n        webView.setBackgroundColor(android.graphics.Color.parseColor(\"\($0)\"))"
+        } ?? ""
+        return """
         package \(packageId)
 
         import android.os.Bundle
@@ -321,7 +387,7 @@ enum AndroidTemplates {
                 // loader dedupes on the underlying library handle.
                 System.loadLibrary("\(soBaseName)")
 
-                val webView = WebView(this)
+                val webView = WebView(this)\(backgroundColorLine)
                 setContentView(webView)
 
                 if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {

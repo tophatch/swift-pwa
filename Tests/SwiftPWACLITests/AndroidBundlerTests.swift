@@ -1,5 +1,6 @@
 import Foundation
 @testable import SwiftPWACLISupport
+import SwiftPWACore
 import Testing
 
 /// Coverage for the bits of the Android bundler that don't actually
@@ -56,6 +57,50 @@ struct AndroidBundlerUnitTests {
 
         let withoutIcon = AndroidTemplates.androidManifestXml(packageId: "com.example.hi", label: "Hi", hasIcon: false)
         #expect(!withoutIcon.contains("android:icon"))
+    }
+
+    @Test("background_color: manifest theme, WebView fill, and themed status bars only when set")
+    func backgroundColor() {
+        // Unset → stock AppCompat theme, no WebView fill, no theme reference.
+        let plainManifest = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.hi", label: "Hi", hasIcon: false, customTheme: false
+        )
+        #expect(plainManifest.contains("android:theme=\"Theme.AppCompat.Light.NoActionBar\""))
+        #expect(!plainManifest.contains("android:theme=\"@style/Theme.SwiftPWA\""))
+        let plainActivity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(!plainActivity.contains("setBackgroundColor"))
+
+        // Set → manifest points at the generated theme; WebView surface filled.
+        let themedManifest = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.hi", label: "Hi", hasIcon: false, customTheme: true
+        )
+        #expect(themedManifest.contains("android:theme=\"@style/Theme.SwiftPWA\""))
+        let themedActivity = AndroidTemplates.mainActivityKt(
+            packageId: "com.example.hi", soBaseName: "Hi", backgroundColorHex: "#F4F7F5"
+        )
+        #expect(themedActivity.contains(
+            "webView.setBackgroundColor(android.graphics.Color.parseColor(\"#F4F7F5\"))"
+        ))
+    }
+
+    @Test("swiftPWAThemeXml fills window + system bars and picks icon luminance")
+    func themeXmlLuminance() throws {
+        // A near-white surface wants dark (light-bar) status/navigation icons.
+        let light = try AndroidTemplates.WindowBackground(#require(RGBColor(hex: "#F4F7F5")))
+        #expect(light.hex == "#F4F7F5")
+        #expect(light.lightStatusBar == true)
+        let lightXml = AndroidTemplates.swiftPWAThemeXml(light)
+        #expect(lightXml.contains("<color name=\"swift_pwa_window_background\">#F4F7F5</color>"))
+        #expect(lightXml.contains("parent=\"Theme.AppCompat.Light.NoActionBar\""))
+        #expect(lightXml.contains("<item name=\"android:windowBackground\">@color/swift_pwa_window_background</item>"))
+        #expect(lightXml.contains("<item name=\"android:statusBarColor\">@color/swift_pwa_window_background</item>"))
+        #expect(lightXml.contains("<item name=\"android:windowLightStatusBar\">true</item>"))
+
+        // A dark surface wants light (white) status/navigation icons.
+        let dark = try AndroidTemplates.WindowBackground(#require(RGBColor(hex: "#101418")))
+        #expect(dark.lightStatusBar == false)
+        let darkXml = AndroidTemplates.swiftPWAThemeXml(dark)
+        #expect(darkXml.contains("<item name=\"android:windowLightStatusBar\">false</item>"))
     }
 
     @Test("appBuildGradleKts without signing skips the signingConfigs block")

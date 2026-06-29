@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`window.background_color` is now honoured on Android — it was the one backend that parsed the field and never applied it.** When the feature shipped (v0.7.0) it landed on Apple / GTK / WebView2, but the Android bundler decoded `window.background_color` into `WindowConfig.backgroundColor` and then dropped it, so an Android build flashed the stock white launch window and kept a default-light status bar regardless of the configured colour — the exact "this is just a webview" tell the option exists to remove. The Android `--target android` bundler now threads the colour through three surfaces, matching the analogous iOS launch-screen treatment: it emits a `Theme.SwiftPWA` (in `res/values/swift_pwa_theme.xml`, descending from the same `Theme.AppCompat.Light.NoActionBar` base) whose `android:windowBackground` paints the launch window in the colour (killing the white flash before first paint), sets `android:statusBarColor` + `android:navigationBarColor` to match, and picks `android:windowLightStatusBar` / `windowLightNavigationBar` from the colour's relative luminance so the system-bar glyphs stay legible (dark icons on a light fill, light on a dark one); the generated `MainActivity` also calls `webView.setBackgroundColor(...)` to cover inflation→first-paint. All gated on the colour being set — apps that omit it keep the stock theme untouched. Closes the gap behind the v0.7.0 "applied on **every backend**" claim. See [docs/android-setup.md](docs/android-setup.md).
+
 ## [0.7.4] - 2026-06-28
 
 ### Added

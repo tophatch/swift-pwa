@@ -289,6 +289,29 @@ All fields are optional; sensible defaults are derived from the
 top-level keys. The CLI flag `--android-abis` overrides
 `android.abis` when both are set.
 
+### `window.background_color`
+
+Setting the top-level `window.background_color` (hex, e.g. `"#F4F7F5"`)
+makes the Android build paint its native surface to match before the
+page's first paint — the same option honoured on every other backend.
+On Android it drives three things, generated only when the field is set
+(omit it to keep the stock light theme):
+
+- **Launch window** — the bundler emits `res/values/swift_pwa_theme.xml`
+  with a `Theme.SwiftPWA` (descended from
+  `Theme.AppCompat.Light.NoActionBar`) whose `android:windowBackground`
+  is the configured colour, and points the manifest's `<application>` at
+  it. This removes the white flash between launch and the WebView's
+  first paint.
+- **System bars** — `android:statusBarColor` and
+  `android:navigationBarColor` are set to the same colour, and
+  `android:windowLightStatusBar` / `windowLightNavigationBar` are chosen
+  from the colour's relative luminance (dark glyphs on a light fill,
+  light glyphs on a dark one) so the bar icons stay legible.
+- **WebView surface** — the generated `MainActivity` calls
+  `webView.setBackgroundColor(...)`, covering the gap between view
+  inflation and the page's first paint.
+
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important

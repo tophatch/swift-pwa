@@ -101,6 +101,35 @@ await __SWIFT_PWA__.invoke('clipboard.clear');
 `clear()` wipes on Apple; on X11 / Wayland it only relinquishes local
 ownership of the selection.
 
+### `events.*` — server-initiated push
+
+A runtime-owned event bus for events the client *didn't* explicitly request —
+a file appeared, an import finished, a background job progressed. Swift pushes
+on a named channel and every subscriber (in every window) receives it. Two
+convenience helpers wrap the `events.*` commands:
+
+```js
+// Subscribe to a channel. `on` returns an unsubscribe function.
+const off = __SWIFT_PWA__.on('library:changed', (payload) => {
+    console.log('library changed', payload);
+});
+
+// Publish from JS. Fans out to every subscriber in every window, so it
+// doubles as a cross-window message bus.
+await __SWIFT_PWA__.emit('ui:theme', { dark: true });
+
+// A retained channel replays its latest value to subscribers that connect
+// later — no more "subscribed too late and missed the event".
+await __SWIFT_PWA__.emit('job:progress', { pct: 40 }, { retain: true });
+
+off(); // stop listening
+```
+
+The Swift side pushes with `ctx.emit('library:changed', payload)` — see
+[swift-api.md](swift-api.md#server-push-events). `on` / `emit` are thin sugar
+over `subscribe('events.subscribe', …)` / `invoke('events.emit', …)`; the raw
+commands are available if you need them.
+
 ## Opt-in plugins (require `ctx.use(...)` on the Swift side)
 
 ### `dialog.*`
@@ -361,6 +390,42 @@ prompt-and-validate fallback), and composes with multimodal `images` /
 place but no on-device backend is wired yet, so `ai.info` reports
 `available: false` until one lands. Full reference, backend protocol, and
 roadmap: [docs/ai-plugin.md](ai-plugin.md).
+
+### `process.*` — subprocesses (desktop only)
+
+Launch and manage an external child process: stream its stdout/stderr, feed
+its stdin, and have it torn down automatically when the page goes away. This is
+the escape hatch for wrapping an existing CLI/daemon — a converter, an indexer,
+a local model server, or an out-of-process TTS synthesizer. Register it Swift-
+side with `ctx.use(ProcessPlugin(SystemProcess()))`.
+
+```js
+// Spawn + stream. The first frame is `spawned` (with the pid); then `stdout`
+// / `stderr` (base64 bytes), then a terminal `exit`.
+let pid;
+const off = __SWIFT_PWA__.subscribe('process.stream',
+    { command: 'python3', args: ['tts.py'], cwd: '/app', env: { RATE: '24000' } },
+    (frame) => {
+        if (frame.type === 'spawned') pid = frame.pid;
+        else if (frame.type === 'stdout') playPCM(atob(frame.dataBase64));
+        else if (frame.type === 'exit')   console.log('exited', frame.code);
+    });
+
+// Feed stdin (base64), optionally closing it to signal EOF.
+await __SWIFT_PWA__.invoke('process.write',
+    { pid, dataBase64: btoa('speak this\n'), closeStdin: false });
+
+// Terminate explicitly (SIGTERM)…
+await __SWIFT_PWA__.invoke('process.kill', { pid });
+// …or just `off()` — unsubscribing (or closing the window) kills the child.
+```
+
+**Guaranteed teardown.** A child's lifetime is bound to its `process.stream`
+subscription: unsubscribe, or close the owning window, and the child is
+terminated — orphaned children can't happen. **Desktop only** (macOS / Linux /
+Windows); on iOS / Android the sandbox forbids spawning and `process.stream`
+fails with `E_UNIMPLEMENTED`. Full reference and security notes:
+[docs/process-plugin.md](process-plugin.md).
 
 ## Custom commands
 

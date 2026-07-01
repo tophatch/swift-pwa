@@ -60,9 +60,10 @@ JSON-compatible shape works.
 ## Built-in plugins
 
 `WindowPlugin`, `AppPlugin` (`app.quit` / `app.name` / `app.version`),
-and `ClipboardPlugin` are auto-installed on every backend — apps don't
-need to opt in. Everything else is à la carte so apps that don't need a
-tray / file dialogs / biometrics don't pay the binary or runtime cost.
+`EventsPlugin` (the server-push bus, see below), and `ClipboardPlugin`
+are auto-installed on every backend — apps don't need to opt in.
+Everything else is à la carte so apps that don't need a tray / file
+dialogs / biometrics don't pay the binary or runtime cost.
 
 ```swift
 try runtime.run { ctx in
@@ -71,6 +72,7 @@ try runtime.run { ctx in
     ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
     ctx.use(TrayPlugin(SystemTray()))
     ctx.use(NotificationsPlugin(SystemNotifications()))
+    ctx.use(ProcessPlugin(SystemProcess()))   // subprocesses; desktop only
     ctx.use(UpdaterPlugin(AppleUpdater(
         endpoint: URL(string: "https://updates.example.com/{{target}}/{{current_version}}")!,
         publicKey: "BASE64-OF-32-RAW-ED25519-BYTES" // nil on iOS
@@ -178,6 +180,59 @@ only emitted when the corresponding programmatic method is called —
 user-driven changes (alt-tab, click another window) don't yet reach
 subscribers on either GTK backend. See
 [docs/linux-setup.md](linux-setup.md#known-limitations-on-linux).
+
+## Server-push events
+
+`WindowPlugin`'s `window.subscribe` lets JS *pull* window events. When Swift
+needs to push something the client never asked for — a file appeared, an import
+finished, a background job progressed — use the app-wide event bus. It's owned
+by the `AppContext` (`ctx.events`), auto-installed as `EventsPlugin`, and fans
+one `emit` out to subscribers in **every** window.
+
+```swift
+// From anywhere that has the context (a command handler, a plugin):
+try ctx.emit("library:changed", ["added": 3])          // typed, Encodable
+ctx.emit("app:ready")                                    // payload-less signal
+
+// Retain the latest value so a window that subscribes later still sees it:
+try ctx.emit("job:progress", Progress(pct: 40), retain: true)
+```
+
+`ctx.events` is `Sendable`, so to push from a background thread (a file watcher,
+an import `Task`) capture it once and skip the main-actor hop:
+
+```swift
+let bus = ctx.events
+watcher.onChange = { path in try? bus.emit("fs:changed", ["path": path]) }
+```
+
+JS receives these via `__SWIFT_PWA__.on(channel, cb)` — see
+[javascript-api.md](javascript-api.md#events--server-initiated-push). The bus
+is best-effort in-memory pub/sub: no persistence, and (apart from a retained
+channel's latest value) no buffering for windows that aren't subscribed yet.
+
+## Subprocesses (desktop only)
+
+`ProcessPlugin` lets an app host a "thick" local backend — a converter, an
+indexer, a local model server, or an out-of-process synthesizer — instead of
+being a purely thin PWA wrapper. Register it with a runner:
+
+```swift
+ctx.use(ProcessPlugin(SystemProcess()))
+```
+
+`SystemProcess` wraps Foundation's `Process` on macOS / Linux / Windows; on
+iOS / Android the sandbox forbids spawning, so `spawn` throws `E_UNIMPLEMENTED`
+(the plugin still compiles everywhere). JS drives it through `process.stream` /
+`process.write` / `process.kill` — see
+[javascript-api.md](javascript-api.md#process--subprocesses-desktop-only).
+
+The key correctness property is **guaranteed teardown**: a child's lifetime is
+tied to its `process.stream` subscription. When JS unsubscribes or the owning
+window closes, `BridgeRuntime` cancels the subscription, which reaches the
+stream's `onTermination` and terminates the child — so a child can't outlive
+the page that spawned it. To inject a fake in tests, conform to `ProcessRunner`
+/ `ProcessChild`. Full reference: [docs/process-plugin.md](process-plugin.md).
 
 ## Concurrency model
 

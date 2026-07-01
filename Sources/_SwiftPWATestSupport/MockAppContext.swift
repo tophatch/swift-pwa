@@ -6,6 +6,7 @@ import SwiftPWACore
 public final class MockAppContext: AppContext {
     public let registry: CommandRegistry
     public let assetProvider = AssetProvider()
+    public let events = EventBus()
     public var windows: [WindowID: any Window] = [:]
     public private(set) var didQuitWith: Int32?
     public private(set) var installedPlugins: [String] = []

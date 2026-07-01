@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-07-01
+
 ### Added
 
 - **Subprocess plugin (`process.*`) — host a "thick" local backend, not just a thin PWA.** A new opt-in `ProcessPlugin(SystemProcess())` launches and manages an external child process: `process.stream` spawns it and streams stdout/stderr as bridge events (base64 frames: `spawned` → `stdout`/`stderr` → terminal `exit`), `process.write` feeds stdin (with optional `closeStdin` EOF), and `process.kill` terminates it. The motivating case comes from adopters wrapping an existing CLI/daemon — a converter, an indexer, a local model server, or an out-of-process TTS synthesizer that has to keep running until a native audio backend exists. The design's headline property is **guaranteed teardown**: a child's lifetime is bound to its `process.stream` subscription, so when JS unsubscribes *or the owning window closes*, `BridgeRuntime` cancels the subscription, whose `onTermination` terminates the child — orphaned children (the classic hand-rolled-`Process` failure mode) can't happen. Backed by Foundation's `Process` on macOS/Linux/Windows; **desktop only** — iOS/Android sandboxes forbid spawning, so `SystemProcess.spawn` throws `E_UNIMPLEMENTED` there (the plugin still compiles everywhere). Injectable via the `ProcessRunner`/`ProcessChild` protocols for testing. See [docs/process-plugin.md](docs/process-plugin.md), [docs/javascript-api.md](docs/javascript-api.md), and [docs/swift-api.md](docs/swift-api.md).

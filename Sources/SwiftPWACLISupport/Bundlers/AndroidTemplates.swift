@@ -228,7 +228,7 @@ enum AndroidTemplates {
         // light-theme white. Theme.SwiftPWA still descends from
         // Theme.AppCompat.Light.NoActionBar, so the AppCompat inflation
         // constraint below still holds.
-        let themeName = customTheme ? "@style/Theme.SwiftPWA" : "Theme.AppCompat.Light.NoActionBar"
+        let themeName = customTheme ? "@style/Theme.SwiftPWA" : "@style/Theme.AppCompat.Light.NoActionBar"
         return """
         <?xml version="1.0" encoding="utf-8"?>
         <manifest xmlns:android="http://schemas.android.com/apk/res/android"

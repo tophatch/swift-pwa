@@ -61,12 +61,18 @@ struct AndroidBundlerUnitTests {
 
     @Test("background_color: manifest theme, WebView fill, and themed status bars only when set")
     func backgroundColor() {
-        // Unset → stock AppCompat theme, no WebView fill, no theme reference.
+        // Unset → stock AppCompat theme, no WebView fill, no custom theme
+        // reference. It must still be a `@style/` resource reference — a bare
+        // `Theme.AppCompat.Light.NoActionBar` fails AAPT resource linking with
+        // "incompatible with attribute theme (attr) reference" (the v0.7.5
+        // regression this guards against).
         let plainManifest = AndroidTemplates.androidManifestXml(
             packageId: "com.example.hi", label: "Hi", hasIcon: false, customTheme: false
         )
-        #expect(plainManifest.contains("android:theme=\"Theme.AppCompat.Light.NoActionBar\""))
+        #expect(plainManifest.contains("android:theme=\"@style/Theme.AppCompat.Light.NoActionBar\""))
         #expect(!plainManifest.contains("android:theme=\"@style/Theme.SwiftPWA\""))
+        // Guard specifically against the bare (prefix-less) form regressing.
+        #expect(!plainManifest.contains("android:theme=\"Theme.AppCompat"))
         let plainActivity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
         #expect(!plainActivity.contains("setBackgroundColor"))
 

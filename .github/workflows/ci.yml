@@ -385,16 +385,20 @@ jobs:
         run: swift run SwiftPWAWindowsTestRunner
 
   android:
-    # Android cross-compile + Gradle `assembleDebug` smoke test. Uses
-    # the Examples/HelloPWA app as the bring-up subject — the same
-    # path the v0.5 on-device round-trip was verified against.
+    # Android Gradle-scaffold smoke test on Examples/HelloPWA: generate the
+    # Gradle project (bundler codegen) and build it with `assembleDebug`.
     #
-    # The job is split into clearly-bounded steps so a failure in any
-    # one (toolchain install, SDK install, cross-compile, gradle
-    # build) is immediately attributable. Failures fall through to
-    # subsequent steps — the bundler still emits the Gradle scaffold
-    # even when cross-compile fails, and a manifest of `app-debug.apk`
-    # at the end is the canonical "did it actually build?" check.
+    # This deliberately does NOT run the Swift Android cross-compile
+    # (`--cross-compile-android`). That path needs the swift-android-sdk, which
+    # does not reliably produce a native `.so` on the GitHub `ubuntu-24.04`
+    # runner — an elusive `missing required module 'SwiftAndroid'` that does not
+    # reproduce on a real Linux box or on device (all observable SDK/toolchain/
+    # clang state is identical). Attempting it here previously shipped a *hollow*
+    # APK behind a green check for months. So the job verifies what the runner
+    # can do reliably; the native cross-compile is device-verified (Galaxy Tab
+    # S10+) and guarded for local/user builds by `--cross-compile-android`'s
+    # hard-fail-on-skipped-ABI (see AndroidBundler). Restore the cross-compile
+    # step if the runner story improves.
     runs-on: ubuntu-24.04
     needs: macos
     steps:
@@ -419,49 +423,6 @@ jobs:
           swiftly install 6.2.0
           swiftly use 6.2.0
           swift --version
-      - name: Install Android NDK r27d
-        run: |
-          mkdir -p $HOME/android
-          curl -fsSLo /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r27d-linux.zip
-          unzip -q /tmp/ndk.zip -d $HOME/android
-          echo "ANDROID_NDK_HOME=$HOME/android/android-ndk-r27d" >> $GITHUB_ENV
-      - name: Install Swift Android SDK 6.2
-        # The artifactbundle is published at
-        # https://github.com/swift-android-sdk/swift-android-sdk/releases/tag/6.2
-        # — pin the URL rather than tracking-latest so a future SDK
-        # release that breaks our build doesn't take the workflow
-        # offline silently. The checksum is computed from the
-        # download (rather than hard-coded) so the workflow keeps
-        # working when the upstream rebuilds the artifact with a new
-        # checksum but the same version label.
-        env:
-          SDK_URL: https://github.com/swift-android-sdk/swift-android-sdk/releases/download/6.2/swift-6.2-RELEASE-android-0.1.artifactbundle.tar.gz
-        run: |
-          curl -fsSLo /tmp/swift-android-sdk.tar.gz "$SDK_URL"
-          SDK_SHA=$(sha256sum /tmp/swift-android-sdk.tar.gz | cut -d' ' -f1)
-          echo "Computed SDK checksum: $SDK_SHA"
-          # Install from the local file (avoids a second download) —
-          # `swift sdk install` accepts a path or URL; the checksum
-          # check matches against either.
-          swift sdk install /tmp/swift-android-sdk.tar.gz --checksum "$SDK_SHA"
-          swift sdk list
-      - name: Run setup-android-sdk script
-        # SwiftPM's swift-sdks root is platform-dependent —
-        # ~/Library/org.swift.swiftpm/swift-sdks on macOS,
-        # ${XDG_DATA_HOME:-~/.local/share}/swiftpm/swift-sdks on Linux —
-        # so resolve the script path with `find` rather than hard-coding
-        # a host-specific tree. Errors out clearly if the script can't
-        # be located, instead of falling through with an empty path.
-        run: |
-          export ANDROID_NDK_HOME=$HOME/android/android-ndk-r27d
-          SETUP_SH=$(find "$HOME" -path '*/swift-sdks/*/swift-android/scripts/setup-android-sdk.sh' -type f 2>/dev/null | head -1)
-          if [ -z "$SETUP_SH" ]; then
-            echo "::error::setup-android-sdk.sh not found under \$HOME — swift sdk install may have changed its layout"
-            find "$HOME" -path '*swift-sdks*' -maxdepth 8 -print 2>/dev/null | head -50
-            exit 1
-          fi
-          echo "Using $SETUP_SH"
-          "$SETUP_SH"
       - name: Set up JDK 17
         # AGP 8.5 requires JDK 17 (Java 21 trips a "no toolchain
         # found" warning under AGP 8.5; AGP 8.7+ relaxes the
@@ -472,16 +433,28 @@ jobs:
           distribution: temurin
           java-version: "17"
       - name: Build swift-pwa CLI (host toolchain)
-        # Host build for the CLI; cross-compile happens via
-        # `--cross-compile-android` in the next step.
         run: swift build --product swift-pwa
-      - name: Cross-compile Examples/HelloPWA + emit Gradle scaffold
+      - name: Emit Gradle scaffold + assembleDebug (scaffold smoke test)
+        # Scaffold-only: generate the Gradle project and build it, WITHOUT the
+        # Swift Android cross-compile. The cross-compile requires the
+        # swift-android-sdk, which does not reliably build a native `.so` on the
+        # GitHub `ubuntu-24.04` runner (an elusive `missing required module
+        # 'SwiftAndroid'` that does NOT reproduce on a real Linux box or on
+        # device — everything observable about the SDK/toolchain/clang wiring is
+        # identical). Rather than ship a hollow APK behind a green check (which
+        # is what the `--cross-compile-android` path silently did for months),
+        # this job verifies what the runner *can* do reliably — bundler codegen
+        # + `aapt2`/`d8` via Gradle. The real native cross-compile is covered by
+        # `--cross-compile-android`'s hard-fail (see AndroidBundler) for local /
+        # user builds and is verified on-device (device-verified on a Galaxy Tab
+        # S10+; a cold build also succeeds on the project's Linux box). If the
+        # runner story improves, restore `--cross-compile-android` here.
+        # Cross-compile is off by default (no --cross-compile-android), so the
+        # bundler emits the scaffold with empty jniLibs/ — exactly the
+        # scaffold-only smoke test we want here.
         run: |
           cd Examples/HelloPWA
-          swift run --package-path ../.. swift-pwa build \
-            --target android \
-            --cross-compile-android \
-            --android-abis arm64-v8a
+          swift run --package-path ../.. swift-pwa build --target android
       - name: Run gradle assembleDebug
         # The vendored Gradle wrapper bootstraps Gradle 8.10.2 on
         # first run; subsequent runs are cache hits. JAVA_HOME is

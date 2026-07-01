@@ -76,15 +76,17 @@
             ).first
         }
 
-        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> String? {
+        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String] {
             try await runFileDialogAsync(
-                action: SWIFTPWA_FILE_DIALOG_SELECT_FOLDER,
+                action: args.multiple == true
+                    ? SWIFTPWA_FILE_DIALOG_SELECT_FOLDER_MULTIPLE
+                    : SWIFTPWA_FILE_DIALOG_SELECT_FOLDER,
                 title: args.title,
                 folder: args.defaultPath,
                 name: nil,
                 filters: [],
                 parent: parent
-            ).first
+            )
         }
 
         // MARK: - Alert bridge

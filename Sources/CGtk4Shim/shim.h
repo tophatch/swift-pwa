@@ -273,6 +273,7 @@ typedef enum {
     SWIFTPWA_FILE_DIALOG_SAVE = 1,
     SWIFTPWA_FILE_DIALOG_SELECT_FOLDER = 2,
     SWIFTPWA_FILE_DIALOG_OPEN_MULTIPLE = 3,
+    SWIFTPWA_FILE_DIALOG_SELECT_FOLDER_MULTIPLE = 4,
 } swiftpwa_file_dialog_action;
 
 /// Result handed to file-dialog callbacks. On success, `paths` is a
@@ -310,8 +311,11 @@ static void swiftpwa_file_dialog_finish(
     char *err_msg = NULL;
     GtkFileDialog *dialog = GTK_FILE_DIALOG(source);
 
-    if (action == SWIFTPWA_FILE_DIALOG_OPEN_MULTIPLE) {
-        GListModel *model = gtk_file_dialog_open_multiple_finish(dialog, result, &error);
+    if (action == SWIFTPWA_FILE_DIALOG_OPEN_MULTIPLE ||
+        action == SWIFTPWA_FILE_DIALOG_SELECT_FOLDER_MULTIPLE) {
+        GListModel *model = (action == SWIFTPWA_FILE_DIALOG_SELECT_FOLDER_MULTIPLE)
+            ? gtk_file_dialog_select_multiple_folders_finish(dialog, result, &error)
+            : gtk_file_dialog_open_multiple_finish(dialog, result, &error);
         if (model) {
             guint n = g_list_model_get_n_items(model);
             paths = (char **)g_malloc0(sizeof(char *) * (n + 1));
@@ -428,6 +432,9 @@ static inline void swiftpwa_file_dialog_run(
             break;
         case SWIFTPWA_FILE_DIALOG_SELECT_FOLDER:
             gtk_file_dialog_select_folder(dialog, parent, NULL, swiftpwa_file_dialog_finish, box);
+            break;
+        case SWIFTPWA_FILE_DIALOG_SELECT_FOLDER_MULTIPLE:
+            gtk_file_dialog_select_multiple_folders(dialog, parent, NULL, swiftpwa_file_dialog_finish, box);
             break;
     }
     g_object_unref(dialog);

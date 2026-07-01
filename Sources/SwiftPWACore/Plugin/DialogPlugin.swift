@@ -58,8 +58,8 @@ public struct DialogPlugin: Plugin {
 
         registry.register(
             "dialog.openDirectory",
-            typed: { (args: DialogOpenDirectoryArgs, ctx) async throws -> DialogPathResult in
-                try await DialogPathResult(path: dialog.openDirectory(args, parent: ctx.originWindow))
+            typed: { (args: DialogOpenDirectoryArgs, ctx) async throws -> DialogOpenDirectoryResult in
+                try await DialogOpenDirectoryResult(paths: dialog.openDirectory(args, parent: ctx.originWindow))
             }
         )
     }

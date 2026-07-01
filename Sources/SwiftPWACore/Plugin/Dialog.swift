@@ -44,8 +44,15 @@ public protocol Dialog: AnyObject, Sendable {
     func saveFile(_ args: DialogSaveFileArgs, parent: WindowID?) async throws -> String?
 
     /// Show the platform's directory-picker dialog. Returns the picked
-    /// directory path, or `nil` when the user cancels.
-    func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> String?
+    /// directory paths (one entry when `multiple` is false / unset) or an
+    /// empty array when the user cancels.
+    ///
+    /// **Multi-select** is desktop-only. macOS / Windows / GTK honor
+    /// `multiple`; iOS does too via `UIDocumentPickerViewController`.
+    /// Android's `ACTION_OPEN_DOCUMENT_TREE` can only grant one tree at a
+    /// time, so `multiple` is ignored there and at most one path comes
+    /// back — documented in `docs/android-setup.md`.
+    func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String]
 }
 
 // MARK: - Severity
@@ -148,10 +155,15 @@ public struct DialogSaveFileArgs: Sendable, Codable, Equatable {
 public struct DialogOpenDirectoryArgs: Sendable, Codable, Equatable {
     public var title: String?
     public var defaultPath: String?
+    /// Allow selecting more than one directory in a single invocation.
+    /// Desktop-only (macOS / Windows / GTK / iOS); ignored on Android,
+    /// whose SAF tree picker grants one directory at a time.
+    public var multiple: Bool?
 
-    public init(title: String? = nil, defaultPath: String? = nil) {
+    public init(title: String? = nil, defaultPath: String? = nil, multiple: Bool? = nil) {
         self.title = title
         self.defaultPath = defaultPath
+        self.multiple = multiple
     }
 }
 
@@ -170,4 +182,19 @@ public struct DialogOpenFileResult: Sendable, Codable, Equatable {
 public struct DialogPathResult: Sendable, Codable, Equatable {
     public var path: String?
     public init(path: String?) { self.path = path }
+}
+
+/// Result of `dialog.openDirectory`. Carries the full `paths` array
+/// (one entry unless `multiple` was requested) plus a `path`
+/// convenience holding the first selection — kept so pre-0.7.7 JS
+/// callers that read `result.path` keep working after directory
+/// multi-select landed.
+public struct DialogOpenDirectoryResult: Sendable, Codable, Equatable {
+    public var path: String?
+    public var paths: [String]
+
+    public init(paths: [String]) {
+        self.paths = paths
+        path = paths.first
+    }
 }

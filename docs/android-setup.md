@@ -682,6 +682,14 @@ prompt-and-validate fallback for now (`structuredOutput: false`).
 
 ## 8. Known limitations
 
+- **`dialog.openDirectory` multi-select is desktop-only.** The
+  cross-platform `multiple` flag (added in 0.7.7) is honored on macOS /
+  Windows / GTK / iOS, but Android's `ACTION_OPEN_DOCUMENT_TREE` grants
+  one directory tree per launch — there's no multi-tree SAF picker. On
+  Android `multiple` is ignored and the result carries at most one path
+  (`paths` has 0–1 entries; `path` is the first or `null`). Apps that
+  need several trees prompt the user once per folder.
+
 - **SAF dialog results are `content://` URIs, not filesystem paths.**
   The cross-platform `Dialog` API returns these URI strings in the
   same `[String]` slot the desktop backends fill with paths. **The

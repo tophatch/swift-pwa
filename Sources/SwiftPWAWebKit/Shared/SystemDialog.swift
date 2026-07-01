@@ -72,18 +72,18 @@
                 return url.path
             }
 
-            public func openDirectory(_ args: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> String? {
+            public func openDirectory(_ args: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> [String] {
                 let panel = NSOpenPanel()
                 panel.canChooseFiles = false
                 panel.canChooseDirectories = true
-                panel.allowsMultipleSelection = false
+                panel.allowsMultipleSelection = args.multiple ?? false
                 if let title = args.title { panel.title = title }
                 if let path = args.defaultPath {
                     panel.directoryURL = URL(fileURLWithPath: path)
                 }
                 let resp = await runPanel(panel)
-                guard resp == .OK, let url = panel.url else { return nil }
-                return url.path
+                guard resp == .OK else { return [] }
+                return panel.urls.map(\.path)
             }
 
             // MARK: - NSAlert / panel sheets
@@ -219,11 +219,10 @@
                 return nil
             }
 
-            public func openDirectory(_: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> String? {
+            public func openDirectory(_ args: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> [String] {
                 let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.folder])
-                picker.allowsMultipleSelection = false
-                let paths = await presentPicker(picker)
-                return paths.first
+                picker.allowsMultipleSelection = args.multiple ?? false
+                return await presentPicker(picker)
             }
 
             // MARK: - Helpers

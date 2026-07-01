@@ -127,16 +127,28 @@ private struct AudioInputEchoBackend: AIBackend {
 /// Text→audio (TTS) backend using the default (single `done`) stream.
 private struct AudioBackend: AIBackend {
     func info() async -> AICapabilities {
-        AICapabilities(available: true, backend: AIBackendID.ttsMLX, audioGeneration: true)
+        AICapabilities(
+            available: true,
+            backend: AIBackendID.ttsMLX,
+            audioGeneration: true,
+            voiceCloning: true
+        )
     }
 
     func generate(_: AIGenerateRequest) async throws -> AIGenerateResult {
         AIGenerateResult(text: "", backend: AIBackendID.ttsMLX)
     }
 
-    func generateAudio(_: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
-        AIGenerateAudioResult(
-            audio: AIGeneratedAudio(dataBase64: "UklGRg==", mimeType: "audio/wav", durationMs: 1200),
+    func generateAudio(_ req: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+        // Echo whether a reference voice was supplied into the mimeType so a
+        // test can assert the reference clip threaded through the plugin.
+        let cloned = req.referenceAudio != nil
+        return AIGenerateAudioResult(
+            audio: AIGeneratedAudio(
+                dataBase64: "UklGRg==",
+                mimeType: cloned ? "audio/wav;cloned" : "audio/wav",
+                durationMs: 1200
+            ),
             backend: AIBackendID.ttsMLX
         )
     }
@@ -393,6 +405,27 @@ struct AIPluginTests {
         #expect(try JSONDecoder().decode(AICapabilities.self, from: data).audioGeneration == true)
     }
 
+    @Test("ai.info reports the voiceCloning flag (and defaults it off)")
+    func infoVoiceCloning() async throws {
+        let result = await dispatch(app(AudioBackend()), "ai.info", "{}")
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AICapabilities.self, from: data).voiceCloning == true)
+
+        // A backend that doesn't set the flag reports false.
+        let plain = await dispatch(app(StreamingBackend()), "ai.info", "{}")
+        guard case let .ok(pd) = plain else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AICapabilities.self, from: pd).voiceCloning == false)
+    }
+
+    @Test("ai.generateAudio threads the reference voice clip through to the backend")
+    func generateAudioVoiceClone() async throws {
+        let payload = #"{"prompt":"kiitos","referenceAudio":{"path":"/ref.wav"},"referenceText":"hi"}"#
+        let result = await dispatch(app(AudioBackend()), "ai.generateAudio", payload)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        let out = try JSONDecoder().decode(AIGenerateAudioResult.self, from: data)
+        #expect(out.audio.mimeType == "audio/wav;cloned")
+    }
+
     @Test("ai.generateAudio on NoneBackend reports E_AI_UNAVAILABLE")
     func generateAudioNone() async {
         let result = await dispatch(app(NoneBackend()), "ai.generateAudio", #"{"prompt":"hello"}"#)
@@ -563,6 +596,26 @@ struct AIWireContractTests {
 
         let req = AIGenerateAudioRequest(prompt: "hi", voice: "a", language: "fi-FI", speed: 1.0, format: "wav")
         #expect(try JSONDecoder().decode(AIGenerateAudioRequest.self, from: JSONEncoder().encode(req)) == req)
+
+        // Per-request voice cloning: reference clip + transcript ride on the request.
+        let cloneReq = AIGenerateAudioRequest(
+            prompt: "kiitos",
+            referenceAudio: .file("/ref.wav", mimeType: "audio/wav"),
+            referenceText: "hello there"
+        )
+        let cloneBack = try JSONDecoder().decode(
+            AIGenerateAudioRequest.self, from: JSONEncoder().encode(cloneReq)
+        )
+        #expect(cloneBack == cloneReq)
+        #expect(cloneBack.referenceAudio?.path == "/ref.wav")
+        #expect(cloneBack.referenceText == "hello there")
+
+        // Pre-cloning JSON (no reference fields) still decodes — backward compatible.
+        let legacy = try JSONDecoder().decode(
+            AIGenerateAudioRequest.self, from: Data(#"{"prompt":"hi"}"#.utf8)
+        )
+        #expect(legacy.referenceAudio == nil)
+        #expect(legacy.referenceText == nil)
 
         let chunk = AIAudioChunk.chunk("AA==", mimeType: "audio/wav")
         #expect(try JSONDecoder().decode(AIAudioChunk.self, from: JSONEncoder().encode(chunk)) == chunk)

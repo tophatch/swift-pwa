@@ -13,8 +13,10 @@
 # and of `--no-parallel`. It always clears on a fresh run. See the design
 # note / CI-flake memo for the full investigation.
 #
-# Strategy: bound each run with `timeout` and capture its output. Exit-code
-# policy:
+# Strategy: build the test bundle ONCE up front (outside the timeout — a cold
+# gtk build is slow enough to blow a run-sized timeout on its own), then run
+# `swift test --skip-build` under a `timeout` and capture its output. Exit-code
+# policy for each test run:
 #   * 0            -> tests passed; done.
 #   * 124 / 137    -> the run TIMED OUT. Distinguish two cases by whether the
 #                     output already contains swift-testing's passed-completion
@@ -52,7 +54,8 @@
 set -uo pipefail
 
 ATTEMPTS="${CI_TEST_ATTEMPTS:-3}"
-PER_ATTEMPT_TIMEOUT="${CI_TEST_TIMEOUT:-300}"
+PER_ATTEMPT_TIMEOUT="${CI_TEST_TIMEOUT:-180}"
+BUILD_TIMEOUT="${CI_BUILD_TIMEOUT:-1200}"
 
 # swift-testing prints this once the whole run has finished with every test
 # passing (e.g. "✔ Test run with 410 tests in 58 suites passed after 1.2s").
@@ -68,20 +71,37 @@ reap_orphans() {
     pkill -9 -f 'swift-test' 2>/dev/null || true
 }
 
+# Build the test bundle FIRST, outside the per-attempt timeout. A cold gtk
+# build on the runner sits at ~5 min — right at the old 300s test timeout —
+# so it was the *build* (a linker invocation was the last line at +300s), not
+# the exit-hang, that timed the attempts out. The per-attempt timeout exists
+# only to bound the test *run* (which finishes in seconds) so we can detect
+# and tolerate the exit-hang; it must not have to cover compilation. A build
+# failure is a real failure — surface it immediately, never retry.
+echo "::group::swift build --build-tests"
+timeout -s TERM -k 30 "$BUILD_TIMEOUT" swift build --build-tests "$@"
+build_rc=$?
+echo "::endgroup::"
+if [ "$build_rc" -ne 0 ]; then
+    echo "::error::swift build --build-tests failed (rc=${build_rc}). Not a test-run hang; failing."
+    exit "$build_rc"
+fi
+
 for attempt in $(seq 1 "$ATTEMPTS"); do
-    echo "::group::swift test (attempt ${attempt}/${ATTEMPTS}, per-attempt timeout ${PER_ATTEMPT_TIMEOUT}s)"
+    echo "::group::swift test --skip-build (attempt ${attempt}/${ATTEMPTS}, per-attempt timeout ${PER_ATTEMPT_TIMEOUT}s)"
     # Redirect (don't pipe) to a fresh per-attempt log. A pipe would make bash
     # wait on the reader (`tee`), which only sees EOF once every process
     # holding the pipe's write end exits — but `timeout` kills only its direct
-    # child (`swift test`), not the compiler/linker grandchildren that inherit
-    # the fd, so a `| tee` deadlocks the step past the job limit. With a file
-    # bash waits solely on `timeout`, which returns as soon as it kills its
-    # child. `> "$log"` truncates so the completion-line check is per-attempt.
+    # child, not the grandchildren that inherit the fd, so a `| tee` deadlocks
+    # the step past the job limit. With a file bash waits solely on `timeout`,
+    # which returns as soon as it kills its child. `> "$log"` truncates so the
+    # completion-line check is per-attempt.
+    # --skip-build: we built above; this run is just execution + the exit-hang.
     # -s TERM then SIGKILL 30s later if it ignores TERM (the hung process does).
     # stdbuf -oL -eL: line-buffer so the passed-summary flushes before any hang.
     timeout -s TERM -k 30 "$PER_ATTEMPT_TIMEOUT" \
         stdbuf -oL -eL \
-        swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests "$@" > "$log" 2>&1
+        swift test --skip-build --filter SwiftPWACoreTests --filter SwiftPWACLITests "$@" > "$log" 2>&1
     rc=$?
     cat "$log"
     echo "::endgroup::"

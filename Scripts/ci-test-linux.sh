@@ -36,8 +36,16 @@
 # printed its *passed*-completion line — a real failure can't be masked: a
 # failing run exits non-timeout (surfaced at once), and a "failed"-completion
 # run exits 1 (also surfaced). The completion-line check is what makes the
-# gtk4 job reliable: the exit-hang runs hot enough (>25%) that 3 blind retries
-# can all land on it, but the passed line is always printed before the hang.
+# gtk4 job reliable: the exit-hang runs hot enough that 3 blind retries can
+# all land on it, but the passed line is emitted before the hang.
+#
+# Buffering caveat: swift-testing's stdout is block-buffered on a non-TTY, so
+# the final ~60-byte summary line is normally flushed only by the process's
+# clean exit — which never happens when it hangs, so a SIGKILL would discard
+# it and the check would miss a genuinely-passed run. We force line buffering
+# with `stdbuf -oL -eL` (inherited by the test binary via libstdbuf) so every
+# line, summary included, flushes the instant it's written — before the hang.
+# If stdbuf can't influence the output, we're no worse off than plain retries.
 #
 # Usage: Scripts/ci-test-linux.sh [extra swift-test args...]
 #   e.g. Scripts/ci-test-linux.sh --verbose
@@ -62,12 +70,20 @@ reap_orphans() {
 
 for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "::group::swift test (attempt ${attempt}/${ATTEMPTS}, per-attempt timeout ${PER_ATTEMPT_TIMEOUT}s)"
+    # Redirect (don't pipe) to a fresh per-attempt log. A pipe would make bash
+    # wait on the reader (`tee`), which only sees EOF once every process
+    # holding the pipe's write end exits — but `timeout` kills only its direct
+    # child (`swift test`), not the compiler/linker grandchildren that inherit
+    # the fd, so a `| tee` deadlocks the step past the job limit. With a file
+    # bash waits solely on `timeout`, which returns as soon as it kills its
+    # child. `> "$log"` truncates so the completion-line check is per-attempt.
     # -s TERM then SIGKILL 30s later if it ignores TERM (the hung process does).
-    # tee so we can inspect the output for the completion line; PIPESTATUS[0]
-    # is `timeout`'s code, not tee's.
+    # stdbuf -oL -eL: line-buffer so the passed-summary flushes before any hang.
     timeout -s TERM -k 30 "$PER_ATTEMPT_TIMEOUT" \
-        swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests "$@" 2>&1 | tee "$log"
-    rc=${PIPESTATUS[0]}
+        stdbuf -oL -eL \
+        swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests "$@" > "$log" 2>&1
+    rc=$?
+    cat "$log"
     echo "::endgroup::"
 
     if [ "$rc" -eq 0 ]; then

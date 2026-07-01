@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Android builds without `window.background_color` no longer fail resource linking.** The v0.7.5 theme refactor emitted the app's `android:theme` as a bare `Theme.AppCompat.Light.NoActionBar` (missing the `@style/` prefix) whenever no `window.background_color` was set — a bare string isn't a valid theme *reference*, so `aapt2`/`gradle assembleDebug` aborted with `'Theme.AppCompat.Light.NoActionBar' is incompatible with attribute theme (attr) reference`. It slipped through because the manual v0.7.5 device check set a background colour (exercising only the `@style/Theme.SwiftPWA` branch) and the bundler unit test asserted the *buggy* bare string. Fixed to `@style/Theme.AppCompat.Light.NoActionBar` (restoring the pre-0.7.5 value); the unit test now asserts a valid `@style/` reference and guards against the prefix-less form regressing. Device-verified on a Galaxy Tab S10+.
+
 ## [0.7.6] - 2026-07-01
 
 ### Added

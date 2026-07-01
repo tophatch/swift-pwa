@@ -462,6 +462,28 @@ jobs:
           fi
           echo "Using $SETUP_SH"
           "$SETUP_SH"
+      - name: (diag) inspect Swift Android SDK clang + SwiftAndroid wiring
+        # TEMP diagnostic: the android cross-compile fails `missing required
+        # module 'SwiftAndroid'` on the runner while it succeeds on a dev box
+        # with an identical SDK. Dump the SDK's clang resource link + module
+        # layout to pin the CI-specific difference. Remove once fixed.
+        run: |
+          SDK=$(find "$HOME" -type d -path '*/swift-sdks/*/swift-android' | head -1)
+          echo "SDK dir: $SDK"
+          RES="$SDK/swift-resources/usr/lib"
+          echo "--- swift/clang link ---"
+          ls -la "$RES/swift/clang" 2>&1 || echo "no swift/clang entry"
+          echo "resolves to: $(readlink -f "$RES/swift/clang" 2>&1)"
+          echo "--- clang builtin stddef.h via link ---"
+          ls -la "$RES/swift/clang/include/stddef.h" 2>&1 || echo "stddef.h NOT reachable"
+          echo "--- SwiftAndroid module files ---"
+          find "$SDK/swift-resources" -iname '*SwiftAndroid*' 2>/dev/null | head
+          echo "--- swift-aarch64/android dir ---"
+          ls -la "$RES/swift-aarch64/android/" 2>&1 | head
+          echo "--- swiftly +6.2 toolchain ---"
+          "$HOME/.local/share/swiftly/bin/swiftly" run +6.2 swift --version 2>&1 | head -2
+          echo "--- swift sdk list ---"
+          swift sdk list 2>&1 | tail -3
       - name: Set up JDK 17
         # AGP 8.5 requires JDK 17 (Java 21 trips a "no toolchain
         # found" warning under AGP 8.5; AGP 8.7+ relaxes the

@@ -50,6 +50,20 @@ The cross-compile path verified against this repo's `Examples/HelloPWA`:
 > compiler`. `swiftly install 6.2` resolves to the latest patch (which
 > at time of writing is 6.2.4); use `6.2.0` explicitly.
 
+The bundler smooths over the toolchain-selection part of that pin:
+
+> **The bundler selects the matching toolchain for you.** You don't need to
+> wrap `swift-pwa build --cross-compile-android` in `swiftly run +6.2.0` — when
+> swiftly is installed, the bundler parses the SDK's version and runs the inner
+> `swift build --swift-sdk` under `swiftly run +<major.minor>` itself, which
+> overrides any repo `.swift-version` (this repo pins `6.0`, which would
+> otherwise mispin the Android build). If a requested ABI can't be built, the
+> command now **fails with a non-zero exit** rather than emitting a scaffold
+> with empty `jniLibs/` — a hollow APK would crash at launch with
+> `UnsatisfiedLinkError`. If you see `'stddef.h' file not found` during the
+> cross-compile, the SDK's NDK clang link went stale (e.g. after moving the
+> NDK): re-run the setup script above.
+
 A second pin worth knowing about, derived from the SDK's own metadata:
 
 > **Why the API 28 floor.** The Swift Android SDK 6.2 distribution's

@@ -89,6 +89,16 @@ struct AndroidBundlerUnitTests {
         ))
     }
 
+    @Test("swiftVersion(fromSDKBundleID:) parses the SDK's Swift major.minor")
+    func androidSDKVersionParse() {
+        // The cross-compile wraps the inner build in `swiftly run +<ver>` using
+        // this — a mismatch is what shipped hollow APKs (no native .so).
+        #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "swift-6.2-RELEASE-android-0.1") == "6.2")
+        #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "swift-6.0.3-RELEASE-android") == "6.0")
+        #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "swift-6.10-RELEASE-android-0.2") == "6.10")
+        #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "android-sdk-no-version") == nil)
+    }
+
     @Test("swiftPWAThemeXml fills window + system bars and picks icon luminance")
     func themeXmlLuminance() throws {
         // A near-white surface wants dark (light-bar) status/navigation icons.

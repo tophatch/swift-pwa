@@ -342,13 +342,24 @@ struct AndroidBundler {
         // build; the bundle ID (`sdk`) is only used below for
         // resolving the runtime-stdlib `.so` files we ship alongside
         // the app's binary.
+        // The Swift Android SDK is keyed to an exact Swift release (its bundle
+        // id embeds e.g. `swift-6.2-RELEASE-android`), and the inner
+        // `swift build --swift-sdk` MUST run under a matching toolchain —
+        // otherwise the SDK's prebuilt `.swiftmodule`s can't be imported
+        // ("module compiled with Swift 6.2 cannot be imported by the Swift 6.0.3
+        // compiler"), the ABI is skipped, and the APK ships without a Swift
+        // `.so`. A repo `.swift-version` (read by swiftly) silently pins the
+        // wrong toolchain for a plain `swift build`, so when swiftly is present
+        // and the SDK's version is parseable we wrap the build in
+        // `swiftly run +<major.minor>`, which overrides `.swift-version`.
+        let buildTool = Self.androidBuildTool(sdkBundleID: sdk)
         var failures: [String] = []
         for abi in abis {
             let triple = tripleFor(abi: abi)
             do {
                 try await Shell.run(
-                    "/usr/bin/env",
-                    ["swift", "build", "-c", "release", "--swift-sdk", triple],
+                    buildTool.exe,
+                    buildTool.leadingArgs + ["swift", "build", "-c", "release", "--swift-sdk", triple],
                     cwd: projectRoot
                 )
                 // SwiftPM's executable target names its output `<Name>`
@@ -415,13 +426,71 @@ struct AndroidBundler {
                 failures.append("\(abi): \(error)")
             }
         }
+        // A requested cross-compile that produced no native library is a hard
+        // failure — silently emitting a hollow scaffold (exit 0) here is what
+        // let APKs ship without a Swift `.so` unnoticed. Callers who want the
+        // scaffold-only behaviour pass `--no-cross-compile` (this method isn't
+        // invoked then).
         if !failures.isEmpty {
-            print("note: some Android ABIs were skipped:")
-            for line in failures { print("  - \(line)") }
-            print(
-                "The Gradle scaffold is still usable; copy the missing .so files into app/src/main/jniLibs/<abi>/ once your toolchain can produce them."
-            )
+            throw AndroidBundlerError.crossCompileFailed(failures)
         }
+    }
+
+    /// Resolve the executable + leading args for the inner cross-compile so it
+    /// runs under a toolchain matching the installed Swift Android SDK.
+    ///
+    /// The SDK's prebuilt `.swiftmodule`s can only be imported by their exact
+    /// Swift release; a repo `.swift-version` (read by swiftly) otherwise pins a
+    /// different one for a plain `swift build`, silently skipping the ABI. When
+    /// swiftly is present we invoke `<swiftly> run +<major.minor> swift build …`,
+    /// which overrides `.swift-version`. We locate swiftly by its absolute path
+    /// (via `SWIFTLY_BIN_DIR` / `SWIFTLY_HOME_DIR` / the platform default) rather
+    /// than `PATH`, because swiftly's own `swift` shim narrows `PATH` to the
+    /// selected toolchain for child processes — so a plain `env swiftly` from
+    /// inside a `swift run`-launched CLI wouldn't find it. Falls back to the
+    /// ambient `swift` when swiftly or the SDK version can't be resolved.
+    static func androidBuildTool(sdkBundleID: String) -> (exe: String, leadingArgs: [String]) {
+        let ambient = (exe: "/usr/bin/env", leadingArgs: [String]())
+        guard let version = swiftVersion(fromSDKBundleID: sdkBundleID) else {
+            print(
+                "note: could not parse a Swift version from SDK '\(sdkBundleID)'; cross-compiling with the ambient `swift`"
+            )
+            return ambient
+        }
+        guard let swiftly = locateSwiftly() else {
+            print(
+                "note: swiftly not found; cross-compiling with the ambient `swift` (which must match the Swift \(version) Android SDK)"
+            )
+            return ambient
+        }
+        print(
+            "cross-compiling under `swiftly run +\(version)` to match the Swift \(version) Android SDK (overrides any repo .swift-version)"
+        )
+        return (swiftly, ["run", "+\(version)"])
+    }
+
+    /// Absolute path to the `swiftly` binary, resolved without relying on
+    /// `PATH`. Checks `SWIFTLY_BIN_DIR`, `SWIFTLY_HOME_DIR/bin`, then the
+    /// per-platform default install location.
+    static func locateSwiftly() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        let home = env["HOME"] ?? NSHomeDirectory()
+        var candidates: [String] = []
+        if let bin = env["SWIFTLY_BIN_DIR"] { candidates.append("\(bin)/swiftly") }
+        if let root = env["SWIFTLY_HOME_DIR"] { candidates.append("\(root)/bin/swiftly") }
+        candidates.append("\(home)/.local/share/swiftly/bin/swiftly") // Linux default
+        candidates.append("\(home)/Library/Application Support/swiftly/bin/swiftly") // macOS default
+        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Parse the `major.minor` Swift version from a Swift Android SDK bundle id,
+    /// e.g. `swift-6.2-RELEASE-android-0.1` → `"6.2"`. `swiftly run +6.2`
+    /// resolves that to the installed `6.2.x`.
+    static func swiftVersion(fromSDKBundleID id: String) -> String? {
+        guard let range = id.range(of: #"swift-[0-9]+\.[0-9]+"#, options: .regularExpression) else {
+            return nil
+        }
+        return String(id[range].dropFirst("swift-".count))
     }
 
     /// Copy the Swift stdlib runtime `.so`s (`libswiftCore.so` and
@@ -881,6 +950,7 @@ struct AndroidBundler {
 enum AndroidBundlerError: Error, CustomStringConvertible {
     case signingMissingAlias
     case signingUnknownStoreType(String)
+    case crossCompileFailed([String])
 
     var description: String {
         switch self {
@@ -892,6 +962,20 @@ enum AndroidBundlerError: Error, CustomStringConvertible {
             """
         case let .signingUnknownStoreType(t):
             "swift-pwa: pwa.json's android.signing.store_type='\(t)' is not recognized; expected 'jks' or 'pkcs12'."
+        case let .crossCompileFailed(failures):
+            """
+            swift-pwa: --cross-compile-android could not produce a native library for \
+            \(failures.count == 1 ? "the requested ABI" : "\(failures.count) requested ABIs"). \
+            The APK would ship without a Swift .so and crash at launch \
+            (UnsatisfiedLinkError), so this is a hard error rather than a warning:
+            \(failures.map { "  - \($0)" }.joined(separator: "\n"))
+            Common cause: the inner `swift build --swift-sdk` ran under a Swift \
+            toolchain that doesn't match the installed Swift Android SDK (a repo \
+            `.swift-version` can pin the wrong one — see \
+            "module compiled with Swift X cannot be imported by the Swift Y compiler" \
+            above). Install/select the matching toolchain, or pass \
+            --no-cross-compile to emit the Gradle scaffold without native libs.
+            """
         }
     }
 }

@@ -197,8 +197,10 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      | Partial⁷                 |
 | `AppPlugin` (`app.quit` …)    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
+| `EventsPlugin` (server push)  | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      | Partial¹⁰                |
 | `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
+| `ProcessPlugin` (subprocess)  | Yes                     | —¹²                          | Yes                        | Yes                     | Yes                      | —¹²                      |
 | `TrayPlugin`                  | Yes                     | —                            | Yes                        | —                       | Yes                      | —                        |
 | `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | Yes                      |
 | `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | Fingerprint / Face¹¹     |
@@ -218,6 +220,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 9. Driven by `pwa.json`'s `android.signing` (or `--sign` / `--android-key-alias` CLI overrides) with passwords from environment variables. Full wiring + CI pattern: [docs/android-setup.md](docs/android-setup.md) §7.
 10. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths; `Fs` routes those URIs through `ContentResolver` transparently. Detail: [docs/android-setup.md](docs/android-setup.md) §6.1.
 11. Android's `BiometricManager` doesn't distinguish fingerprint / face / iris — `BiometricKind` is `.unknown` when available. Gate JS on `available`, not `kind`.
+12. `ProcessPlugin` needs to spawn OS processes; the iOS / Android sandboxes forbid it, so `process.*` reports `E_UNIMPLEMENTED` there. Desktop only.
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 
@@ -227,6 +230,10 @@ The full per-plugin command surface lives in [docs/javascript-api.md](docs/javas
 // JS — full reference: docs/javascript-api.md
 await __SWIFT_PWA__.invoke('window.setTitle', { title: 'Hello' });
 const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (e) => { /* ... */ });
+
+// Server-push events (Swift → JS, all windows) and subprocesses (desktop):
+const off = __SWIFT_PWA__.on('library:changed', (payload) => { /* ... */ });
+__SWIFT_PWA__.subscribe('process.stream', { command: 'ffmpeg', args: [/* … */] }, (f) => { /* ... */ });
 ```
 
 ```swift

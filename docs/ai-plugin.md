@@ -243,6 +243,122 @@ runtime.run { ctx in
 }
 ```
 
+### Worked example: a custom on-device audio (TTS) backend
+
+No shipping backend implements audio yet — the contract is complete and tested,
+but wiring an actual synthesizer (CoreML, MLX, or any in-process engine) is
+yours to do. This is the full recipe; the JS side
+([Audio generation](#audio-generation-text-to-audio--tts)) and the streaming
+frames already exist, so you only implement two methods and flip one capability
+flag.
+
+**1. Advertise the capability.** `ai.info` must report `audioGeneration: true`
+so the page routes to you instead of a fallback tier:
+
+```swift
+func info() async -> AICapabilities {
+    AICapabilities(
+        available: true,
+        backend: AIBackendID.ttsMLX,   // or your own id string
+        model: "kokoro-82M",
+        streaming: true,
+        audioGeneration: true
+    )
+}
+```
+
+**2. Implement `generateAudioStream`** — this is the important one; it maps
+directly onto the page's play-as-it-arrives `AudioWorklet` ring buffer. Emit
+`AIAudioChunk.chunk(_:mimeType:)` as your engine produces PCM, then a single
+terminal `AIAudioChunk.done(audio:backend:)`:
+
+```swift
+func generateAudioStream(_ request: AIGenerateAudioRequest)
+    -> AsyncThrowingStream<AIAudioChunk, any Error>
+{
+    AsyncThrowingStream { continuation in
+        let task = Task {
+            do {
+                let engine = try self.loadEngine()                 // CoreML / MLX model
+                let voice = request.voice ?? "default"             // see below
+                var assembled = Data()
+
+                // Your synthesizer's per-frame callback. `pcm` is raw bytes in a
+                // known format — here 16-bit little-endian mono @ 24 kHz.
+                for try await pcm in engine.synthesize(request.prompt, voice: voice,
+                                                       speed: request.speed ?? 1.0) {
+                    if Task.isCancelled { break }
+                    assembled.append(pcm)
+                    continuation.yield(.chunk(pcm.base64EncodedString(),
+                                              mimeType: "audio/pcm;rate=24000;encoding=signed-int;bits=16;channels=1"))
+                }
+
+                // Terminal frame carries the fully assembled clip (inline, or a
+                // written file `path` if the request set `outputDirectory`).
+                let final = AIGeneratedAudio(dataBase64: assembled.base64EncodedString(),
+                                             mimeType: "audio/wav",
+                                             durationMs: engine.lastDurationMs)
+                continuation.yield(.done(audio: final, backend: AIBackendID.ttsMLX))
+                continuation.finish()
+            } catch {
+                continuation.finish(throwing: AIError.generationFailed("\(error)"))
+            }
+        }
+        continuation.onTermination = { _ in task.cancel() }   // stop synth on unsubscribe
+    }
+}
+```
+
+**3. Implement `generateAudio`** for the one-shot case (or synthesize fully and
+return). If you only care about streaming, the simplest correct unary impl
+drains your own stream:
+
+```swift
+func generateAudio(_ request: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+    for try await chunk in generateAudioStream(request) where chunk.type == "done" {
+        if let audio = chunk.audio {
+            return AIGenerateAudioResult(audio: audio, backend: AIBackendID.ttsMLX)
+        }
+    }
+    throw AIError.generationFailed("no audio produced")
+}
+```
+
+**Framing.** `AIAudioChunk` deliberately doesn't carry sample-rate / bit-depth /
+channel fields — that metadata lives *in* the bytes and is hinted by
+`mimeType`. Pick one convention and keep it consistent across `chunk`s so the
+page's `AudioWorklet` can configure its ring buffer once. Two common choices:
+
+- **Raw PCM chunks** (lowest latency): each `chunk` is headerless PCM; the page
+  needs to know the rate/format out-of-band (encode it in the `mimeType` as
+  above, or agree on a fixed format). The terminal `done` can still carry a
+  proper `audio/wav` (with header) for save-to-file.
+- **Self-describing chunks**: each `chunk` is a complete container (e.g. an Ogg
+  page). Simpler for the page, slightly more overhead.
+
+**Voice selection & cloning.** `request.voice` / `request.language` /
+`request.speed` are already on `AIGenerateAudioRequest` — map `voice` to your
+engine's voice id. Reference-audio **voice cloning** (a reference WAV +
+transcript) isn't in the contract's request shape today; until it is, pass the
+reference path through your backend's *own* init/config (e.g.
+`MyTTSBackend(referenceClip: url)`) rather than per-request, or register a small
+companion custom command (`tts.setVoiceReference`) via `ctx.registry.register`.
+If you'd like it first-class in `AIGenerateAudioRequest`, that's a contract
+addition worth filing.
+
+**Model download.** If your model is downloadable, override `ensureModel` and
+drive `ModelDownloader` (`SwiftPWAModelStore`) — resumable, SHA-256-pinned,
+cached across launches — exactly as the llama backend does; see its source for a
+worked `ensureModel`.
+
+**Runtime choices.** For the engine itself, MLX Swift (`mlx-swift`) or CoreML
+are the usual on-device options on Apple platforms; both run in-process, so the
+result is a self-contained, notarizable `.app` with no sidecar process. If you
+need to ship before that's ready, the [subprocess plugin](process-plugin.md)
+lets you stream PCM out of an existing Python synthesizer through
+`process.stream` with the *same* page-side ring-buffer code, then swap to this
+`AIBackend` later without touching the page.
+
 ### Available backend: Apple Foundation Models
 
 `SwiftPWAFoundationModels` ships the first real backend — Apple's on-device

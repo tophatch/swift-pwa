@@ -34,6 +34,7 @@
         // wired into the generated Kotlin by the bundler. See the
         // content-packs design doc.
         public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
+        public let events = EventBus()
         public private(set) nonisolated(unsafe) var windows: [WindowID: any Window] = [:]
         // `pendingExitCode` is read by the runtime worker thread
         // (in `AndroidAppRuntime.run`) right after `runSemaphore`
@@ -71,6 +72,7 @@
             use(WindowPlugin())
             use(PlatformInfoPlugin())
             use(AppPlugin())
+            use(EventsPlugin())
             // Auto-register `ClipboardPlugin` so apps don't have to —
             // every other backend's `AppContext` does the same. Apps
             // can override with their own `ctx.use(ClipboardPlugin(...))`

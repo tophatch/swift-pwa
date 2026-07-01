@@ -1,8 +1,10 @@
 // swift-pwa bridge runtime, injected at document start.
 //
 // Exposes globalThis.__SWIFT_PWA__ with:
-//   .invoke(cmd, args)            -> Promise<result>
+//   .invoke(cmd, args)             -> Promise<result>
 //   .subscribe(cmd, args, onChunk) -> () => void  (unsubscribe)
+//   .on(channel, cb)               -> () => void  (server-push subscribe)
+//   .emit(channel, payload)        -> Promise<void>  (publish to a channel)
 //
 // Wire envelope (matches Sources/SwiftPWACore/Bridge/Invocation.swift):
 //   in : {v:1, kind:"invoke"|"subscribe"|"unsubscribe", id, cmd?, payload?}
@@ -117,6 +119,35 @@
         };
     }
 
+    // Server-push sugar over the `events.*` command set (EventsPlugin).
+    //
+    //   on(channel, cb)      -> () => void  (off)   subscribe to a channel;
+    //                                               `cb` gets each payload.
+    //   emit(channel, payload[, {retain}])          publish to a channel; fans
+    //                                               out to every subscriber in
+    //                                               every window.
+    //
+    // A named event bus lives on the Swift `AppContext`, so Swift can push
+    // (`ctx.emit(channel, payload)`) without the client having asked, and a
+    // retained channel replays its latest value to late subscribers.
+    function on(channel, cb, onError) {
+        return subscribe(
+            "events.subscribe",
+            { channel },
+            (payload) => { if (cb) cb(payload); },
+            onError,
+            undefined,
+        );
+    }
+
+    function emit(channel, payload, opts) {
+        return invoke("events.emit", {
+            channel,
+            payload: payload === undefined ? null : payload,
+            retain: !!(opts && opts.retain),
+        });
+    }
+
     // WebView2's host-to-web channel surfaces native frames as
     // `message` events on `window.chrome.webview` rather than
     // `evaluateJavaScript("...__deliver(json)")` calls. Subscribe so
@@ -134,6 +165,8 @@
         value: Object.freeze({
             invoke,
             subscribe,
+            on,
+            emit,
             __deliver: deliver,    // called by the native side via evaluateJavaScript (WK / WebKitGTK)
             __version: VERSION,
         }),

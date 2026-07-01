@@ -7,6 +7,7 @@
     public final class MacAppContext: AppContext {
         public let registry = CommandRegistry()
         public let assetProvider = AssetProvider()
+        public let events = EventBus()
         public private(set) var windows: [WindowID: any Window] = [:]
         public var pendingExitCode: Int32?
         private var installedPlugins: Set<String> = []
@@ -18,6 +19,7 @@
             use(WindowPlugin())
             use(PlatformInfoPlugin())
             use(AppPlugin())
+            use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))
         }
 

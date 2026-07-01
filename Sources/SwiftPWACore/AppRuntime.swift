@@ -41,6 +41,13 @@ public protocol AppContext: AnyObject, Sendable {
     /// (e.g. after extracting a content pack) takes effect for in-flight and
     /// future requests without re-registering anything.
     var assetProvider: AssetProvider { get }
+
+    /// The app-wide server-push event bus. One instance per app, shared by
+    /// every window, so a single ``EventBus/emit(_:payload:retain:)`` fans out
+    /// to subscribers in all windows. The built-in `EventsPlugin` bridges it to
+    /// the JS `on(channel, cb)` / `emit(channel, payload)` API. Prefer the
+    /// typed ``emit(_:_:retain:)`` convenience for Swift-side pushes.
+    var events: EventBus { get }
 }
 
 public extension AppContext {
@@ -63,5 +70,26 @@ public extension AppContext {
     /// bundle `/` mount cannot be removed.
     func unserveDirectory(at prefix: String) {
         assetProvider.unmount(at: prefix)
+    }
+
+    /// Push an `Encodable` payload to JS subscribers of `channel` in every
+    /// window — the Swift-side half of the server-push story. Sugar over
+    /// ``EventBus/emit(_:_:retain:)`` on ``events``; JS receives it via
+    /// `__SWIFT_PWA__.on(channel, cb)`.
+    ///
+    /// Set `retain: true` to remember this as the channel's latest value and
+    /// replay it to windows/subscribers that connect later.
+    ///
+    /// `events` is `Sendable`, so to emit from a background thread (a file
+    /// watcher, an import task) capture it once — `let bus = ctx.events` — and
+    /// call `bus.emit(...)` off the main actor rather than hopping back here.
+    func emit(_ channel: String, _ payload: some Encodable, retain: Bool = false) throws {
+        try events.emit(channel, payload, retain: retain)
+    }
+
+    /// Push a payload-less signal to subscribers of `channel` (JS receives
+    /// `null`). See ``emit(_:_:retain:)``.
+    func emit(_ channel: String, retain: Bool = false) {
+        events.signal(channel, retain: retain)
     }
 }

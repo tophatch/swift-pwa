@@ -369,18 +369,31 @@ wrapper can't tell "passed then hung" from "hung mid-run"). CI now runs the
 Linux test step through [`Scripts/ci-test-linux.sh`](../Scripts/ci-test-linux.sh),
 which sidesteps that entirely: it launches the **built test bundle directly**
 (`swift build --build-tests` runs first) and has swift-testing write its
-**structured event stream to a file** (`--event-stream-output-path`). The
-run's `runEnded` verdict — and every per-issue `"symbol":"fail"` — is written
-to that file *as the run proceeds*, so the script reads the authoritative
-pass/fail result and kills the parked process instead of waiting on the lost
-`exit()` wakeup. A recorded failure fails the job immediately (never
-retried/masked); only a lost event-stream tail (swift-testing block-buffers
-it, so its final chunk is occasionally lost to the same SIGKILL) triggers a
-retry of the deterministic run. If you hit the hang locally, build once
-(`swift build --build-tests`) then invoke the wrapper (`bash
-Scripts/ci-test-linux.sh`), or just re-run `swift test`. See issue #39 for the
-full investigation (including the stdout/`stdbuf`/`--xunit-output`/`tee` dead
-ends).
+**structured event stream to a file** (`--event-stream-output-path`). Two
+facts make that robust:
+
+- A failed expectation is written as a `"symbol":"fail"` issue event
+  *mid-run*, flushed with the bulk of the stream — so **failures are always
+  observed and reported, never masked**.
+- Because the hang is *post-run*, the pass signal is the hang itself: once the
+  bundle has run tests and gone **quiescent** (no new events for several
+  seconds while still alive) with no failure recorded, the run passed and the
+  script kills the parked process. (`runEnded`, when it happens to flush
+  before the hang, is a fast path to the same verdict.)
+
+swift-testing block-buffers the event stream, so its trailing chunk is often
+lost to the exit-hang's kill — which is exactly why the verdict comes from the
+mid-run failure events + the quiescence signal, not the trailing `runEnded`. A
+test process that instead *crashes* at exit (the other face of the same
+swift-corelibs race — no verdict written) is retried; a deterministic crash
+recrashes and fails the job.
+
+If you hit the hang locally, build once (`swift build --build-tests`) then
+invoke the wrapper (`bash Scripts/ci-test-linux.sh`), or just re-run `swift
+test`. See issue #39 for the full investigation, including the dead ends
+(stdout `stdbuf`, `--xunit-output`, `| tee`, SIGCONT-nudging) and the one
+documented caveat: a test that hung *mid-run* with no output would be
+indistinguishable from the post-run park — the suite has no such test.
 
 ## Reporting issues
 

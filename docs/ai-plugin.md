@@ -27,7 +27,7 @@ sugar.
 // Capability probe — cheap, call once at startup and route on `available`.
 const info = await __SWIFT_PWA__.invoke('ai.info', {});
 // → { available, backend, model?, streaming, structuredOutput,
-//     vision, imageGeneration, audioInput, audioGeneration }
+//     vision, imageGeneration, audioInput, audioGeneration, voiceCloning }
 //   backend ∈ none | apple-foundation-models | gemini-nano | phi-silica
 //           | gemma-mlx | gemma-mediapipe | gemma-onnx | gemma-llamacpp
 //           | apple-image-playground | stable-diffusion-mlx
@@ -38,6 +38,7 @@ if (!info.available) {
 // Capability flags gate the modalities:
 //   vision          → image input honored      imageGeneration → text→image
 //   audioInput      → audio input honored       audioGeneration → text→audio
+//   voiceCloning    → referenceAudio/-Text honored on ai.generateAudio(Stream)
 
 // One-shot text.
 const { text, backend } = await __SWIFT_PWA__.invoke('ai.generate', {
@@ -147,6 +148,11 @@ __SWIFT_PWA__.subscribe('ai.generateAudioStream', { prompt }, (e) => {
     else if (e.type === 'done') finish(e.audio);
 });
 ```
+
+When `info.voiceCloning` is true, pass `referenceAudio` (inline `dataBase64` or
+on-disk `path`) + `referenceText` to clone a voice per request — see
+[the worked example](#worked-example-a-custom-on-device-audio-tts-backend) for
+the backend side.
 
 > **Live, continuous audio streaming** (push mic frames into an open
 > session for real-time incremental results) is **not** part of this
@@ -336,15 +342,39 @@ page's `AudioWorklet` can configure its ring buffer once. Two common choices:
 - **Self-describing chunks**: each `chunk` is a complete container (e.g. an Ogg
   page). Simpler for the page, slightly more overhead.
 
-**Voice selection & cloning.** `request.voice` / `request.language` /
-`request.speed` are already on `AIGenerateAudioRequest` — map `voice` to your
-engine's voice id. Reference-audio **voice cloning** (a reference WAV +
-transcript) isn't in the contract's request shape today; until it is, pass the
-reference path through your backend's *own* init/config (e.g.
-`MyTTSBackend(referenceClip: url)`) rather than per-request, or register a small
-companion custom command (`tts.setVoiceReference`) via `ctx.registry.register`.
-If you'd like it first-class in `AIGenerateAudioRequest`, that's a contract
-addition worth filing.
+**Voice selection.** `request.voice` / `request.language` / `request.speed`
+are on `AIGenerateAudioRequest` — map `voice` to your engine's voice id.
+
+**Reference-audio voice cloning.** `AIGenerateAudioRequest.referenceAudio`
+(an `AIAudio` — inline `dataBase64` or on-disk `path`) plus
+`referenceText` (its transcript) carry a per-request cloning voice. Report
+`voiceCloning: true` in your `AICapabilities` when you honor them; pages route
+on `info.voiceCloning` to show a "clone a voice" affordance only where it works.
+Because the reference rides on the request, the voice is a user-switchable
+preference that changes per call with **no backend re-init** — read it in
+`generateAudioStream` and pass it to your engine's cloning path:
+
+```swift
+func info() async -> AICapabilities {
+    AICapabilities(available: true, backend: "my-tts",
+                   audioGeneration: true, voiceCloning: true)
+}
+
+func generateAudioStream(_ request: AIGenerateAudioRequest)
+    -> AsyncThrowingStream<AIAudioChunk, any Error>
+{
+    // Resolve the optional reference clip → engine speaker embedding.
+    let speaker = request.referenceAudio.map { ref in
+        engine.cloneVoice(from: ref.path ?? decode(ref.dataBase64),
+                          transcript: request.referenceText)
+    }
+    // …synthesize request.prompt in `speaker` (or the default voice when nil).
+}
+```
+
+Backends that don't advertise `voiceCloning` should simply ignore the two
+fields — they're optional and default to nil, so older backends stay
+source-compatible.
 
 **Model download.** If your model is downloadable, override `ensureModel` and
 drive `ModelDownloader` (`SwiftPWAModelStore`) — resumable, SHA-256-pinned,

@@ -59,11 +59,15 @@
             return result.path
         }
 
-        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> String? {
+        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> [String] {
+            // SAF's ACTION_OPEN_DOCUMENT_TREE grants one tree per launch, so
+            // `args.multiple` is ignored here — the Kotlin host returns a
+            // single `path`, which we surface as a zero- or one-element array
+            // to match the cross-platform `[String]` contract.
             let result: DialogPathResult = try await AndroidRPC.call(
                 "dialog.openDirectory", args
             )
-            return result.path
+            return result.path.map { [$0] } ?? []
         }
     }
 #endif

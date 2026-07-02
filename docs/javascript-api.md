@@ -150,8 +150,17 @@ const { paths } = await __SWIFT_PWA__.invoke('dialog.openFile', {
 const { path } = await __SWIFT_PWA__.invoke('dialog.saveFile',
     { defaultName: 'report.pdf' });
 
+// Single directory (backward-compatible `path`), or several with `multiple`:
 const { path: dir } = await __SWIFT_PWA__.invoke('dialog.openDirectory');
+const { paths: dirs } = await __SWIFT_PWA__.invoke('dialog.openDirectory',
+    { multiple: true });
 ```
+
+`dialog.openDirectory` returns both `paths` (every selected directory) and
+`path` (the first, kept for callers written before multi-select landed).
+`multiple` is desktop-only — macOS / Windows / GTK / iOS honor it; on Android
+the SAF tree picker grants one directory per launch, so at most one path comes
+back.
 
 `dialog.saveFile` is a stub on iOS (the platform has no system save
 panel — apps export through `UIDocumentPickerViewController(forExporting:)`
@@ -380,6 +389,15 @@ const score = await __SWIFT_PWA__.invoke('ai.generateJSON', {
 // Audio out (when info.audioGeneration) — TTS.
 const { audio } = await __SWIFT_PWA__.invoke('ai.generateAudio', { prompt: 'kiitos' });
 // streaming variant: subscribe('ai.generateAudioStream', …) for play-as-it-arrives
+
+// Per-request voice cloning (when info.voiceCloning) — clone from a reference
+// clip + its transcript. The reference rides on the request, so it can change
+// per call (a user-switchable voice) with no backend re-init.
+const { audio: cloned } = await __SWIFT_PWA__.invoke('ai.generateAudio', {
+    prompt: 'kiitos',
+    referenceAudio: { path: '/voices/narrator.wav' }, // or { dataBase64 }
+    referenceText: 'the transcript of the reference clip',
+});
 ```
 
 `ai.generateJSON` always returns schema-valid JSON regardless of backend

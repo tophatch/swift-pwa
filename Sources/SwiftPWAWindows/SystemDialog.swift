@@ -34,7 +34,7 @@
             try await MainThread.run { [self] in try saveFileOnMain(args, parent: parent) }
         }
 
-        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> String? {
+        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String] {
             try await MainThread.run { [self] in try openDirectoryOnMain(args, parent: parent) }
         }
 
@@ -144,16 +144,17 @@
         }
 
         @MainActor
-        private func openDirectoryOnMain(_ args: DialogOpenDirectoryArgs, parent: WindowID?) throws -> String? {
+        private func openDirectoryOnMain(_ args: DialogOpenDirectoryArgs, parent: WindowID?) throws -> [String] {
             let owner = lookupParent(parent)
             return try (args.title ?? "").withCString(encodedAs: UTF16.self) { titleW in
                 try (args.defaultPath ?? "").withCString(encodedAs: UTF16.self) { folderW in
-                    var path: UnsafeMutablePointer<CChar>?
+                    var paths: UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>?
                     let rc = swiftpwa_dialog_open_directory(
                         UnsafeMutableRawPointer(owner),
                         args.title == nil ? nil : titleW,
                         args.defaultPath == nil ? nil : folderW,
-                        &path
+                        (args.multiple ?? false) ? 1 : 0,
+                        &paths
                     )
                     if rc < 0 {
                         throw BridgeError(
@@ -161,10 +162,15 @@
                             message: "open-directory dialog failed"
                         )
                     }
-                    guard rc > 0, let path else { return nil }
-                    let str = String(cString: path)
-                    swiftpwa_dialog_free_path(path)
-                    return str
+                    guard rc > 0, let paths else { return [] }
+                    var collected: [String] = []
+                    var i = 0
+                    while let cstr = paths[i] {
+                        collected.append(String(cString: cstr))
+                        i += 1
+                    }
+                    swiftpwa_dialog_free_paths(paths)
+                    return collected
                 }
             }
         }

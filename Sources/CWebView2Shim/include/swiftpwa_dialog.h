@@ -87,12 +87,16 @@ int32_t swiftpwa_dialog_save_file(
     char **out_path);
 
 // Show the directory-picker dialog. Same return convention as
-// `swiftpwa_dialog_save_file`.
+// `swiftpwa_dialog_open_file` (NULL-terminated UTF-8 array in
+// `*out_paths`, released via `swiftpwa_dialog_free_paths`; returns the
+// count picked, 0 on cancel, -1 on error). `allow_multiple` toggles
+// FOS_ALLOWMULTISELECT so several folders can be chosen at once.
 int32_t swiftpwa_dialog_open_directory(
     void *parent_hwnd,
     const wchar_t *title,
     const wchar_t *default_folder,
-    char **out_path);
+    int32_t allow_multiple,
+    char ***out_paths);
 
 // Free a path returned via `swiftpwa_dialog_save_file` /
 // `swiftpwa_dialog_open_directory`.

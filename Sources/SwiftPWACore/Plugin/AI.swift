@@ -208,6 +208,12 @@ public struct AICapabilities: Sendable, Codable, Equatable {
     /// Whether the backend supports text→audio generation — TTS or
     /// generative audio (`ai.generateAudio` / `ai.generateAudioStream`).
     public let audioGeneration: Bool
+    /// Whether the backend honors per-request **voice cloning** — i.e.
+    /// `referenceAudio` / `referenceText` on `ai.generateAudio(Stream)`
+    /// steer the synthesized timbre rather than being ignored. A page can
+    /// route on this to expose a "clone a voice" affordance only where it
+    /// works.
+    public let voiceCloning: Bool
 
     public init(
         available: Bool,
@@ -218,7 +224,8 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         vision: Bool = false,
         imageGeneration: Bool = false,
         audioInput: Bool = false,
-        audioGeneration: Bool = false
+        audioGeneration: Bool = false,
+        voiceCloning: Bool = false
     ) {
         self.available = available
         self.backend = backend
@@ -229,6 +236,7 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         self.imageGeneration = imageGeneration
         self.audioInput = audioInput
         self.audioGeneration = audioGeneration
+        self.voiceCloning = voiceCloning
     }
 
     /// The capabilities of a host with no usable backend.
@@ -578,6 +586,18 @@ public struct AIGenerateAudioRequest: Sendable, Codable, Equatable {
     /// `path` (bridge-efficient for longer clips); when `nil`, base64 bytes
     /// inline. Mirrors `ai.generateImage`.
     public var outputDirectory: String?
+    /// A reference voice clip for **per-request voice cloning** — the
+    /// timbre to synthesize `prompt` in. Inline base64 (short clips) or an
+    /// on-disk `path` (the bridge-efficient route for longer references),
+    /// exactly like an input `AIImage` / `AIAudio`. Ignored by backends
+    /// that report `voiceCloning: false`. Because it rides on the request,
+    /// the voice can change per call — a user-switchable preference — with
+    /// no backend re-init. Pair it with `referenceText`.
+    public var referenceAudio: AIAudio?
+    /// The transcript of `referenceAudio`. Cloning backends that need the
+    /// reference text (most do, for alignment) read it here; ignored when
+    /// `referenceAudio` is nil or the backend doesn't require it.
+    public var referenceText: String?
 
     public init(
         prompt: String,
@@ -585,7 +605,9 @@ public struct AIGenerateAudioRequest: Sendable, Codable, Equatable {
         language: String? = nil,
         speed: Double? = nil,
         format: String? = nil,
-        outputDirectory: String? = nil
+        outputDirectory: String? = nil,
+        referenceAudio: AIAudio? = nil,
+        referenceText: String? = nil
     ) {
         self.prompt = prompt
         self.voice = voice
@@ -593,6 +615,8 @@ public struct AIGenerateAudioRequest: Sendable, Codable, Equatable {
         self.speed = speed
         self.format = format
         self.outputDirectory = outputDirectory
+        self.referenceAudio = referenceAudio
+        self.referenceText = referenceText
     }
 }
 

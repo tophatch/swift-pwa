@@ -317,9 +317,10 @@ int32_t swiftpwa_dialog_open_directory(
     void *parent_hwnd,
     const wchar_t *title,
     const wchar_t *default_folder,
-    char **out_path
+    int32_t allow_multiple,
+    char ***out_paths
 ) {
-    if (out_path) *out_path = nullptr;
+    if (out_paths) *out_paths = nullptr;
     HWND owner = (HWND)parent_hwnd;
 
     ComScope com;
@@ -333,6 +334,7 @@ int32_t swiftpwa_dialog_open_directory(
     DWORD flags = 0;
     dlg->GetOptions(&flags);
     flags |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_PICKFOLDERS;
+    if (allow_multiple) flags |= FOS_ALLOWMULTISELECT;
     dlg->SetOptions(flags);
 
     configure_file_dialog(dlg.Get(), title, default_folder, 0, nullptr);
@@ -341,15 +343,35 @@ int32_t swiftpwa_dialog_open_directory(
     if (hr == HRESULT_FROM_WIN32(ERROR_CANCELLED)) return 0;
     if (FAILED(hr)) return -1;
 
-    ComPtr<IShellItem> result;
-    if (FAILED(dlg->GetResult(&result)) || !result) return 0;
-    PWSTR raw = nullptr;
-    if (FAILED(result->GetDisplayName(SIGDN_FILESYSPATH, &raw)) || !raw) return 0;
-    char *u = wide_to_utf8_dup(raw);
-    CoTaskMemFree(raw);
-    if (!u) return -1;
-    if (out_path) *out_path = u; else free(u);
-    return 1;
+    ComPtr<IShellItemArray> items;
+    hr = dlg->GetResults(&items);
+    if (FAILED(hr) || !items) return 0;
+
+    DWORD count = 0;
+    items->GetCount(&count);
+    if (count == 0) return 0;
+
+    char **out = (char **)calloc((size_t)count + 1, sizeof(char *));
+    if (!out) return -1;
+
+    DWORD written = 0;
+    for (DWORD i = 0; i < count; ++i) {
+        ComPtr<IShellItem> item;
+        if (FAILED(items->GetItemAt(i, &item)) || !item) continue;
+        PWSTR raw = nullptr;
+        if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &raw)) || !raw) continue;
+        char *u = wide_to_utf8_dup(raw);
+        CoTaskMemFree(raw);
+        if (u) out[written++] = u;
+    }
+    out[written] = nullptr;
+
+    if (written == 0) {
+        free(out);
+        return 0;
+    }
+    if (out_paths) *out_paths = out;
+    return (int32_t)written;
 }
 
 void swiftpwa_dialog_free_path(char *path) {

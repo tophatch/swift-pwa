@@ -25,7 +25,7 @@ public final class MockDialog: Dialog {
     public var nextConfirm: Bool = true
     public var nextOpenFilePaths: [String] = []
     public var nextSaveFilePath: String?
-    public var nextOpenDirectoryPath: String?
+    public var nextOpenDirectoryPaths: [String] = []
 
     public init() {}
 
@@ -48,8 +48,8 @@ public final class MockDialog: Dialog {
         return nextSaveFilePath
     }
 
-    public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> String? {
+    public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String] {
         actions.append(.openDirectory(args, parent: parent))
-        return nextOpenDirectoryPath
+        return nextOpenDirectoryPaths
     }
 }

@@ -37,7 +37,7 @@
             try await MainThread.run { [self] in try saveFileOnMain(args, parent: parent) }
         }
 
-        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> String? {
+        public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String] {
             try await MainThread.run { [self] in try openDirectoryOnMain(args, parent: parent) }
         }
 
@@ -112,19 +112,19 @@
         }
 
         @MainActor
-        private func openDirectoryOnMain(_ args: DialogOpenDirectoryArgs, parent: WindowID?) throws -> String? {
+        private func openDirectoryOnMain(_ args: DialogOpenDirectoryArgs, parent: WindowID?) throws -> [String] {
             let dialog = makeFileChooser(
                 parent: parent,
                 action: SWIFTPWA_FILE_CHOOSER_SELECT_FOLDER,
                 title: args.title,
                 folder: args.defaultPath,
                 filename: nil,
-                allowMultiple: false
+                allowMultiple: args.multiple ?? false
             )
             let resp = swiftpwa_dialog_run(dialog)
             defer { swiftpwa_widget_destroy(dialog) }
-            guard resp == GTK_RESPONSE_OK.rawValue else { return nil }
-            return takeFilename(dialog)
+            guard resp == GTK_RESPONSE_OK.rawValue else { return [] }
+            return takeFilenames(dialog)
         }
 
         // MARK: - Helpers

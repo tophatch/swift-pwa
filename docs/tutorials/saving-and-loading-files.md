@@ -284,7 +284,7 @@ Every call is `await __SWIFT_PWA__.invoke(command, options)`. It returns a Promi
 |---|---|---|
 | `dialog.saveFile` | `{ title?, defaultName?, defaultPath?, filters? }` | `{ path }` — `path` is `null` if cancelled |
 | `dialog.openFile` | `{ title?, defaultPath?, filters?, multiple? }` | `{ paths }` — empty array if cancelled |
-| `dialog.openDirectory` | `{ title?, defaultPath? }` | `{ path }` — `null` if cancelled |
+| `dialog.openDirectory` | `{ title?, defaultPath?, multiple? }` | `{ paths, path }` — `paths` empty (and `path` `null`) if cancelled; `path` is the first selection |
 | `fs.writeText` | `{ path, contents }` | `{}` |
 | `fs.readText` | `{ path }` | `{ contents }` |
 | `fs.writeBinary` | `{ path, dataBase64 }` | `{}` |

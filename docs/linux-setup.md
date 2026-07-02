@@ -356,18 +356,31 @@ to exit**. A swift-testing bundle's async `@main` parks the main thread in
 `dispatch_main()` (`swift_task_asyncMainDrainQueue`) after the run
 completes, waiting for the wakeup that fires the final `exit()` — and that
 wakeup is intermittently lost (a swift-corelibs-libdispatch main-queue
-race). It reproduces in roughly **15–25 % of runs**, on Swift 6.0.3 **and**
-6.2.0 (so it isn't toolchain-specific), independent of which tests run and
-of `--no-parallel`. It always clears on a fresh run.
+race). It reproduces on Swift 6.0.3 **and** 6.2.0 (so it isn't
+toolchain-specific), independent of which tests run and of `--no-parallel`,
+and lately runs *hot* — a majority of runs park at exit — so it can't be
+waited out with a couple of retries. It always clears on a fresh process.
 
 This is purely a *process-exit* hang — the tests themselves have already
-passed — so CI wraps the Linux test step in
-[`Scripts/ci-test-linux.sh`](../Scripts/ci-test-linux.sh): each `swift
-test` is bounded by a `timeout`, and **only a clean timeout is retried**.
-A real test failure exits non-zero on the first attempt and fails the job
-immediately, so nothing is masked; three attempts take the residual flake
-below 1 %. If you hit the hang locally, just re-run, or invoke the same
-wrapper (`bash Scripts/ci-test-linux.sh`).
+passed. A timeout-and-retry wrapper handled it for a while, but the flake
+runs hot enough on the hosted gtk runners that blind retries began failing
+otherwise-green jobs (the hang eats `swift test`'s stdout summary, so a
+wrapper can't tell "passed then hung" from "hung mid-run"). CI now runs the
+Linux test step through [`Scripts/ci-test-linux.sh`](../Scripts/ci-test-linux.sh),
+which sidesteps that entirely: it launches the **built test bundle directly**
+(`swift build --build-tests` runs first) and has swift-testing write its
+**structured event stream to a file** (`--event-stream-output-path`). The
+run's `runEnded` verdict — and every per-issue `"symbol":"fail"` — is written
+to that file *as the run proceeds*, so the script reads the authoritative
+pass/fail result and kills the parked process instead of waiting on the lost
+`exit()` wakeup. A recorded failure fails the job immediately (never
+retried/masked); only a lost event-stream tail (swift-testing block-buffers
+it, so its final chunk is occasionally lost to the same SIGKILL) triggers a
+retry of the deterministic run. If you hit the hang locally, build once
+(`swift build --build-tests`) then invoke the wrapper (`bash
+Scripts/ci-test-linux.sh`), or just re-run `swift test`. See issue #39 for the
+full investigation (including the stdout/`stdbuf`/`--xunit-output`/`tee` dead
+ends).
 
 ## Reporting issues
 

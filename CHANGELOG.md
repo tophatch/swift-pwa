@@ -5,6 +5,12 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **CI: the Linux gtk3/gtk4 test jobs no longer flake on the swift-corelibs exit-hang (issue #39).** The hang (swift-testing's async `@main` parks in `dispatch_main` after every test passes, and the final `exit()` wakeup is intermittently lost) had begun to red *otherwise-green* jobs: it now runs hot on the hosted gtk runners (a majority of runs park), and the previous timeout-and-retry wrapper couldn't ride it out because the hang eats `swift test`'s stdout summary — so a wrapper can't distinguish "passed then hung" from "hung mid-run" (confirmed dead ends: `stdbuf` can't reach SwiftPM's buffered output, `--xunit-output` is XCTest-only, and `| tee` deadlocks under `timeout`). [`Scripts/ci-test-linux.sh`](Scripts/ci-test-linux.sh) now launches the **built test bundle directly** and has swift-testing write its **structured event stream to a file** (`--event-stream-output-path`); it reads the authoritative `runEnded` verdict (and any per-issue `"symbol":"fail"`, which is flushed mid-run) from that file and kills the parked process rather than waiting on the lost wakeup. A recorded failure fails the job immediately — never retried or masked; only a lost event-stream tail (swift-testing block-buffers the stream, so its final chunk is occasionally lost to the same SIGKILL) retries the deterministic run. Validated on the Linux box: 20/20 passing across runs that hit the hang, and an injected failing test exits non-zero at once. See [docs/linux-setup.md](docs/linux-setup.md#swift-test-occasionally-hangs-at-exit-on-linux).
+
 ## [0.7.7] - 2026-07-01
 
 ### Added

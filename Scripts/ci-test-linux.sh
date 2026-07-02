@@ -1,62 +1,109 @@
 #!/usr/bin/env bash
 #
-# Run the Linux Core + CLI test suite, tolerating a known swift-corelibs
+# Run the Linux Core + CLI test suite immune to a known swift-corelibs
 # process-exit hang — WITHOUT masking real failures.
 #
-# Background: on Linux, the swift-testing bundle's async `@main` finishes
-# all tests, then parks the main thread in libdispatch's `dispatch_main()`
-# (`swift_task_asyncMainDrainQueue`) waiting for the wakeup that fires the
-# final `exit()`. That wakeup is intermittently lost — a swift-corelibs
-# libdispatch main-queue race — so the process never exits even though
-# every test passed. It reproduces ~15-25% of runs on Swift 6.0.3 *and*
-# 6.2.0 (so it is not toolchain-specific), independent of which tests run
-# and of `--no-parallel`. It always clears on a fresh run. See the design
-# note / CI-flake memo for the full investigation.
+# Background: on Linux the swift-testing bundle finishes every test, then parks
+# the main thread in libdispatch's `dispatch_main()` (`swift_task_async
+# MainDrainQueue`) waiting for the wakeup that fires the final `exit()`. That
+# wakeup is intermittently lost — a swift-corelibs libdispatch main-queue race
+# — so the process never exits even though every test passed. It reproduces on
+# 6.0.3 and 6.2 alike, independent of which tests run, and lately runs *hot*
+# (a majority of runs on the gtk runners). See the CI-flake memo / issue #39.
 #
-# Strategy: bound each run with `timeout`. Exit-code policy:
-#   * 0            -> tests passed; done.
-#   * 124 / 137    -> the run TIMED OUT (the benign exit-hang). Reap any
-#                     orphaned test process and retry.
-#   * anything else-> a genuine test failure, build error, or crash
-#                     (e.g. 1 = issues recorded, 134 = abort, 139 = segv).
-#                     Fail the job IMMEDIATELY — never retried, never hidden.
+# Why not `swift test`: on the hang, `swift test`'s stdout summary never
+# flushes (SwiftPM block-buffers and only flushes on the clean exit the hang
+# prevents), so a wrapper can't tell "passed then hung" from "hung mid-run".
+# stdbuf can't reach SwiftPM's output; `--xunit-output` is XCTest-only; a
+# `| tee` deadlocks under `timeout`. (All dead ends — see issue #39.)
 #
-# Because only a clean timeout is retried, a real failure can never be
-# masked: it surfaces on the first attempt with its own exit code. Three
-# attempts take the residual flake from ~20% to <1%, and the residual is a
-# timeout (visible, not a false pass), not a silent success.
+# What works: launch the built test bundle directly and have swift-testing
+# write its structured **event stream to a file** (`--event-stream-output-path`).
+# The authoritative `runEnded` verdict — and every per-issue `"symbol":"fail"`
+# — is written to that file as the run proceeds. We read the verdict from the
+# file and kill the (possibly parked) process instead of waiting on the lost
+# wakeup:
+#   * a `"symbol":"fail"` event (issue recorded, flushed mid-run) -> FAIL now.
+#   * a `runEnded` event                                          -> PASS.
+#   * neither within the per-attempt timeout -> swift-testing block-buffers the
+#     event stream too, so its final chunk (incl. `runEnded`) is occasionally
+#     lost to the same SIGKILL. The run is deterministic, so RETRY; a real
+#     failure re-emits its `"symbol":"fail"` and is never masked.
 #
-# Usage: Scripts/ci-test-linux.sh [extra swift-test args...]
-#   e.g. Scripts/ci-test-linux.sh --verbose
+# Requires the test bundle to be built first (CI's "Build test targets" step
+# runs `swift build --build-tests`).
+#
+# Usage: Scripts/ci-test-linux.sh   (extra args are ignored — kept for the
+#        historical `--verbose` call site)
 set -uo pipefail
 
-ATTEMPTS="${CI_TEST_ATTEMPTS:-3}"
-PER_ATTEMPT_TIMEOUT="${CI_TEST_TIMEOUT:-300}"
+# The run itself finishes in seconds; the per-attempt timeout only bounds how
+# long we wait for `runEnded` before treating the attempt as a lost-tail and
+# retrying. The exit-hang runs hot on the gtk runners (~1/3 of attempts lose
+# the tail), so keep a healthy attempt ceiling — retries only cost wall-clock
+# on an actual miss; a completed run returns immediately.
+ATTEMPTS="${CI_TEST_ATTEMPTS:-8}"
+PER_ATTEMPT_TIMEOUT="${CI_TEST_TIMEOUT:-60}"
+FILTERS=(--filter SwiftPWACoreTests --filter SwiftPWACLITests)
+
+BUNDLE=$(find .build -maxdepth 4 -name '*PackageTests.xctest' -type f 2>/dev/null | head -1)
+if [ -z "${BUNDLE:-}" ]; then
+    echo "::error::test bundle not found under .build — run 'swift build --build-tests' first."
+    exit 1
+fi
+
+events=$(mktemp)
+trap 'rm -f "$events"' EXIT
 
 for attempt in $(seq 1 "$ATTEMPTS"); do
-    echo "::group::swift test (attempt ${attempt}/${ATTEMPTS}, per-attempt timeout ${PER_ATTEMPT_TIMEOUT}s)"
-    # -s TERM then SIGKILL 30s later if it ignores TERM (the hung process does).
-    timeout -s TERM -k 30 "$PER_ATTEMPT_TIMEOUT" \
-        swift test --filter SwiftPWACoreTests --filter SwiftPWACLITests "$@"
-    rc=$?
+    : > "$events"
+    echo "::group::test bundle (attempt ${attempt}/${ATTEMPTS}, per-attempt timeout ${PER_ATTEMPT_TIMEOUT}s)"
+
+    # Run the bundle directly; swift-testing streams structured events to the
+    # file. Console output still goes to the log for humans.
+    "$BUNDLE" --testing-library swift-testing \
+        --event-stream-version 0 --event-stream-output-path "$events" \
+        "${FILTERS[@]}" &
+    pid=$!
+
+    verdict=""
+    end=$(( SECONDS + PER_ATTEMPT_TIMEOUT ))
+    while [ "$SECONDS" -lt "$end" ]; do
+        # A recorded issue is flushed with the bulk of the stream, so a real
+        # failure is caught even when the trailing runEnded is lost to the hang.
+        if grep -q '"symbol":"fail"' "$events" 2>/dev/null; then verdict=fail; break; fi
+        if grep -q '"kind":"runEnded"' "$events" 2>/dev/null; then verdict=pass; break; fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            # Process exited on its own (rare clean exit, or a crash). Give the
+            # stream a moment to settle, then read whatever verdict landed.
+            sleep 0.3
+            grep -q '"symbol":"fail"' "$events" 2>/dev/null && verdict=fail
+            [ -z "$verdict" ] && grep -q '"kind":"runEnded"' "$events" 2>/dev/null && verdict=pass
+            break
+        fi
+        sleep 0.5
+    done
+
+    # Reap the (usually parked) process before the next attempt / exit.
+    kill -9 "$pid" 2>/dev/null || true
+    wait "$pid" 2>/dev/null || true
     echo "::endgroup::"
 
-    if [ "$rc" -eq 0 ]; then
-        echo "swift test passed on attempt ${attempt}."
-        exit 0
-    fi
-
-    # 124 = timed out (TERM); 137 = 128+9, timed out then SIGKILL'd by -k.
-    if [ "$rc" -ne 124 ] && [ "$rc" -ne 137 ]; then
-        echo "::error::swift test exited ${rc} — a genuine failure/crash, not the exit-hang. Failing the job."
-        exit "$rc"
-    fi
-
-    echo "::warning::swift test timed out after ${PER_ATTEMPT_TIMEOUT}s on attempt ${attempt} — the known swift-corelibs process-exit hang (all tests had passed). Reaping orphans and retrying."
-    pkill -9 -f 'swift-pwaPackageTests.xctest' 2>/dev/null || true
-    pkill -9 -f 'swift-test' 2>/dev/null || true
-    sleep 3
+    case "$verdict" in
+        pass)
+            echo "swift-testing run completed and passed (attempt ${attempt})."
+            exit 0
+            ;;
+        fail)
+            echo "::error::swift-testing reported a test failure:"
+            grep -o '"symbol":"fail","text":"[^"]*"' "$events" | sed 's/.*"text":"/  - /; s/"$//' | head -20
+            exit 1
+            ;;
+        *)
+            echo "::warning::no completion (runEnded) within ${PER_ATTEMPT_TIMEOUT}s on attempt ${attempt} — the event-stream tail was lost to the swift-corelibs exit-hang; retrying."
+            ;;
+    esac
 done
 
-echo "::error::swift test timed out on all ${ATTEMPTS} attempts. The exit-hang normally clears within a retry or two, so this is unexpected — failing rather than looping forever."
+echo "::error::the test run never reported completion across ${ATTEMPTS} attempts — this is not the benign tail-loss (a genuine mid-run hang or crash). Failing."
 exit 1

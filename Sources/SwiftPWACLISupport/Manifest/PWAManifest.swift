@@ -58,20 +58,27 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var height: Double
         public var resizable: Bool
         public var fullscreen: Bool
-        /// Native window/webview background colour (hex, e.g. `"#F4F7F5"`),
-        /// applied before the page's first paint to avoid a white/black
-        /// flash and to match the scroll overscroll area; also used as the
-        /// iOS launch-screen background. Optional — omit for the platform
-        /// default (opaque white). Seeds `WindowConfig.backgroundColor` in
-        /// the generated `App.swift`.
-        public var backgroundColor: String?
+        /// Native window/webview background colour, applied before the page's
+        /// first paint to avoid a white/black flash and to match the scroll
+        /// overscroll area; also used as the iOS launch-screen background.
+        /// Optional — omit for the platform default (opaque white).
+        ///
+        /// Accepts either a single hex string (`"#F4F7F5"`, used for both
+        /// light and dark) or a light/dark pair
+        /// (`{ "light": "#F4F4F2", "dark": "#0C0D0E" }`). The pair drives a
+        /// DayNight activity theme on Android so `prefers-color-scheme: dark`
+        /// matches inside the WebView. The other backends paint a single
+        /// launch colour (they aren't system-theme-aware at runtime yet) and
+        /// resolve a pair to its **dark** value — a dark pre-paint flash is
+        /// preferable to blinding a dark-mode user with the light colour.
+        public var backgroundColor: BackgroundColor?
         public init(
             title: String,
             width: Double = 1024,
             height: Double = 768,
             resizable: Bool = true,
             fullscreen: Bool = false,
-            backgroundColor: String? = nil
+            backgroundColor: BackgroundColor? = nil
         ) {
             self.title = title
             self.width = width
@@ -79,6 +86,65 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.resizable = resizable
             self.fullscreen = fullscreen
             self.backgroundColor = backgroundColor
+        }
+    }
+
+    /// `window.background_color` — a single hex colour used for both light and
+    /// dark, or an explicit light/dark pair. Decodes from either a JSON string
+    /// (`"#RRGGBB"`) or an object (`{ "light": …, "dark": … }`) and re-encodes
+    /// in the same shape it was written.
+    public enum BackgroundColor: Codable, Sendable, Equatable {
+        case single(String)
+        case dayNight(light: String, dark: String)
+
+        /// The light-mode colour (the single colour when not a pair).
+        public var light: String {
+            switch self {
+            case let .single(c): c
+            case let .dayNight(light, _): light
+            }
+        }
+
+        /// The dark-mode colour (the single colour when not a pair). This is
+        /// what non-Android backends use as their one launch colour.
+        public var dark: String {
+            switch self {
+            case let .single(c): c
+            case let .dayNight(_, dark): dark
+            }
+        }
+
+        /// Whether this is an explicit light/dark pair (vs. one colour for both).
+        public var isPair: Bool {
+            if case .dayNight = self { true } else { false }
+        }
+
+        private enum PairKeys: String, CodingKey { case light, dark }
+
+        public init(from decoder: any Decoder) throws {
+            if let container = try? decoder.singleValueContainer(),
+               let hex = try? container.decode(String.self)
+            {
+                self = .single(hex)
+                return
+            }
+            let keyed = try decoder.container(keyedBy: PairKeys.self)
+            self = try .dayNight(
+                light: keyed.decode(String.self, forKey: .light),
+                dark: keyed.decode(String.self, forKey: .dark)
+            )
+        }
+
+        public func encode(to encoder: any Encoder) throws {
+            switch self {
+            case let .single(hex):
+                var container = encoder.singleValueContainer()
+                try container.encode(hex)
+            case let .dayNight(light, dark):
+                var keyed = encoder.container(keyedBy: PairKeys.self)
+                try keyed.encode(light, forKey: .light)
+                try keyed.encode(dark, forKey: .dark)
+            }
         }
     }
 

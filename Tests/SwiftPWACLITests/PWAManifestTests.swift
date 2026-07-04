@@ -29,6 +29,45 @@ struct PWAManifestTests {
         #expect(decoded == original)
     }
 
+    @Test("window.background_color decodes from a plain string (both modes)")
+    func backgroundColorString() throws {
+        let json = """
+        { "id": "com.example.hi", "name": "Hi", "version": "1.0.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "Hi", "width": 1024, "height": 768, "resizable": true, "fullscreen": false, "background_color": "#F4F7F5" } }
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.window.backgroundColor == .single("#F4F7F5"))
+        #expect(m.window.backgroundColor?.light == "#F4F7F5")
+        #expect(m.window.backgroundColor?.dark == "#F4F7F5")
+        #expect(m.window.backgroundColor?.isPair == false)
+    }
+
+    @Test("window.background_color decodes from a light/dark object and round-trips its shape")
+    func backgroundColorPairObject() throws {
+        let json = """
+        { "id": "com.example.hi", "name": "Hi", "version": "1.0.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "Hi", "width": 1024, "height": 768, "resizable": true, "fullscreen": false, "background_color": { "light": "#F4F4F2", "dark": "#0C0D0E" } } }
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.window.backgroundColor == .dayNight(light: "#F4F4F2", dark: "#0C0D0E"))
+        #expect(m.window.backgroundColor?.light == "#F4F4F2")
+        #expect(m.window.backgroundColor?.dark == "#0C0D0E")
+        #expect(m.window.backgroundColor?.isPair == true)
+
+        // Re-encodes as an object (not a string), so a written manifest keeps the pair.
+        let encoder = JSONEncoder()
+        encoder.keyEncodingStrategy = .convertToSnakeCase
+        let reencoded = try String(decoding: encoder.encode(m), as: UTF8.self)
+        #expect(reencoded.contains("\"light\""))
+        #expect(reencoded.contains("\"dark\""))
+    }
+
     @Test("ai.local_llama decodes from snake_case and round-trips")
     func aiLocalLlama() throws {
         let json = #"""

@@ -82,11 +82,25 @@ struct AndroidBundlerUnitTests {
         )
         #expect(themedManifest.contains("android:theme=\"@style/Theme.SwiftPWA\""))
         let themedActivity = AndroidTemplates.mainActivityKt(
-            packageId: "com.example.hi", soBaseName: "Hi", backgroundColorHex: "#F4F7F5"
+            packageId: "com.example.hi", soBaseName: "Hi",
+            background: AndroidTemplates.WindowBackground(.single("#F4F7F5"))
         )
+        // A single colour paints unconditionally (no night branch).
         #expect(themedActivity.contains(
             "webView.setBackgroundColor(android.graphics.Color.parseColor(\"#F4F7F5\"))"
         ))
+        #expect(!themedActivity.contains("UI_MODE_NIGHT_MASK"))
+    }
+
+    @Test("light/dark pair drives a night-aware pre-paint background")
+    func backgroundColorPair() throws {
+        let pair = try #require(AndroidTemplates.WindowBackground(.dayNight(light: "#F4F4F2", dark: "#0C0D0E")))
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi", background: pair)
+        // The pre-paint colour branches on the active night mode: dark colour
+        // in night mode, light otherwise — so a dark-mode user never gets the
+        // light flash.
+        #expect(activity.contains("UI_MODE_NIGHT_MASK"))
+        #expect(activity.contains("if (swiftPwaNightMode) \"#0C0D0E\" else \"#F4F4F2\""))
     }
 
     @Test("swiftVersion(fromSDKBundleID:) parses the SDK's Swift major.minor")
@@ -99,24 +113,46 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "android-sdk-no-version") == nil)
     }
 
-    @Test("swiftPWAThemeXml fills window + system bars and picks icon luminance")
+    @Test("swiftPWAThemeXml is DayNight, fills window + bars, and picks icon luminance per mode")
     func themeXmlLuminance() throws {
         // A near-white surface wants dark (light-bar) status/navigation icons.
-        let light = try AndroidTemplates.WindowBackground(#require(RGBColor(hex: "#F4F7F5")))
-        #expect(light.hex == "#F4F7F5")
-        #expect(light.lightStatusBar == true)
-        let lightXml = AndroidTemplates.swiftPWAThemeXml(light)
+        let bg = try #require(AndroidTemplates.WindowBackground(.dayNight(light: "#F4F7F5", dark: "#101418")))
+        #expect(bg.light.hex == "#F4F7F5")
+        #expect(bg.light.lightSystemBars == true)
+        #expect(bg.dark.hex == "#101418")
+        #expect(bg.dark.lightSystemBars == false)
+        #expect(bg.isPair)
+
+        // The parent must be DayNight (not *.Light.*): a Light parent pins the
+        // AppCompat context to light uiMode, so `prefers-color-scheme: dark`
+        // never matched inside the WebView.
+        let lightXml = AndroidTemplates.swiftPWAThemeXml(bg.light)
+        #expect(lightXml.contains("parent=\"Theme.AppCompat.DayNight.NoActionBar\""))
+        #expect(!lightXml.contains(".Light.NoActionBar"))
         #expect(lightXml.contains("<color name=\"swift_pwa_window_background\">#F4F7F5</color>"))
-        #expect(lightXml.contains("parent=\"Theme.AppCompat.Light.NoActionBar\""))
         #expect(lightXml.contains("<item name=\"android:windowBackground\">@color/swift_pwa_window_background</item>"))
         #expect(lightXml.contains("<item name=\"android:statusBarColor\">@color/swift_pwa_window_background</item>"))
         #expect(lightXml.contains("<item name=\"android:windowLightStatusBar\">true</item>"))
 
-        // A dark surface wants light (white) status/navigation icons.
-        let dark = try AndroidTemplates.WindowBackground(#require(RGBColor(hex: "#101418")))
-        #expect(dark.lightStatusBar == false)
-        let darkXml = AndroidTemplates.swiftPWAThemeXml(dark)
+        // The values-night variant carries the dark colour + light (white) bar icons.
+        let darkXml = AndroidTemplates.swiftPWAThemeXml(bg.dark)
+        #expect(darkXml.contains("parent=\"Theme.AppCompat.DayNight.NoActionBar\""))
+        #expect(darkXml.contains("<color name=\"swift_pwa_window_background\">#101418</color>"))
         #expect(darkXml.contains("<item name=\"android:windowLightStatusBar\">false</item>"))
+    }
+
+    @Test("a single-colour background yields identical light/dark modes")
+    func themeXmlSingleColour() throws {
+        let bg = try #require(AndroidTemplates.WindowBackground(.single("#123456")))
+        #expect(bg.light == bg.dark)
+        #expect(!bg.isPair)
+        #expect(bg.light.hex == "#123456")
+    }
+
+    @Test("an unparseable background colour degrades to no theme")
+    func themeXmlInvalidColour() {
+        #expect(AndroidTemplates.WindowBackground(.single("not-a-hex")) == nil)
+        #expect(AndroidTemplates.WindowBackground(.dayNight(light: "#F4F7F5", dark: "nope")) == nil)
     }
 
     @Test("appBuildGradleKts without signing skips the signingConfigs block")

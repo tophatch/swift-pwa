@@ -88,8 +88,7 @@ struct AndroidBundler {
         // emitting a broken resource. Mirrors the other backends, which all
         // honour the same field.
         let windowBackground = manifest.window.backgroundColor
-            .flatMap(RGBColor.init(hex:))
-            .map(AndroidTemplates.WindowBackground.init)
+            .flatMap(AndroidTemplates.WindowBackground.init)
 
         // Project-level files.
         let settings = AndroidTemplates.settingsGradleKts(label: label)
@@ -148,17 +147,24 @@ struct AndroidBundler {
             atomically: true, encoding: .utf8
         )
 
-        // res/values/swift_pwa_theme.xml — the `Theme.SwiftPWA` the manifest
-        // points at when `window.background_color` is set. Only written when a
-        // colour is configured (the manifest references the stock theme
-        // otherwise).
+        // res/values{,-night}/swift_pwa_theme.xml — the `Theme.SwiftPWA` the
+        // manifest points at when `window.background_color` is set. Written as a
+        // DayNight pair: the light mode under `res/values/`, the dark mode under
+        // `res/values-night/`, so Android resolves the right window colour +
+        // system-bar glyph luminance per mode (and the WebView tracks
+        // `prefers-color-scheme`). Only written when a colour is configured (the
+        // manifest references the stock theme otherwise). A single configured
+        // colour writes identical light/dark files — harmless, and keeps one
+        // code path.
         if let windowBackground {
-            let values = main.appendingPathComponent("res/values")
-            try FileManager.default.createDirectory(at: values, withIntermediateDirectories: true)
-            try AndroidTemplates.swiftPWAThemeXml(windowBackground).write(
-                to: values.appendingPathComponent("swift_pwa_theme.xml"),
-                atomically: true, encoding: .utf8
-            )
+            for (dir, mode) in [("res/values", windowBackground.light), ("res/values-night", windowBackground.dark)] {
+                let values = main.appendingPathComponent(dir)
+                try FileManager.default.createDirectory(at: values, withIntermediateDirectories: true)
+                try AndroidTemplates.swiftPWAThemeXml(mode).write(
+                    to: values.appendingPathComponent("swift_pwa_theme.xml"),
+                    atomically: true, encoding: .utf8
+                )
+            }
         }
 
         // Kotlin sources go under `java/<package-as-path>/...`
@@ -166,7 +172,7 @@ struct AndroidBundler {
         try FileManager.default.createDirectory(at: kotlinDir, withIntermediateDirectories: true)
         try AndroidTemplates.mainActivityKt(
             packageId: pkg, soBaseName: soBase, serveMounts: manifest.build?.serve ?? [],
-            backgroundColorHex: windowBackground?.hex
+            background: windowBackground
         ).write(
             to: kotlinDir.appendingPathComponent("MainActivity.kt"),
             atomically: true, encoding: .utf8

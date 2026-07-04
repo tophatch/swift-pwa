@@ -10,6 +10,10 @@
     @MainActor
     public final class SwiftPWASceneDelegate: UIResponder, UIWindowSceneDelegate {
         public var window: UIWindow?
+        /// Retains opened security-scoped URLs so the grant stays active for
+        /// the scene's lifetime (the web app reads them via `fs.readBinary`
+        /// after an async bridge round-trip). See the macOS counterpart.
+        private var scopedURLs: [URL] = []
 
         public func scene(
             _ scene: UIScene,
@@ -26,6 +30,28 @@
                 try? configure(context)
             }
             attachNextPendingWindow(to: windowScene)
+
+            // Cold-launch open: a file that launched the app arrives here, not
+            // via `scene(_:openURLContexts:)`. Emitted retained, so the WebView
+            // receives it once it subscribes.
+            emitOpen(connectionOptions.urlContexts)
+        }
+
+        /// Warm-launch open: the app is already running and the OS hands it a
+        /// document / URL to open.
+        public func scene(_: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {
+            emitOpen(URLContexts)
+        }
+
+        /// Forward the file URLs in `contexts` to JS over the ``OpenFile``
+        /// channel, activating (and retaining) the sandbox grant for each.
+        private func emitOpen(_ contexts: Set<UIOpenURLContext>) {
+            let fileURLs = contexts.map(\.url).filter(\.isFileURL)
+            guard !fileURLs.isEmpty else { return }
+            for url in fileURLs where url.startAccessingSecurityScopedResource() {
+                scopedURLs.append(url)
+            }
+            OpenFile.emit(fileURLs.map(\.path), on: IOSAppRuntime.shared.context.events)
         }
 
         private func attachNextPendingWindow(to windowScene: UIWindowScene) {

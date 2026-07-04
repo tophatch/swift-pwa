@@ -16,6 +16,10 @@
         /// Retained for the lifetime of the process — releasing the
         /// monitor handle removes the hook.
         private var devToolsMonitor: Any?
+        /// Retained for the lifetime of the process — `NSApplication.delegate`
+        /// is a weak reference, so without a strong hold here the open-file
+        /// handler would deallocate immediately and never fire.
+        private var openFileDelegate: OpenFileDelegate?
 
         private init() {}
 
@@ -28,6 +32,15 @@
             app.setActivationPolicy(.regular)
             app.mainMenu = Self.makeMainMenu()
             installDevToolsAccelerator()
+
+            // Deliver OS "Open With" / document-open events to JS. Set before
+            // `NSApp.run()` so the launch open-file Apple event (queued during
+            // a cold launch) is handled once the loop starts; the payload is
+            // emitted retained, so the WebView receives it whenever it
+            // subscribes. See `OpenFileDelegate`.
+            let openFileDelegate = OpenFileDelegate(events: context.events)
+            self.openFileDelegate = openFileDelegate
+            app.delegate = openFileDelegate
 
             // Route MainThread.run through DispatchQueue.main so the
             // bridge runtime can hop to the UI thread uniformly across
@@ -133,6 +146,38 @@
             )
             appMenuItem.submenu = appMenu
             return mainMenu
+        }
+    }
+
+    /// `NSApplicationDelegate` that forwards OS document-open events
+    /// (`Finder → Open With`, `open <file>`, custom URL schemes) to the web
+    /// app over the ``OpenFile`` event-bus channel. Without it,
+    /// `MacAppRuntime` ran a delegate-less `NSApplication` and silently
+    /// dropped opened files.
+    @MainActor
+    private final class OpenFileDelegate: NSObject, NSApplicationDelegate {
+        private let events: EventBus
+        /// Retains opened security-scoped URLs so the sandbox grant stays
+        /// active for the process lifetime. Under the App Sandbox a file from
+        /// Launch Services is only readable between
+        /// `startAccessingSecurityScopedResource()` and `stop…`; the web app
+        /// reads it via `fs.readBinary` after an async bridge round-trip, so
+        /// releasing the scope eagerly would revoke access mid-read. Holding
+        /// for the session is the simplest correct lifetime for a document the
+        /// user explicitly opened.
+        private var scopedURLs: [URL] = []
+
+        init(events: EventBus) { self.events = events }
+
+        func application(_: NSApplication, open urls: [URL]) {
+            let fileURLs = urls.filter(\.isFileURL)
+            guard !fileURLs.isEmpty else { return }
+            // Activate the sandbox grant where present (no-op / false for a
+            // non-sandboxed app, where the path is readable anyway).
+            for url in fileURLs where url.startAccessingSecurityScopedResource() {
+                scopedURLs.append(url)
+            }
+            OpenFile.emit(fileURLs.map(\.path), on: events)
         }
     }
 #endif

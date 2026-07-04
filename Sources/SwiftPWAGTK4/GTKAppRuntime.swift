@@ -39,6 +39,11 @@
                     Data("swift-pwa: configure threw: \(error)\n".utf8)
                 )
             }
+            // Desktop "open with": a file association / CLI file argument
+            // arrives as a launch argument (`.desktop` `Exec=… %F`). Emit it
+            // (retained) so the WebView receives it once it subscribes to
+            // `app.openFile`, matching the macOS/iOS Launch Services path.
+            OpenFile.emit(OpenFile.launchFilePaths(), on: context.events)
             context.runMainLoop()
             exit(context.pendingExitCode ?? 0)
         }

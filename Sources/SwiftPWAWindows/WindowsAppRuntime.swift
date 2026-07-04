@@ -90,6 +90,12 @@
                 )
             }
 
+            // Windows file association: the shell launches the app with the
+            // opened file as a command-line argument. Emit it (retained) so
+            // the WebView receives it once it subscribes to `app.openFile`,
+            // matching the macOS/iOS Launch Services path.
+            OpenFile.emit(OpenFile.launchFilePaths(), on: context.events)
+
             var msg = MSG()
             // Swift's WinSDK overlay imports `GetMessageW` as
             // returning `Bool` rather than the C `BOOL` (Int32). We

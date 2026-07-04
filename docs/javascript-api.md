@@ -90,6 +90,49 @@ on Windows, the Activity `filesDir` / `cacheDir` on Android. `dataDir` is
 where you extract a downloaded content pack (see `fs.extractZip`); the OS
 may evict `cacheDir` at any time, so only put regenerable artifacts there.
 
+#### `app.openFile` — OS "Open With" / launch-with-file
+
+When the OS launches (or foregrounds) your app *with* a document — Finder /
+Explorer "Open With", `open -a MyApp file`, a file double-clicked on a type
+your app handles — the file path(s) arrive as a **server-push event** on the
+`app.openFile` channel. Subscribe with `on` (see [`events.*`](#events--server-initiated-push)):
+
+```js
+__SWIFT_PWA__.on('app.openFile', ({ paths }) => {
+    for (const path of paths) openDocument(path);   // e.g. read via fs.readBinary
+});
+```
+
+Key points:
+
+- **Cold-start safe.** The most common case is *the file launches the app*, so
+  the open event fires before the WebView (and this listener) exists. The event
+  is emitted **retained**, so it replays to your listener as soon as you
+  subscribe — you never miss the launch file. (Consequence: a manual page reload
+  re-subscribes and re-receives the launch file; ignore a repeat if that matters.)
+- **Payload** is `{ paths: string[] }` — selecting multiple files in one "Open
+  With" delivers them as one event.
+- **macOS sandbox.** A file handed over by Launch Services is readable via
+  `fs.readBinary` — the runtime holds the security-scoped grant for the session,
+  so no extra step is needed on your side.
+
+You still have to **declare** which file types your app handles (the event only
+fires for a launch the OS routes to you, or an explicit `open -a`). On Apple that
+goes through the `info_plist` passthrough (see [macos-setup.md](macos-setup.md)):
+
+```json
+"macos": { "info_plist": { "CFBundleDocumentTypes": [
+    { "CFBundleTypeName": "Image", "CFBundleTypeRole": "Viewer",
+      "LSItemContentTypes": ["public.png", "public.jpeg"] }
+] } }
+```
+
+Platform coverage: **macOS** (`application(_:open:)`) and **iOS**
+(`scene(_:openURLContexts:)`, including cold-launch) via Launch Services;
+**Linux** and **Windows** via the launch file-argument convention (`.desktop`
+`Exec=… %F` / file-association argv). **Android** `VIEW`/`SEND` intents are not
+wired to this channel yet.
+
 ### `clipboard.*`
 
 ```js

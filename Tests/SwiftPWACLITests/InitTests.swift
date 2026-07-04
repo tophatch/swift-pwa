@@ -217,9 +217,19 @@ struct InitTests {
     @Test("generated App.swift emits window.background_color only when set")
     func appSwiftThreadsBackgroundColor() {
         let withColor = Templates.mainSwift(
-            structName: "MyApp", window: .init(title: "X", backgroundColor: "#F4F7F5")
+            structName: "MyApp", window: .init(title: "X", backgroundColor: .single("#F4F7F5"))
         )
         #expect(withColor.contains("backgroundColor: \"#F4F7F5\""))
+        // A light/dark pair resolves to its dark value for the single-colour
+        // runtime WindowConfig (a dark pre-paint flash beats a blinding one).
+        let pair = Templates.mainSwift(
+            structName: "MyApp", window: .init(
+                title: "X",
+                backgroundColor: .dayNight(light: "#F4F4F2", dark: "#0C0D0E")
+            )
+        )
+        #expect(pair.contains("backgroundColor: \"#0C0D0E\""))
+        #expect(!pair.contains("#F4F4F2"))
         // Omitted when nil, so WindowConfig keeps the platform default.
         let without = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
         #expect(!without.contains("backgroundColor:"))
@@ -231,7 +241,7 @@ struct InitTests {
         let decoder = JSONDecoder()
         decoder.keyDecodingStrategy = .convertFromSnakeCase
         let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
-        #expect(m.window.backgroundColor == "#101418")
+        #expect(m.window.backgroundColor == .single("#101418"))
     }
 
     @Test("init bakes the manifest web.entry into the generated App.swift")

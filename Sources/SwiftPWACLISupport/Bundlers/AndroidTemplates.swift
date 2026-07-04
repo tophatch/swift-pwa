@@ -293,43 +293,77 @@ enum AndroidTemplates {
         """
     }
 
-    /// Resolved `window.background_color` for the Android backend. `hex` is a
-    /// normalized opaque `#RRGGBB`; `lightStatusBar` drives
-    /// `windowLightStatusBar` / `windowLightNavigationBar` — true (dark icons)
-    /// when the surface is light, so the status/navigation glyphs stay legible.
+    /// Resolved `window.background_color` for the Android backend, as a
+    /// light/dark pair. Each mode carries a normalized opaque `#RRGGBB` and a
+    /// `lightSystemBars` flag driving `windowLightStatusBar` /
+    /// `windowLightNavigationBar` — true (dark icons) when that mode's surface
+    /// is light, so the status/navigation glyphs stay legible. A single
+    /// configured colour yields identical light and dark modes.
     struct WindowBackground {
-        var hex: String
-        var lightStatusBar: Bool
+        struct Mode: Equatable {
+            var hex: String
+            var lightSystemBars: Bool
 
-        /// Build from a parsed colour. Relative-luminance threshold at 0.5:
-        /// a light fill wants dark system-bar icons and vice-versa.
-        init(_ rgb: RGBColor) {
-            let (r, g, b) = rgb.bytes
-            hex = String(format: "#%02X%02X%02X", r, g, b)
-            let luminance = 0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue
-            lightStatusBar = luminance > 0.5
+            /// Relative-luminance threshold at 0.5: a light fill wants dark
+            /// system-bar icons and vice-versa.
+            init(_ rgb: RGBColor) {
+                let (r, g, b) = rgb.bytes
+                hex = String(format: "#%02X%02X%02X", r, g, b)
+                let luminance = 0.2126 * rgb.red + 0.7152 * rgb.green + 0.0722 * rgb.blue
+                lightSystemBars = luminance > 0.5
+            }
+        }
+
+        var light: Mode
+        var dark: Mode
+
+        /// True when the two modes differ — i.e. a real light/dark pair was
+        /// configured, so the pre-paint background needs a night-aware branch.
+        var isPair: Bool {
+            light != dark
+        }
+
+        /// Build from the manifest's `background_color`, parsing both the light
+        /// and dark hex. Returns `nil` if either colour is unparseable, so the
+        /// build degrades to the stock theme rather than emitting a broken
+        /// resource.
+        init?(_ color: PWAManifest.BackgroundColor) {
+            guard let lightRGB = RGBColor(hex: color.light),
+                  let darkRGB = RGBColor(hex: color.dark)
+            else { return nil }
+            light = Mode(lightRGB)
+            dark = Mode(darkRGB)
         }
     }
 
-    /// `res/values/swift_pwa_theme.xml` — defines `Theme.SwiftPWA`, the
-    /// activity theme referenced by the manifest when `window.background_color`
-    /// is set. Painting `android:windowBackground` is what kills the white
-    /// launch flash before the WebView's first paint (the WebView's own
-    /// `setBackgroundColor` covers the gap between inflation and first paint);
-    /// matching the status + navigation bars removes the "this is just a
-    /// webview" framing. Emitted only when a colour is configured, so non-themed
-    /// apps keep the stock AppCompat light theme untouched.
-    static func swiftPWAThemeXml(_ bg: WindowBackground) -> String {
+    /// `res/values{,-night}/swift_pwa_theme.xml` — defines `Theme.SwiftPWA`,
+    /// the activity theme referenced by the manifest when
+    /// `window.background_color` is set. Painting `android:windowBackground` is
+    /// what kills the white launch flash before the WebView's first paint (the
+    /// WebView's own `setBackgroundColor` covers the gap between inflation and
+    /// first paint); matching the status + navigation bars removes the "this is
+    /// just a webview" framing.
+    ///
+    /// The parent is `Theme.AppCompat.DayNight.NoActionBar` (not `*.Light.*`):
+    /// inflating a `Light` theme on an `AppCompatActivity` pins the context to
+    /// light `uiMode`, which the `WebView` inherits — so
+    /// `prefers-color-scheme: dark` never matched inside the page. DayNight lets
+    /// the WebView track the system setting. The bundler writes this file twice
+    /// — once under `res/values/` with the light `mode`, once under
+    /// `res/values-night/` with the dark `mode` — so Android picks the right
+    /// window colour + system-bar glyph luminance per mode. Emitted only when a
+    /// colour is configured, so non-themed apps keep the stock theme untouched.
+    static func swiftPWAThemeXml(_ mode: WindowBackground.Mode) -> String {
         """
         <?xml version="1.0" encoding="utf-8"?>
         <resources>
-            <color name="swift_pwa_window_background">\(bg.hex)</color>
-            <style name="Theme.SwiftPWA" parent="Theme.AppCompat.Light.NoActionBar">
+            <color name="swift_pwa_window_background">\(mode.hex)</color>
+            <style name="Theme.SwiftPWA" parent="Theme.AppCompat.DayNight.NoActionBar">
                 <item name="android:windowBackground">@color/swift_pwa_window_background</item>
                 <item name="android:statusBarColor">@color/swift_pwa_window_background</item>
                 <item name="android:navigationBarColor">@color/swift_pwa_window_background</item>
-                <item name="android:windowLightStatusBar">\(bg.lightStatusBar)</item>
-                <item name="android:windowLightNavigationBar">\(bg.lightStatusBar)</item>
+                <item name="android:windowLightStatusBar">\(mode.lightSystemBars)</item>
+                <item name="android:windowLightNavigationBar">\(mode.lightSystemBars)</item>
             </style>
         </resources>
         """
@@ -341,16 +375,31 @@ enum AndroidTemplates {
         packageId: String,
         soBaseName: String,
         serveMounts: [PWAManifest.ServeMount] = [],
-        backgroundColorHex: String? = nil
+        background: WindowBackground? = nil
     ) -> String {
         // `window.background_color` set → paint the WebView's own surface to
         // match before its first paint. The activity theme's windowBackground
         // covers the launch flash up to inflation; this covers inflation →
         // first paint (the WebView is otherwise opaque white). Color.parseColor
-        // accepts the same `#RRGGBB` the theme colour uses.
-        let backgroundColorLine = backgroundColorHex.map {
-            "\n        webView.setBackgroundColor(android.graphics.Color.parseColor(\"\($0)\"))"
-        } ?? ""
+        // accepts the same `#RRGGBB` the theme colour uses. For a light/dark
+        // pair the pre-paint colour must follow the active night mode too —
+        // otherwise a dark-mode user gets the light colour flashed before the
+        // web content (which the DayNight theme already handles) paints.
+        let backgroundColorLine = switch background {
+        case .none:
+            ""
+        case let .some(bg) where !bg.isPair:
+            "\n        webView.setBackgroundColor(android.graphics.Color.parseColor(\"\(bg.light.hex)\"))"
+        case let .some(bg):
+            """
+
+                    val swiftPwaNightMode = (resources.configuration.uiMode and \
+            android.content.res.Configuration.UI_MODE_NIGHT_MASK) == \
+            android.content.res.Configuration.UI_MODE_NIGHT_YES
+                    webView.setBackgroundColor(android.graphics.Color.parseColor(
+                        if (swiftPwaNightMode) "\(bg.dark.hex)" else "\(bg.light.hex)"))
+            """
+        }
         return """
         package \(packageId)
 

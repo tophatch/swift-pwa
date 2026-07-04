@@ -399,7 +399,11 @@ enum Templates {
         let name = structName
         // Optional native background colour. Emitted only when set, so the
         // generated WindowConfig keeps `nil` (platform default) otherwise.
-        let backgroundColorArg: String = window.backgroundColor.map {
+        // The runtime `WindowConfig` takes one colour and isn't system-theme-
+        // aware, so a light/dark pair resolves to its dark value (a dark
+        // pre-paint flash is preferable to a blinding light one at night;
+        // Android's build-time DayNight theme handles per-mode colours).
+        let backgroundColorArg: String = window.backgroundColor.map(\.dark).map {
             let escaped = $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
             return ",\n                backgroundColor: \"\(escaped)\""
         } ?? ""

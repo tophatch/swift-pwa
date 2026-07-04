@@ -101,7 +101,9 @@ The bundler:
    then merges any `macos.info_plist` passthrough on top (see below).
 4. Copies the `web/` directory into `Contents/Resources/web`.
 5. If `pwa.json.icon` points at a PNG, converts it to `AppIcon.icns`
-   via `sips` + `iconutil`.
+   via `sips` + `iconutil`. The build prints a one-line icon summary —
+   `swift-pwa: app icon ← icon.png (7 sizes)` on success, or the reason
+   it fell back (no icon set / not a PNG / file missing / tool absent).
 6. If `pwa.json.description` is set, writes a `Credits.html` so the
    description shows up as the body of the standard About panel.
 

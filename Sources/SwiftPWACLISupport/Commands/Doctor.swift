@@ -58,6 +58,20 @@ struct Doctor: AsyncParsableCommand {
         }
     }
 
+    // MARK: - Quiet preflight (used by `build`)
+
+    /// The *required* tools a target needs that are currently missing, as
+    /// `(label, fix)` pairs. `build` calls this to emit one concise heads-up
+    /// before a long compile — a quiet preflight that says nothing on a
+    /// healthy machine, rather than the full `doctor` checklist. Excludes the
+    /// advisory (non-required) checks and the scaffold-freshness pass, which
+    /// `doctor` still surfaces in full.
+    static func requiredToolGaps(for target: BuildTarget) async -> [(label: String, fix: String?)] {
+        var checks: [Check] = await [swiftToolchain()]
+        checks += await self.checks(for: target)
+        return checks.filter { !$0.ok && $0.required }.map { ($0.name, $0.fix) }
+    }
+
     // MARK: - Checks
 
     private static func swiftToolchain() async -> Check {

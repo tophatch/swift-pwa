@@ -145,6 +145,13 @@ struct WindowsBundler {
             // window. (See suppressConsoleWindow for the why.)
             try await suppressConsoleWindow(at: bundledExe)
 
+            // App icon: inject an RT_GROUP_ICON/RT_ICON from pwa.json's PNG
+            // into the EXE's resource section. Must run before the
+            // single-file overlay below — appending the overlay grows the
+            // file past the PE image, and rewriting resources afterwards
+            // would corrupt or drop that trailing data.
+            await IconOutcome.report(embedPortableIcon(at: bundledExe))
+
             // Single-file: embed web/ as an exe overlay and emit one `.exe`,
             // no sibling web/ or pwa.json. The runtime reads its own overlay
             // and serves the bundle from memory (EmbeddedWebAssets).
@@ -423,6 +430,42 @@ struct WindowsBundler {
         }
     }
 
+    // MARK: - App icon
+
+    /// Embed `pwa.json`'s `icon` (a PNG) into the portable `.exe` so it
+    /// shows a real icon in Explorer / the taskbar / Alt-Tab instead of the
+    /// default Windows application icon — the one platform whose icon
+    /// pipeline used to stop at the MSIX tile. Best-effort and reported (not
+    /// thrown): a missing / non-PNG / unreadable icon leaves the default
+    /// icon and never fails the build, matching every other bundler's icon
+    /// step. See `WindowsIcon` for the resource-injection mechanics.
+    private func embedPortableIcon(at exe: URL) async -> IconOutcome {
+        guard let icon = manifest.icon else { return .noneSet }
+        let src = projectRoot.appendingPathComponent(icon)
+        guard src.pathExtension.lowercased() == "png" else {
+            return .notPNG(source: icon, placeholder: false)
+        }
+        guard let pngData = try? Data(contentsOf: src) else {
+            return .notFound(source: icon, placeholder: false)
+        }
+        guard let (width, height) = WindowsIcon.pngDimensions(pngData) else {
+            // Extension says PNG but the bytes don't parse — treat as
+            // not-a-PNG rather than claiming success.
+            return .notPNG(source: icon, placeholder: false)
+        }
+        let groupDir = WindowsIcon.groupIconDirectory(
+            pngByteCount: pngData.count, width: width, height: height, iconID: WindowsIcon.groupID
+        )
+        do {
+            try WindowsIcon.embed(
+                pngData: pngData, groupDirectory: groupDir, iconID: WindowsIcon.groupID, into: exe
+            )
+            return .bundled(source: icon, detail: "\(width)×\(height)")
+        } catch {
+            return .toolFailed(source: icon, reason: "\(error)")
+        }
+    }
+
     // MARK: - WebView2 Evergreen Bootstrapper
 
     /// `MicrosoftEdgeWebview2Setup.exe` is the official Evergreen
@@ -487,15 +530,25 @@ struct WindowsBundler {
         // caller provided an icon, copy it; otherwise emit a 1x1
         // placeholder PNG so makeappx doesn't reject the manifest.
         let logoPath = stagingDir.appendingPathComponent("Square150x150Logo.png")
+        let iconOutcome: IconOutcome
         if let icon = manifest.icon {
             let src = projectRoot.appendingPathComponent(icon)
-            if FileManager.default.fileExists(atPath: src.path) {
+            let isPNG = src.pathExtension.lowercased() == "png"
+            if isPNG, FileManager.default.fileExists(atPath: src.path) {
                 try FileManager.default.copyItem(at: src, to: logoPath)
+                iconOutcome = .bundled(source: icon, detail: nil)
+            } else {
+                iconOutcome = isPNG
+                    ? .notFound(source: icon, placeholder: true)
+                    : .notPNG(source: icon, placeholder: true)
             }
+        } else {
+            iconOutcome = .noneSet
         }
         if !FileManager.default.fileExists(atPath: logoPath.path) {
             try Data(placeholderPNG).write(to: logoPath)
         }
+        IconOutcome.report(iconOutcome)
 
         let msixURL = outputDir.appendingPathComponent("\(manifest.name).msix")
         if FileManager.default.fileExists(atPath: msixURL.path) {

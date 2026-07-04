@@ -174,7 +174,8 @@ struct IPABundler {
         // `actool` (which generates every size + the Assets.car). Returns
         // the CFBundleIcons* keys actool emits, which we merge into the
         // Info.plist we write ourselves.
-        let iconPlistKeys = await compileAppIcon(into: app)
+        let (iconPlistKeys, iconOutcome) = await compileAppIcon(into: app)
+        IconOutcome.report(iconOutcome)
 
         var plist = InfoPlistGenerator.iOS(
             manifest: manifest,
@@ -239,13 +240,16 @@ struct IPABundler {
     /// 1024 icon is the modern (Xcode 14+) single-size app-icon form.
     /// Skips quietly (no icon, not a failed build) if the icon is missing /
     /// not a PNG / `actool` errors.
-    private func compileAppIcon(into app: URL) async -> [String: Any] {
-        guard let iconPath = manifest.icon else { return [:] }
+    private func compileAppIcon(into app: URL) async -> (keys: [String: Any], outcome: IconOutcome) {
+        guard let iconPath = manifest.icon else { return ([:], .noneSet) }
         let iconURL = projectRoot.appendingPathComponent(iconPath)
         let fm = FileManager.default
-        guard fm.fileExists(atPath: iconURL.path),
-              iconURL.pathExtension.lowercased() == "png"
-        else { return [:] }
+        guard fm.fileExists(atPath: iconURL.path) else {
+            return ([:], .notFound(source: iconPath, placeholder: false))
+        }
+        guard iconURL.pathExtension.lowercased() == "png" else {
+            return ([:], .notPNG(source: iconPath, placeholder: false))
+        }
 
         let tmp = fm.temporaryDirectory.appendingPathComponent("swift-pwa-appicon-\(UUID().uuidString)")
         let assets = tmp.appendingPathComponent("Assets.xcassets")
@@ -271,12 +275,12 @@ struct IPABundler {
             if let data = try? Data(contentsOf: partial),
                let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
             {
-                return dict
+                return (dict, .bundled(source: iconPath, detail: nil))
             }
+            return ([:], .bundled(source: iconPath, detail: nil))
         } catch {
-            print("note: app icon generation skipped (\(error)). The build is otherwise fine.")
+            return ([:], .toolFailed(source: iconPath, reason: "actool unavailable"))
         }
-        return [:]
     }
 
     /// Asset-catalog manifest for a single 1024×1024 universal iOS app

@@ -339,7 +339,8 @@ swift run swift-pwa build --target windows --package-format msix --sign <thumbpr
 
 The bundler stages the EXE, web bundle, a generated `AppxManifest.xml`,
 and a `Square150x150Logo.png` (taken from `pwa.json`'s `icon` if
-provided, otherwise a 1×1 placeholder), then drives `makeappx.exe pack`
+provided, otherwise a 1×1 placeholder — the build prints a one-line
+icon summary either way), then drives `makeappx.exe pack`
 and — if `--sign` is supplied — `signtool.exe sign`. Both binaries
 ship with the Windows SDK; no extra install needed once you've launched
 the VS Developer Shell. `--arch` is one of `x64` (default), `x86`, or
@@ -569,12 +570,17 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 
 ## Known limitations (Windows-specific)
 
-- **The portable `.exe` has no embedded icon.** `pwa.json`'s `icon`
-  becomes the MSIX tile (`Square150x150Logo.png`), but the portable
-  bundle's `.exe` still shows the default Windows icon in Explorer /
-  the taskbar — embedding a generated `.ico` into the PE is queued
-  (roadmap). macOS / iOS / Linux / Android all turn that one PNG into a
-  real app icon today.
+- **The portable `.exe` icon is a single source image, not a multi-size
+  set (yet).** `pwa.json`'s `icon` is now embedded into the portable
+  `.exe` — it shows in Explorer / the taskbar / Alt-Tab — by injecting an
+  `RT_GROUP_ICON` / `RT_ICON` resource into the linked PE via the Win32
+  `UpdateResource` API (the same post-link resource editing the bundler
+  does for the Common Controls manifest, so no extra tool is needed). The
+  first cut embeds the single source PNG and lets the shell downscale it
+  for the 16/32/48 px slots; a WIC-based resize to ship pixel-crisp small
+  sizes is a follow-up. A missing / non-PNG icon leaves the default
+  Windows icon and never fails the build (reported in the build's one-line
+  icon summary).
 - **Action Center persistence requires a Start-menu shortcut.** The
   runtime sets a stable AppUserModelID at process start
   (`SwiftPWA.<exe-stem>`) which is enough for toasts to *show*, but

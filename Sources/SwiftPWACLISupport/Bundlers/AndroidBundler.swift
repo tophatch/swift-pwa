@@ -137,7 +137,9 @@ struct AndroidBundler {
         // Launcher icon: drop the source PNG into res/mipmap/ic_launcher.png
         // and reference it from the manifest. aapt/Gradle scale it per
         // density at build time, so a single PNG is enough — no pre-resize.
-        let iconStaged = try stageLauncherIcon(into: main)
+        let iconOutcome = try stageLauncherIcon(into: main)
+        IconOutcome.report(iconOutcome)
+        let iconStaged = if case .bundled = iconOutcome { true } else { false }
 
         try AndroidTemplates.androidManifestXml(
             packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil
@@ -279,12 +281,15 @@ struct AndroidBundler {
     /// Returns whether an icon was staged (drives the manifest's
     /// `android:icon` attribute). Best-effort: a missing or non-PNG icon
     /// just yields the platform-default launcher icon, same as before.
-    private func stageLauncherIcon(into main: URL) throws -> Bool {
-        guard let icon = manifest.icon else { return false }
+    private func stageLauncherIcon(into main: URL) throws -> IconOutcome {
+        guard let icon = manifest.icon else { return .noneSet }
         let src = projectRoot.appendingPathComponent(icon)
-        guard src.pathExtension.lowercased() == "png",
-              FileManager.default.fileExists(atPath: src.path)
-        else { return false }
+        guard src.pathExtension.lowercased() == "png" else {
+            return .notPNG(source: icon, placeholder: false)
+        }
+        guard FileManager.default.fileExists(atPath: src.path) else {
+            return .notFound(source: icon, placeholder: false)
+        }
         let mipmap = main.appendingPathComponent("res/mipmap")
         try FileManager.default.createDirectory(at: mipmap, withIntermediateDirectories: true)
         let dst = mipmap.appendingPathComponent("ic_launcher.png")
@@ -292,7 +297,7 @@ struct AndroidBundler {
             try FileManager.default.removeItem(at: dst)
         }
         try FileManager.default.copyItem(at: src, to: dst)
-        return true
+        return .bundled(source: icon, detail: nil)
     }
 
     private func stageJniLibs(into appModule: URL, soBaseName: String) async throws {

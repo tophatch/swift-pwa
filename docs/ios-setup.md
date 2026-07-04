@@ -329,7 +329,9 @@ must be HTTPS — iOS rejects http manifests outright.
   `LaunchScreen.storyboard` with the icon centered on a black background
   (compiled via `ibtool`). App-icon generation is best-effort: if the
   icon is missing / not a PNG, or `actool` can't run, the build falls
-  back to the system default rather than failing. Alternate-icon support
+  back to the system default rather than failing — the build prints a
+  one-line icon summary either way (`swift-pwa: app icon ← icon.png`, or
+  the fallback reason). Alternate-icon support
   and dark/tinted icon variants are still queued. To customize the
   launch screen beyond "icon on black", drop your own compiled
   `LaunchScreen.storyboardc` into `<App>.app/` after the build for now.

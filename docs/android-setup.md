@@ -114,7 +114,9 @@ When `pwa.json`'s `icon` is a PNG, the bundler copies it to
 `res/mipmap/ic_launcher.png` and wires `android:icon="@mipmap/ic_launcher"`
 into the manifest; aapt/Gradle scale it per density at build time (a
 single source PNG is enough). Without an icon, the platform default
-launcher icon is used.
+launcher icon is used. The build prints a one-line icon summary either
+way (`swift-pwa: app icon ← icon.png`, or the fallback reason — no icon
+set / not a PNG / file missing).
 
 ## 3. Building your app's `.so`
 

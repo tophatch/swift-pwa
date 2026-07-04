@@ -70,16 +70,8 @@ struct MacAppBundler {
             try FileManager.default.copyItem(at: webSrc, to: webDst)
         }
 
-        // 5. Icon (best-effort: skip silently if tools missing).
-        if let icon = manifest.icon {
-            let iconURL = projectRoot.appendingPathComponent(icon)
-            if FileManager.default.fileExists(atPath: iconURL.path) {
-                try? await IconConverter.makeICNS(
-                    from: iconURL,
-                    into: resourcesDir.appendingPathComponent("AppIcon.icns")
-                )
-            }
-        }
+        // 5. Icon (best-effort: a missing tool or file never fails the build).
+        await IconOutcome.report(bundleIcon(into: resourcesDir))
 
         // 6. Credits.html for the standard About panel — shown below
         // the version + copyright. AppKit picks this up automatically.
@@ -114,6 +106,30 @@ struct MacAppBundler {
         }
 
         return app
+    }
+
+    /// Convert `manifest.icon` (a PNG) into `AppIcon.icns` via
+    /// `sips`/`iconutil`. Best-effort: reports (never throws) so a missing
+    /// tool or file leaves the app with the system default rather than
+    /// failing the build.
+    private func bundleIcon(into resourcesDir: URL) async -> IconOutcome {
+        guard let icon = manifest.icon else { return .noneSet }
+        let iconURL = projectRoot.appendingPathComponent(icon)
+        guard FileManager.default.fileExists(atPath: iconURL.path) else {
+            return .notFound(source: icon, placeholder: false)
+        }
+        guard iconURL.pathExtension.lowercased() == "png" else {
+            return .notPNG(source: icon, placeholder: false)
+        }
+        do {
+            let sizes = try await IconConverter.makeICNS(
+                from: iconURL,
+                into: resourcesDir.appendingPathComponent("AppIcon.icns")
+            )
+            return .bundled(source: icon, detail: "\(sizes) sizes")
+        } catch {
+            return .toolFailed(source: icon, reason: "sips/iconutil unavailable")
+        }
     }
 
     /// Submit the signed `.app` to Apple's notary service and staple the

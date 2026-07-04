@@ -307,26 +307,53 @@ top-level keys. The CLI flag `--android-abis` overrides
 
 ### `window.background_color`
 
-Setting the top-level `window.background_color` (hex, e.g. `"#F4F7F5"`)
-makes the Android build paint its native surface to match before the
-page's first paint — the same option honoured on every other backend.
-On Android it drives three things, generated only when the field is set
-(omit it to keep the stock light theme):
+Setting the top-level `window.background_color` makes the Android build
+paint its native surface to match before the page's first paint — the
+same option honoured on every other backend. It accepts either a single
+hex string (`"#F4F7F5"`, used for both light and dark) or a light/dark
+pair:
 
-- **Launch window** — the bundler emits `res/values/swift_pwa_theme.xml`
-  with a `Theme.SwiftPWA` (descended from
-  `Theme.AppCompat.Light.NoActionBar`) whose `android:windowBackground`
-  is the configured colour, and points the manifest's `<application>` at
-  it. This removes the white flash between launch and the WebView's
-  first paint.
+```json
+"window": { "background_color": { "light": "#F4F4F2", "dark": "#0C0D0E" } }
+```
+
+On Android it drives three things, generated only when the field is set
+(omit it to keep the stock theme):
+
+- **Launch window (DayNight)** — the bundler emits a `Theme.SwiftPWA`
+  descended from **`Theme.AppCompat.DayNight.NoActionBar`** whose
+  `android:windowBackground` is the configured colour, and points the
+  manifest's `<application>` at it. It writes the theme **twice**:
+  `res/values/swift_pwa_theme.xml` with the light colour and
+  `res/values-night/swift_pwa_theme.xml` with the dark colour, so Android
+  resolves the right one per system setting. A single-string colour writes
+  the same value to both. This removes the white flash between launch and
+  the WebView's first paint.
+
+  The DayNight parent matters beyond the launch colour: `MainActivity` is
+  an `AppCompatActivity`, and inflating a `*.Light.*` theme pins its
+  context to light `uiMode` — which the `WebView` inherits, so
+  **`prefers-color-scheme: dark` never matched inside the page** regardless
+  of the device setting (the v0.7.5–0.7.7 behaviour). With the DayNight
+  parent the WebView tracks the system theme, and toggling it at runtime
+  updates the page's media queries live.
 - **System bars** — `android:statusBarColor` and
-  `android:navigationBarColor` are set to the same colour, and
+  `android:navigationBarColor` are set to the mode's colour, and
   `android:windowLightStatusBar` / `windowLightNavigationBar` are chosen
-  from the colour's relative luminance (dark glyphs on a light fill,
-  light glyphs on a dark one) so the bar icons stay legible.
+  per mode from the colour's relative luminance (dark glyphs on a light
+  fill, light glyphs on a dark one) so the bar icons stay legible.
 - **WebView surface** — the generated `MainActivity` calls
   `webView.setBackgroundColor(...)`, covering the gap between view
-  inflation and the page's first paint.
+  inflation and the page's first paint. For a light/dark pair this
+  branches on the active night mode (`UI_MODE_NIGHT_MASK`) so a dark-mode
+  user gets the dark pre-paint colour, not a light flash.
+
+The other backends (macOS / iOS / Linux / Windows) aren't system-theme-
+aware at runtime yet, so they paint a **single** launch colour; given a
+pair they use its **dark** value (a dark pre-paint flash is preferable to
+blinding a dark-mode user with the light colour). Device-verified on a
+Galaxy Tab S10+: `prefers-color-scheme` reports `dark` in night mode and
+`light` otherwise, tracking the system toggle.
 
 ## 6. Architecture notes
 

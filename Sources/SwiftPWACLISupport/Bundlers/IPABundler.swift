@@ -319,7 +319,10 @@ struct IPABundler {
             defer { try? fm.removeItem(at: tmp) }
 
             let sbInput = tmp.appendingPathComponent("LaunchScreen.storyboard")
-            let background = manifest.window.backgroundColor.flatMap(RGBColor.init(hex:))
+            // A launch screen is a single static image — iOS can't swap it by
+            // appearance — so resolve a light/dark pair to its dark value (a
+            // dark flash beats a blinding light one at night).
+            let background = manifest.window.backgroundColor.map(\.dark).flatMap(RGBColor.init(hex:))
             try Self.launchStoryboardXML(background: background)
                 .write(to: sbInput, atomically: true, encoding: .utf8)
             let sbOutput = app.appendingPathComponent("LaunchScreen.storyboardc")

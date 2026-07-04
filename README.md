@@ -176,7 +176,7 @@ swift run swift-pwa build          # --target defaults to the host (macos/linux/
 open ./build/MyApp.app
 ```
 
-`swift-pwa doctor [--target <platform>]` reports, with a copy-paste fix for each gap, whether the tools a target needs are installed (Xcode for iOS, `linuxdeploy` for AppImages, the Android NDK, etc.) — so a missing prerequisite is a friendly message up front rather than a cryptic mid-build failure.
+`swift-pwa doctor [--target <platform>]` reports, with a copy-paste fix for each gap, whether the tools a target needs are installed (Xcode for iOS, `linuxdeploy` for AppImages, the Android NDK, etc.) — so a missing prerequisite is a friendly message up front rather than a cryptic mid-build failure. `swift-pwa build` also runs these required-tool checks as a quiet preflight: it stays silent on a healthy machine and, only if something's missing, prints one line pointing you at `doctor` before the compile starts.
 
 `--target` defaults to the desktop platform you're building on, so you can omit it for a host build; pass it explicitly for cross-targets (`--target ios`, `--target android`) or to bundle for another desktop OS.
 
@@ -304,7 +304,7 @@ Next up, in priority order:
 6. **Delta updates** — ship binary diffs instead of full artifacts to cut update download size. Builds on (1); extend the publishing CLI to emit per-version patches and the runtime to apply them.
 7. **Mandatory-update kill-switch (`min_supported_version`)** — let a manifest force-upgrade clients below a floor. Called out as a known gap in [docs/auto-updates.md](docs/auto-updates.md); also builds on (1).
 8. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
-9. **Windows `.exe` icon** — embed an `.ico` generated from the `pwa.json` icon (the one platform the icon pipeline doesn't yet cover).
+9. **Crisp multi-size Windows `.exe` icon** — the portable `.exe` now embeds the `pwa.json` icon (via `UpdateResource`), but as a single source image the shell downscales; a WIC resize to ship dedicated 16/32/48/256 px slots would sharpen the small sizes.
 10. **Built-in live reload on Windows** — the `swift-pwa dev` server is POSIX-only today (macOS / Linux); Windows still needs `--server <url>`.
 11. **Homebrew tap** — `brew install tophatch/tap/swift-pwa` as the idiomatic macOS / Linux install + upgrade story. `swift-pwa self-update` already covers the no-brew and Windows cases.
 

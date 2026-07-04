@@ -276,8 +276,10 @@ remain:
   GTK4's `notify::is-active` / `notify::fullscreened` / `notify::minimized`,
   the same way the resize signals are hooked.
 - **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
-  absent or non-PNG, the bundler embeds a 1×1 transparent placeholder
-  so `linuxdeploy` doesn't hang on its prompt path.
+  absent or non-PNG, the bundler embeds a transparent placeholder
+  so `linuxdeploy` doesn't hang on its prompt path. The build prints a
+  one-line icon summary (`swift-pwa: app icon ← icon.png`, or the
+  fallback reason) so a placeholder substitution isn't silent.
 - **On-device llama.cpp is x86_64-only on Linux.** The prebuilt
   `libllama.a` (see §7) is published for x86_64; arm64 Linux isn't built
   yet, so `ai.local_llama` on a `--target linux` build from an aarch64

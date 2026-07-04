@@ -193,6 +193,7 @@ struct Build: AsyncParsableCommand {
         let pwa = try PWAManifest.load(from: manifestURL)
 
         try Self.preflight(manifest: pwa, projectRoot: cwd)
+        await Self.reportToolGaps(target: target, crossCompileAndroid: crossCompileAndroid)
 
         try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
         Self.applyGeminiNanoGate(manifest: pwa, target: target)
@@ -556,6 +557,26 @@ struct Build: AsyncParsableCommand {
                 """
             )
         }
+    }
+
+    /// Quiet toolchain preflight: reuse `doctor`'s required-tool checks and,
+    /// if any are missing, print one concise heads-up pointing at `doctor`
+    /// for the fixes — then continue (a probe false-negative shouldn't block
+    /// a build; the bundler surfaces the real error if the tool is truly
+    /// absent). Says nothing on a healthy machine, so it adds no noise to the
+    /// common case.
+    ///
+    /// Android is skipped unless `--cross-compile-android` is set: a plain
+    /// `build --target android` only emits the Gradle scaffold, so its
+    /// heavier prerequisites (NDK, Swift Android SDK, JDK-for-Gradle) aren't
+    /// needed yet and flagging them would be a false alarm.
+    static func reportToolGaps(target: BuildTarget, crossCompileAndroid: Bool) async {
+        if target == .android, !crossCompileAndroid { return }
+        let gaps = await Doctor.requiredToolGaps(for: target)
+        guard !gaps.isEmpty else { return }
+        let names = gaps.map(\.label).joined(separator: ", ")
+        print("swift-pwa: missing required tool(s) for \(target.rawValue): \(names).")
+        print("           Run `swift-pwa doctor --target \(target.rawValue)` for the fixes.")
     }
 
     /// swift-pwa-level checks that run before any bundler shells out to

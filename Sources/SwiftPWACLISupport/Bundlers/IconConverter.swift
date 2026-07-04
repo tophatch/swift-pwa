@@ -4,7 +4,10 @@ import Foundation
 /// containers. Best-effort: silently no-ops if the host doesn't have
 /// the required tools (`sips`/`iconutil` on macOS, `convert` on Linux).
 enum IconConverter {
-    static func makeICNS(from png: URL, into icns: URL) async throws {
+    /// Builds the `.icns` and returns how many distinct icon sizes it
+    /// rendered from the source PNG (for the build's one-line icon report).
+    @discardableResult
+    static func makeICNS(from png: URL, into icns: URL) async throws -> Int {
         // macOS-only path: build an .iconset and run iconutil.
         let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("swift-pwa-iconset-\(UUID().uuidString).iconset")
@@ -25,5 +28,6 @@ enum IconConverter {
             }
         }
         try await Shell.run("/usr/bin/env", ["iconutil", "-c", "icns", tmp.path, "-o", icns.path])
+        return sizes.count
     }
 }

@@ -58,22 +58,25 @@ struct AppImageBundler {
         // linuxdeploy doesn't fail with `Could not find icon executable`
         // and hang on its retry/prompt path.
         let iconDst = appDir.appendingPathComponent("\(exeName).png")
+        let iconOutcome: IconOutcome
         if let icon = manifest.icon {
             let src = projectRoot.appendingPathComponent(icon)
             let isPNG = src.pathExtension.lowercased() == "png"
-            if isPNG, FileManager.default.fileExists(atPath: src.path) {
+            let exists = FileManager.default.fileExists(atPath: src.path)
+            if isPNG, exists {
                 try FileManager.default.copyItem(at: src, to: iconDst)
+                iconOutcome = .bundled(source: icon, detail: nil)
             } else {
                 try writePlaceholderIcon(to: iconDst)
-                if !isPNG {
-                    print(
-                        "note: pwa.json `icon` is not a PNG; using placeholder. Convert to PNG to bundle a real icon."
-                    )
-                }
+                iconOutcome = isPNG
+                    ? .notFound(source: icon, placeholder: true)
+                    : .notPNG(source: icon, placeholder: true)
             }
         } else {
             try writePlaceholderIcon(to: iconDst)
+            iconOutcome = .noneSet
         }
+        IconOutcome.report(iconOutcome)
 
         // .desktop
         let desktop = """

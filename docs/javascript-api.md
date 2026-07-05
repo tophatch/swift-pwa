@@ -130,8 +130,12 @@ goes through the `info_plist` passthrough (see [macos-setup.md](macos-setup.md))
 Platform coverage: **macOS** (`application(_:open:)`) and **iOS**
 (`scene(_:openURLContexts:)`, including cold-launch) via Launch Services;
 **Linux** and **Windows** via the launch file-argument convention (`.desktop`
-`Exec=… %F` / file-association argv). **Android** `VIEW`/`SEND` intents are not
-wired to this channel yet.
+`Exec=… %F` / file-association argv); and **Android** via `ACTION_VIEW` /
+`ACTION_SEND` intents (declare the handled MIME types with
+[`android.document_types`](android-setup.md#file-associations-androiddocument_types),
+which generates the intent-filters). On Android `paths` are `content://` URIs —
+read them with `fs.readBinary` the same way; the URI's read grant is held for
+the launching activity's lifetime.
 
 ### `clipboard.*`
 

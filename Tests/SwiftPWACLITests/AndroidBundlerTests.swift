@@ -103,6 +103,36 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("if (swiftPwaNightMode) \"#0C0D0E\" else \"#F4F4F2\""))
     }
 
+    @Test("document_types generate VIEW + SEND intent-filters; absent leaves only LAUNCHER")
+    func documentTypeIntentFilters() {
+        // No document types → only the MAIN/LAUNCHER filter, no VIEW/SEND.
+        let plain = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.hi", label: "Hi", hasIcon: false
+        )
+        #expect(plain.contains("android.intent.action.MAIN"))
+        #expect(!plain.contains("android.intent.action.VIEW"))
+        #expect(!plain.contains("android.intent.action.SEND"))
+
+        // Declared types → an ACTION_VIEW filter and an ACTION_SEND /
+        // SEND_MULTIPLE filter, each with a <data> line per (de-duped) MIME
+        // type; the LAUNCHER filter is still present.
+        let withTypes = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.hi", label: "Hi", hasIcon: false,
+            documentTypes: [
+                .init(mimeTypes: ["image/png", "image/jpeg"]),
+                .init(mimeTypes: ["image/png"]) // dup collapses
+            ]
+        )
+        #expect(withTypes.contains("android.intent.category.LAUNCHER"))
+        #expect(withTypes.contains("<action android:name=\"android.intent.action.VIEW\"/>"))
+        #expect(withTypes.contains("<action android:name=\"android.intent.action.SEND\"/>"))
+        #expect(withTypes.contains("<action android:name=\"android.intent.action.SEND_MULTIPLE\"/>"))
+        #expect(withTypes.contains("<data android:mimeType=\"image/png\"/>"))
+        #expect(withTypes.contains("<data android:mimeType=\"image/jpeg\"/>"))
+        // image/png appears once per filter (deduped) → twice total (VIEW + SEND).
+        #expect(withTypes.components(separatedBy: "android:mimeType=\"image/png\"").count - 1 == 2)
+    }
+
     @Test("swiftVersion(fromSDKBundleID:) parses the SDK's Swift major.minor")
     func androidSDKVersionParse() {
         // The cross-compile wraps the inner build in `swiftly run +<ver>` using

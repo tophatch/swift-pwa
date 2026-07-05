@@ -76,6 +76,21 @@
                 AndroidAppContext.shared.completeRun(exitCode: Int32(exitCode))
             }, nil)
 
+            // OS "Open with" / share-sheet: `MainActivity` reads the
+            // launch/new intent's file URI(s) and pushes them on the
+            // `app.openFile` channel; re-emit them on the event bus
+            // (retained) so JS receives them via `on('app.openFile', …)`
+            // even when a file *cold-launched* the app. Registered before
+            // the host-event handler is installed below so the C-shim's
+            // pre-handler buffer flush (of an `onCreate`-time push) finds
+            // this subscriber. On Android the paths are `content://` URIs,
+            // read via the `fs.*` content-URI methods.
+            AndroidHostEventRouter.subscribe(channel: OpenFile.channel) { data in
+                struct Payload: Decodable { let paths: [String] }
+                guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
+                OpenFile.emit(payload.paths, on: context.events)
+            }
+
             // Host events: Kotlin-side asynchronous pushes that don't
             // fit the JS bridge envelope or the RPC request/response
             // shape — `BroadcastReceiver` payloads, lifecycle hooks,

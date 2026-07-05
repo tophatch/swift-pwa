@@ -33,6 +33,7 @@
 
 #include <jni.h>
 #include <android/log.h>
+#include <pthread.h>
 
 #define LOG_TAG "swift-pwa"
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO,  LOG_TAG, __VA_ARGS__)
@@ -77,6 +78,20 @@ static swiftpwa_android_main_fn g_main_fn = NULL;
 // Host event channel (Kotlin -> Swift, no reply) registered by Swift.
 static swiftpwa_android_host_event_fn g_host_event_fn = NULL;
 static void *g_host_event_user = NULL;
+
+// Small buffer for host events that arrive *before* Swift installs the
+// handler. The handler is registered inside `swiftPwaMain` on a worker
+// thread, but a launch intent (e.g. "Open with") is pushed from
+// `MainActivity.onCreate` on the UI thread first — without buffering, that
+// event is dropped and the file that launched the app never reaches JS.
+// Guarded by a dedicated mutex (the only sync primitive in this shim,
+// justified because dispatch and handler-install run on different threads).
+// Capacity is tiny on purpose: launch delivers one event; overflow is
+// dropped rather than grown unboundedly.
+#define SWIFTPWA_HOST_EVENT_BUF_MAX 16
+static char *g_host_event_pending[SWIFTPWA_HOST_EVENT_BUF_MAX];
+static int g_host_event_pending_n = 0;
+static pthread_mutex_t g_host_event_mu = PTHREAD_MUTEX_INITIALIZER;
 
 // ---------------------------------------------------------------------
 // Helpers
@@ -531,14 +546,47 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeRpcDone(JNIEnv *env,
 
 void swiftpwa_android_set_host_event_handler(swiftpwa_android_host_event_fn handler,
                                              void *user) {
+    // Install the handler and drain anything that arrived before it existed,
+    // preserving arrival order. Copy the pending list out under the lock, then
+    // invoke the handler outside it (the handler routes into Swift, which may
+    // re-enter this shim — never call it while holding our mutex).
+    char *drain[SWIFTPWA_HOST_EVENT_BUF_MAX];
+    int n = 0;
+    pthread_mutex_lock(&g_host_event_mu);
     g_host_event_fn = handler;
     g_host_event_user = user;
+    if (handler) {
+        n = g_host_event_pending_n;
+        for (int i = 0; i < n; i++) {
+            drain[i] = g_host_event_pending[i];
+            g_host_event_pending[i] = NULL;
+        }
+        g_host_event_pending_n = 0;
+    }
+    pthread_mutex_unlock(&g_host_event_mu);
+    for (int i = 0; i < n; i++) {
+        handler(drain[i], user);
+        free(drain[i]);
+    }
 }
 
 void swiftpwa_android_dispatch_host_event(const char *json_utf8) {
-    if (g_host_event_fn && json_utf8) {
-        g_host_event_fn(json_utf8, g_host_event_user);
+    if (!json_utf8) return;
+    pthread_mutex_lock(&g_host_event_mu);
+    swiftpwa_android_host_event_fn fn = g_host_event_fn;
+    void *user = g_host_event_user;
+    if (!fn) {
+        // No handler yet — buffer a copy (dropping on overflow) so a launch
+        // intent isn't lost to the onCreate-vs-swiftPwaMain race.
+        if (g_host_event_pending_n < SWIFTPWA_HOST_EVENT_BUF_MAX) {
+            char *dup = strdup(json_utf8);
+            if (dup) g_host_event_pending[g_host_event_pending_n++] = dup;
+        }
+        pthread_mutex_unlock(&g_host_event_mu);
+        return;
     }
+    pthread_mutex_unlock(&g_host_event_mu);
+    fn(json_utf8, user);
 }
 
 // JNI entry: Kotlin's `SwiftPWABridge.nativeHostEvent(String json)`

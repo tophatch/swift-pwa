@@ -290,13 +290,27 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// human-readable `versionName` comes from the top-level
         /// `version`.
         public var versionCode: Int?
+        /// File types this app opens, used to generate `ACTION_VIEW` /
+        /// `ACTION_SEND` intent-filters on the launcher activity so the app
+        /// appears in Android's "Open with" / share sheet. The Android
+        /// counterpart to Apple's `CFBundleDocumentTypes` (declared there via
+        /// the `ios`/`macos` `info_plist` passthrough). When a user opens a
+        /// matching file, its `content://` URI is delivered to JS on the
+        /// `app.openFile` event channel (read it with `fs.readBinary`). Unset
+        /// → no association (the app only opens from the launcher).
+        ///
+        /// ```json
+        /// "android": { "document_types": [{ "mime_types": ["image/png", "image/jpeg"] }] }
+        /// ```
+        public var documentTypes: [DocumentType]?
         public init(
             packageId: String? = nil,
             minSdk: Int? = nil,
             targetSdk: Int? = nil,
             abis: [String]? = nil,
             versionCode: Int? = nil,
-            signing: AndroidSigningSection? = nil
+            signing: AndroidSigningSection? = nil,
+            documentTypes: [DocumentType]? = nil
         ) {
             self.packageId = packageId
             self.minSdk = minSdk
@@ -304,6 +318,16 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.abis = abis
             self.versionCode = versionCode
             self.signing = signing
+            self.documentTypes = documentTypes
+        }
+
+        /// One `android.document_types` entry: a set of MIME types the app
+        /// handles (`"image/png"`, `"application/pdf"`, `"image/*"`). Each
+        /// becomes `<data android:mimeType="…"/>` in the generated
+        /// intent-filters.
+        public struct DocumentType: Codable, Sendable, Equatable {
+            public var mimeTypes: [String]
+            public init(mimeTypes: [String]) { self.mimeTypes = mimeTypes }
         }
 
         /// Release signing configuration. When set, the generated

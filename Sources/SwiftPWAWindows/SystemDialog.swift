@@ -38,6 +38,15 @@
             try await MainThread.run { [self] in try openDirectoryOnMain(args, parent: parent) }
         }
 
+        public func exportFile(_ args: DialogExportFileArgs, parent: WindowID?) async throws -> String? {
+            // Resolve bytes first so bad input fails before the dialog.
+            let data = try args.resolveData()
+            guard let dest = try await MainThread.run({ [self] in try exportFileChooseOnMain(args, parent: parent) })
+            else { return nil }
+            try data.write(to: URL(fileURLWithPath: dest))
+            return dest
+        }
+
         // MARK: - Main-thread bodies
 
         @MainActor
@@ -138,6 +147,36 @@
                             swiftpwa_dialog_free_path(path)
                             return str
                         }
+                    }
+                }
+            }
+        }
+
+        @MainActor
+        private func exportFileChooseOnMain(_ args: DialogExportFileArgs, parent: WindowID?) throws -> String? {
+            let owner = lookupParent(parent)
+            return try withFilters(args.filters ?? []) { n, specs in
+                try (args.title ?? "").withCString(encodedAs: UTF16.self) { titleW in
+                    try args.suggestedName.withCString(encodedAs: UTF16.self) { nameW in
+                        var path: UnsafeMutablePointer<CChar>?
+                        let rc = swiftpwa_dialog_save_file(
+                            UnsafeMutableRawPointer(owner),
+                            args.title == nil ? nil : titleW,
+                            nil,
+                            nameW,
+                            n, specs,
+                            &path
+                        )
+                        if rc < 0 {
+                            throw BridgeError(
+                                code: BridgeError.handler,
+                                message: "export-file dialog failed"
+                            )
+                        }
+                        guard rc > 0, let path else { return nil }
+                        let str = String(cString: path)
+                        swiftpwa_dialog_free_path(path)
+                        return str
                     }
                 }
             }

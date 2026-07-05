@@ -36,12 +36,26 @@ public protocol Dialog: AnyObject, Sendable {
     /// or `nil` when the user cancels.
     ///
     /// **iOS:** returns `nil` and logs a one-shot stderr warning. iOS
-    /// has no system save panel — apps export through
-    /// `UIDocumentPickerViewController(forExporting:)` (which takes an
-    /// already-written file URL) or a `UIActivityViewController` share
-    /// sheet, neither of which fits the cross-platform API shape. Use
-    /// the system APIs directly there.
+    /// has no "pick a location, get a writable path back" panel — its
+    /// save model is content-first, which is what `exportFile` is for.
+    /// Use `dialog.exportFile` on iOS (and it works everywhere else too).
     func saveFile(_ args: DialogSaveFileArgs, parent: WindowID?) async throws -> String?
+
+    /// Let the user save app-provided **content** to a location of their
+    /// choosing, and return the destination (a filesystem path on
+    /// desktop, the picked file's path on iOS, a `content://` URI on
+    /// Android) — or `nil` if the user cancels.
+    ///
+    /// This is the *content-first* counterpart to `saveFile`. Where
+    /// `saveFile` returns a destination path the caller then writes to,
+    /// `exportFile` carries the bytes itself (via `path` or `dataBase64`
+    /// on `DialogExportFileArgs`) and the backend does the write. That
+    /// shape is what lets iOS participate at all — its only save
+    /// affordance, `UIDocumentPickerViewController(forExporting:)`, needs
+    /// an already-written file — and it rounds out the dialog surface on
+    /// every other platform: a save panel followed by a write on
+    /// desktop, a SAF create-document followed by a write on Android.
+    func exportFile(_ args: DialogExportFileArgs, parent: WindowID?) async throws -> String?
 
     /// Show the platform's directory-picker dialog. Returns the picked
     /// directory paths (one entry when `multiple` is false / unset) or an
@@ -152,6 +166,40 @@ public struct DialogSaveFileArgs: Sendable, Codable, Equatable {
     }
 }
 
+/// Arguments for `dialog.exportFile`. The content to export is supplied
+/// as **exactly one** of `path` (an on-disk source file the app can
+/// read) or `dataBase64` (inline bytes). `defaultName` seeds the
+/// picker's filename field; `filters` narrows the type where the
+/// platform's save UI supports it.
+public struct DialogExportFileArgs: Sendable, Codable, Equatable {
+    public var title: String?
+    /// Suggested filename shown in the save/export picker (e.g.
+    /// `"report.csv"`). Falls back to the source file's name, then
+    /// `"export"`, when omitted.
+    public var defaultName: String?
+    public var filters: [DialogFileFilter]?
+    /// On-disk source file to export. Mutually exclusive with
+    /// `dataBase64`.
+    public var path: String?
+    /// Inline content to export, base64-encoded. Mutually exclusive with
+    /// `path`.
+    public var dataBase64: String?
+
+    public init(
+        title: String? = nil,
+        defaultName: String? = nil,
+        filters: [DialogFileFilter]? = nil,
+        path: String? = nil,
+        dataBase64: String? = nil
+    ) {
+        self.title = title
+        self.defaultName = defaultName
+        self.filters = filters
+        self.path = path
+        self.dataBase64 = dataBase64
+    }
+}
+
 public struct DialogOpenDirectoryArgs: Sendable, Codable, Equatable {
     public var title: String?
     public var defaultPath: String?
@@ -196,5 +244,80 @@ public struct DialogOpenDirectoryResult: Sendable, Codable, Equatable {
     public init(paths: [String]) {
         self.paths = paths
         path = paths.first
+    }
+}
+
+// MARK: - exportFile content resolution
+
+public extension DialogExportFileArgs {
+    /// Resolve the content to export as raw bytes: reads `path`, or
+    /// decodes `dataBase64`. Throws `E_HANDLER` if neither (or both) is
+    /// provided, or if `dataBase64` isn't valid base64.
+    func resolveData() throws -> Data {
+        switch (path, dataBase64) {
+        case let (source?, nil):
+            return try Data(contentsOf: URL(fileURLWithPath: source))
+        case let (nil, b64?):
+            guard let data = Data(base64Encoded: b64) else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "dialog.exportFile: dataBase64 is not valid base64"
+                )
+            }
+            return data
+        case (nil, nil):
+            throw BridgeError(
+                code: BridgeError.handler,
+                message: "dialog.exportFile: provide exactly one of path / dataBase64 (got neither)"
+            )
+        case (.some, .some):
+            throw BridgeError(
+                code: BridgeError.handler,
+                message: "dialog.exportFile: provide exactly one of path / dataBase64 (got both)"
+            )
+        }
+    }
+
+    /// A safe suggested filename for the destination: `defaultName` if
+    /// set, else the source file's last path component, else `"export"`.
+    var suggestedName: String {
+        if let defaultName, !defaultName.isEmpty { return defaultName }
+        if let path {
+            let base = (path as NSString).lastPathComponent
+            if !base.isEmpty { return base }
+        }
+        return "export"
+    }
+
+    /// Materialize the content into a temporary file (named
+    /// `suggestedName`) and return its URL. For backends whose export
+    /// API takes an already-written source file (iOS `forExporting:`).
+    /// When the content is *already* an on-disk file (`path` set,
+    /// `dataBase64` nil) that file's URL is returned directly — no copy.
+    /// The caller owns cleanup of any temp file created here.
+    func materializeTempFile() throws -> URL {
+        if let path, dataBase64 == nil {
+            return URL(fileURLWithPath: path)
+        }
+        let data = try resolveData()
+        let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swift-pwa-export-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let url = dir.appendingPathComponent(suggestedName)
+        try data.write(to: url)
+        return url
+    }
+}
+
+public extension Dialog {
+    /// Default so a custom `Dialog` conformance that predates
+    /// `exportFile` still compiles. The five shipped backends all
+    /// override this; the default just fails loudly rather than
+    /// silently no-op'ing.
+    func exportFile(_: DialogExportFileArgs, parent _: WindowID?) async throws -> String? {
+        throw BridgeError(
+            code: BridgeError.unimplemented,
+            message: "dialog.exportFile is not implemented by this Dialog"
+        )
     }
 }

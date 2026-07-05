@@ -119,6 +119,35 @@ struct DialogPluginTests {
         #expect(out.path == nil)
     }
 
+    @Test("dialog.exportFile forwards args and returns the destination path")
+    func exportFile() async throws {
+        let (app, dialog) = makeApp()
+        dialog.nextExportFilePath = "/Users/me/Downloads/report.csv"
+        let args = DialogExportFileArgs(defaultName: "report.csv", dataBase64: "aGk=")
+        let inv = try Invocation(id: 1, command: "dialog.exportFile", payload: JSONEncoder().encode(args))
+        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let result = await app.registry.dispatch(ctx)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        let out = try JSONDecoder().decode(DialogPathResult.self, from: data)
+        #expect(out.path == "/Users/me/Downloads/report.csv")
+        #expect(dialog.actions == [.exportFile(args, parent: nil)])
+    }
+
+    @Test("dialog.exportFile cancel surfaces as null")
+    func exportFileCancel() async throws {
+        let (app, _) = makeApp()
+        let inv = Invocation(
+            id: 1,
+            command: "dialog.exportFile",
+            payload: Data(#"{"dataBase64":"aGk="}"#.utf8)
+        )
+        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let result = await app.registry.dispatch(ctx)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        let out = try JSONDecoder().decode(DialogPathResult.self, from: data)
+        #expect(out.path == nil)
+    }
+
     @Test("dialog.openDirectory returns the picked path (with backward-compat `path`)")
     func openDirectory() async throws {
         let (app, dialog) = makeApp()

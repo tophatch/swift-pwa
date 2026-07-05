@@ -89,6 +89,21 @@
             )
         }
 
+        public func exportFile(_ args: DialogExportFileArgs, parent: WindowID?) async throws -> String? {
+            // Resolve bytes first so bad input fails before the chooser.
+            let data = try args.resolveData()
+            guard let dest = try await runFileDialogAsync(
+                action: SWIFTPWA_FILE_DIALOG_SAVE,
+                title: args.title,
+                folder: nil,
+                name: args.suggestedName,
+                filters: args.filters ?? [],
+                parent: parent
+            ).first else { return nil }
+            try data.write(to: URL(fileURLWithPath: dest))
+            return dest
+        }
+
         // MARK: - Alert bridge
 
         /// Suspend until the alert dialog's C callback resumes us.

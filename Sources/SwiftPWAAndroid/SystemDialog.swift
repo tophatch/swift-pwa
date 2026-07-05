@@ -69,5 +69,32 @@
             )
             return result.path.map { [$0] } ?? []
         }
+
+        public func exportFile(_ args: DialogExportFileArgs, parent _: WindowID?) async throws -> String? {
+            // Resolve the content to bytes on this side (reading `path`
+            // or decoding `dataBase64`) and send it inline; the Kotlin
+            // host runs SAF's ACTION_CREATE_DOCUMENT to get a destination
+            // `content://` URI and writes the bytes to it via
+            // ContentResolver, then returns that URI. Resolving here keeps
+            // the Kotlin path uniform (it always writes base64) and means
+            // an unreadable `path` fails before we open a picker.
+            let data = try args.resolveData()
+            let payload = ExportFilePayload(
+                defaultName: args.suggestedName,
+                dataBase64: data.base64EncodedString()
+            )
+            let result: DialogPathResult = try await AndroidRPC.call(
+                "dialog.exportFile", payload
+            )
+            return result.path
+        }
+    }
+
+    /// Wire payload for `dialog.exportFile` → Kotlin: the destination
+    /// filename plus the content, inline. Mirrors `fs.writeContentUri`'s
+    /// base64 convention so the Kotlin host reuses the same write path.
+    private struct ExportFilePayload: Encodable {
+        let defaultName: String
+        let dataBase64: String
     }
 #endif

@@ -18,6 +18,7 @@ public final class MockDialog: Dialog {
         case openFile(DialogOpenFileArgs, parent: WindowID?)
         case saveFile(DialogSaveFileArgs, parent: WindowID?)
         case openDirectory(DialogOpenDirectoryArgs, parent: WindowID?)
+        case exportFile(DialogExportFileArgs, parent: WindowID?)
     }
 
     public private(set) var actions: [Action] = []
@@ -26,6 +27,7 @@ public final class MockDialog: Dialog {
     public var nextOpenFilePaths: [String] = []
     public var nextSaveFilePath: String?
     public var nextOpenDirectoryPaths: [String] = []
+    public var nextExportFilePath: String?
 
     public init() {}
 
@@ -51,5 +53,10 @@ public final class MockDialog: Dialog {
     public func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String] {
         actions.append(.openDirectory(args, parent: parent))
         return nextOpenDirectoryPaths
+    }
+
+    public func exportFile(_ args: DialogExportFileArgs, parent: WindowID?) async throws -> String? {
+        actions.append(.exportFile(args, parent: parent))
+        return nextExportFilePath
     }
 }

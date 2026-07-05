@@ -41,6 +41,15 @@
             try await MainThread.run { [self] in try openDirectoryOnMain(args, parent: parent) }
         }
 
+        public func exportFile(_ args: DialogExportFileArgs, parent: WindowID?) async throws -> String? {
+            // Resolve bytes first so bad input fails before the chooser.
+            let data = try args.resolveData()
+            guard let dest = try await MainThread.run({ [self] in try exportFileChooseOnMain(args, parent: parent) })
+            else { return nil }
+            try data.write(to: URL(fileURLWithPath: dest))
+            return dest
+        }
+
         // MARK: - Main-thread bodies
 
         @MainActor
@@ -102,6 +111,23 @@
                 title: args.title,
                 folder: args.defaultPath,
                 filename: args.defaultName,
+                allowMultiple: false
+            )
+            applyFilters(args.filters ?? [], to: dialog)
+            let resp = swiftpwa_dialog_run(dialog)
+            defer { swiftpwa_widget_destroy(dialog) }
+            guard resp == GTK_RESPONSE_OK.rawValue else { return nil }
+            return takeFilename(dialog)
+        }
+
+        @MainActor
+        private func exportFileChooseOnMain(_ args: DialogExportFileArgs, parent: WindowID?) throws -> String? {
+            let dialog = makeFileChooser(
+                parent: parent,
+                action: SWIFTPWA_FILE_CHOOSER_SAVE,
+                title: args.title,
+                folder: nil,
+                filename: args.suggestedName,
                 allowMultiple: false
             )
             applyFilters(args.filters ?? [], to: dialog)

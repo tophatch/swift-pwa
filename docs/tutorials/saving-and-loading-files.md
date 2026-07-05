@@ -93,7 +93,7 @@ func configure(_ ctx: any AppContext) throws {
 }
 ```
 
-**That's the entire Swift part of this tutorial.** You won't touch Swift again. These two features automatically use the right native pieces on each platform (Mac/iOS panels, Linux choosers, Windows dialogs, Android's file system) — you don't choose; swift-pwa does.
+**That's the entire Swift part of this tutorial.** You won't touch Swift again. These two features automatically use the right native pieces on each platform (Mac panels, Linux choosers, Windows dialogs, Android's file system) — you don't choose; swift-pwa does. (One wrinkle on **iOS**, covered below: the save *dialog* this tutorial uses doesn't exist there, so iOS saves go through `dialog.exportFile` instead — same idea, one call.)
 
 ---
 
@@ -169,6 +169,18 @@ Two ideas worth remembering from this file:
 
 - **A dialog gives you a path; the file feature reads/writes it.** You always pair them: `dialog.saveFile` picks *where*, then `fs.writeText` does the writing. (On locked-down platforms like the Mac App Store, picking the file in a dialog is also what *grants* your app permission to touch it — another reason to always go through the dialog.)
 - **"No shell" and "Cancelled" are different.** No shell (`false`) means fall back to browser behavior. Cancelled (`null`) means the user changed their mind — just do nothing.
+- **On iOS, save through `dialog.exportFile` instead.** iOS has no "pick a location, then write to it" panel, so `dialog.saveFile` returns `null` there. `dialog.exportFile` is the content-first version — you hand it the bytes, it shows the export picker and does the write for you — and it works on every platform, so it's a fine single code path if you ship iOS. Swap the two calls above for one:
+
+  ```js
+  // Portable "save this content" — works on desktop, Android, and iOS.
+  const res = await b.invoke("dialog.exportFile", {
+    title: title || "Export",
+    defaultName: defaultName || "field-notes.json",
+    dataBase64: btoa(contents),        // or: path: "<a file you already wrote>"
+    filters: FILTER,
+  });
+  return (res && res.path) || null;    // destination, or null if cancelled
+  ```
 
 ---
 
@@ -282,7 +294,8 @@ Every call is `await __SWIFT_PWA__.invoke(command, options)`. It returns a Promi
 
 | Command | Options you pass | What you get back |
 |---|---|---|
-| `dialog.saveFile` | `{ title?, defaultName?, defaultPath?, filters? }` | `{ path }` — `path` is `null` if cancelled |
+| `dialog.saveFile` | `{ title?, defaultName?, defaultPath?, filters? }` | `{ path }` — `path` is `null` if cancelled (no-op on iOS — see `exportFile`) |
+| `dialog.exportFile` | `{ title?, defaultName?, filters?, dataBase64? / path? }` | `{ path }` — writes the content to the chosen location; `null` if cancelled. Works on iOS too |
 | `dialog.openFile` | `{ title?, defaultPath?, filters?, multiple? }` | `{ paths }` — empty array if cancelled |
 | `dialog.openDirectory` | `{ title?, defaultPath?, multiple? }` | `{ paths, path }` — `paths` empty (and `path` `null`) if cancelled; `path` is the first selection |
 | `fs.writeText` | `{ path, contents }` | `{}` |

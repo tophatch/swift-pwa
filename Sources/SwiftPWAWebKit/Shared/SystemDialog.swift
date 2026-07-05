@@ -86,6 +86,22 @@
                 return panel.urls.map(\.path)
             }
 
+            public func exportFile(_ args: DialogExportFileArgs, parent _: WindowID?) async throws -> String? {
+                // Resolve the bytes up front so a bad `path`/`dataBase64`
+                // fails before we bother the user with a save panel.
+                let data = try args.resolveData()
+                let panel = NSSavePanel()
+                if let title = args.title { panel.title = title }
+                panel.nameFieldStringValue = args.suggestedName
+                if let filters = args.filters, !filters.isEmpty {
+                    panel.allowedContentTypes = contentTypes(from: filters)
+                }
+                let resp = await runPanel(panel)
+                guard resp == .OK, let url = panel.url else { return nil }
+                try data.write(to: url)
+                return url.path
+            }
+
             // MARK: - NSAlert / panel sheets
 
             /// Run an alert and return the index of the chosen button
@@ -210,13 +226,35 @@
                     savedFileWarned = true
                     FileHandle.standardError.writeQuietly(Data(
                         """
-                        swift-pwa: dialog.saveFile is a no-op on iOS — there is no system save panel. \
-                        Use UIDocumentPickerViewController(forExporting:) or UIActivityViewController.
+                        swift-pwa: dialog.saveFile is a no-op on iOS — there is no "pick a location, \
+                        get a writable path" panel. Use dialog.exportFile instead (content-first; \
+                        presents the system export picker).
                         \n
                         """.utf8
                     ))
                 }
                 return nil
+            }
+
+            public func exportFile(_ args: DialogExportFileArgs, parent _: WindowID?) async throws -> String? {
+                // iOS export is content-first: the picker copies an
+                // already-written file to the user's chosen location.
+                // Materialize the bytes to a temp file (or reuse the
+                // source path), present forExporting:, return the
+                // destination. `resolveData`/`materializeTempFile` throw
+                // on bad input before we present anything.
+                let source = try args.materializeTempFile()
+                // materializeTempFile only creates a temp when the content
+                // was inline (`dataBase64`); when a `path` was given it
+                // returns that URL untouched, so don't delete it.
+                let isTemp = args.path == nil
+                defer {
+                    if isTemp {
+                        try? FileManager.default.removeItem(at: source.deletingLastPathComponent())
+                    }
+                }
+                let picker = UIDocumentPickerViewController(forExporting: [source])
+                return await presentPicker(picker).first
             }
 
             public func openDirectory(_ args: DialogOpenDirectoryArgs, parent _: WindowID?) async throws -> [String] {

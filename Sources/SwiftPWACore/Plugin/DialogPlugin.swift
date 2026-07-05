@@ -62,5 +62,12 @@ public struct DialogPlugin: Plugin {
                 try await DialogOpenDirectoryResult(paths: dialog.openDirectory(args, parent: ctx.originWindow))
             }
         )
+
+        registry.register(
+            "dialog.exportFile",
+            typed: { (args: DialogExportFileArgs, ctx) async throws -> DialogPathResult in
+                try await DialogPathResult(path: dialog.exportFile(args, parent: ctx.originWindow))
+            }
+        )
     }
 }

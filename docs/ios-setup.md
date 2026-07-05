@@ -312,15 +312,20 @@ must be HTTPS — iOS rejects http manifests outright.
   enterprise distribution certificate or an ad-hoc profile that lists
   the device's UDID. A clean `BridgeError` is returned when the
   system declines to open the URL.
-- **`DialogPlugin.saveFile` returns `nil` on iOS.** iOS has no system
-  save panel. Apps that need a save flow should call
-  `UIDocumentPickerViewController(forExporting:)` directly (which takes
-  an already-written file URL) or present a `UIActivityViewController`
-  share sheet. The other dialog commands (`message`, `confirm`,
-  `openFile`, `openDirectory`) all work — `openFile` and
-  `openDirectory` are routed through `UIDocumentPickerViewController`
-  in opening / folder mode. `dialog.saveFile` logs a one-shot
-  stderr warning the first time it is called.
+- **Use `dialog.exportFile` — not `dialog.saveFile` — to save on iOS.**
+  `saveFile` returns a *destination path the caller writes to*, which iOS
+  has no panel for; it returns `nil` (and logs a one-shot stderr warning
+  the first time). `dialog.exportFile` is the content-first primitive
+  that *does* work: pass the bytes (`dataBase64`) or a source file
+  (`path`), and the runtime materializes the content, presents
+  `UIDocumentPickerViewController(forExporting:)`, and returns the
+  location the user chose (or `nil` if cancelled). It's the same command
+  everywhere — desktop and Android implement it too — so a save flow
+  written against `exportFile` is portable. The other dialog commands
+  (`message`, `confirm`, `openFile`, `openDirectory`) all work —
+  `openFile` and `openDirectory` route through
+  `UIDocumentPickerViewController` in opening / folder mode. See
+  [docs/javascript-api.md](javascript-api.md#dialog).
 - **`pwa.json.icon` drives both the home-screen App Icon and the
   launch screen.** From the single 1024×1024 PNG the bundler compiles
   a real `AppIcon` via `actool` (a single "universal" asset — Xcode

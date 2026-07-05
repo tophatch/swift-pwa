@@ -194,8 +194,21 @@ const { paths } = await __SWIFT_PWA__.invoke('dialog.openFile', {
     multiple: false,
 });
 
+// saveFile returns a destination path you then write to yourself
+// (desktop + Android). It's a no-op on iOS — use exportFile there.
 const { path } = await __SWIFT_PWA__.invoke('dialog.saveFile',
     { defaultName: 'report.pdf' });
+
+// exportFile is "save this content" — you hand it the bytes, it lets the
+// user pick a location and writes them for you. Works on every platform,
+// including iOS. Supply exactly one of `dataBase64` or `path`:
+const { path: saved } = await __SWIFT_PWA__.invoke('dialog.exportFile', {
+    defaultName: 'report.csv',
+    dataBase64: btoa('a,b,c\n1,2,3\n'),
+    filters: [{ name: 'CSV', extensions: ['csv'] }],
+});
+// or export a file already on disk (e.g. one you wrote via fs.*):
+// await __SWIFT_PWA__.invoke('dialog.exportFile', { path: '/…/report.csv' });
 
 // Single directory (backward-compatible `path`), or several with `multiple`:
 const { path: dir } = await __SWIFT_PWA__.invoke('dialog.openDirectory');
@@ -209,9 +222,16 @@ const { paths: dirs } = await __SWIFT_PWA__.invoke('dialog.openDirectory',
 the SAF tree picker grants one directory per launch, so at most one path comes
 back.
 
-`dialog.saveFile` is a stub on iOS (the platform has no system save
-panel — apps export through `UIDocumentPickerViewController(forExporting:)`
-or `UIActivityViewController` instead). GTK4 dialogs require GTK 4.10+.
+**`dialog.saveFile` vs `dialog.exportFile`.** `saveFile` returns a *destination
+path you then write to* — natural on desktop and Android, but a no-op on iOS
+(returns `null`), which has no "pick a location, get a writable path" panel.
+`exportFile` is the *content-first* counterpart: you pass the bytes (`dataBase64`)
+or a source file (`path`), the platform's save/export UI lets the user choose a
+location, and the backend does the write — returning the destination
+(a filesystem path on desktop, the picked file's path on iOS, a `content://`
+URI on Android) or `null` if cancelled. `exportFile` is the portable "let the
+user save this" primitive and the **recommended** way to save on iOS. Provide
+exactly one of `dataBase64` / `path`. GTK4 dialogs require GTK 4.10+.
 
 ### `fs.*`
 

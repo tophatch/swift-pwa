@@ -1044,6 +1044,10 @@ enum AndroidTemplates {
         private var pendingSaveFile: ((String) -> Unit)? = null
         private var pendingOpenDirectory: ((String) -> Unit)? = null
         private var pendingNotificationPerm: ((Boolean) -> Unit)? = null
+        // exportFile: the create-document callback plus the bytes to
+        // write into the chosen document once the user picks a location.
+        private var pendingExportFile: ((String?, String?) -> Unit)? = null
+        private var pendingExportBytes: ByteArray? = null
 
         // SAF launchers — registered eagerly on construction (which
         // happens during the Activity's onCreate flow) because the
@@ -1070,6 +1074,40 @@ enum AndroidTemplates {
                 pendingSaveFile = null
                 val result = JSONObject().put("path", uri?.toString()).toString()
                 cb?.invoke(result)
+            }
+
+        // exportFile = create-document + write. Unlike saveFile (which
+        // just hands back the URI), we write the supplied bytes into the
+        // chosen document before resolving, so JS gets a "content saved"
+        // result in one round-trip. The write is I/O, so it runs on the
+        // background executor and reports back through the same callback.
+        private val exportFileLauncher: ActivityResultLauncher<String> =
+            appActivity.registerForActivityResult(
+                ActivityResultContracts.CreateDocument("application/octet-stream")
+            ) { uri ->
+                val cb = pendingExportFile
+                val bytes = pendingExportBytes
+                pendingExportFile = null
+                pendingExportBytes = null
+                if (cb == null) return@registerForActivityResult
+                if (uri == null) {
+                    // User cancelled — null path, no error.
+                    cb(JSONObject().put("path", null as String?).toString(), null)
+                    return@registerForActivityResult
+                }
+                backgroundExecutor.execute {
+                    try {
+                        val out = activity.contentResolver.openOutputStream(uri, "rwt")
+                            ?: run {
+                                cb(null, "swift-pwa: dialog.exportFile: ContentResolver could not open $uri for writing")
+                                return@execute
+                            }
+                        out.use { it.write(bytes ?: ByteArray(0)) }
+                        cb(JSONObject().put("path", uri.toString()).toString(), null)
+                    } catch (t: Throwable) {
+                        cb(null, "swift-pwa: dialog.exportFile failed: ${t.javaClass.simpleName}: ${t.message}")
+                    }
+                }
             }
 
         private val openDirectoryLauncher: ActivityResultLauncher<Uri?> =
@@ -1119,6 +1157,7 @@ enum AndroidTemplates {
                 "dialog.confirm" -> dialogConfirm(json, done)
                 "dialog.openFile" -> dialogOpenFile(json, done)
                 "dialog.saveFile" -> dialogSaveFile(json, done)
+                "dialog.exportFile" -> dialogExportFile(json, done)
                 "dialog.openDirectory" -> dialogOpenDirectory(done)
                 "biometric.canAuthenticate" -> biometricCanAuthenticate(done)
                 "biometric.authenticate" -> biometricAuthenticate(json, done)
@@ -1348,6 +1387,24 @@ enum AndroidTemplates {
                 json.optString("defaultName") else "untitled"
             pendingSaveFile = { result -> done(result, null) }
             saveFileLauncher.launch(name)
+        }
+
+        private fun dialogExportFile(json: JSONObject, done: (String?, String?) -> Unit) {
+            if (pendingExportFile != null) {
+                done(null, "swift-pwa: an exportFile dialog is already in flight")
+                return
+            }
+            val name = if (json.has("defaultName") && !json.isNull("defaultName"))
+                json.optString("defaultName") else "export"
+            val bytes = try {
+                Base64.decode(json.optString("dataBase64", ""), Base64.DEFAULT)
+            } catch (t: Throwable) {
+                done(null, "swift-pwa: dialog.exportFile: dataBase64 is not valid base64")
+                return
+            }
+            pendingExportBytes = bytes
+            pendingExportFile = done
+            exportFileLauncher.launch(name)
         }
 
         private fun dialogOpenDirectory(done: (String?, String?) -> Unit) {

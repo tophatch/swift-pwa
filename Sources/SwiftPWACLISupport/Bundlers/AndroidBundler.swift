@@ -141,7 +141,8 @@ struct AndroidBundler {
         let iconStaged = if case .bundled = iconOutcome { true } else { false }
 
         try AndroidTemplates.androidManifestXml(
-            packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil
+            packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil,
+            documentTypes: manifest.android?.documentTypes ?? []
         ).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
             atomically: true, encoding: .utf8

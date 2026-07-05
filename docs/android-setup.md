@@ -355,6 +355,37 @@ blinding a dark-mode user with the light colour). Device-verified on a
 Galaxy Tab S10+: `prefers-color-scheme` reports `dark` in night mode and
 `light` otherwise, tracking the system toggle.
 
+### File associations (`android.document_types`)
+
+Declare the file types your app opens and it appears in Android's **Open
+with** chooser and **share sheet**; when a user picks a matching file, its
+URI is delivered to the web app on the `app.openFile` event channel (see
+[javascript-api.md](javascript-api.md#appopenfile--os-open-with--launch-with-file)).
+This is the Android counterpart to Apple's `CFBundleDocumentTypes` (declared
+there via the `ios`/`macos` `info_plist` passthrough).
+
+```json
+"android": {
+  "document_types": [
+    { "mime_types": ["image/png", "image/jpeg", "image/webp"] }
+  ]
+}
+```
+
+Each entry's `mime_types` become `<data android:mimeType="…"/>` specs on two
+generated intent-filters on the launcher activity: one `ACTION_VIEW` ("Open
+with") and one `ACTION_SEND` / `ACTION_SEND_MULTIPLE` (share sheet). A
+MIME-type-only data spec matches both `content:` and `file:` URIs, which is
+exactly the local-file open case. Wildcards work (`"image/*"`). Unset → no
+association (the app only opens from the launcher).
+
+The file arrives as a **`content://` URI** (the SAF form), delivered to JS as
+`{ paths: ["content://…"] }`; read it with `fs.readBinary` (the same
+content-URI path `dialog.openFile` uses — see §8). The URI carries a temporary
+read grant scoped to the launching activity, so no extra permission step is
+needed. Both cold launch (the file starts the app) and warm delivery (the app
+is already running) are handled; device-verified on a Galaxy Tab S10+.
+
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important

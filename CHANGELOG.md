@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`app.openFile` now fires on Android too — completing "Open With" → JS on every platform.** v0.7.8 delivered OS-opened files to JS everywhere except Android (`VIEW`/`SEND` intents were deferred); this wires them up. Declare the handled types with a new **`android.document_types`** (`"android": { "document_types": [{ "mime_types": ["image/png"] }] }`) — the Android counterpart to Apple's `CFBundleDocumentTypes` — and the bundler generates `ACTION_VIEW` ("Open with") + `ACTION_SEND`/`ACTION_SEND_MULTIPLE` (share sheet) intent-filters on the launcher activity. When a user opens a matching file, `MainActivity` (`onCreate` for cold launch, `onNewIntent` for warm) reads the intent's `content://` URI(s) and pushes them to the Swift runtime, which re-emits on the `app.openFile` channel; the web app reads the URIs via `fs.readBinary`. The cold-launch race — the launch intent is pushed from `onCreate` on the UI thread before the Swift host-event handler is installed on the runtime worker thread — is closed by a small buffer in the JNI C shim that stashes a pre-handler push and flushes it on install (the Android analogue of the `EventBus` retain that makes cold launch work on the other platforms). Device-verified on a Galaxy Tab S10+ (cold + warm `ACTION_VIEW`). See [docs/android-setup.md](docs/android-setup.md#file-associations-androiddocument_types) and [docs/javascript-api.md](docs/javascript-api.md#appopenfile--os-open-with--launch-with-file).
+
 ## [0.7.8] - 2026-07-05
 
 ### Added

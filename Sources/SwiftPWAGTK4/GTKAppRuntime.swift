@@ -59,6 +59,14 @@
         }
     }
 
+    /// Test-only: initialize GTK without entering the GMainLoop, so
+    /// `SWIFT_PWA_LINUX_GUI`-gated integration tests can construct a
+    /// `GTKWindow`. `swiftpwa_gtk_init` is safe to call more than once.
+    @MainActor
+    func initGTKForTesting() {
+        swiftpwa_gtk_init()
+    }
+
     /// Heap-boxed `() -> Void` closure ferried across the C boundary.
     final class GTKMainThreadJob {
         let body: @Sendable () -> Void

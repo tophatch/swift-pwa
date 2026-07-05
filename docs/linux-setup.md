@@ -274,7 +274,11 @@ remain:
   subscribers on either backend. The fix is to wire GTK3's
   `focus-in-event` / `focus-out-event` / `window-state-event`, or
   GTK4's `notify::is-active` / `notify::fullscreened` / `notify::minimized`,
-  the same way the resize signals are hooked.
+  the same way the resize signals are hooked. Note that *programmatic*
+  fullscreen state **is** tracked: `Window.isFullscreen()` reflects the
+  last `setFullscreen(_:)` call (and the initial `window.fullscreen`
+  config) on both backends — it just doesn't yet observe a WM/F11-driven
+  toggle.
 - **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
   absent or non-PNG, the bundler embeds a transparent placeholder
   so `linuxdeploy` doesn't hang on its prompt path. The build prints a

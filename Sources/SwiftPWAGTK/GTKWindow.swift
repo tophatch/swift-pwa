@@ -31,6 +31,14 @@
         private var lastSize: Size = .zero
         private var lastPosition: Point = .zero
 
+        /// Tracked programmatic fullscreen state. GTK's native surface
+        /// flips async after the WM grants fullscreen, so we mirror the
+        /// requested state (matching `Win32Window` / `AndroidWindow`) to
+        /// give `isFullscreen()` a correct *immediate* read. WM/F11-driven
+        /// changes aren't observed — consistent with the backend's stance
+        /// on WM-driven state (see `handleConfigure`).
+        private var fullscreenOn = false
+
         /// Cast our owned widget back to `GtkWindow*` for `gtk_window_*` calls.
         private var window: UnsafeMutablePointer<GtkWindow> {
             UnsafeMutableRawPointer(widget).assumingMemoryBound(to: GtkWindow.self)
@@ -79,6 +87,7 @@
             adapter.load(config.content)
 
             if config.fullscreen { gtk_window_fullscreen(windowPtr) }
+            fullscreenOn = config.fullscreen
             if config.visibleOnLaunch { gtk_widget_show_all(win) }
 
             lastSize = config.size
@@ -230,12 +239,10 @@
         }
         public func setFullscreen(_ on: Bool) {
             if on { gtk_window_fullscreen(window) } else { gtk_window_unfullscreen(window) }
+            fullscreenOn = on
             emit(on ? .didEnterFullscreen : .didExitFullscreen)
         }
-        public func isFullscreen() -> Bool {
-            // We don't observe state changes here; track at a higher level if needed.
-            false
-        }
+        public func isFullscreen() -> Bool { fullscreenOn }
 
         public func close() {
             emit(.willClose)

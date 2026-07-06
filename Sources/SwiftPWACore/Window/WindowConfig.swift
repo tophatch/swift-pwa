@@ -34,6 +34,12 @@ public struct WindowConfig: Sendable {
     public var size: Size
     public var minSize: Size?
     public var maxSize: Size?
+    /// Initial top-left position. `nil` lets the platform place the window
+    /// (macOS centres it, GTK defers to the window manager, Windows uses
+    /// `CW_USEDEFAULT`). Best-effort, mirroring ``Window/setPosition(_:)``:
+    /// GTK4 / Wayland ignore it. Chiefly populated by ``WindowStateStore``
+    /// when ``rememberState`` restores a remembered location.
+    public var origin: Point?
     public var resizable: Bool
     public var fullscreen: Bool
     public var visibleOnLaunch: Bool
@@ -44,26 +50,49 @@ public struct WindowConfig: Sendable {
     /// (opaque white). A single solid colour can only approximate a
     /// gradient page background — close, but not pixel-exact.
     public var backgroundColor: String?
+    /// Persist this window's size — and, where the platform exposes it,
+    /// position — across launches, restoring it the next time a window with
+    /// the same ``stateKey`` is created. Off by default so an app opts in
+    /// explicitly (the `swift-pwa init` scaffold sets it on for new apps).
+    ///
+    /// **Desktop only.** macOS / GTK3 / Windows restore both size and
+    /// position; GTK4 / Wayland restore size only (the compositor owns
+    /// placement). iOS / Android windows are full-screen, so there's nothing
+    /// to remember — the flag is a no-op there. Geometry is written to a
+    /// small `window-state.json` in the per-app data directory
+    /// (``PlatformDirectories``), keyed by ``stateKey``.
+    public var rememberState: Bool
+    /// Identity used to persist / restore geometry when ``rememberState`` is
+    /// on. Defaults to `"main"`. Give each window in a multi-window app its
+    /// own key so their frames don't clobber one another; two live windows
+    /// sharing a key will fight over the same saved geometry.
+    public var stateKey: String
 
     public init(
         title: String,
         size: Size,
         minSize: Size? = nil,
         maxSize: Size? = nil,
+        origin: Point? = nil,
         resizable: Bool = true,
         fullscreen: Bool = false,
         visibleOnLaunch: Bool = true,
         content: WindowContent,
-        backgroundColor: String? = nil
+        backgroundColor: String? = nil,
+        rememberState: Bool = false,
+        stateKey: String = "main"
     ) {
         self.title = title
         self.size = size
         self.minSize = minSize
         self.maxSize = maxSize
+        self.origin = origin
         self.resizable = resizable
         self.fullscreen = fullscreen
         self.visibleOnLaunch = visibleOnLaunch
         self.content = content
         self.backgroundColor = backgroundColor
+        self.rememberState = rememberState
+        self.stateKey = stateKey
     }
 }

@@ -51,7 +51,15 @@
             window.title = config.title
             if let min = config.minSize { window.contentMinSize = NSSize(width: min.width, height: min.height) }
             if let max = config.maxSize { window.contentMaxSize = NSSize(width: max.width, height: max.height) }
-            window.center()
+            // A remembered position (via `rememberState`) or an explicit
+            // `config.origin` overrides centring; the origin is a bottom-left
+            // frame origin, matching `position()` / `setPosition(_:)` so it
+            // round-trips.
+            if let origin = config.origin {
+                window.setFrameOrigin(NSPoint(x: origin.x, y: origin.y))
+            } else {
+                window.center()
+            }
             window.contentView = adapter.webView
 
             // Native background before first paint: avoids the white flash

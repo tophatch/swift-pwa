@@ -264,7 +264,13 @@ remain:
   refuses to give apps their own position; CSD makes the concept
   ambiguous). `position()` returns `.zero`, `setPosition` silently
   no-ops, and `.didMove` events are never emitted on GTK4. The GTK3
-  backend supports all three.
+  backend supports all three. **Consequence for window state memory**
+  (`window.remember_state`): GTK3 restores both size and position, but
+  **GTK4 restores size only** — since it can neither read nor set a
+  position, none is ever saved, and the window opens at its remembered
+  size wherever the compositor places it. Off-screen restore (a monitor
+  that was present when the geometry was saved is now gone) isn't clamped
+  yet on any backend.
 - **WM-driven focus / minimize / fullscreen events aren't observed.**
   `WindowEvent.didFocus` / `.didBlur` / `.didMinimize` / `.didDeminiaturize`
   / `.didEnterFullscreen` / `.didExitFullscreen` are only emitted when

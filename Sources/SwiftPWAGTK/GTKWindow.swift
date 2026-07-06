@@ -65,6 +65,15 @@
             )
             gtk_window_set_resizable(windowPtr, config.resizable ? gboolean(1) : gboolean(0))
 
+            // A remembered / explicit initial position. GTK3 (X11) honours
+            // `gtk_window_move` before the window is mapped; on Wayland the
+            // compositor may ignore it. Seed `lastPosition` so the resulting
+            // configure-event doesn't read as a spurious user move.
+            if let origin = config.origin {
+                gtk_window_move(windowPtr, gint(origin.x), gint(origin.y))
+                lastPosition = origin
+            }
+
             titleStorage = config.title
 
             let adapter = try WebKitGTKAdapter(parent: win, content: config.content, sharedProvider: app.assetProvider)

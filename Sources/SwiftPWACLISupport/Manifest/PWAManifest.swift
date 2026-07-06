@@ -72,13 +72,24 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// resolve a pair to its **dark** value — a dark pre-paint flash is
         /// preferable to blinding a dark-mode user with the light colour.
         public var backgroundColor: BackgroundColor?
+        /// Remember the window's size — and, where the platform allows,
+        /// position — across launches (JSON key `remember_state`). Seeds
+        /// `WindowConfig.rememberState` in the generated `main.swift` at
+        /// `swift-pwa init` time; the `init` scaffold turns it on for new
+        /// apps. **Desktop only** (macOS / GTK3 / Windows restore size +
+        /// position, GTK4 / Wayland size only); a no-op on iOS / Android,
+        /// whose windows are full-screen. Omit / `false` to always open at
+        /// the configured size. Geometry is stored in a `window-state.json`
+        /// in the per-app data directory.
+        public var rememberState: Bool?
         public init(
             title: String,
             width: Double = 1024,
             height: Double = 768,
             resizable: Bool = true,
             fullscreen: Bool = false,
-            backgroundColor: BackgroundColor? = nil
+            backgroundColor: BackgroundColor? = nil,
+            rememberState: Bool? = nil
         ) {
             self.title = title
             self.width = width
@@ -86,6 +97,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.resizable = resizable
             self.fullscreen = fullscreen
             self.backgroundColor = backgroundColor
+            self.rememberState = rememberState
         }
     }
 

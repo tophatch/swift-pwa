@@ -25,7 +25,9 @@
 
         @discardableResult
         public func createWindow(_ config: WindowConfig) throws -> any Window {
-            let win = try MacWindow(config: config, app: self)
+            let effective = WindowStateStore.shared.restore(config)
+            let win = try MacWindow(config: effective, app: self)
+            WindowStateStore.shared.track(win, config: effective)
             windows[win.id] = win
             return win
         }

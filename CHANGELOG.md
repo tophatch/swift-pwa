@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Window state memory — remember a window's size and position across launches.** Set `"window": { "remember_state": true }` in `pwa.json` (the `swift-pwa init` scaffold now turns this on for new apps) and the desktop backends persist the window's geometry to a small `window-state.json` in the per-app data directory, restoring it the next time a window with the same `stateKey` opens. It's driven by a new `WindowConfig.rememberState` / `WindowConfig.stateKey` and a Foundation-only `WindowStateStore` in core — **no new dependency**, no `UserDefaults` / registry / GSettings. Restore is synchronous (the config is seeded before the native window is built, so there's no flash-then-jump), a new `WindowConfig.origin` carries the remembered position into window construction (macOS `setFrameOrigin` instead of `center()`, GTK3 `gtk_window_move`, Windows `CreateWindowExW` instead of `CW_USEDEFAULT`), and changes are saved continuously as you resize/move (debounced ~0.4s off the main thread, plus a synchronous flush when the last window closes). Multi-window apps give each window its own `stateKey` so their frames don't clobber one another. **Scoped per platform, following each one's window model:** macOS / GTK3 / Windows restore **both size and position**; **GTK4 / Wayland restore size only** (the compositor owns window placement — `setPosition` is a no-op there and no position is ever recorded); iOS / Android windows are full-screen, so `remember_state` is a no-op. Off-screen restore (e.g. a monitor was unplugged) isn't clamped yet — a documented limitation. Verified with unit tests (the store's record / restore / persist / track paths against a `MockWindow`) plus a compile pass on macOS, GTK4 (on the Linux box), and the CLI. See [README.md](README.md#configuring-pwajson) and [docs/linux-setup.md](docs/linux-setup.md#known-limitations).
+
 ## [0.7.9] - 2026-07-05
 
 ### Added

@@ -235,6 +235,36 @@ struct InitTests {
         #expect(!without.contains("backgroundColor:"))
     }
 
+    @Test("generated App.swift emits rememberState only when opted in")
+    func appSwiftThreadsRememberState() {
+        let on = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X", rememberState: true)
+        )
+        #expect(on.contains("rememberState: true"))
+        // Omitted when nil/false, so WindowConfig keeps rememberState off.
+        let off = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X", rememberState: false)
+        )
+        #expect(!off.contains("rememberState:"))
+        let unset = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
+        #expect(!unset.contains("rememberState:"))
+    }
+
+    @Test("a freshly scaffolded manifest turns window state memory on")
+    func freshManifestRemembersState() {
+        let m = Init.freshManifest(identifier: "MyApp", displayName: "My App", id: "com.example.myapp")
+        #expect(m.window.rememberState == true)
+    }
+
+    @Test("pwa.json window.remember_state decodes (snake_case)")
+    func manifestDecodesRememberState() throws {
+        let json = ##"{"id":"com.example.b","name":"B","version":"1.0.0","web":{"directory":"web","entry":"index.html"},"window":{"title":"B","width":1024,"height":768,"resizable":true,"fullscreen":false,"remember_state":true}}"##
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.window.rememberState == true)
+    }
+
     @Test("pwa.json window.background_color decodes (snake_case)")
     func manifestDecodesBackgroundColor() throws {
         let json = ##"{"id":"com.example.b","name":"B","version":"1.0.0","web":{"directory":"web","entry":"index.html"},"window":{"title":"B","width":1024,"height":768,"resizable":true,"fullscreen":false,"background_color":"#101418"}}"##

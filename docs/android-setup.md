@@ -355,6 +355,14 @@ blinding a dark-mode user with the light colour). Device-verified on a
 Galaxy Tab S10+: `prefers-color-scheme` reports `dark` in night mode and
 `light` otherwise, tracking the system toggle.
 
+### `window.remember_state`
+
+`window.remember_state` (window size / position memory across launches) is
+a **desktop-only** feature — a no-op on Android, where the app window is
+full-screen and the OS owns its geometry. The key is accepted in `pwa.json`
+(so one manifest can drive every target) but has no effect on an Android
+build. See [README.md](../README.md#configuring-pwajson).
+
 ### File associations (`android.document_types`)
 
 Declare the file types your app opens and it appears in Android's **Open

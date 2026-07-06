@@ -48,7 +48,9 @@
                     message: "WebView2 environment not ready"
                 )
             }
-            let win = try Win32Window(config: config, app: self, environment: env)
+            let effective = WindowStateStore.shared.restore(config)
+            let win = try Win32Window(config: effective, app: self, environment: env)
+            WindowStateStore.shared.track(win, config: effective)
             windows[win.id] = win
             return win
         }
@@ -73,6 +75,9 @@
             // "live in the tray after last window" can keep a hidden
             // owner window alive themselves.
             if windows.isEmpty {
+                // Flush any debounced window geometry before the message loop
+                // exits — the async `.didClose` handler may not get to run.
+                WindowStateStore.shared.flushNow()
                 quit(exitCode: pendingExitCode ?? 0)
             }
         }

@@ -89,6 +89,19 @@
             let initialDpi = primaryMonitorDpi()
             let initialW = Int32((config.size.width * Double(initialDpi) / 96.0).rounded())
             let initialH = Int32((config.size.height * Double(initialDpi) / 96.0).rounded())
+            // A remembered / explicit initial position (DIPs → physical px);
+            // otherwise let the OS place the window. `WM_DPICHANGED` still
+            // reconciles the size/position if the target monitor's DPI differs.
+            let initialX: Int32
+            let initialY: Int32
+            if let origin = config.origin {
+                initialX = Int32((origin.x * Double(initialDpi) / 96.0).rounded())
+                initialY = Int32((origin.y * Double(initialDpi) / 96.0).rounded())
+                lastPosition = origin
+            } else {
+                initialX = Int32(CW_USEDEFAULT)
+                initialY = Int32(CW_USEDEFAULT)
+            }
             let hwndOpt: HWND? = titleW.withUnsafeBufferPointer { titlePtr in
                 Self.className.withUnsafeBufferPointer { classPtr in
                     CreateWindowExW(
@@ -96,7 +109,7 @@
                         classPtr.baseAddress,
                         titlePtr.baseAddress,
                         style,
-                        Int32(CW_USEDEFAULT), Int32(CW_USEDEFAULT),
+                        initialX, initialY,
                         initialW, initialH,
                         nil, nil,
                         GetModuleHandleW(nil),

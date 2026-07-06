@@ -29,7 +29,12 @@
 
         @discardableResult
         public func createWindow(_ config: WindowConfig) throws -> any Window {
-            let win = try GTKWindow(config: config, app: self)
+            // GTK4 restores size but not position: it never emits `.didMove`
+            // and ignores `config.origin` (the compositor owns placement), so
+            // no `x`/`y` is ever saved and `restore` only seeds the size.
+            let effective = WindowStateStore.shared.restore(config)
+            let win = try GTKWindow(config: effective, app: self)
+            WindowStateStore.shared.track(win, config: effective)
             windows[win.id] = win
             return win
         }
@@ -52,6 +57,9 @@
             // Linux convention: closing the last window terminates the
             // app (unlike Mac, where the menu bar lingers).
             if windows.isEmpty {
+                // Flush any debounced window geometry before the loop tears
+                // down — the async `.didClose` handler may not get to run.
+                WindowStateStore.shared.flushNow()
                 quit(exitCode: pendingExitCode ?? 0)
             }
         }

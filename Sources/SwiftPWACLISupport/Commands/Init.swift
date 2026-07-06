@@ -234,7 +234,7 @@ struct Init: AsyncParsableCommand {
             description: nil,
             icon: nil,
             web: .init(directory: "web", entry: "index.html"),
-            window: .init(title: displayName),
+            window: .init(title: displayName, rememberState: true),
             macos: .init(bundleIdentifier: id, category: nil, minimumSystemVersion: "15.0"),
             ios: .init(bundleIdentifier: id, minimumSystemVersion: "18.0"),
             linux: .init(desktopCategories: ["Utility"], executableName: nil),
@@ -407,6 +407,11 @@ enum Templates {
             let escaped = $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
             return ",\n                backgroundColor: \"\(escaped)\""
         } ?? ""
+        // Persist window size/position across launches when pwa.json opts in
+        // (the `init` scaffold sets `remember_state: true`). Desktop-only at
+        // runtime; a no-op on iOS/Android. `stateKey` distinguishes windows in
+        // a multi-window app — the single generated window uses the default.
+        let rememberStateArg = (window.rememberState ?? false) ? ",\n                rememberState: true" : ""
         return """
         // swift-pwa-generated: v\(SwiftPWAVersion.current)
         //
@@ -495,7 +500,7 @@ enum Templates {
                 size: Size(width: \(width), height: \(height)),
                 resizable: \(window.resizable),
                 fullscreen: \(window.fullscreen),
-                content: content\(backgroundColorArg)
+                content: content\(backgroundColorArg)\(rememberStateArg)
             ))
         }
         """

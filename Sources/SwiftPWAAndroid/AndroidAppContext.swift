@@ -68,9 +68,19 @@
         /// `AndroidAppRuntime.run`'s wait.
         nonisolated let runSemaphore = DispatchSemaphore(value: 0)
 
+        /// Process-wide memory source. Held so the pressure-event forwarder and
+        /// both memory-consuming plugins share one JNI-backed provider (and its
+        /// cached large-heap value).
+        private let memoryProvider = AndroidMemoryProvider()
+
         private init() {
             use(WindowPlugin())
-            use(PlatformInfoPlugin())
+            // `appMemoryLimitBytes` on Android is the large-heap class, read
+            // over JNI and cached by the provider. The closure degrades to `nil`
+            // on RPC failure so `__platform.info` never breaks on a memory read.
+            let memory = memoryProvider
+            use(PlatformInfoPlugin(appMemoryLimit: { await memory.appMemoryLimit() }))
+            use(SystemPlugin(memoryProvider))
             use(AppPlugin())
             use(EventsPlugin())
             // Auto-register `ClipboardPlugin` so apps don't have to —
@@ -88,6 +98,21 @@
             // on Android transparently handles content URIs without
             // any app-side setup.
             SystemFs.setContentResolver(AndroidContentResolver())
+
+            // Forward `onTrimMemory` bands (pushed from MainActivity as host
+            // events) onto the JS `system.memoryPressure` channel — the Android
+            // counterpart to Apple's `DispatchSource` wired in `SystemPlugin`.
+            // The Kotlin side already maps `RUNNING_LOW`/`RUNNING_CRITICAL` to a
+            // normalized `level`; we re-emit `{ level }` verbatim.
+            let bus = events
+            AndroidHostEventRouter.subscribe(channel: "system.memoryPressure") { data in
+                struct Payload: Decodable { let level: String }
+                guard let p = try? JSONDecoder().decode(Payload.self, from: data) else { return }
+                bus.emit(
+                    "system.memoryPressure",
+                    payload: Data("{\"level\":\"\(p.level)\"}".utf8)
+                )
+            }
         }
 
         @discardableResult

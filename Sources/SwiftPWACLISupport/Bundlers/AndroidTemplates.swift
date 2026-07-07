@@ -442,6 +442,7 @@ enum AndroidTemplates {
         return """
         package \(packageId)
 
+        import android.content.ComponentCallbacks2
         import android.content.Intent
         import android.net.Uri
         import android.os.Build
@@ -615,6 +616,34 @@ enum AndroidTemplates {
                     intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
                 else
                     intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM)
+
+            /// Map `onTrimMemory` bands to the normalized `system.memoryPressure`
+            /// levels and push them to the Swift runtime, which re-emits on the
+            /// JS event bus. Only the RUNNING_* foreground-pressure bands are
+            /// forwarded — UI_HIDDEN / BACKGROUND / MODERATE are lifecycle hints
+            /// about being backgrounded, not "shed caches now" pressure. This is
+            /// the Android counterpart to Apple's `DispatchSource` in
+            /// `SystemPlugin`.
+            @Suppress("DEPRECATION")
+            override fun onTrimMemory(level: Int) {
+                super.onTrimMemory(level)
+                if (isSecondary) return
+                val normalized = when (level) {
+                    ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
+                    ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "critical"
+                    ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW,
+                    ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE -> "warning"
+                    else -> return
+                }
+                val payload = JSONObject()
+                    .put("channel", "system.memoryPressure")
+                    .put("level", normalized)
+                try {
+                    bridge.nativeHostEvent(payload.toString())
+                } catch (t: Throwable) {
+                    android.util.Log.e("swift-pwa", "failed to push system.memoryPressure: ${t.message}")
+                }
+            }
 
             /// Provided by the Swift side via `@_cdecl("swiftpwa_android_main")`.
             /// See `docs/android-setup.md` for the wrapping pattern that
@@ -987,6 +1016,7 @@ enum AndroidTemplates {
     package dev.swiftpwa.runtime
 
     import android.app.Activity
+    import android.app.ActivityManager
     import android.app.AlertDialog
     import android.app.PendingIntent
     import android.content.BroadcastReceiver
@@ -1168,9 +1198,33 @@ enum AndroidTemplates {
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
+                "system.memory" -> systemMemory(done)
                 /*__SWIFT_PWA_GENAI_DISPATCH__*/
                 else -> done(null, "swift-pwa: unknown rpc method $method")
             }
+        }
+
+        // -----------------------------------------------------------
+        // System (device memory)
+        // -----------------------------------------------------------
+
+        // `system.memory`: a point-in-time device-memory read. `totalMem` /
+        // `availMem` come from ActivityManager.MemoryInfo; `appLimitBytes` is
+        // the large-heap class (getLargeMemoryClass, in MiB) — a device-tier
+        // proxy, since a WebView canvas app's real pressure is usually native/
+        // GPU memory, not the Java heap. `lowMemory` is the OS's own flag.
+        private fun systemMemory(done: (String?, String?) -> Unit) {
+            val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+            val info = ActivityManager.MemoryInfo()
+            am.getMemoryInfo(info)
+            val appLimitBytes = am.largeMemoryClass.toLong() * 1024L * 1024L
+            val result = JSONObject()
+                .put("physicalBytes", info.totalMem)
+                .put("availableBytes", info.availMem)
+                .put("appLimitBytes", appLimitBytes)
+                .put("lowMemory", info.lowMemory)
+                .toString()
+            done(result, null)
         }
 
         // -----------------------------------------------------------

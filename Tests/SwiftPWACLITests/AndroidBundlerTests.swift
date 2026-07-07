@@ -585,3 +585,94 @@ struct AndroidBundlerUnitTests {
         #expect(signing == nil)
     }
 }
+
+/// Coverage for the stale-incremental-cross-compile guard: fingerprinting the
+/// swift-pwa runtime ABI surface and wiping `.build/<triple>` when it changes.
+/// Prevents the value-witness-copy SIGSEGV that a mid-struct layout change
+/// (e.g. PR #49's `WindowConfig`) produced from a stale Android build cache.
+@Suite("Android bundler — ABI-fingerprint cache guard")
+struct AndroidBundlerCacheGuardTests {
+    private let triple = "aarch64-unknown-linux-android28"
+
+    /// Build a fake consumer project with a git-checkout-shaped swift-pwa
+    /// runtime tree and a populated `.build/<triple>` cache. Returns the project
+    /// root and the one source file the tests mutate.
+    private func makeProject() throws -> (root: URL, source: URL) {
+        let fm = FileManager.default
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pwa-abi-\(UUID().uuidString)")
+        let core = root.appendingPathComponent(".build/checkouts/swift-pwa/Sources/SwiftPWACore")
+        try fm.createDirectory(at: core, withIntermediateDirectories: true)
+        let source = core.appendingPathComponent("WindowConfig.swift")
+        try "public struct WindowConfig { public var title: String }".write(
+            to: source, atomically: true, encoding: .utf8
+        )
+        try fm.createDirectory(
+            at: root.appendingPathComponent(".build/\(triple)"), withIntermediateDirectories: true
+        )
+        return (root, source)
+    }
+
+    @Test("fingerprint is stable for unchanged sources and shifts when they change")
+    func fingerprintStability() throws {
+        let (root, source) = try makeProject()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let a = AndroidBundler.runtimeABIFingerprint(projectRoot: root)
+        let b = AndroidBundler.runtimeABIFingerprint(projectRoot: root)
+        #expect(a == b) // deterministic across calls (not Swift's randomized hashValue)
+
+        try "public struct WindowConfig { public var origin: Int?; public var title: String }"
+            .write(to: source, atomically: true, encoding: .utf8)
+        let c = AndroidBundler.runtimeABIFingerprint(projectRoot: root)
+        #expect(c != a) // a real content change moves the digest
+    }
+
+    @Test("locateSwiftPWASources finds the runtime tree under .build/checkouts")
+    func locatesSources() throws {
+        let (root, _) = try makeProject()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let found = AndroidBundler.locateSwiftPWASources(projectRoot: root)
+        #expect(found?.appendingPathComponent("SwiftPWACore").lastPathComponent == "SwiftPWACore")
+    }
+
+    @Test("guard wipes a pre-stamp cache, then leaves an unchanged one alone")
+    func cleanOnFirstThenNoop() throws {
+        let fm = FileManager.default
+        let (root, _) = try makeProject()
+        defer { try? fm.removeItem(at: root) }
+        let tripleDir = root.appendingPathComponent(".build/\(triple)")
+        let marker = tripleDir.appendingPathComponent("stale.o")
+        try "old".write(to: marker, atomically: true, encoding: .utf8)
+
+        // No stamp yet (a cache predating the guard) → must clean.
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        #expect(!fm.fileExists(atPath: marker.path)) // stale object wiped
+        let stamp = tripleDir.appendingPathComponent(".swiftpwa-abi-fingerprint")
+        #expect(fm.fileExists(atPath: stamp.path)) // fresh stamp written
+
+        // A new object with the stamp matching current sources → no clean.
+        try "new".write(to: marker, atomically: true, encoding: .utf8)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        #expect(fm.fileExists(atPath: marker.path)) // preserved: incremental stays fast
+    }
+
+    @Test("guard re-cleans after the runtime sources change")
+    func cleanAfterSourceChange() throws {
+        let fm = FileManager.default
+        let (root, source) = try makeProject()
+        defer { try? fm.removeItem(at: root) }
+        let tripleDir = root.appendingPathComponent(".build/\(triple)")
+
+        // Stamp the cache against the current sources.
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        let marker = tripleDir.appendingPathComponent("obj.o")
+        try "x".write(to: marker, atomically: true, encoding: .utf8)
+
+        // Change a core type's layout → next guard run must wipe the cache.
+        try "public struct WindowConfig { public var origin: Int?; public var title: String }"
+            .write(to: source, atomically: true, encoding: .utf8)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        #expect(!fm.fileExists(atPath: marker.path))
+    }
+}

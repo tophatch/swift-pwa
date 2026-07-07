@@ -285,6 +285,12 @@ remain:
   last `setFullscreen(_:)` call (and the initial `window.fullscreen`
   config) on both backends — it just doesn't yet observe a WM/F11-driven
   toggle.
+- **No `system.memoryPressure` event.** `system.memory` works (total RAM,
+  plus `availableBytes` from `/proc/meminfo`'s `MemAvailable`), but Linux has
+  no portable per-process memory-pressure signal, so the
+  `system.memoryPressure` event never fires here (it does on
+  iOS/macOS/Android). Size memory-scaled caches from a `system.memory` read
+  rather than relying on the push event, and treat the event as best-effort.
 - **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
   absent or non-PNG, the bundler embeds a transparent placeholder
   so `linuxdeploy` doesn't hang on its prompt path. The build prints a

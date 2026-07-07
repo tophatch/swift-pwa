@@ -26,9 +26,17 @@ It returns the live command list so the page can feature-detect instead
 of guessing:
 
 ```js
-const { os, commands, tempDir } = await __SWIFT_PWA__.invoke('__platform.info');
-if (commands.includes('biometric.authenticate')) { /* show the unlock button */ }
+const info = await __SWIFT_PWA__.invoke('__platform.info');
+// { os, commands, tempDir, physicalMemoryBytes, appMemoryLimitBytes }
+if (info.commands.includes('biometric.authenticate')) { /* show the unlock button */ }
 ```
+
+`physicalMemoryBytes` is the total device RAM (exact and uncapped — a strictly
+better signal than `navigator.deviceMemory`, which is quantized, capped at 8 GB,
+and absent in WKWebView/iOS). `appMemoryLimitBytes` is the per-app ceiling where
+the OS defines one (Android's large-heap class), else `null`. Both are static
+for the session; for a live "available now" read and a memory-pressure event,
+see [`system.*`](#system).
 
 ## Built-in plugins (auto-installed on every backend)
 
@@ -136,6 +144,55 @@ Platform coverage: **macOS** (`application(_:open:)`) and **iOS**
 which generates the intent-filters). On Android `paths` are `content://` URIs —
 read them with `fs.readBinary` the same way; the URI's read grant is held for
 the launching activity's lifetime.
+
+### `system.*`
+
+Device / OS facts that aren't application identity (`app.*`) or window state
+(`window.*`). Auto-installed on every backend.
+
+```js
+const m = await __SWIFT_PWA__.invoke('system.memory');
+// { physicalBytes, availableBytes, appLimitBytes, lowMemory }
+if (m.availableBytes != null && m.availableBytes < 256 * 1024 * 1024) {
+    shrinkCaches();   // running low right now
+}
+```
+
+`system.memory` is a **live, point-in-time** read (unlike the static totals on
+`__platform.info`), so call it on a debounce before growing a cache — not per
+frame. Fields:
+
+- `physicalBytes` — total device RAM (same as `__platform.info`'s
+  `physicalMemoryBytes`).
+- `availableBytes` — allocatable right now, or `null` where the platform gives
+  no portable signal. **On iOS this is the remaining per-app headroom before the
+  OS jetsams you** (`os_proc_available_memory()`) — the number a memory-scaled
+  cache actually wants — which is why iOS reports it here and leaves
+  `appLimitBytes` `null`.
+- `appLimitBytes` — the per-app OS ceiling (Android's large-heap class), else
+  `null` (desktop, iOS).
+- `lowMemory` — the OS's own "under pressure" flag on Android
+  (`MemoryInfo.lowMemory`); a heuristic (`availableBytes` below ~⅛ of physical)
+  elsewhere.
+
+#### `system.memoryPressure` — shed caches before you're killed
+
+The OS asking your app to free memory *before* it kills the process. A
+server-push event on the [`events.*`](#events--server-initiated-push) bus:
+
+```js
+__SWIFT_PWA__.on('system.memoryPressure', ({ level }) => {
+    // level ∈ 'warning' | 'critical'
+    shrinkCaches(level);   // e.g. drop to LOD-only, force-drain LRUs
+});
+```
+
+Platform coverage: **iOS / macOS** via `DispatchSource.makeMemoryPressureSource`,
+**Android** via `onTrimMemory` (`RUNNING_LOW`/`RUNNING_MODERATE` → `warning`,
+`RUNNING_CRITICAL`/`COMPLETE` → `critical`). **Linux and Windows have no portable
+signal, so the event never fires there** — treat it as best-effort and always
+also size caches from `system.memory` so you degrade gracefully where there's no
+pressure feed.
 
 ### `clipboard.*`
 

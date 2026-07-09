@@ -774,7 +774,20 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,
             swiftSettings: swiftSettings,
-            linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.android]))]
+            linkerSettings: [
+                .linkedLibrary("onnxruntime", .when(platforms: [.android])),
+                // The vendored ONNX Runtime xcframework embeds protobuf (C++),
+                // which needs libc++ (Arena, exception-personality symbols). A
+                // `.binaryTarget` can't declare linker settings, so we hang it
+                // on this regular target instead — SwiftPM propagates a target's
+                // linkerSettings to the final executable link, so any app that
+                // links SwiftPWASegmentation gets libc++ automatically (a plain
+                // `.executableTarget` doesn't pull it in by default the way a
+                // test bundle incidentally does). Without this, a consuming app
+                // hits unresolved `___gxx_personality_v0` / protobuf symbols and
+                // has to add the flag itself.
+                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))
+            ]
         ),
         .testTarget(
             name: "SwiftPWASegmentationTests",

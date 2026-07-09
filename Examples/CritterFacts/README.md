@@ -150,14 +150,12 @@ const { masks } = await __SWIFT_PWA__.invoke('ai.vision.segment', {
 });
 ```
 
-**One gotcha worth carrying to your own app** (see
-[docs/android-setup.md §9.1](../../docs/android-setup.md) for the full
-writeup): Apple's vendored ONNX Runtime xcframework embeds protobuf, which
-needs `libc++` linked — add
-`.linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))` to your executable
-target's `linkerSettings` (see this app's `Package.swift`), or you'll hit
-unresolved-symbol linker errors. The Android `libonnxruntime.so` staging and
-the per-ABI `.so` fetch are handled for you by `swift-pwa build`.
+Nothing app-specific is needed to link it: Apple's vendored ONNX Runtime
+xcframework embeds protobuf (which needs `libc++`), but `SwiftPWASegmentation`
+declares that link itself, and the Android `libonnxruntime.so` staging + the
+per-ABI `.so` fetch are handled for you by `swift-pwa build`. So this app's
+`Package.swift` just adds the `SwiftPWASegmentation` product — no extra
+`linkerSettings`.
 
 ## Swapping the model
 

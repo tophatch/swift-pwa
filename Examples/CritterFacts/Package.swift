@@ -59,13 +59,9 @@ let package = Package(
                     ["-Xlinker", "-no-pie", "-Xlinker", "-shared"],
                     .when(platforms: [.android])
                 ),
-                // The vendored ONNX Runtime xcframework embeds protobuf,
-                // which needs the C++ standard library (Arena, exception
-                // personality routines) — an explicit executable target
-                // doesn't link libc++ by default the way a test bundle does
-                // (only test targets happened to pull it in incidentally
-                // before this app tried to link SwiftPWASegmentation).
-                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
+                // Note: linking the ONNX Runtime xcframework needs libc++ on
+                // Apple, but `SwiftPWASegmentation` now declares that itself
+                // (its linkerSettings propagate here), so this app doesn't.
             ]
         ),
     ]

@@ -761,6 +761,59 @@ in place (it's regenerated on each `swift-pwa build`, so fold the fix back into
 your build flow). Structured output (`ai.generateJSON`) uses the shared
 prompt-and-validate fallback for now (`structuredOutput: false`).
 
+## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime packaging spike
+
+**Not a shipped feature yet** — no `pwa.json` flag, no bundler wiring, no
+backend. This section documents an in-progress packaging spike for the 0.8
+segmentation epic (see
+[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)),
+so anyone picking up the follow-up work (a real `MobileSAMBackend`,
+publishing the vendored artifact) knows where things stand and how to
+reproduce the toolchain locally.
+
+Unlike llama.cpp (no Android backend at all in this repo), Microsoft ships
+a usable prebuilt Android artifact for ONNX Runtime — the
+`onnxruntime-android` Maven AAR bundles the plain C API headers plus a
+per-ABI `libonnxruntime.so` directly, so Swift can call the C API without
+any JNI glue. `Scripts/vendor-onnxruntime-android.sh` downloads +
+sha1-verifies it (against Maven's own published sidecar) and vendors:
+
+- `Vendor/onnxruntime-android-headers/` — **committed**, a plain
+  `.systemLibrary` (`ONNXRuntimeAndroid` in `Package.swift`, gated behind
+  `SWIFT_PWA_ONNXRUNTIME`).
+- `Vendor/onnxruntime-android/<abi>/libonnxruntime.so` — **gitignored**;
+  found at cross-compile link time via `LIBRARY_PATH`, the exact mechanism
+  [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) already
+  describes for Linux's llama.cpp build (no `unsafeFlags`).
+
+Cross-compiling anything against the installed Android Swift SDK on this
+toolchain **requires the matching Swift 6.2 host toolchain**, not Xcode's
+newer default — set `TOOLCHAINS=org.swift.6200202509111a` (or whatever id
+`~/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain` resolves to
+on your machine) before `swift build`, or you'll hit "module compiled with
+Swift 6.2 cannot be imported by the Swift 6.3.x compiler" errors. This is
+the same requirement `swift-pwa build --cross-compile-android` already
+satisfies internally; it only bites when invoking `swift build
+--swift-sdk` by hand, as the spike's verification did:
+
+```bash
+export TOOLCHAINS=org.swift.6200202509111a
+export SWIFT_PWA_ONNXRUNTIME=1
+export LIBRARY_PATH="$(pwd)/Vendor/onnxruntime-android/arm64-v8a"
+swift build --swift-sdk aarch64-unknown-linux-android28 --target SwiftPWAONNXRuntimeAndroidSmoke
+```
+
+Verified end-to-end, including on an actual device: a throwaway executable
+linked against the vendored `.so` this way, then pushed via `adb push` +
+run via `adb shell` (with `LD_LIBRARY_PATH` pointed at the pushed `.so`,
+the Swift Android runtime libs from the SDK artifact bundle, and the
+NDK's `libc++_shared.so`) on a Galaxy Tab S10+ — printed the real ONNX
+Runtime version string. `SwiftPWAONNXRuntimeAndroidSmoke` itself (the
+committed target) is a plain library with no product forcing a real link
+yet, so `swift build --target` against it only proves compile +
+module-resolution; the link+runtime proof lives in that throwaway
+executable, not in anything committed to this repo.
+
 ## 8. Known limitations
 
 - **`dialog.openDirectory` multi-select is desktop-only.** The

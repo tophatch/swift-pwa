@@ -533,6 +533,51 @@ place but no on-device backend is wired yet, so `ai.info` reports
 `available: false` until one lands. Full reference, backend protocol, and
 roadmap: [docs/ai-plugin.md](ai-plugin.md).
 
+### `ai.vision.*` — promptable on-device image segmentation
+
+Unrelated to `ai.info`'s `vision` flag above (that's *generative* backends
+accepting image input, e.g. "describe this photo"). `ai.vision.*` is a
+**separate**, *discriminative* contract — SAM-family models turning an
+image + a spatial prompt (point/box) into object masks — installed via its
+own `VisionPlugin`, not `AIPlugin`. Encoding an image is the expensive
+step, so it's a session: open once per image, then decode (segment) many
+times cheaply against the cached embedding.
+
+```js
+const info = await __SWIFT_PWA__.invoke('ai.vision.info', {});
+// → { available, backend, model?, pointPrompts, boxPrompts, multimask,
+//     autoMask, maxImageSize, sessionCaching }
+if (!info.available) { /* hide the ML object-select affordance */ }
+
+// Open a session — runs the (expensive) encoder. Prefer `path` over
+// `dataBase64` for doc-sized images so the bytes don't cross the bridge.
+const { sessionId, width, height } = await __SWIFT_PWA__.invoke(
+    'ai.vision.openSession', { image: { path: dataDir + '/layer-cache.png' } }
+);
+
+// Segment at a prompt — runs the (cheap) decoder. Coordinates are in
+// source-image pixels (the dims openSession returned).
+const { masks } = await __SWIFT_PWA__.invoke('ai.vision.segment', {
+    sessionId, points: [{ x: 120, y: 84, label: 1 }], multimask: true,
+});
+// masks: [{ bounds: [x0, y0, x1, y1], rle: [...], score }], best-first
+
+await __SWIFT_PWA__.invoke('ai.vision.closeSession', { sessionId });
+```
+
+Each mask's `rle` is a row-major run-length encoding over its `bounds` box
+(first run = background pixel count) — compact for many-mask results and
+trivial to decode into a bitmap. Errors carry stable codes
+(`E_VISION_UNAVAILABLE`, `E_VISION_SESSION` for an unknown/evicted
+`sessionId`, `E_VISION_SEGMENTATION`). `ai.vision.segmentAll(Stream)` /
+`ensureModel` / `benchmark` are wired but **reserved** — they throw
+`E_UNIMPLEMENTED` until a backend that supports them is injected, same as
+`ai.generateImage` did before an image backend existed. As of this writing
+no backend is wired yet (`ai.vision.info` reports `available: false`); see
+[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
+for the full design, current implementation status, and the ONNX Runtime
+packaging work underway.
+
 ### `process.*` — subprocesses (desktop only)
 
 Launch and manage an external child process: stream its stdout/stderr, feed

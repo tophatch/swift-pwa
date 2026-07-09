@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Tap-to-segment · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
+            --accent-ink: #06231a; --line: #232a35;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; overflow: hidden; }
+        body {
+            background: var(--bg); color: var(--ink);
+            font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column;
+        }
+        .bar {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            border-bottom: 1px solid var(--line); background: #131820;
+            padding-top: calc(12px + env(safe-area-inset-top));
+        }
+        .back {
+            text-decoration: none; color: var(--ink); font-weight: 700;
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+        }
+        .back:active { transform: translateY(1px); }
+        .hint { color: var(--muted); font-size: 13px; }
+        .hint b { color: var(--accent); }
+        .stage { position: relative; flex: 1; min-height: 0; }
+        canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: manipulation; }
+        .overlay {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; padding: 24px;
+            background: rgba(14,17,22,0.72); text-align: center;
+        }
+        .overlay small { color: var(--muted); }
+        progress { width: min(320px, 70vw); height: 8px; accent-color: var(--accent); }
+        .err { color: #f0c9c9; max-width: 40ch; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="back" href="index.html">← Back</a>
+        <div class="hint" id="hint"><b>Tap</b> a kitten to select it. Tap elsewhere to reselect.</div>
+    </div>
+
+    <div class="stage">
+        <canvas id="canvas"></canvas>
+        <div class="overlay" id="overlay">
+            <div id="status">Loading…</div>
+            <progress id="bar" max="1" value="0" hidden></progress>
+            <small id="sub"></small>
+        </div>
+    </div>
+
+    <script src="mobilesam.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+        const IMAGE_URL = "assets/jari-hytonen-YCPkW_r_6uA-unsplash.jpg";
+        const MASK_RGBA = [95, 208, 160, 150]; // accent, translucent
+
+        const canvas = $("canvas");
+        const ctx = canvas.getContext("2d");
+
+        let bitmap = null;          // the decoded image, drawn each frame
+        let sessionId = null;       // cached encoder embedding
+        let imageW = 0, imageH = 0; // source pixel dims (from openSession)
+        let layout = null;          // { scale, offsetX, offsetY } in CSS px
+        let lastMask = null;        // most recent VisionMask (for redraw on resize)
+        let lastPoint = null;       // most recent click, source px { x, y }
+        let segmenting = false;
+
+        function setStatus(text, { spinner = true, sub = "" } = {}) {
+            $("overlay").hidden = false;
+            $("status").textContent = text;
+            $("sub").textContent = sub;
+            $("bar").hidden = true;
+        }
+        function hideOverlay() { $("overlay").hidden = true; }
+        function showError(msg) {
+            $("overlay").hidden = false;
+            $("status").innerHTML = '<div class="err">⚠️ ' + msg + "</div>";
+            $("sub").textContent = "";
+            $("bar").hidden = true;
+        }
+
+        // --- rendering -------------------------------------------------------
+
+        // Size the backing store to the device pixel ratio and compute the
+        // contain-fit rect (scale + letterbox offset) mapping source pixels to
+        // CSS pixels. All click/mask math is done in CSS pixels.
+        function computeLayout() {
+            const dpr = window.devicePixelRatio || 1;
+            const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+            canvas.width = Math.round(cssW * dpr);
+            canvas.height = Math.round(cssH * dpr);
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const scale = Math.min(cssW / imageW, cssH / imageH);
+            layout = {
+                scale,
+                offsetX: (cssW - imageW * scale) / 2,
+                offsetY: (cssH - imageH * scale) / 2,
+                cssW, cssH,
+            };
+        }
+
+        function redraw() {
+            if (!layout) return;
+            ctx.clearRect(0, 0, layout.cssW, layout.cssH);
+            if (bitmap) {
+                ctx.drawImage(bitmap, layout.offsetX, layout.offsetY,
+                    imageW * layout.scale, imageH * layout.scale);
+            }
+            if (lastMask) drawMask(lastMask);
+            if (lastPoint) drawMarker(lastPoint);
+        }
+
+        // Decode the mask's run-length encoding (row-major over its bounds box,
+        // background-first) into a translucent overlay and composite it, scaled
+        // from source pixels into the on-screen rect.
+        function drawMask(mask) {
+            const [x0, y0, x1, y1] = mask.bounds;
+            const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+            if (bw <= 0 || bh <= 0) return;
+            const off = document.createElement("canvas");
+            off.width = bw; off.height = bh;
+            const octx = off.getContext("2d");
+            const img = octx.createImageData(bw, bh);
+            const data = img.data;
+            let idx = 0, foreground = false;
+            for (const run of mask.rle) {
+                if (foreground) {
+                    const end = idx + run;
+                    for (let p = idx; p < end; p++) {
+                        const o = p * 4;
+                        data[o] = MASK_RGBA[0]; data[o + 1] = MASK_RGBA[1];
+                        data[o + 2] = MASK_RGBA[2]; data[o + 3] = MASK_RGBA[3];
+                    }
+                }
+                idx += run; foreground = !foreground;
+            }
+            octx.putImageData(img, 0, 0);
+            ctx.drawImage(off,
+                layout.offsetX + x0 * layout.scale, layout.offsetY + y0 * layout.scale,
+                bw * layout.scale, bh * layout.scale);
+        }
+
+        function drawMarker(pt) {
+            const cx = layout.offsetX + pt.x * layout.scale;
+            const cy = layout.offsetY + pt.y * layout.scale;
+            ctx.beginPath(); ctx.arc(cx, cy, 7, 0, Math.PI * 2);
+            ctx.fillStyle = "rgba(255,255,255,0.95)"; ctx.fill();
+            ctx.lineWidth = 2.5; ctx.strokeStyle = "#06231a"; ctx.stroke();
+        }
+
+        // --- interaction -----------------------------------------------------
+
+        async function onTap(clientX, clientY) {
+            if (!sessionId || segmenting || !layout) return;
+            const rect = canvas.getBoundingClientRect();
+            const cx = clientX - rect.left, cy = clientY - rect.top;
+            // CSS px → source px; ignore taps in the letterbox margin.
+            const sx = (cx - layout.offsetX) / layout.scale;
+            const sy = (cy - layout.offsetY) / layout.scale;
+            if (sx < 0 || sy < 0 || sx >= imageW || sy >= imageH) return;
+
+            segmenting = true;
+            lastPoint = { x: sx, y: sy };
+            lastMask = null;         // clear the previous mask immediately
+            redraw();
+            try {
+                const { masks } = await bridge.invoke("ai.vision.segment", {
+                    sessionId,
+                    points: [{ x: sx, y: sy, label: 1 }],
+                    multimask: true,
+                });
+                // Best-scored candidate (SAM's ambiguity-resolving pick).
+                lastMask = masks && masks.length ? masks[0] : null;
+                redraw();
+                if (!lastMask) $("hint").innerHTML = "No object found there — try another spot.";
+            } catch (e) {
+                showError((e && e.message) || "segmentation failed");
+            } finally {
+                segmenting = false;
+            }
+        }
+
+        canvas.addEventListener("click", (e) => onTap(e.clientX, e.clientY));
+
+        let resizeRaf = 0;
+        window.addEventListener("resize", () => {
+            cancelAnimationFrame(resizeRaf);
+            resizeRaf = requestAnimationFrame(() => { computeLayout(); redraw(); });
+        });
+
+        // --- startup ---------------------------------------------------------
+
+        async function start() {
+            try {
+                const info = await bridge.invoke("ai.vision.info", {});
+                if (!info || !info.available) {
+                    showError("On-device segmentation isn't available in this build. " +
+                        "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
+                    return;
+                }
+
+                // 1. Ensure the MobileSAM weights are on disk (first run downloads
+                //    ~60 MB; ensureSegmentationModel is defined in mobilesam.js).
+                setStatus("Preparing the segmentation model…");
+                $("bar").hidden = false;
+                await window.ensureSegmentationModel((done, total) => {
+                    if (total) {
+                        $("bar").removeAttribute("value"); $("bar").value = done / total;
+                        $("sub").textContent =
+                            `Downloading model… ${(done / 1048576).toFixed(0)} / ${(total / 1048576).toFixed(0)} MB`;
+                    } else {
+                        $("sub").textContent = `Downloading model… ${(done / 1048576).toFixed(0)} MB`;
+                    }
+                });
+
+                // 2. Fetch the image once — decode it for display, and hand the
+                //    same bytes to the encoder as base64 (a bundled asset has no
+                //    real filesystem path on Android, so `dataBase64` is used).
+                setStatus("Loading image…", { spinner: true });
+                $("bar").hidden = true;
+                const buf = await (await fetch(IMAGE_URL)).arrayBuffer();
+                bitmap = await createImageBitmap(new Blob([buf]));
+
+                // 3. Encode once (the expensive step); every tap reuses the
+                //    cached embedding via the returned sessionId.
+                setStatus("Analyzing image…");
+                const session = await bridge.invoke("ai.vision.openSession", {
+                    image: { dataBase64: arrayBufferToBase64(buf) },
+                });
+                sessionId = session.sessionId;
+                imageW = session.width; imageH = session.height;
+
+                computeLayout();
+                redraw();
+                hideOverlay();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            }
+        }
+
+        function arrayBufferToBase64(buf) {
+            const bytes = new Uint8Array(buf);
+            let binary = "";
+            const chunk = 0x8000; // chunked to avoid a String.fromCharCode stack blowout
+            for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+        }
+
+        // Release the encoder's cached embedding when leaving the page.
+        window.addEventListener("pagehide", () => {
+            if (sessionId) bridge.invoke("ai.vision.closeSession", { sessionId }).catch(() => {});
+        });
+
+        start();
+    </script>
+</body>
+</html>

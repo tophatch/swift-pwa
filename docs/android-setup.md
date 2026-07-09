@@ -761,15 +761,59 @@ in place (it's regenerated on each `swift-pwa build`, so fold the fix back into
 your build flow). Structured output (`ai.generateJSON`) uses the shared
 prompt-and-validate fallback for now (`structuredOutput: false`).
 
-## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime packaging spike
+## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime + `MobileSAMBackend`
 
-**Not a shipped feature yet** — no `pwa.json` flag, no bundler wiring, no
-backend. This section documents an in-progress packaging spike for the 0.8
-segmentation epic (see
-[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)),
-so anyone picking up the follow-up work (a real `MobileSAMBackend`,
-publishing the vendored artifact) knows where things stand and how to
-reproduce the toolchain locally.
+**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, gated behind
+`ai.local_onnx_runtime: true` in `pwa.json` — `swift-pwa build` sets
+`SWIFT_PWA_ONNXRUNTIME=1` for you) exists on Android**, verified against real
+MobileSAM weights — see
+[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
+for the full design and current 0.8 status. `swift-pwa build --target
+android --cross-compile-android` resolves + stages the vendored
+`libonnxruntime.so` into `jniLibs/<abi>/` for you (`OnnxRuntimeAndroidArtifact`,
+checksum-verified per ABI — only `arm64-v8a` is published today; an
+unpublished ABI fails the build with an actionable message rather than
+shipping a `.so`-less APK). An app opts in to the *model* with
+`ctx.use(VisionPlugin(MobileSAMBackend(...)))`, either bundling weights or —
+preferably on Android — using the **downloadable tier**:
+`MobileSAMBackend(cacheDirectory:)` plus `ai.vision.ensureModel` fetches the
+three ONNX files from the `mobilesam-vendor` release on first use
+(checksum-pinned) straight to a real filesystem path. That sidesteps the "an
+APK asset isn't a file ONNX Runtime can open" problem entirely — no
+`fs.writeBinary` materialization step, no ~60 MB of weights in the APK.
+`Examples/CritterFacts` uses this tier (device-verified on a Galaxy Z Fold7).
+
+> **Downloads on Android don't use `URLSession`.** swift-corelibs-foundation's
+> `URLSession` here is libcurl + BoringSSL with no injectable CA trust store —
+> `libFoundationNetworking` only reads a fixed list of read-only Linux CA
+> paths (`/etc/ssl/certs/ca-certificates.crt`, …) that don't exist on Android,
+> and neither `CURL_CA_BUNDLE` nor `SSL_CERT_FILE`/`SSL_CERT_DIR` is honored,
+> so any HTTPS download from Swift fails with "unable to get local issuer
+> certificate". `MobileSAMBackend`'s Android `ensureModel` therefore downloads
+> through a Kotlin `net.downloadFile` RPC (`HttpURLConnection`, the platform's
+> own system TLS), which mirrors `ModelDownloader`'s cache-reuse + streamed
+> SHA-256 verification + atomic rename. If you write an Android backend that
+> needs to fetch over HTTPS, route it through that RPC (or your own Kotlin
+> HTTP), not `URLSession`.
+
+This section documents the packaging spike this was built on plus the
+Android-specific plumbing, so anyone reproducing the toolchain locally knows
+where things stand.
+
+**No CoreGraphics/ImageIO on Android**, so `ImagePreprocessing`'s Android
+half (`Sources/SwiftPWASegmentation/AndroidImagePreprocessing.swift`)
+doesn't decode/resize in Swift at all — it RPCs a new `vision.
+preprocessImage` method (in the generated `SwiftPWASystemPlugins.kt`) that
+decodes via `android.graphics.BitmapFactory` (`decodeFile` for a plain
+path, `decodeStream` off a `ContentResolver` for a `content://` SAF pick,
+`decodeByteArray` for inline `dataBase64`), resizes with
+`Bitmap.createScaledBitmap` to match the same resize-longest-side-to-1024
+math the Apple side uses, and returns the raw RGB bytes base64-encoded —
+same generic JNI RPC bridge (`AndroidRPC.call`, now `public` so a
+cross-module target can reach it) `AndroidArchiveExtractor` uses for zip
+work. `MobileSAMBackend` itself, `OrtRuntime`, and `OrtModelSession` are
+otherwise identical Swift on both platforms — only the image-decode step
+differs.
 
 Unlike llama.cpp (no Android backend at all in this repo), Microsoft ships
 a usable prebuilt Android artifact for ONNX Runtime — the
@@ -813,6 +857,33 @@ committed target) is a plain library with no product forcing a real link
 yet, so `swift build --target` against it only proves compile +
 module-resolution; the link+runtime proof lives in that throwaway
 executable, not in anything committed to this repo.
+
+The real `MobileSAMBackend` (`SwiftPWASegmentation` target) is verified the
+same way at the link level — a throwaway executable depending on the
+`SwiftPWASegmentation` product, built with the same
+`TOOLCHAINS`/`LIBRARY_PATH`/`--swift-sdk` invocation, links successfully
+with `OrtGetApiBase@VERS_1.27.0` showing as an undefined symbol resolving
+against the real vendored `.so` (`nm` on the resulting binary, not a stub).
+
+Beyond that, a **full on-device `openSession`/`segment` round trip through
+the `vision.preprocessImage` RPC bridge is verified**, using
+`Examples/CritterFacts` (a real `swift-pwa build --target android`
+app, not a throwaway executable) on a Galaxy Z Fold7 against a real photo:
+`ai.vision.openSession` on a 6018×4024 kitten photo (fetched from the
+app's own bundled web asset, base64'd to `dataBase64`) succeeded, and
+`ai.vision.segment` with a point prompt + `multimask: true` returned 4
+ranked masks (best IoU ~0.99) whose decoded RLE, rendered back onto the
+source photo, precisely outlined the prompted kittens — visually confirmed,
+not just checked by shape. See `Examples/CritterFacts/Sources/CritterFacts/
+CritterFacts.swift`'s `configure(_:)` and `web/mobilesam.js` for the
+bundled-weights + on-device-materialize pattern this used (also documented
+in the proposal doc). At the time of that round trip, `swift-pwa build
+--target android` didn't yet stage the vendored `libonnxruntime.so` into
+`jniLibs/`, requiring a manual `cp` before `./gradlew assembleDebug` (or
+`UnsatisfiedLinkError: ... library "libonnxruntime.so" not found` at
+launch) — `OnnxRuntimeAndroidArtifact` + `AndroidBundler.stageJniLibs` now
+do this automatically, the same way the Swift runtime stdlib libs are
+staged.
 
 ## 8. Known limitations
 

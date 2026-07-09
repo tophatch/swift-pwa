@@ -17,6 +17,11 @@ let llamaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil
 // platform built-in (Phi Silica). `swift-pwa build` sets SWIFT_PWA_PHI_SILICA
 // from `ai.phi_silica: true`; add the dependency only then, same as llama.
 let phiSilicaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_PHI_SILICA"] != nil
+// `SwiftPWASegmentation` (MobileSAMBackend, `ai.vision.*`) is the analogous
+// env-gated product for on-device segmentation — `swift-pwa build` sets
+// SWIFT_PWA_ONNXRUNTIME from `ai.local_onnx_runtime: true`, same as llama/Phi
+// Silica above (Apple + Android; no Linux/Windows backend yet).
+let onnxRuntimeEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil
 
 var appDependencies: [Target.Dependency] = [
     .product(name: "SwiftPWA", package: "swift-pwa"),
@@ -28,6 +33,9 @@ if llamaEnabled {
 }
 if phiSilicaEnabled {
     appDependencies.append(.product(name: "SwiftPWAPhiSilica", package: "swift-pwa"))
+}
+if onnxRuntimeEnabled {
+    appDependencies.append(.product(name: "SwiftPWASegmentation", package: "swift-pwa"))
 }
 
 let package = Package(
@@ -51,6 +59,9 @@ let package = Package(
                     ["-Xlinker", "-no-pie", "-Xlinker", "-shared"],
                     .when(platforms: [.android])
                 ),
+                // Note: linking the ONNX Runtime xcframework needs libc++ on
+                // Apple, but `SwiftPWASegmentation` now declares that itself
+                // (its linkerSettings propagate here), so this app doesn't.
             ]
         ),
     ]

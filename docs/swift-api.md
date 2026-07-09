@@ -102,12 +102,17 @@ is discriminative, not generative, and needs an encode-once/decode-many
 session primitive `AIBackend` has no room for):
 `ctx.use(VisionPlugin(MyBackend()))`, or `ctx.use(VisionPlugin())` to wire
 the JS contract against `NoneSegmentationBackend`. Shipping backend:
-`MobileSAMBackend` (`SwiftPWASegmentation`, Apple-only, env-gated behind
-`SWIFT_PWA_ONNXRUNTIME`) — runs MobileSAM's encoder plus one of two decoder
-variants as ONNX Runtime sessions, verified against real weights (see the
-`mobilesam-vendor` GitHub Release); takes on-disk
-`encoderPath`/`decoderSinglePath`/`decoderMultiPath` directly (no
-downloadable-model tier yet). See
+`MobileSAMBackend` (`SwiftPWASegmentation`, Apple + Android, opt in via
+`ai.local_onnx_runtime` in `pwa.json`) — runs MobileSAM's encoder plus one of two
+decoder variants as ONNX Runtime sessions, verified against real weights
+(see the `mobilesam-vendor` GitHub Release). Two initializers, mirroring
+`LlamaBackend`: `init(encoderPath:decoderSinglePath:decoderMultiPath:)` for
+weights already on disk (bundled / bring-your-own), or
+`init(cacheDirectory:source:)` for the **downloadable** tier — `ai.vision.ensureModel`
+then fetches the three ONNX files (default `MobileSAMModelSource.mobileSAM`,
+resumable + checksum-pinned via `ModelDownloader`) into `cacheDirectory` on
+first use. Android has no CoreGraphics/ImageIO, so image decode/resize routes
+through a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` instead. See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the design and current implementation status.
 

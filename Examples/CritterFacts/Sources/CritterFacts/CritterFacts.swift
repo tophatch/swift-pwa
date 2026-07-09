@@ -12,6 +12,11 @@ import SwiftPWAModelStore // ModelSpec
 #if canImport(SwiftPWAPhiSilica)
     import SwiftPWAPhiSilica
 #endif
+// The on-device segmentation backend (MobileSAMBackend, `ai.vision.*`) —
+// env-gated the same way, via `ai.local_onnx_runtime` in pwa.json.
+#if canImport(SwiftPWASegmentation)
+    import SwiftPWASegmentation
+#endif
 
 #if canImport(SwiftPWALlama)
     /// The downloadable model (tiny, ~400 MB, Apache-2.0) — shared by the
@@ -151,6 +156,25 @@ func configure(_ ctx: any AppContext) throws {
                 + "`swift-pwa build` (ai.local_llama is set in pwa.json) or export "
                 + "SWIFT_PWA_LLAMA=1 before `swift run` to enable on-device facts."
         )
+    #endif
+
+    // On-device segmentation demo (`ai.vision.*`) — MobileSAMBackend, a
+    // *separate* plugin/namespace from the `ai.*` generative backend picked
+    // above, so it's wired unconditionally rather than as another `#elseif`
+    // branch. Uses the **downloadable-model tier**: the three MobileSAM ONNX
+    // files (~60 MB, Apache-2.0) are fetched on first use from the
+    // `mobilesam-vendor` release (resumable + checksum-pinned via the same
+    // ModelDownloader the llama backend uses) into the app's data directory,
+    // exactly like the llama GGUF above — the page calls `ai.vision.ensureModel`
+    // once before its first `ai.vision.openSession` (see `web/mobilesam.js`).
+    // Identical wiring on Apple and Android; on Android this also sidesteps
+    // the "an APK asset isn't a file ONNX Runtime can open" problem — the
+    // downloader writes straight to a real filesystem path, no materialization
+    // step needed. Verified end-to-end against a real photo on a Galaxy Z
+    // Fold7, and on macOS via a real network download + segment.
+    #if canImport(SwiftPWASegmentation)
+        let mobileSAMDir = ctx.dataDirectory().appendingPathComponent("mobilesam", isDirectory: true)
+        ctx.use(VisionPlugin(MobileSAMBackend(cacheDirectory: mobileSAMDir)))
     #endif
 
     // Android serves bundled web assets through the WebViewAssetLoader virtual

@@ -3,63 +3,29 @@
     import Foundation
     import ImageIO
 
-    /// The MobileSAM encoder's actual preprocessing split: this side resizes
-    /// so the longer side hits `targetSize` (preserving aspect ratio) and
-    /// hands the encoder a raw HWC pixel tensor — no padding, no
-    /// normalization, no channel transpose. The verified real encoder graph
-    /// (`Acly/MobileSAM` on Hugging Face) bakes all three of those into the
-    /// ONNX graph itself (mean/std `Sub`/`Div`, a `Transpose` to CHW, then a
-    /// `Pad` to square), so doing them again here would double-apply. Every
-    /// SAM/MobileSAM ONNX export in this "encoder does its own preprocessing"
-    /// shape expects exactly `[height, width, 3]` float32, values `0...255`,
-    /// RGB order.
-    struct PreprocessedImage {
-        /// HWC float32, row-major, `resizedHeight * resizedWidth * 3`
-        /// elements — raw pixel values `0...255`, not normalized.
-        var tensor: [Float]
-        /// The source image's original pixel dimensions — what prompt
-        /// coordinates and `orig_im_size` are expressed in.
-        var originalWidth: Int
-        var originalHeight: Int
-        /// The resized dimensions actually fed to the encoder (one of these
-        /// equals `targetSize`; the other is smaller — no padding is added
-        /// on this side, the encoder graph pads internally).
-        var resizedWidth: Int
-        var resizedHeight: Int
-        /// `resizedWidth / originalWidth` (equivalently `resizedHeight /
-        /// originalHeight`, aspect ratio is preserved) — the factor prompt
-        /// coordinates must be scaled by to land in the encoder's frame.
-        var scale: Double
-
-        /// Maps a point in source-image pixels into the resized image's
-        /// coordinate space (what the decoder's `point_coords` input
-        /// expects — verified empirically against the real decoder graph,
-        /// no padding offset needed since the encoder's internal pad is
-        /// added after this frame, top-left anchored).
-        func mapPoint(x: Double, y: Double) -> (x: Double, y: Double) {
-            (x * scale, y * scale)
-        }
-    }
-
-    enum ImagePreprocessingError: Error, Equatable {
-        case decodeFailed(String)
-        case unsupportedColorFormat(String)
-    }
-
-    enum ImagePreprocessing {
-        /// Loads and resizes an image file into the encoder's expected
+    /// The Apple `ImagePreprocessing.load` implementation — decodes via
+    /// CoreGraphics/ImageIO and resizes so the longer side hits `targetSize`.
+    /// See `AndroidImagePreprocessing.swift` for the Android counterpart and
+    /// `PreprocessedImage.swift` for the shared contract both produce.
+    extension ImagePreprocessing {
+        /// Loads and resizes an on-disk image into the encoder's expected
         /// `[height, width, 3]` raw pixel tensor.
-        static func load(contentsOf url: URL, targetSize: Int = 1024) throws -> PreprocessedImage {
+        static func load(path: String, targetSize: Int = 1024) async throws -> PreprocessedImage {
+            let url = URL(fileURLWithPath: path)
             guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
                   let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
             else {
-                throw ImagePreprocessingError.decodeFailed(url.path)
+                throw ImagePreprocessingError.decodeFailed(path)
             }
             return try preprocess(cgImage, targetSize: targetSize)
         }
 
-        /// Same as `load(contentsOf:)`, from in-memory image bytes (PNG/JPEG).
-        static func load(data: Data, targetSize: Int = 1024) throws -> PreprocessedImage {
+        /// Same as `load(path:)`, from base64-encoded in-memory image bytes
+        /// (PNG/JPEG).
+        static func load(dataBase64: String, targetSize: Int = 1024) async throws -> PreprocessedImage {
+            guard let data = Data(base64Encoded: dataBase64) else {
+                throw ImagePreprocessingError.decodeFailed("<invalid base64 image data>")
+            }
             guard let source = CGImageSourceCreateWithData(data as CFData, nil),
                   let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
             else {

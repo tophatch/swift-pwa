@@ -24,6 +24,10 @@ The llama model runs **Metal-accelerated on Apple** and **Vulkan-accelerated on
 Linux and Windows** (GPU if present, CPU fallback otherwise); Gemini Nano runs
 on the device's NPU/accelerator via AICore — same page, same `ai.*` calls.
 
+It also carries an on-device **segmentation** demo (`ai.vision.*`,
+`MobileSAMBackend`) on Apple + Android — see
+[On-device segmentation](#on-device-segmentation-aivision) below.
+
 ## Build & run
 
 The backend is opt-in, so build through the CLI (which sets `SWIFT_PWA_LLAMA`
@@ -97,6 +101,61 @@ swift run --package-path ../.. swift-pwa build \
 cd build/CritterFacts-android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## On-device segmentation (`ai.vision.*`)
+
+Alongside the fact generator, this app wires **`MobileSAMBackend`**
+(`SwiftPWASegmentation`) — promptable on-device image segmentation, verified
+end-to-end on both Apple and a real Android device (Galaxy Z Fold7) against
+a real photo. The **"🐱 Tap-to-segment a kitten"** button on the main page
+opens [web/segment.html](Sources/CritterFacts/web/segment.html): a full-screen
+canvas showing a photo of kittens where tapping one draws a mask over it (tap
+elsewhere to reselect) — the canonical SAM tap-to-segment interaction, running
+entirely on-device. It's enabled via **`ai.local_onnx_runtime: true`** in
+[pwa.json](pwa.json), the same pattern as `ai.local_llama` — `swift-pwa
+build` sets `SWIFT_PWA_ONNXRUNTIME=1` for you (Apple + Android; on Android it
+also resolves + stages `libonnxruntime.so` per ABI automatically).
+
+The three MobileSAM ONNX weight files (~60 MB, Apache-2.0, sourced from
+[`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM) — see
+[docs/proposals/segmentation-plugin.md](../../docs/proposals/segmentation-plugin.md))
+are **not** shipped with the app. It uses the **downloadable tier**:
+`MobileSAMBackend(cacheDirectory:)` fetches them on first use from the
+`mobilesam-vendor` release (resumable + checksum-pinned via the same
+`ModelDownloader` the llama GGUF uses), into the app's data directory. Same
+wiring on Apple and Android — and on Android it sidesteps the "an APK asset
+isn't a file ONNX Runtime can open" problem for free, since the downloader
+writes straight to a real path.
+
+**Build**: same as above — no extra flag needed, `pwa.json` already turns it
+on. For a quick `swift build`/`swift run` dev loop that bypasses the CLI, set
+the env var directly instead:
+
+```bash
+cd Examples/CritterFacts
+SWIFT_PWA_ONNXRUNTIME=1 swift build
+```
+
+Drive the download once before your first `ai.vision.openSession`.
+[web/mobilesam.js](Sources/CritterFacts/web/mobilesam.js) wraps
+`ai.vision.ensureModel` as `window.ensureSegmentationModel(onProgress)`:
+
+```js
+await ensureSegmentationModel((done, total) => console.log(`${done}/${total} bytes`));
+const { sessionId, width, height } = await __SWIFT_PWA__.invoke('ai.vision.openSession', {
+    image: { path: /* a real on-device path, or use dataBase64 */ }
+});
+const { masks } = await __SWIFT_PWA__.invoke('ai.vision.segment', {
+    sessionId, points: [{ x: width / 2, y: height / 2, label: 1 }], multimask: true,
+});
+```
+
+Nothing app-specific is needed to link it: Apple's vendored ONNX Runtime
+xcframework embeds protobuf (which needs `libc++`), but `SwiftPWASegmentation`
+declares that link itself, and the Android `libonnxruntime.so` staging + the
+per-ABI `.so` fetch are handled for you by `swift-pwa build`. So this app's
+`Package.swift` just adds the `SwiftPWASegmentation` product — no extra
+`linkerSettings`.
 
 ## Swapping the model
 

@@ -569,15 +569,19 @@ Each mask's `rle` is a row-major run-length encoding over its `bounds` box
 (first run = background pixel count) — compact for many-mask results and
 trivial to decode into a bitmap. Errors carry stable codes
 (`E_VISION_UNAVAILABLE`, `E_VISION_SESSION` for an unknown/evicted
-`sessionId`, `E_VISION_SEGMENTATION`). `ai.vision.segmentAll(Stream)` /
-`ensureModel` / `benchmark` are wired but **reserved** — they throw
-`E_UNIMPLEMENTED` until a backend that supports them is injected, same as
-`ai.generateImage` did before an image backend existed. A real backend
-(`MobileSAMBackend`, Apple-only, verified against real weights) exists as
-of this writing, but isn't auto-installed — an app must opt in via
-`ctx.use(VisionPlugin(...))` and supply model paths (see the
-`mobilesam-vendor` GitHub Release), so `ai.vision.info` reports
-`available: false` until then. See
+`sessionId`, `E_VISION_SEGMENTATION`, `E_VISION_MODEL` for a failed
+`ensureModel` download). `ai.vision.ensureModel` (subscribe) streams
+`AIDownloadEvent` frames — a single aggregate `progress` bar then a terminal
+`done` — the same shape as `ai.ensureModel` for the llama model; call it once
+before the first `ai.vision.openSession` when using a downloadable backend
+(`MobileSAMBackend(cacheDirectory:)`). `ai.vision.segmentAll(Stream)` /
+`benchmark` remain **reserved** — they throw `E_UNIMPLEMENTED` until a backend
+that supports them is injected, same as `ai.generateImage` did before an image
+backend existed. A real backend (`MobileSAMBackend`, Apple + Android, verified
+against real weights) exists as of this writing, but isn't auto-installed — an
+app must opt in via `ctx.use(VisionPlugin(...))` and either bundle weights or
+use the downloadable tier (see the `mobilesam-vendor` GitHub Release), so
+`ai.vision.info` reports `available: false` until then. See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the full design, current implementation status, and the ONNX Runtime
 packaging work underway.

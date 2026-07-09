@@ -48,6 +48,14 @@
         }
         button:active { transform: translateY(1px); }
         button:disabled { opacity: 0.5; cursor: progress; }
+        .seglink {
+            display: inline-block; text-decoration: none; font-weight: 700; font: inherit;
+            font-weight: 700; color: var(--ink); background: transparent;
+            border: 1px solid var(--line); padding: 12px 20px; border-radius: 12px;
+            transition: border-color .2s, transform .06s ease;
+        }
+        .seglink:hover { border-color: var(--accent); }
+        .seglink:active { transform: translateY(1px); }
         .progress { width: 100%; max-width: 540px; }
         progress { width: 100%; height: 8px; accent-color: var(--accent); }
         .progress small { color: var(--muted); }
@@ -75,6 +83,8 @@
         <button id="go">Tell me a fact</button>
     </main>
 
+    <a class="seglink" href="segment.html">🐱 Tap-to-segment a kitten →</a>
+
     <div id="progress" class="progress" hidden>
         <progress id="bar" max="1" value="0"></progress>
         <small id="progress-label">Downloading model…</small>
@@ -84,6 +94,7 @@
         Backend: <code id="backend">checking…</code> · model downloads once, then runs offline.
     </footer>
 
+    <script src="mobilesam.js"></script>
     <script>
         const $ = (id) => document.getElementById(id);
         const bridge = window.__SWIFT_PWA__;

@@ -207,6 +207,67 @@
             }
         }
 
+        @Test("info reports autoMask:true now that AMG is implemented")
+        func infoAutoMask() async throws {
+            #expect(try await (backend()).info().autoMask == true)
+        }
+
+        @Test("segmentAll runs the grid + NMS and returns deduped masks")
+        func segmentAllDedupes() async throws {
+            let backend = try backend()
+            let imageURL = try writeTestImage()
+            defer { try? FileManager.default.removeItem(at: imageURL) }
+
+            let session = try await backend.openSession(.init(image: .file(imageURL.path)))
+            // The fake multi decoder emits three blobs with iou [0.5, 0.8,
+            // 0.65] and ignores the prompt point, so every grid cell yields
+            // the same single above-quality-floor (0.8) blob. NMS collapses
+            // the identical masks to exactly one.
+            let result = try await backend.segmentAll(.init(sessionID: session.sessionID, pointsPerSide: 4))
+            #expect(result.masks.count == 1)
+            let mask = try #require(result.masks.first)
+            #expect(abs(mask.score - 0.8) < 0.001)
+            // RLE integrity: run lengths sum to the bbox area.
+            #expect(mask.rle
+                .reduce(0, +) == (mask.bounds[2] - mask.bounds[0] + 1) * (mask.bounds[3] - mask.bounds[1] + 1))
+        }
+
+        @Test("segmentAllStream emits one progress frame per grid cell, then a done")
+        func segmentAllStreamProgress() async throws {
+            let backend = try backend()
+            let imageURL = try writeTestImage()
+            defer { try? FileManager.default.removeItem(at: imageURL) }
+
+            let session = try await backend.openSession(.init(image: .file(imageURL.path)))
+            var progressFrames = 0
+            var lastProgress: (done: Int, total: Int)?
+            var doneMasks: [VisionMask]?
+            for try await frame in backend.segmentAllStream(.init(sessionID: session.sessionID, pointsPerSide: 3)) {
+                if frame.type == "progress" {
+                    progressFrames += 1
+                    lastProgress = (frame.done ?? -1, frame.total ?? -1)
+                } else if frame.type == "done" {
+                    doneMasks = frame.masks
+                }
+            }
+            // 3x3 grid → 9 progress frames, total reported as 9, terminal done.
+            #expect(progressFrames == 9)
+            #expect(lastProgress?.done == 9)
+            #expect(lastProgress?.total == 9)
+            #expect(doneMasks?.count == 1)
+        }
+
+        @Test("segmentAll against an unknown sessionId fails with .session")
+        func segmentAllUnknownSession() async throws {
+            let backend = try backend()
+            do {
+                _ = try await backend.segmentAll(.init(sessionID: "nope"))
+                Issue.record("expected segmentAll to throw")
+            } catch let error as VisionError {
+                #expect(error.code == VisionError.sessionCode)
+            }
+        }
+
         @Test("the encoder's cached embedding is reused across multiple segment calls")
         func embeddingReusedAcrossSegmentCalls() async throws {
             let backend = try backend()

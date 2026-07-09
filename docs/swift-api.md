@@ -112,7 +112,11 @@ weights already on disk (bundled / bring-your-own), or
 then fetches the three ONNX files (default `MobileSAMModelSource.mobileSAM`,
 resumable + checksum-pinned via `ModelDownloader`) into `cacheDirectory` on
 first use. Android has no CoreGraphics/ImageIO, so image decode/resize routes
-through a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` instead. See
+through a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` instead.
+`MobileSAMBackend` also implements **automatic mask generation**
+(`ai.vision.segmentAll` / `segmentAllStream`, `autoMask: true`) — a grid-of-
+prompts sweep + NMS returning every distinct object as its own mask, streaming
+per-cell progress. See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the design and current implementation status.
 

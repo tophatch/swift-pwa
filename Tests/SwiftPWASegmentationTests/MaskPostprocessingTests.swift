@@ -62,4 +62,46 @@ struct MaskPostprocessingTests {
         #expect(encoded.rle.first == 0)
         #expect(encoded.rle.reduce(0, +) == 4)
     }
+
+    // MARK: - Upsampled RLE (automatic mask generation)
+
+    @Test("encodeUpsampledRLE at scale 1 (no downscale) matches a plain encode")
+    func upsampledIdentity() throws {
+        // A 2x2 true block in a 4x4 working grid, scale 1.0 → source == work.
+        let width = 4, height = 4
+        var mask = [Bool](repeating: false, count: width * height)
+        for y in 1 ... 2 { for x in 1 ... 2 { mask[y * width + x] = true } }
+        let upsampled = try #require(MaskPostprocessing.encodeUpsampledRLE(
+            workMask: mask, workWidth: width, workHeight: height, workBounds: [1, 1, 2, 2],
+            scale: 1.0, sourceWidth: width, sourceHeight: height
+        ))
+        let plain = try #require(MaskPostprocessing.encodeRLE(mask, width: width, height: height))
+        #expect(upsampled.bounds == plain.bounds)
+        #expect(upsampled.rle == plain.rle)
+    }
+
+    @Test("encodeUpsampledRLE scales a working mask up to source pixels")
+    func upsampledScalesUp() throws {
+        // A single set pixel at working (1,1) in a 2x2 grid; scale 0.5 means
+        // source is 4x4, so that pixel covers the source 2x2 block [2..3, 2..3].
+        let mask = [false, false, false, true] // 2x2, only (1,1) set
+        let encoded = try #require(MaskPostprocessing.encodeUpsampledRLE(
+            workMask: mask, workWidth: 2, workHeight: 2, workBounds: [1, 1, 1, 1],
+            scale: 0.5, sourceWidth: 4, sourceHeight: 4
+        ))
+        // Source bbox: floor(1/0.5)=2 .. ceil(2/0.5)-1=3 in both axes.
+        #expect(encoded.bounds == [2, 2, 3, 3])
+        // Every source pixel in that 2x2 box maps back to work (1,1) → all set.
+        let decoded = MaskPostprocessing.decodeRLE(bounds: encoded.bounds, rle: encoded.rle)
+        #expect(decoded == [true, true, true, true])
+    }
+
+    @Test("encodeUpsampledRLE returns nil for an all-background mask")
+    func upsampledEmpty() {
+        let mask = [Bool](repeating: false, count: 4)
+        #expect(MaskPostprocessing.encodeUpsampledRLE(
+            workMask: mask, workWidth: 2, workHeight: 2, workBounds: [0, 0, 1, 1],
+            scale: 0.5, sourceWidth: 4, sourceHeight: 4
+        ) == nil)
+    }
 }

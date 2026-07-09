@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ai.vision.segmentAll` / `segmentAllStream` — automatic mask generation on `MobileSAMBackend`.** The reserved AMG surface now has a real implementation (previously `E_UNIMPLEMENTED`): a `pointsPerSide × pointsPerSide` grid of positive-point prompts through the multi-mask decoder, then greedy non-max-suppression (mask IoU) to dedup overlapping candidates — every distinct object as its own `{ bounds, rle, score }` mask, best-score-first. `segmentAllStream` (subscribe) yields a `progress(done, total)` frame per grid cell then a terminal `done`; the unary `segmentAll` drains the same pass. `ai.vision.info` now reports `autoMask: true`. Request knobs: `pointsPerSide` (default 16, capped at 32), `iouThreshold` (NMS dedup, default 0.88), `minAreaPx` (drop specks). Reuses the cached encoder embedding — the whole grid is cheap decodes against one `openSession`. Discovery runs at a reduced working resolution (the decoder upsamples masks to whatever `orig_im_size` it's handed) so a full sweep stays tractable; survivors are nearest-upsampled back to source pixels. Verified end-to-end on macOS against the real `Acly/MobileSAM` weights — a 12×12 grid on a 6018×4024 four-kitten photo returns distinct per-object masks (scores ~0.97–1.01) in ~5 s. Linux/Windows still ship `NoneBackend`; `ai.vision.benchmark` remains reserved.
+
 ## [0.8.0] - 2026-07-09
 
 ### Added

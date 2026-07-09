@@ -763,17 +763,22 @@ prompt-and-validate fallback for now (`structuredOutput: false`).
 
 ## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime + `MobileSAMBackend`
 
-**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, env-gated
-behind `SWIFT_PWA_ONNXRUNTIME`) exists on Android**, verified against real
+**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, gated behind
+`ai.local_onnx_runtime: true` in `pwa.json` — `swift-pwa build` sets
+`SWIFT_PWA_ONNXRUNTIME=1` for you) exists on Android**, verified against real
 MobileSAM weights — see
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
-for the full design and current 0.8 status. There's still no `pwa.json`
-flag or bundler auto-wiring (an app opts in with `ctx.use(VisionPlugin(...))`
-and its own on-disk model paths, same as Apple), and no downloadable-model
-tier (`ai.vision.ensureModel`) yet. This section documents the packaging
-spike this was built on plus the Android-specific plumbing, so anyone
-picking up the remaining follow-ups (an on-device encode/decode round trip
-against a real device, `ensureModel` wiring) knows where things stand and
+for the full design and current 0.8 status. `swift-pwa build --target
+android --cross-compile-android` resolves + stages the vendored
+`libonnxruntime.so` into `jniLibs/<abi>/` for you (`OnnxRuntimeAndroidArtifact`,
+checksum-verified per ABI — only `arm64-v8a` is published today; an
+unpublished ABI fails the build with an actionable message rather than
+shipping a `.so`-less APK). An app still opts in to the *model* itself with
+`ctx.use(VisionPlugin(MobileSAMBackend(...)))` and its own on-disk weight
+paths (same as Apple) — there's no downloadable-model tier
+(`ai.vision.ensureModel`) yet. This section documents the packaging spike
+this was built on plus the Android-specific plumbing, so anyone picking up
+the remaining follow-up (`ensureModel` wiring) knows where things stand and
 how to reproduce the toolchain locally.
 
 **No CoreGraphics/ImageIO on Android**, so `ImagePreprocessing`'s Android
@@ -853,13 +858,13 @@ source photo, precisely outlined the prompted kittens — visually confirmed,
 not just checked by shape. See `Examples/CritterFacts/Sources/CritterFacts/
 CritterFacts.swift`'s `configure(_:)` and `web/mobilesam.js` for the
 bundled-weights + on-device-materialize pattern this used (also documented
-in the proposal doc). One extra gotcha hit along the way: `swift-pwa build
---target android` doesn't stage the vendored `libonnxruntime.so` into
-`jniLibs/` (no `pwa.json`/bundler wiring for this exists yet, unlike
-llama's artifacts) — copy it in by hand before `./gradlew assembleDebug`,
-or the app crashes on launch with `UnsatisfiedLinkError: ... library
-"libonnxruntime.so" not found`. This is a real gap for whenever `ai.vision.*`
-gets real bundler wiring.
+in the proposal doc). At the time of that round trip, `swift-pwa build
+--target android` didn't yet stage the vendored `libonnxruntime.so` into
+`jniLibs/`, requiring a manual `cp` before `./gradlew assembleDebug` (or
+`UnsatisfiedLinkError: ... library "libonnxruntime.so" not found` at
+launch) — `OnnxRuntimeAndroidArtifact` + `AndroidBundler.stageJniLibs` now
+do this automatically, the same way the Swift runtime stdlib libs are
+staged.
 
 ## 8. Known limitations
 

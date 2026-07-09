@@ -102,8 +102,8 @@ is discriminative, not generative, and needs an encode-once/decode-many
 session primitive `AIBackend` has no room for):
 `ctx.use(VisionPlugin(MyBackend()))`, or `ctx.use(VisionPlugin())` to wire
 the JS contract against `NoneSegmentationBackend`. Shipping backend:
-`MobileSAMBackend` (`SwiftPWASegmentation`, Apple + Android, env-gated
-behind `SWIFT_PWA_ONNXRUNTIME`) — runs MobileSAM's encoder plus one of two
+`MobileSAMBackend` (`SwiftPWASegmentation`, Apple + Android, opt in via
+`ai.local_onnx_runtime` in `pwa.json`) — runs MobileSAM's encoder plus one of two
 decoder variants as ONNX Runtime sessions, verified against real weights
 (see the `mobilesam-vendor` GitHub Release); takes on-disk
 `encoderPath`/`decoderSinglePath`/`decoderMultiPath` directly (no

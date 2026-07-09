@@ -13,8 +13,7 @@ import SwiftPWAModelStore // ModelSpec
     import SwiftPWAPhiSilica
 #endif
 // The on-device segmentation backend (MobileSAMBackend, `ai.vision.*`) —
-// env-gated the same way, `SWIFT_PWA_ONNXRUNTIME` set by hand (see
-// Package.swift) since there's no `pwa.json` flag for this yet.
+// env-gated the same way, via `ai.local_onnx_runtime` in pwa.json.
 #if canImport(SwiftPWASegmentation)
     import SwiftPWASegmentation
 #endif

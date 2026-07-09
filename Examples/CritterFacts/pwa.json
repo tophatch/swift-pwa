@@ -10,7 +10,8 @@
   "ai": {
     "local_llama": true,
     "gemini_nano": true,
-    "phi_silica": true
+    "phi_silica": true,
+    "local_onnx_runtime": true
   },
   "window": {
     "title": "Critter Facts",

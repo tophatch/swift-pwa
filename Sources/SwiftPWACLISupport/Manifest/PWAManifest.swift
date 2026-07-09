@@ -244,10 +244,49 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// only**; ignored (with a warning) for other targets.
         public var phiSilica: Bool?
 
-        public init(localLlama: Bool? = nil, geminiNano: Bool? = nil, phiSilica: Bool? = nil) {
+        /// Bundle the **ONNX Runtime** tier (`SwiftPWASegmentation` /
+        /// `MobileSAMBackend`) into the build — on-device promptable image
+        /// segmentation exposed through the separate `ai.vision.*` plugin
+        /// namespace. When `true`, `swift-pwa build` sets
+        /// `SWIFT_PWA_ONNXRUNTIME=1` for the underlying `swift build` (so
+        /// SwiftPM's manifest evaluation includes `SwiftPWASegmentation` +
+        /// its platform ONNX Runtime target) and the app can
+        /// `ctx.use(VisionPlugin(MobileSAMBackend(...)))`.
+        ///
+        /// Per platform:
+        /// - **Apple (macOS / iOS)** — just sets the flag; SwiftPM's
+        ///   `.binaryTarget` downloads + checksum-verifies the ONNX Runtime
+        ///   xcframework. The vendored xcframework embeds protobuf, which
+        ///   needs `libc++` linked — add
+        ///   `.linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))` to
+        ///   your executable target's `linkerSettings` (see
+        ///   `Examples/CritterFacts/Package.swift`).
+        /// - **Android** — additionally resolves the prebuilt
+        ///   `libonnxruntime.so` per requested ABI (downloaded +
+        ///   checksum-verified, or read from a local `Vendor/onnxruntime-android/`
+        ///   vendoring), prepends its directory to `LIBRARY_PATH` so the
+        ///   per-ABI cross-compile resolves `-lonnxruntime`, and stages the
+        ///   `.so` into `jniLibs/<abi>/` so the APK doesn't crash at launch
+        ///   with `UnsatisfiedLinkError`. Only `arm64-v8a` is published today
+        ///   — see `OnnxRuntimeAndroidArtifact`.
+        /// - **Linux / Windows** — not supported yet (no ONNX Runtime
+        ///   backend on either); `SegmentationBackend` falls back to a
+        ///   documented `NoneBackend` there. Ignored (with a warning) for
+        ///   these targets.
+        ///
+        /// No app-shipped model weights of its own — bundle the MobileSAM
+        /// ONNX files yourself (see `Examples/CritterFacts`) until
+        /// `ai.vision.ensureModel` lands. Off by default.
+        public var localOnnxRuntime: Bool?
+
+        public init(
+            localLlama: Bool? = nil, geminiNano: Bool? = nil, phiSilica: Bool? = nil,
+            localOnnxRuntime: Bool? = nil
+        ) {
             self.localLlama = localLlama
             self.geminiNano = geminiNano
             self.phiSilica = phiSilica
+            self.localOnnxRuntime = localOnnxRuntime
         }
     }
 

@@ -198,6 +198,7 @@ struct Build: AsyncParsableCommand {
         try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
         Self.applyGeminiNanoGate(manifest: pwa, target: target)
         Self.applyPhiSilicaGate(manifest: pwa, target: target)
+        Self.applyLocalOnnxRuntimeGate(manifest: pwa, target: target)
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
@@ -475,6 +476,46 @@ struct Build: AsyncParsableCommand {
                 "swift-pwa: ai.phi_silica is set but Phi Silica is Windows-only — "
                     + "ignoring it for \(target). Use the platform's built-in (Foundation Models / "
                     + "Gemini Nano) or ai.local_llama instead."
+            )
+        }
+    }
+
+    /// Honor `pwa.json`'s `ai.local_onnx_runtime` by exporting
+    /// `SWIFT_PWA_ONNXRUNTIME=1` so the child `swift build`'s manifest
+    /// evaluation includes `SwiftPWASegmentation` (the `ai.vision.*` /
+    /// `MobileSAMBackend` tier). Apple + Android only.
+    ///
+    /// This only flips the manifest gate — the actual native artifact
+    /// resolution differs per platform:
+    /// - **Apple** — nothing further needed here; SwiftPM's `.binaryTarget`
+    ///   downloads + checksum-verifies the ONNX Runtime xcframework.
+    /// - **Android** — no per-arch work happens here, because Android
+    ///   cross-compiles multiple ABIs in one build and each needs its own
+    ///   `libonnxruntime.so` on `LIBRARY_PATH` for that ABI's link step
+    ///   alone. `AndroidBundler.stageJniLibs` reads this same
+    ///   `manifest.ai?.localOnnxRuntime` flag directly and resolves +
+    ///   stages the `.so` per ABI via `OnnxRuntimeAndroidArtifact` inside
+    ///   its cross-compile loop.
+    static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget) {
+        guard manifest.ai?.localOnnxRuntime == true else { return }
+        switch target {
+        case .macos, .ios:
+            #if !os(Windows)
+                setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
+            #endif
+            print("swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier (SwiftPWASegmentation)")
+        case .android:
+            #if !os(Windows)
+                setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
+            #endif
+            print(
+                "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
+                    + "(SwiftPWASegmentation); libonnxruntime.so resolved per-ABI during cross-compile"
+            )
+        default:
+            print(
+                "swift-pwa: ai.local_onnx_runtime is set but ONNX Runtime has no \(target) backend yet "
+                    + "(segmentation ships a NoneBackend there) — ignoring it for this build."
             )
         }
     }

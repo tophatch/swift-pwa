@@ -18,9 +18,9 @@ let llamaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil
 // from `ai.phi_silica: true`; add the dependency only then, same as llama.
 let phiSilicaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_PHI_SILICA"] != nil
 // `SwiftPWASegmentation` (MobileSAMBackend, `ai.vision.*`) is the analogous
-// env-gated product for on-device segmentation — `SWIFT_PWA_ONNXRUNTIME` set
-// by hand for now (no `pwa.json` flag/bundler wiring exists yet, unlike
-// `ai.local_llama`/`ai.phi_silica` above).
+// env-gated product for on-device segmentation — `swift-pwa build` sets
+// SWIFT_PWA_ONNXRUNTIME from `ai.local_onnx_runtime: true`, same as llama/Phi
+// Silica above (Apple + Android; no Linux/Windows backend yet).
 let onnxRuntimeEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil
 
 var appDependencies: [Target.Dependency] = [

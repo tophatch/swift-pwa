@@ -107,21 +107,25 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Alongside the fact generator, this app wires **`MobileSAMBackend`**
 (`SwiftPWASegmentation`) — promptable on-device image segmentation, verified
 end-to-end on both Apple and a real Android device (Galaxy Z Fold7) against
-a real photo. It's env-gated behind `SWIFT_PWA_ONNXRUNTIME` (no `pwa.json`
-flag exists for this yet, unlike `ai.local_llama`), and the three MobileSAM
-ONNX weight files (~60 MB, Apache-2.0, sourced from
+a real photo. It's enabled via **`ai.local_onnx_runtime: true`** in
+[pwa.json](pwa.json), the same pattern as `ai.local_llama` — `swift-pwa
+build` sets `SWIFT_PWA_ONNXRUNTIME=1` for you (Apple + Android; on Android it
+also resolves + stages `libonnxruntime.so` per ABI, see the Gotchas below for
+what that replaced). The three MobileSAM ONNX weight files (~60 MB,
+Apache-2.0, sourced from
 [`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM) — see
 [docs/proposals/segmentation-plugin.md](../../docs/proposals/segmentation-plugin.md))
 are bundled with the app itself under
 [Sources/CritterFacts/web/models/mobilesam/](Sources/CritterFacts/web/models/mobilesam/),
 since there's no downloadable-model tier (`ai.vision.ensureModel`) yet.
 
-**Build**: same as above, with `SWIFT_PWA_ONNXRUNTIME=1` set alongside (or
-instead of) `SWIFT_PWA_LLAMA`/`ai.gemini_nano`:
+**Build**: same as above — no extra flag needed, `pwa.json` already turns it
+on. For a quick `swift build`/`swift run` dev loop that bypasses the CLI, set
+the env var directly instead:
 
 ```bash
 cd Examples/CritterFacts
-SWIFT_PWA_ONNXRUNTIME=1 swift build   # or add it to the swift-pwa build env for a real bundle
+SWIFT_PWA_ONNXRUNTIME=1 swift build
 ```
 
 On Apple, `MobileSAMBackend` reads the bundled weights directly — nothing
@@ -152,14 +156,15 @@ writeup):
   linked — add `.linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))` to
   your executable target's `linkerSettings` (see this app's `Package.swift`)
   or you'll hit unresolved-symbol linker errors.
-- `swift-pwa build --target android` doesn't yet stage the vendored
-  `libonnxruntime.so` into `jniLibs/` (no bundler wiring for this feature
-  exists yet) — copy `Vendor/onnxruntime-android/arm64-v8a/libonnxruntime.so`
-  into `build/CritterFacts-android/app/src/main/jniLibs/arm64-v8a/` by hand
-  before `./gradlew assembleDebug`, or the app crashes on launch with
-  `UnsatisfiedLinkError`.
 - This app's `configure(_:)` needs `ctx.use(FsPlugin(SystemFs()))` wired
   (it wasn't, before this) — `web/mobilesam.js` depends on `fs.*` commands.
+
+`swift-pwa build --target android --cross-compile-android` now resolves +
+stages `libonnxruntime.so` into `jniLibs/<abi>/` for you (via
+`OnnxRuntimeAndroidArtifact`, checksum-verified per ABI) — no manual `cp`
+step anymore. Only `arm64-v8a` is published today; requesting another ABI
+with `ai.local_onnx_runtime` on fails the build with an actionable message
+rather than silently shipping a `.so`-less APK.
 
 ## Swapping the model
 

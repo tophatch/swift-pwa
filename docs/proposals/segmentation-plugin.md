@@ -24,19 +24,31 @@
 > mirroring `llama-xcframework.yml`); Android's publishes but can't self-pin
 > since no CLI-side fetch resolver (`LlamaLinuxArtifact`-style) exists yet.
 >
-> **`MobileSAMBackend` (Apple) is real and wired**, in its own
-> `SwiftPWASegmentation` target: `openSession`/`segment`/`closeSession` run
-> MobileSAM's encoder/decoder as two ONNX Runtime sessions, with
-> `ImagePreprocessing` (SAM's resize/pad/normalize) and
-> `MaskPostprocessing` (upsample + RLE) as independently-tested pieces. The
-> encoder's I/O contract is verified against a real exported MobileSAM ONNX
-> graph; the decoder's is the standard reference-SAM contract every
-> MobileSAM port mirrors, but **is not yet verified against real decoder
-> weights** — the whole pipeline is proven end-to-end against structurally
-> matching *fake*-weight fixtures instead. **Model hosting is still the
-> open decision below** — `MobileSAMBackend` takes on-disk model paths
-> directly; no downloadable-model tier ships. Android/Linux/Windows
-> backends don't exist yet.
+> **`MobileSAMBackend` (Apple) is real, wired, and verified against real
+> weights**, in its own `SwiftPWASegmentation` target: `openSession`/
+> `segment`/`closeSession` run MobileSAM's encoder + one of two decoder
+> variants as ONNX Runtime sessions, with `ImagePreprocessing` (resize-only
+> — see below) and `MaskPostprocessing` (RLE) as independently-tested
+> pieces. Real weights, re-hosted at the `mobilesam-vendor` GitHub Release
+> (sourced from [`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM),
+> an ONNX export of the official Apache-2.0 `ChaoningZhang/MobileSAM`
+> checkpoint), turned up two contract corrections the fake-weight-only cut
+> had wrong: **(1)** the real encoder graph bakes in normalization,
+> channel-transpose, and padding itself — it takes a raw HWC
+> `[height,width,3]` pixel tensor (`0...255`, RGB), resized so the longer
+> side hits 1024 and nothing else; `ImagePreprocessing` no longer
+> normalizes/pads/transposes on the Swift side. **(2)** `multimask` selects
+> between two *separate* decoder graphs
+> (`sam_mask_decoder_single.onnx`/`sam_mask_decoder_multi.onnx`), not one
+> graph with a toggle, and each decoder already upsamples `masks` to
+> `orig_im_size` internally — `MaskPostprocessing`'s low-res-to-source-pixel
+> resampling step was deleted as dead code. Confirmed end-to-end with
+> point, box, and mixed positive/negative multi-point prompts against
+> synthetic test images — predicted mask bounding boxes matched ground
+> truth exactly. **Model hosting**: the `mobilesam-vendor` release exists,
+> but no downloadable-model tier (`ensureModel`) wires it up yet —
+> `MobileSAMBackend` still takes on-disk model paths directly. Android/
+> Linux/Windows backends don't exist yet.
 
 ## Motivation
 

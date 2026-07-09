@@ -1,82 +1,14 @@
 import Foundation
 
-/// Turns a decoder's low-resolution mask logits into the `VisionMask` shape
-/// the `ai.vision.*` contract returns (source-pixel `bounds` + row-major
+/// Turns a decoder's mask logits into the `VisionMask` shape the
+/// `ai.vision.*` contract returns (source-pixel `bounds` + row-major
 /// `rle`). Pure, dependency-free math — testable without any ONNX Runtime
-/// involvement, unlike the encoder/decoder calls themselves.
+/// involvement, unlike the encoder/decoder calls themselves. The verified
+/// real decoder graph (`Acly/MobileSAM`) already upsamples `masks` to
+/// `orig_im_size` internally (its own `Resize` nodes), so there is no
+/// client-side resampling step here — just thresholding at logit `0`
+/// (SAM's convention) and RLE encoding.
 enum MaskPostprocessing {
-    /// Bilinearly resamples a row-major float grid. `srcRect` (in the
-    /// source grid's own coordinate units, fractional allowed) is the
-    /// region resampled into the full `dstWidth × dstHeight` output — this
-    /// folds SAM's two-step "upsample to the padded square, then crop off
-    /// the padding, then upsample to the original size" into one resample,
-    /// by resampling directly from the low-res grid's unpadded sub-rect.
-    static func resize(
-        _ src: [Float], srcWidth: Int, srcHeight: Int,
-        srcRect: (x: Double, y: Double, width: Double, height: Double),
-        dstWidth: Int, dstHeight: Int
-    ) -> [Float] {
-        guard dstWidth > 0, dstHeight > 0 else { return [] }
-        var dst = [Float](repeating: 0, count: dstWidth * dstHeight)
-        guard srcWidth > 0, srcHeight > 0, srcRect.width > 0, srcRect.height > 0 else { return dst }
-
-        for dy in 0 ..< dstHeight {
-            // Sample at the destination pixel's center, mapped into srcRect.
-            let v = srcRect.y + (Double(dy) + 0.5) / Double(dstHeight) * srcRect.height
-            for dx in 0 ..< dstWidth {
-                let u = srcRect.x + (Double(dx) + 0.5) / Double(dstWidth) * srcRect.width
-                dst[dy * dstWidth + dx] = bilinearSample(src, width: srcWidth, height: srcHeight, x: u, y: v)
-            }
-        }
-        return dst
-    }
-
-    private static func bilinearSample(_ src: [Float], width: Int, height: Int, x: Double, y: Double) -> Float {
-        // Sample at the pixel center convention (`pixel[i]` covers
-        // `[i, i+1)`), so a source-space coordinate of `x` reads
-        // `pixel[x - 0.5]`.
-        let fx = x - 0.5
-        let fy = y - 0.5
-        let x0 = Int(fx.rounded(.down))
-        let y0 = Int(fy.rounded(.down))
-        let tx = Float(fx - Double(x0))
-        let ty = Float(fy - Double(y0))
-
-        func clamp(_ v: Int, _ maxValue: Int) -> Int { min(max(v, 0), maxValue) }
-        let x0c = clamp(x0, width - 1), x1c = clamp(x0 + 1, width - 1)
-        let y0c = clamp(y0, height - 1), y1c = clamp(y0 + 1, height - 1)
-
-        let topLeft = src[y0c * width + x0c]
-        let topRight = src[y0c * width + x1c]
-        let bottomLeft = src[y1c * width + x0c]
-        let bottomRight = src[y1c * width + x1c]
-
-        let top = topLeft + (topRight - topLeft) * tx
-        let bottom = bottomLeft + (bottomRight - bottomLeft) * tx
-        return top + (bottom - top) * ty
-    }
-
-    /// Upsamples a decoder's low-res mask logits (covering the padded
-    /// `targetSize × targetSize` square at `lowResSize × lowResSize`
-    /// resolution) directly to a binary mask at the original source-image
-    /// dimensions, thresholding at logit `0` (SAM's convention — the
-    /// decoder outputs raw logits, not probabilities).
-    static func toSourceMask(
-        lowRes: [Float], lowResSize: Int, preprocessed: PreprocessedImage, targetSize: Int
-    ) -> [Bool] {
-        let gridScale = Double(lowResSize) / Double(targetSize)
-        let srcRect = (
-            x: 0.0, y: 0.0,
-            width: Double(preprocessed.resizedWidth) * gridScale,
-            height: Double(preprocessed.resizedHeight) * gridScale
-        )
-        let resized = resize(
-            lowRes, srcWidth: lowResSize, srcHeight: lowResSize, srcRect: srcRect,
-            dstWidth: preprocessed.originalWidth, dstHeight: preprocessed.originalHeight
-        )
-        return resized.map { $0 > 0 }
-    }
-
     /// Encodes a row-major binary mask into `bounds` (tight bbox) + `rle`
     /// (row-major run-length over that box, background-first — see
     /// `docs/proposals/segmentation-plugin.md`). Returns `nil` for an

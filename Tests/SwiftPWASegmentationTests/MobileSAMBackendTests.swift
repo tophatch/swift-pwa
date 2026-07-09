@@ -6,15 +6,14 @@
     @testable import SwiftPWASegmentation
     import Testing
 
-    /// End-to-end tests against a **fake** encoder/decoder ONNX pair
-    /// (`fake_mobile_sam_encoder.onnx` / `fake_mobile_sam_decoder.onnx`,
-    /// `Scripts` used to generate them documented in the fixtures
-    /// themselves) — matching the real MobileSAM I/O contract's names and
-    /// shapes, but with constant/synthetic weights so no real trained
-    /// model is needed. These prove `MobileSAMBackend`'s *plumbing*
-    /// (preprocessing → encoder → session cache → decoder → postprocessing
-    /// → RLE) end-to-end; they say nothing about real segmentation
-    /// quality, which needs real weights (see
+    /// End-to-end tests against a **fake** encoder/decoder-single/
+    /// decoder-multi ONNX trio — matching the *verified real* MobileSAM I/O
+    /// contract's names and shapes (including the decoder's own internal
+    /// upsample to `orig_im_size`), but with constant/synthetic weights so
+    /// no real trained model is needed. These prove `MobileSAMBackend`'s
+    /// *plumbing* (preprocessing → encoder → session cache → decoder →
+    /// postprocessing → RLE) end-to-end; real segmentation quality is
+    /// covered separately against the real `Acly/MobileSAM` weights (see
     /// `docs/proposals/segmentation-plugin.md`).
     @Suite("MobileSAMBackend (fake weights, plumbing proof)")
     struct MobileSAMBackendTests {
@@ -25,7 +24,8 @@
         private func backend() throws -> MobileSAMBackend {
             try MobileSAMBackend(
                 encoderPath: fixturePath("fake_mobile_sam_encoder"),
-                decoderPath: fixturePath("fake_mobile_sam_decoder")
+                decoderSinglePath: fixturePath("fake_mobile_sam_decoder_single"),
+                decoderMultiPath: fixturePath("fake_mobile_sam_decoder_multi")
             )
         }
 

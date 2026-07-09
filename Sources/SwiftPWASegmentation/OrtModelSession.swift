@@ -35,9 +35,21 @@ import Foundation
             defer { api.pointee.ReleaseSessionOptions(options) }
 
             var sessionPtr: OpaquePointer?
-            try modelPath.withCString { cPath in
-                try runtime.check(api.pointee.CreateSession(runtime.env, cPath, options, &sessionPtr))
-            }
+            // ONNX Runtime's model-path argument is `ORTCHAR_T*` — `wchar_t`
+            // (UTF-16) on Windows, `char` (UTF-8) elsewhere. So the C API
+            // imports `CreateSession` as taking `UnsafePointer<UInt16>` on
+            // Windows and `UnsafePointer<CChar>` on Linux/Apple; hand it the
+            // matching encoding. (Only this call takes a path; input/output
+            // tensor names are plain `char*` on every platform.)
+            #if os(Windows)
+                try modelPath.withCString(encodedAs: UTF16.self) { widePath in
+                    try runtime.check(api.pointee.CreateSession(runtime.env, widePath, options, &sessionPtr))
+                }
+            #else
+                try modelPath.withCString { cPath in
+                    try runtime.check(api.pointee.CreateSession(runtime.env, cPath, options, &sessionPtr))
+                }
+            #endif
             guard let sessionPtr else { throw OrtError.failed("CreateSession returned no session") }
             session = sessionPtr
 

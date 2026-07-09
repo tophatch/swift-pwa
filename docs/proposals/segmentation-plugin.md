@@ -17,13 +17,26 @@
 > Maven AAR (`Scripts/vendor-onnxruntime-android.sh`) cross-compile-links via
 > `LIBRARY_PATH`, same as Linux's llama.cpp story. Both confirmed calling the
 > real C API end-to-end — Android verification went further, running the
-> linked binary **on an actual Galaxy Tab S10+** via `adb shell`. Not yet
-> done: a real `MobileSAMBackend`. Publish workflows exist for both artifacts
-> (`.github/workflows/onnxruntime-xcframework.yml`,
-> `onnxruntime-android.yml`) but haven't been run yet — Apple's
-> self-completes (publishes, then opens a PR pinning the checksum, mirroring
-> `llama-xcframework.yml`); Android's publishes but can't self-pin since no
-> CLI-side fetch resolver (`LlamaLinuxArtifact`-style) exists yet to pin into.
+> linked binary **on an actual Galaxy Tab S10+** via `adb shell`. Publish
+> workflows exist for both artifacts (`.github/workflows/onnxruntime-
+> xcframework.yml`, `onnxruntime-android.yml`) but haven't been run yet —
+> Apple's self-completes (publishes, then opens a PR pinning the checksum,
+> mirroring `llama-xcframework.yml`); Android's publishes but can't self-pin
+> since no CLI-side fetch resolver (`LlamaLinuxArtifact`-style) exists yet.
+>
+> **`MobileSAMBackend` (Apple) is real and wired**, in its own
+> `SwiftPWASegmentation` target: `openSession`/`segment`/`closeSession` run
+> MobileSAM's encoder/decoder as two ONNX Runtime sessions, with
+> `ImagePreprocessing` (SAM's resize/pad/normalize) and
+> `MaskPostprocessing` (upsample + RLE) as independently-tested pieces. The
+> encoder's I/O contract is verified against a real exported MobileSAM ONNX
+> graph; the decoder's is the standard reference-SAM contract every
+> MobileSAM port mirrors, but **is not yet verified against real decoder
+> weights** — the whole pipeline is proven end-to-end against structurally
+> matching *fake*-weight fixtures instead. **Model hosting is still the
+> open decision below** — `MobileSAMBackend` takes on-disk model paths
+> directly; no downloadable-model tier ships. Android/Linux/Windows
+> backends don't exist yet.
 
 ## Motivation
 

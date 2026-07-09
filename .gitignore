@@ -27,3 +27,8 @@ Vendor/llama-windows/
 # Scripts/vendor-onnxruntime-apple.sh; adopters get the checksummed release
 # asset — never committed).
 Vendor/onnxruntime/
+# Vendored ONNX Runtime Android .so per ABI (built by
+# Scripts/vendor-onnxruntime-android.sh; adopters get the checksummed
+# release asset). Headers under Vendor/onnxruntime-android-headers/ ARE
+# committed (the systemLibrary modulemap) — only the .so is ignored.
+Vendor/onnxruntime-android/

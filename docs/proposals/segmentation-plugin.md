@@ -10,13 +10,17 @@
 > for the current detail):** the `ai.vision.*` contract — `SegmentationBackend`,
 > `VisionPlugin`, all request/result types, `NoneSegmentationBackend` — has
 > landed in `SwiftPWACore`, unblocking web-side integration against a stable
-> API today. A packaging **spike** (not a shipped backend) has verified the
-> Apple side of the ONNX Runtime tier this needs: Microsoft's official Apple
-> xcframework requires repackaging (`Scripts/vendor-onnxruntime-apple.sh`) to
-> be importable from Swift at all — confirmed linking and calling its C API
-> end-to-end. Not yet done: a real `MobileSAMBackend`, the Android ONNX
-> Runtime vendoring step, and publishing the repackaged Apple artifact as a
-> release asset.
+> API today. A packaging **spike** (not a shipped backend) has verified both
+> platforms of the ONNX Runtime tier this needs: on **Apple**, Microsoft's
+> official xcframework requires repackaging (`Scripts/vendor-onnxruntime-
+> apple.sh`) to be importable from Swift at all; on **Android**, a vendored
+> Maven AAR (`Scripts/vendor-onnxruntime-android.sh`) cross-compile-links via
+> `LIBRARY_PATH`, same as Linux's llama.cpp story. Both confirmed calling the
+> real C API end-to-end — Android verification went further, running the
+> linked binary **on an actual Galaxy Tab S10+** via `adb shell`. Not yet
+> done: a real `MobileSAMBackend`, and publishing either vendored artifact as
+> a release asset (Apple has a `Package.swift` placeholder for this; Android
+> needs its own CLI-side fetch, `LlamaLinuxArtifact`-style).
 
 ## Motivation
 

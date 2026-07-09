@@ -636,39 +636,60 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
     ])
 }
 
-// MARK: - Optional ONNX Runtime packaging spike (env-gated, Apple only)
+// MARK: - Optional ONNX Runtime packaging spike (env-gated, Apple + Android)
 
 // SPIKE, not a shipped backend. De-risks the packaging story for the 0.8
 // ONNX Runtime tier (first consumer: `ai.vision.*` / MobileSAM segmentation
 // — see docs/proposals/segmentation-plugin.md) before investing in the
-// actual encoder/decoder backend. `SwiftPWAONNXRuntimeSmoke` links the real
-// vendored xcframework and calls one real C API function
-// (`OrtGetApiBase`); it proves the artifact/link/import chain works and
-// nothing more.
+// actual encoder/decoder backend. The smoke targets below link the real
+// vendored artifact and call one real C API function (`OrtGetApiBase`);
+// they prove the artifact/link/import chain works and nothing more.
 //
-// Mirrors the llama.cpp `.binaryTarget` pattern above exactly, but the
-// upstream artifact needs a repackaging step first: Microsoft's official
-// Apple distribution (no GitHub Release asset — the stable, versioned
-// download lives on Microsoft's own CDN, the same artifact
+// **Apple** mirrors the llama.cpp `.binaryTarget` pattern above exactly,
+// but the upstream artifact needs a repackaging step first: Microsoft's
+// official Apple distribution (no GitHub Release asset — the stable,
+// versioned download lives on Microsoft's own CDN, the same artifact
 // `onnxruntime-swift-package-manager` vendors internally) ships each slice
 // as a versioned `.framework` *bundle* with no `Modules/module.modulemap`,
 // so `import onnxruntime` doesn't work out of the box — yet the binary
-// inside is a plain static archive (`ar` format), not a dylib. Rather than
-// hand-patch Microsoft's bundle layout, `Scripts/vendor-onnxruntime-
-// apple.sh` extracts the static lib + headers from each slice and
-// re-packages them via `xcodebuild -create-xcframework -library -headers`
-// into the same flat-library-plus-headers shape `Vendor/llama-headers`
-// already uses — our own `module.modulemap` (named `ONNXRuntime`, matching
-// this target) covering the C API headers a segmentation backend needs.
-// Verified end-to-end: the script's output actually links and its C API is
-// callable (`SwiftPWAONNXRuntimeSmokeTests`).
+// inside is a plain static archive (`ar` format), not a dylib.
+// `Scripts/vendor-onnxruntime-apple.sh` extracts the static lib + headers
+// from each slice and re-packages them via `xcodebuild -create-xcframework
+// -library -headers` into the same flat-library-plus-headers shape
+// `Vendor/llama-headers` already uses. Verified end-to-end: the script's
+// output actually links and its C API is callable
+// (`SwiftPWAONNXRuntimeSmokeTests`).
 //
-// Apple-only for now — Linux/Windows have no ONNX Runtime backend story
-// yet, and Android needs a from-scratch vendoring step (Maven AAR →
-// extract per-ABI `libonnxruntime.so` + headers, fed into a
-// `CSwiftPWAAndroidJNI`-style C shim) since SwiftPM's `.binaryTarget` is
-// Apple-only; both are follow-ups once a real segmentation backend is
-// being built, not part of this packaging spike.
+// **Android** has a real prebuilt artifact too (unlike llama.cpp, which has
+// no Android backend at all in this repo): the `onnxruntime-android` AAR on
+// Maven Central bundles the plain C API headers directly plus a per-ABI
+// `libonnxruntime.so` (Microsoft's own JNI glue, `libonnxruntime4j_jni.so`,
+// isn't needed — Swift calls the C API directly, no JVM round-trip).
+// `Scripts/vendor-onnxruntime-android.sh` downloads + sha1-verifies the AAR
+// (against Maven's own published sidecar) and extracts both. Mirrors
+// `Vendor/llama-headers`' off-Apple shape exactly: headers committed under
+// `Vendor/onnxruntime-android-headers/` (a plain `.systemLibrary`, no
+// pkgConfig — host-agnostic to declare, so it isn't wrapped in an `#if os`
+// guard below), the `.so` itself gitignored under `Vendor/onnxruntime-
+// android/<abi>/` and found at cross-compile link time via `LIBRARY_PATH`
+// (clang's Android cross-linker driver honors it exactly like the host
+// one — no `unsafeFlags`). Verified end-to-end, including on-device: a
+// throwaway executable target linked against the vendored
+// `libonnxruntime.so` via `swift build --swift-sdk
+// aarch64-unknown-linux-android28` (`nm -D` shows `OrtGetApiBase` as an
+// undefined symbol versioned `VERS_1.27.0`, i.e. resolving against the
+// real lib, not a stub), pushed + run via `adb shell` on a Galaxy Tab
+// S10+ (arm64-v8a) → printed the real version string `"1.27.0"`.
+// `SwiftPWAONNXRuntimeAndroidSmoke` itself is a plain library target (no
+// product yet forces a real link on it — that arrives with a real
+// backend/example app), so it's a compile+module-resolution check; the
+// throwaway executable above is what proved the link+runtime story.
+//
+// Linux/Windows still have no ONNX Runtime backend story — not part of
+// this spike. Not part of either spike: a real segmentation backend, and
+// publishing either vendored artifact as a release asset (the CLI-side
+// fetch to make that automatic for adopters, `LlamaLinuxArtifact`-style,
+// is a documented follow-up).
 if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     #if os(macOS)
         let localOnnxXcframework = "Vendor/onnxruntime/onnxruntime.xcframework"
@@ -706,6 +727,20 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         // rather than a build failure — nothing depends on
         // `SwiftPWAONNXRuntimeSmoke` yet, so there's nothing to break.
     #endif
+
+    // Android — host-agnostic to declare (a plain `.systemLibrary` over
+    // committed headers, like `CLlama` on Linux), so no `#if os` guard:
+    // this builds correctly regardless of which host (macOS or Linux) runs
+    // the Android cross-compile.
+    package.targets.append(contentsOf: [
+        .systemLibrary(name: "ONNXRuntimeAndroid", path: "Vendor/onnxruntime-android-headers"),
+        .target(
+            name: "SwiftPWAONNXRuntimeAndroidSmoke",
+            dependencies: [.target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android]))],
+            swiftSettings: swiftSettings,
+            linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.android]))]
+        )
+    ])
 }
 
 // MARK: - Optional Windows Phi Silica backend (env-gated, Windows App SDK)

@@ -257,6 +257,16 @@
             #expect(doneMasks?.count == 1)
         }
 
+        @Test("benchmark returns timings and a device class without needing a session")
+        func benchmarkTimings() async throws {
+            // benchmark synthesizes its own image, so no openSession first.
+            let result = try await (backend()).benchmark()
+            #expect(result.encodeMs >= 0)
+            #expect(result.decodeMs >= 0)
+            #expect(result.segmentAllMs != nil)
+            #expect(["high", "mid", "low"].contains(result.deviceClass))
+        }
+
         @Test("segmentAll against an unknown sessionId fails with .session")
         func segmentAllUnknownSession() async throws {
             let backend = try backend()

@@ -336,9 +336,21 @@
                 Self.amgMaxPointsPerSide,
                 max(1, request.pointsPerSide ?? Self.amgDefaultPointsPerSide)
             )
-            let nmsThreshold = request.iouThreshold ?? Self.amgDefaultNMSThreshold
-            let minAreaPx = max(0, request.minAreaPx ?? 0)
+            return try await automaticMasks(
+                cached: cached, runtime: runtime, pointsPerSide: pointsPerSide,
+                nmsThreshold: request.iouThreshold ?? Self.amgDefaultNMSThreshold,
+                minAreaPx: max(0, request.minAreaPx ?? 0), onProgress: onProgress
+            )
+        }
 
+        /// The AMG algorithm proper, over an already-resolved session + params.
+        /// Split from `runAutomaticMaskGeneration` so `benchmark` can time a
+        /// grid sweep against a synthetic session without touching `sessions`.
+        private func automaticMasks(
+            cached: CachedSession, runtime: OrtRuntime, pointsPerSide: Int,
+            nmsThreshold: Double, minAreaPx: Int,
+            onProgress: @Sendable (Int, Int) -> Void
+        ) async throws -> [VisionMask] {
             let originalWidth = cached.preprocessed.originalWidth
             let originalHeight = cached.preprocessed.originalHeight
 
@@ -395,6 +407,75 @@
                 ) else { return nil }
                 return VisionMask(bounds: encoded.bounds, rle: encoded.rle, score: candidate.score)
             }
+        }
+
+        /// Real synthetic timing for the consumer's device-capability gate.
+        /// Times a single encode, a single decode, and a small AMG sweep on a
+        /// synthetic 1024² image (image content doesn't affect timing — only
+        /// tensor shape does — so a cheap gradient stands in, keeping the probe
+        /// free of any image-codec/platform-decode dependency). Session
+        /// creation (graph parse) is done outside the timed regions so the
+        /// numbers reflect steady-state per-call cost, not one-time load. The
+        /// `deviceClass` bucket is a coarse convenience — the proposal's
+        /// primary device-classing path is the app timing its own first real
+        /// `openSession`/`segment`.
+        public func benchmark() async throws -> VisionBenchmark {
+            guard let runtime = OrtRuntime.shared else {
+                throw VisionError.unavailable("no ONNX Runtime linked (SWIFT_PWA_ONNXRUNTIME is off)")
+            }
+            let side = Self.benchmarkImageSide
+            var tensor = [Float](repeating: 0, count: side * side * 3)
+            for index in 0 ..< (side * side) {
+                let value = Float(index % 256)
+                tensor[index * 3] = value
+                tensor[index * 3 + 1] = value
+                tensor[index * 3 + 2] = value
+            }
+            let preprocessed = PreprocessedImage(
+                tensor: tensor, originalWidth: side, originalHeight: side,
+                resizedWidth: side, resizedHeight: side, scale: 1.0
+            )
+
+            let clock = ContinuousClock()
+            let encoder = try await mapping { try OrtModelSession(modelPath: encoderPath, runtime: runtime) }
+            let decoder = try await mapping { try OrtModelSession(modelPath: decoderSinglePath, runtime: runtime) }
+
+            let encodeStart = clock.now
+            let outputs = try await mapping {
+                try encoder.run(
+                    inputs: ["input_image": .init(values: preprocessed.tensor, shape: [Int64(side), Int64(side), 3])],
+                    outputNames: ["image_embeddings"]
+                )
+            }
+            let encodeMs = Self.milliseconds(clock.now - encodeStart)
+            guard let embedding = outputs["image_embeddings"] else {
+                throw VisionError.segmentationFailed("benchmark encoder produced no embedding")
+            }
+            let cached = CachedSession(embedding: embedding, preprocessed: preprocessed)
+
+            let decodeStart = clock.now
+            _ = try await mapping {
+                try Self.runDecoder(
+                    session: decoder, embedding: embedding,
+                    coords: [Float(side) / 2, Float(side) / 2], labels: [1],
+                    origHeight: Float(side), origWidth: Float(side)
+                )
+            }
+            let decodeMs = Self.milliseconds(clock.now - decodeStart)
+
+            // A small AMG sweep (not the full default grid — a benchmark
+            // shouldn't stall for seconds) times the "segment everything" path.
+            let amgStart = clock.now
+            _ = try await automaticMasks(
+                cached: cached, runtime: runtime, pointsPerSide: Self.benchmarkPointsPerSide,
+                nmsThreshold: Self.amgDefaultNMSThreshold, minAreaPx: 0
+            ) { _, _ in }
+            let segmentAllMs = Self.milliseconds(clock.now - amgStart)
+
+            return VisionBenchmark(
+                encodeMs: encodeMs, decodeMs: decodeMs, segmentAllMs: segmentAllMs,
+                deviceClass: Self.deviceClass(encodeMs: encodeMs)
+            )
         }
 
         /// Downloadable-model tier: fetch the three ONNX files (encoder +
@@ -503,6 +584,35 @@
         /// `runAutomaticMaskGeneration`). Small enough that a full grid of
         /// masks fits comfortably in memory; survivors are upsampled to source.
         private static let amgWorkingSize = 256
+
+        // MARK: - Benchmark internals
+
+        /// The encoder's native square input — a benchmark on a fixed 1024²
+        /// image is representative since the encoder resizes any image to this.
+        private static let benchmarkImageSide = 1024
+        /// A modest AMG grid for the benchmark's `segmentAllMs` — enough to
+        /// exercise the sweep + NMS without the multi-second cost of the full
+        /// default grid.
+        private static let benchmarkPointsPerSide = 8
+
+        /// Coarse device-class bucket keyed on encode time — the dominant,
+        /// most stable cost (a fixed 1024² ViT regardless of source image).
+        /// Heuristic thresholds; calibrated so a modern desktop/phone GPU-class
+        /// encode lands in `high` and a slow CPU-only path in `low`.
+        private static func deviceClass(encodeMs: Int) -> String {
+            switch encodeMs {
+            case ..<400: "high"
+            case ..<1500: "mid"
+            default: "low"
+            }
+        }
+
+        /// `Duration` → whole milliseconds (`components` is seconds +
+        /// attoseconds; 1 ms = 1e15 as).
+        private static func milliseconds(_ duration: Duration) -> Int {
+            let components = duration.components
+            return Int(Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15)
+        }
 
         /// One AMG mask candidate at working resolution, before NMS/upsample.
         private struct AMGCandidate {

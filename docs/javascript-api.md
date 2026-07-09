@@ -592,9 +592,21 @@ __SWIFT_PWA__.subscribe('ai.vision.segmentAllStream',
 
 `pointsPerSide` (default 16, capped at 32) sets grid density; `iouThreshold`
 (default 0.88) is the NMS dedup threshold; `minAreaPx` drops specks. Masks come
-back best-score-first. `ai.vision.benchmark` remains **reserved** — it throws
-`E_UNIMPLEMENTED` until a backend supports it, same as `ai.generateImage` did
-before an image backend existed. A real backend (`MobileSAMBackend`, Apple +
+back best-score-first.
+
+**Device-capability timing** (`autoMask: true` backends) — `ai.vision.benchmark`
+runs a synthetic encode + decode + small AMG sweep and returns
+`{ encodeMs, decodeMs, segmentAllMs, deviceClass }` (`deviceClass` is a coarse
+`'high'`/`'mid'`/`'low'` bucket). Use it for a one-shot capability gate — though
+timing your own first real `openSession`/`segment` and caching the verdict is
+cheaper and more representative of your actual images.
+
+```js
+const b = await __SWIFT_PWA__.invoke('ai.vision.benchmark', {});
+if (b.deviceClass === 'high') enableSegmentEverythingUX();
+```
+
+A real backend (`MobileSAMBackend`, Apple +
 Android, verified against real weights) exists as of this writing, but isn't
 auto-installed — an app must opt in via `ctx.use(VisionPlugin(...))` and either
 bundle weights or use the downloadable tier (see the `mobilesam-vendor` GitHub

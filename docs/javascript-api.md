@@ -572,8 +572,12 @@ trivial to decode into a bitmap. Errors carry stable codes
 `sessionId`, `E_VISION_SEGMENTATION`). `ai.vision.segmentAll(Stream)` /
 `ensureModel` / `benchmark` are wired but **reserved** — they throw
 `E_UNIMPLEMENTED` until a backend that supports them is injected, same as
-`ai.generateImage` did before an image backend existed. As of this writing
-no backend is wired yet (`ai.vision.info` reports `available: false`); see
+`ai.generateImage` did before an image backend existed. A real backend
+(`MobileSAMBackend`, Apple-only) exists as of this writing, but isn't
+auto-installed — an app must opt in via `ctx.use(VisionPlugin(...))` and
+supply model paths, so `ai.vision.info` reports `available: false` until
+then (and real decoder weights aren't verified yet regardless — see the
+proposal doc). See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the full design, current implementation status, and the ONNX Runtime
 packaging work underway.

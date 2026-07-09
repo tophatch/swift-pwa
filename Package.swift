@@ -721,6 +721,34 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
                 swiftSettings: swiftSettings
             )
         ])
+
+        // MARK: - Segmentation backend (ai.vision.*, MobileSAM via ONNX Runtime)
+
+        // The real consumer of the ONNX Runtime tier: `MobileSAMBackend`
+        // conforms to Core's `SegmentationBackend` (see
+        // docs/proposals/segmentation-plugin.md). Apple-only for now,
+        // matching where the packaging spike above is verified; Android
+        // follows once the CLI wiring (an `OnnxRuntimeAndroidArtifact`
+        // resolver) exists. Under the same `SWIFT_PWA_ONNXRUNTIME` gate as
+        // the smoke target, not a separate one — there's no reason to link
+        // ONNX Runtime twice.
+        package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
+        package.targets.append(contentsOf: [
+            .target(
+                name: "SwiftPWASegmentation",
+                dependencies: [
+                    "SwiftPWACore",
+                    .target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS]))
+                ],
+                swiftSettings: swiftSettings
+            ),
+            .testTarget(
+                name: "SwiftPWASegmentationTests",
+                dependencies: ["SwiftPWASegmentation", "SwiftPWACore"],
+                resources: [.copy("Fixtures")],
+                swiftSettings: swiftSettings
+            )
+        ])
     #else
         // Linux / Windows: no ONNX Runtime backend story yet (see the doc
         // comment above). The env var is a deliberate no-op on these hosts

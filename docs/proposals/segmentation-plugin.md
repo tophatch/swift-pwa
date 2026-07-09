@@ -18,9 +18,12 @@
 > `LIBRARY_PATH`, same as Linux's llama.cpp story. Both confirmed calling the
 > real C API end-to-end — Android verification went further, running the
 > linked binary **on an actual Galaxy Tab S10+** via `adb shell`. Not yet
-> done: a real `MobileSAMBackend`, and publishing either vendored artifact as
-> a release asset (Apple has a `Package.swift` placeholder for this; Android
-> needs its own CLI-side fetch, `LlamaLinuxArtifact`-style).
+> done: a real `MobileSAMBackend`. Publish workflows exist for both artifacts
+> (`.github/workflows/onnxruntime-xcframework.yml`,
+> `onnxruntime-android.yml`) but haven't been run yet — Apple's
+> self-completes (publishes, then opens a PR pinning the checksum, mirroring
+> `llama-xcframework.yml`); Android's publishes but can't self-pin since no
+> CLI-side fetch resolver (`LlamaLinuxArtifact`-style) exists yet to pin into.
 
 ## Motivation
 

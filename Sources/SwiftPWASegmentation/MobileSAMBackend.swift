@@ -1,4 +1,8 @@
-#if canImport(CoreGraphics) && canImport(ImageIO)
+// Apple (CoreGraphics/ImageIO-based preprocessing) or Android (RPC-based
+// preprocessing, see AndroidImagePreprocessing.swift) — matches wherever an
+// ONNX Runtime is actually linked (see OrtRuntime.swift). Linux/Windows have
+// no ONNX Runtime story yet (see docs/proposals/segmentation-plugin.md).
+#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid)
     import Foundation
     import SwiftPWACore
 
@@ -71,9 +75,9 @@
             guard let runtime = OrtRuntime.shared else {
                 throw VisionError.unavailable("no ONNX Runtime linked (SWIFT_PWA_ONNXRUNTIME is off)")
             }
-            let preprocessed = try Self.mapping { try preprocess(request.image) }
-            let encoder = try Self.mapping { try OrtModelSession(modelPath: encoderPath, runtime: runtime) }
-            let outputs = try Self.mapping {
+            let preprocessed = try await mapping { try await preprocess(request.image) }
+            let encoder = try await mapping { try OrtModelSession(modelPath: encoderPath, runtime: runtime) }
+            let outputs = try await mapping {
                 try encoder.run(
                     inputs: [
                         "input_image": .init(
@@ -130,8 +134,8 @@
             let numPoints = Int64(labels.count)
 
             let decoderPath = request.multimask ? decoderMultiPath : decoderSinglePath
-            let decoder = try Self.mapping { try OrtModelSession(modelPath: decoderPath, runtime: runtime) }
-            let outputs = try Self.mapping {
+            let decoder = try await mapping { try OrtModelSession(modelPath: decoderPath, runtime: runtime) }
+            let outputs = try await mapping {
                 try decoder.run(
                     inputs: [
                         "image_embeddings": cached.embedding,
@@ -189,22 +193,27 @@
             }
         }
 
-        private func preprocess(_ image: AIImage) throws -> PreprocessedImage {
+        private func preprocess(_ image: AIImage) async throws -> PreprocessedImage {
             if let path = image.path {
-                return try ImagePreprocessing.load(contentsOf: URL(fileURLWithPath: path))
+                return try await ImagePreprocessing.load(path: path)
             }
-            if let base64 = image.dataBase64, let data = Data(base64Encoded: base64) {
-                return try ImagePreprocessing.load(data: data)
+            if let base64 = image.dataBase64 {
+                return try await ImagePreprocessing.load(dataBase64: base64)
             }
             throw VisionError.segmentationFailed("image must supply exactly one of path/dataBase64")
         }
 
         /// Converts a thrown `OrtError`/`ImagePreprocessingError` into the
         /// contract's `VisionError`, so callers only ever see stable
-        /// `E_VISION_*` codes — mirrors `AIPlugin`'s `AIError` mapping.
-        private static func mapping<T>(_ body: () throws -> T) throws -> T {
+        /// `E_VISION_*` codes — mirrors `AIPlugin`'s `AIError` mapping. An
+        /// actor-isolated instance method, not `static` — the closures
+        /// passed in capture actor-isolated state (e.g. calling
+        /// `preprocess(_:)`), so `mapping` must share that isolation domain
+        /// rather than being a `nonisolated static` boundary the closure
+        /// would have to cross.
+        private func mapping<T>(_ body: () async throws -> T) async throws -> T {
             do {
-                return try body()
+                return try await body()
             } catch let error as OrtError {
                 throw VisionError.segmentationFailed(error.description)
             } catch let error as ImagePreprocessingError {

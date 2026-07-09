@@ -721,34 +721,6 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
                 swiftSettings: swiftSettings
             )
         ])
-
-        // MARK: - Segmentation backend (ai.vision.*, MobileSAM via ONNX Runtime)
-
-        // The real consumer of the ONNX Runtime tier: `MobileSAMBackend`
-        // conforms to Core's `SegmentationBackend` (see
-        // docs/proposals/segmentation-plugin.md). Apple-only for now,
-        // matching where the packaging spike above is verified; Android
-        // follows once the CLI wiring (an `OnnxRuntimeAndroidArtifact`
-        // resolver) exists. Under the same `SWIFT_PWA_ONNXRUNTIME` gate as
-        // the smoke target, not a separate one — there's no reason to link
-        // ONNX Runtime twice.
-        package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
-        package.targets.append(contentsOf: [
-            .target(
-                name: "SwiftPWASegmentation",
-                dependencies: [
-                    "SwiftPWACore",
-                    .target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS]))
-                ],
-                swiftSettings: swiftSettings
-            ),
-            .testTarget(
-                name: "SwiftPWASegmentationTests",
-                dependencies: ["SwiftPWASegmentation", "SwiftPWACore"],
-                resources: [.copy("Fixtures")],
-                swiftSettings: swiftSettings
-            )
-        ])
     #else
         // Linux / Windows: no ONNX Runtime backend story yet (see the doc
         // comment above). The env var is a deliberate no-op on these hosts
@@ -767,6 +739,44 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             dependencies: [.target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android]))],
             swiftSettings: swiftSettings,
             linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.android]))]
+        )
+    ])
+
+    // MARK: - Segmentation backend (ai.vision.*, MobileSAM via ONNX Runtime)
+
+    // The real consumer of the ONNX Runtime tier: `MobileSAMBackend`
+    // conforms to Core's `SegmentationBackend` (see
+    // docs/proposals/segmentation-plugin.md). Apple + Android. Declared
+    // host-agnostically (like `ONNXRuntimeAndroid` above) so an Android
+    // cross-compile from either a macOS or a Linux host sees this target —
+    // "ONNXRuntime" (the Apple xcframework binaryTarget) is only referenced
+    // by name when it was actually declared above (a macOS-describing
+    // host), since SwiftPM errors on a dependency name that doesn't exist
+    // in the graph regardless of platform conditions. On a destination with
+    // neither ONNX Runtime linked (Linux/Windows-native), the source itself
+    // compiles to an empty stub (see the guard in OrtRuntime.swift).
+    var segmentationDependencies: [Target.Dependency] = ["SwiftPWACore"]
+    #if os(macOS)
+        segmentationDependencies.append(.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS])))
+    #endif
+    segmentationDependencies.append(contentsOf: [
+        .target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android])),
+        .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
+    ])
+
+    package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
+    package.targets.append(contentsOf: [
+        .target(
+            name: "SwiftPWASegmentation",
+            dependencies: segmentationDependencies,
+            swiftSettings: swiftSettings,
+            linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.android]))]
+        ),
+        .testTarget(
+            name: "SwiftPWASegmentationTests",
+            dependencies: ["SwiftPWASegmentation", "SwiftPWACore"],
+            resources: [.copy("Fixtures")],
+            swiftSettings: swiftSettings
         )
     ])
 }

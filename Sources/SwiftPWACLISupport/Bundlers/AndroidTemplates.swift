@@ -1026,6 +1026,8 @@ enum AndroidTemplates {
     import android.content.Intent
     import android.content.IntentFilter
     import android.content.pm.PackageInstaller
+    import android.graphics.Bitmap
+    import android.graphics.BitmapFactory
     import android.net.Uri
     import android.os.Build
     import android.provider.DocumentsContract
@@ -1198,6 +1200,7 @@ enum AndroidTemplates {
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
+                "vision.preprocessImage" -> visionPreprocessImage(json, done)
                 "system.memory" -> systemMemory(done)
                 /*__SWIFT_PWA_GENAI_DISPATCH__*/
                 else -> done(null, "swift-pwa: unknown rpc method $method")
@@ -2003,6 +2006,76 @@ enum AndroidTemplates {
                     done(null, "swift-pwa: fs.createZip failed: ${t.javaClass.simpleName}: ${t.message}")
                 } finally {
                     if (staging.exists()) staging.delete()
+                }
+            }
+        }
+
+        // -----------------------------------------------------------
+        // ai.vision.* (MobileSAMBackend) — no CoreGraphics/ImageIO on
+        // Android, so image decode + resize (resize-longest-side-to-
+        // targetSize, matching ImagePreprocessing.swift's Apple path) runs
+        // here via BitmapFactory, and the raw RGB bytes go back to Swift
+        // over the RPC bridge. The encoder graph itself does normalization/
+        // padding/channel-transpose, so this only decodes + resizes.
+        // -----------------------------------------------------------
+
+        private fun visionPreprocessImage(json: JSONObject, done: (String?, String?) -> Unit) {
+            val path = json.optString("path", "")
+            val dataBase64 = json.optString("dataBase64", "")
+            val targetSize = if (json.has("targetSize")) json.getInt("targetSize") else 1024
+            if (path.isEmpty() && dataBase64.isEmpty()) {
+                done(null, "swift-pwa: vision.preprocessImage: path or dataBase64 required")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val bitmap = when {
+                        dataBase64.isNotEmpty() -> {
+                            val bytes = Base64.decode(dataBase64, Base64.DEFAULT)
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }
+                        path.startsWith("content://") -> {
+                            activity.contentResolver.openInputStream(Uri.parse(path))?.use {
+                                BitmapFactory.decodeStream(it)
+                            }
+                        }
+                        else -> BitmapFactory.decodeFile(path)
+                    } ?: run {
+                        done(null, "swift-pwa: vision.preprocessImage: could not decode image")
+                        return@execute
+                    }
+
+                    val originalWidth = bitmap.width
+                    val originalHeight = bitmap.height
+                    val longSide = maxOf(originalWidth, originalHeight)
+                    val scale = targetSize.toDouble() / longSide.toDouble()
+                    val resizedWidth = maxOf(1, Math.round(originalWidth * scale).toInt())
+                    val resizedHeight = maxOf(1, Math.round(originalHeight * scale).toInt())
+
+                    val scaled = Bitmap.createScaledBitmap(bitmap, resizedWidth, resizedHeight, true)
+                    val pixels = IntArray(resizedWidth * resizedHeight)
+                    scaled.getPixels(pixels, 0, resizedWidth, 0, 0, resizedWidth, resizedHeight)
+
+                    // ARGB_8888 int -> raw RGB bytes (the encoder graph
+                    // wants HWC RGB, not ARGB — alpha is dropped).
+                    val rgb = ByteArray(resizedWidth * resizedHeight * 3)
+                    for (i in pixels.indices) {
+                        val p = pixels[i]
+                        rgb[i * 3] = ((p shr 16) and 0xFF).toByte()
+                        rgb[i * 3 + 1] = ((p shr 8) and 0xFF).toByte()
+                        rgb[i * 3 + 2] = (p and 0xFF).toByte()
+                    }
+                    val rgbBase64 = Base64.encodeToString(rgb, Base64.NO_WRAP)
+
+                    val result = JSONObject()
+                        .put("rgbBase64", rgbBase64)
+                        .put("originalWidth", originalWidth)
+                        .put("originalHeight", originalHeight)
+                        .put("resizedWidth", resizedWidth)
+                        .put("resizedHeight", resizedHeight)
+                    done(result.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: vision.preprocessImage failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
         }

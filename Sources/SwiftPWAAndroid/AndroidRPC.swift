@@ -15,10 +15,15 @@
     /// Errors come back as `BridgeError(code: .handler, message:)`.
     /// Method names are bare identifiers like `"clipboard.read"` —
     /// the Kotlin `SwiftPWABridge.handleRpc` `when` block dispatches.
-    enum AndroidRPC {
+    ///
+    /// `public`: other optional targets with an Android-specific backend
+    /// (e.g. `SwiftPWASegmentation`'s `AndroidImagePreprocessing`) call this
+    /// from a separate module, the same way `AndroidArchiveExtractor` (in
+    /// this module) does for zip work.
+    public enum AndroidRPC {
         /// Invoke `method` with `args` (encoded to JSON) and decode the
         /// JSON result as `R`. `R == NoResult` for void-returning methods.
-        static func call<R: Decodable>(
+        public static func call<R: Decodable>(
             _ method: String,
             _ args: some Encodable,
             as _: R.Type = R.self

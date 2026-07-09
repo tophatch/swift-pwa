@@ -18,36 +18,44 @@
 > `LIBRARY_PATH`, same as Linux's llama.cpp story. Both confirmed calling the
 > real C API end-to-end — Android verification went further, running the
 > linked binary **on an actual Galaxy Tab S10+** via `adb shell`. Publish
-> workflows exist for both artifacts (`.github/workflows/onnxruntime-
-> xcframework.yml`, `onnxruntime-android.yml`) but haven't been run yet —
-> Apple's self-completes (publishes, then opens a PR pinning the checksum,
-> mirroring `llama-xcframework.yml`); Android's publishes but can't self-pin
-> since no CLI-side fetch resolver (`LlamaLinuxArtifact`-style) exists yet.
+> workflows for both artifacts (`.github/workflows/onnxruntime-
+> xcframework.yml`, `onnxruntime-android.yml`) have been run: Apple's
+> self-completed (published, then opened a PR pinning the checksum,
+> mirroring `llama-xcframework.yml`); Android's published (checksum
+> recorded for the still-needed CLI-side fetch resolver,
+> `LlamaLinuxArtifact`-style, once something calls it).
 >
-> **`MobileSAMBackend` (Apple) is real, wired, and verified against real
-> weights**, in its own `SwiftPWASegmentation` target: `openSession`/
-> `segment`/`closeSession` run MobileSAM's encoder + one of two decoder
-> variants as ONNX Runtime sessions, with `ImagePreprocessing` (resize-only
-> — see below) and `MaskPostprocessing` (RLE) as independently-tested
-> pieces. Real weights, re-hosted at the `mobilesam-vendor` GitHub Release
-> (sourced from [`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM),
-> an ONNX export of the official Apache-2.0 `ChaoningZhang/MobileSAM`
-> checkpoint), turned up two contract corrections the fake-weight-only cut
-> had wrong: **(1)** the real encoder graph bakes in normalization,
-> channel-transpose, and padding itself — it takes a raw HWC
-> `[height,width,3]` pixel tensor (`0...255`, RGB), resized so the longer
-> side hits 1024 and nothing else; `ImagePreprocessing` no longer
-> normalizes/pads/transposes on the Swift side. **(2)** `multimask` selects
-> between two *separate* decoder graphs
+> **`MobileSAMBackend` (Apple + Android) is real, wired, and verified
+> against real weights**, in its own `SwiftPWASegmentation` target:
+> `openSession`/`segment`/`closeSession` run MobileSAM's encoder + one of
+> two decoder variants as ONNX Runtime sessions, with `ImagePreprocessing`
+> (resize-only — see below) and `MaskPostprocessing` (RLE) as
+> independently-tested pieces. Real weights, re-hosted at the
+> `mobilesam-vendor` GitHub Release (sourced from
+> [`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM), an ONNX export
+> of the official Apache-2.0 `ChaoningZhang/MobileSAM` checkpoint), turned
+> up two contract corrections the fake-weight-only cut had wrong: **(1)**
+> the real encoder graph bakes in normalization, channel-transpose, and
+> padding itself — it takes a raw HWC `[height,width,3]` pixel tensor
+> (`0...255`, RGB), resized so the longer side hits 1024 and nothing else;
+> `ImagePreprocessing` no longer normalizes/pads/transposes on the Swift
+> side. **(2)** `multimask` selects between two *separate* decoder graphs
 > (`sam_mask_decoder_single.onnx`/`sam_mask_decoder_multi.onnx`), not one
 > graph with a toggle, and each decoder already upsamples `masks` to
 > `orig_im_size` internally — `MaskPostprocessing`'s low-res-to-source-pixel
 > resampling step was deleted as dead code. Confirmed end-to-end with
 > point, box, and mixed positive/negative multi-point prompts against
 > synthetic test images — predicted mask bounding boxes matched ground
-> truth exactly. **Model hosting**: the `mobilesam-vendor` release exists,
-> but no downloadable-model tier (`ensureModel`) wires it up yet —
-> `MobileSAMBackend` still takes on-disk model paths directly. Android/
+> truth exactly. **Android**: no CoreGraphics/ImageIO, so
+> `ImagePreprocessing`'s Android half decodes + resizes Kotlin-side via a
+> new `vision.preprocessImage` RPC method over the same generic JNI bridge
+> `AndroidArchiveExtractor` uses for zip work; verified by cross-compiling
+> to `aarch64-unknown-linux-android28` and confirming `OrtGetApiBase`
+> resolves against the real vendored `.so` at link time — an actual
+> on-device encode/decode round trip through the RPC bridge is a follow-up.
+> **Model hosting**: the `mobilesam-vendor` release exists, but no
+> downloadable-model tier (`ensureModel`) wires it up yet —
+> `MobileSAMBackend` still takes on-disk model paths directly.
 > Linux/Windows backends don't exist yet.
 
 ## Motivation

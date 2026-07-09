@@ -573,7 +573,7 @@ trivial to decode into a bitmap. Errors carry stable codes
 `ensureModel` / `benchmark` are wired but **reserved** — they throw
 `E_UNIMPLEMENTED` until a backend that supports them is injected, same as
 `ai.generateImage` did before an image backend existed. A real backend
-(`MobileSAMBackend`, Apple-only, verified against real weights) exists as
+(`MobileSAMBackend`, Apple + Android, verified against real weights) exists as
 of this writing, but isn't auto-installed — an app must opt in via
 `ctx.use(VisionPlugin(...))` and supply model paths (see the
 `mobilesam-vendor` GitHub Release), so `ai.vision.info` reports

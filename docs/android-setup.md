@@ -761,15 +761,35 @@ in place (it's regenerated on each `swift-pwa build`, so fold the fix back into
 your build flow). Structured output (`ai.generateJSON`) uses the shared
 prompt-and-validate fallback for now (`structuredOutput: false`).
 
-## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime packaging spike
+## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime + `MobileSAMBackend`
 
-**Not a shipped feature yet** — no `pwa.json` flag, no bundler wiring, no
-backend. This section documents an in-progress packaging spike for the 0.8
-segmentation epic (see
-[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)),
-so anyone picking up the follow-up work (a real `MobileSAMBackend`,
-publishing the vendored artifact) knows where things stand and how to
-reproduce the toolchain locally.
+**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, env-gated
+behind `SWIFT_PWA_ONNXRUNTIME`) exists on Android**, verified against real
+MobileSAM weights — see
+[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
+for the full design and current 0.8 status. There's still no `pwa.json`
+flag or bundler auto-wiring (an app opts in with `ctx.use(VisionPlugin(...))`
+and its own on-disk model paths, same as Apple), and no downloadable-model
+tier (`ai.vision.ensureModel`) yet. This section documents the packaging
+spike this was built on plus the Android-specific plumbing, so anyone
+picking up the remaining follow-ups (an on-device encode/decode round trip
+against a real device, `ensureModel` wiring) knows where things stand and
+how to reproduce the toolchain locally.
+
+**No CoreGraphics/ImageIO on Android**, so `ImagePreprocessing`'s Android
+half (`Sources/SwiftPWASegmentation/AndroidImagePreprocessing.swift`)
+doesn't decode/resize in Swift at all — it RPCs a new `vision.
+preprocessImage` method (in the generated `SwiftPWASystemPlugins.kt`) that
+decodes via `android.graphics.BitmapFactory` (`decodeFile` for a plain
+path, `decodeStream` off a `ContentResolver` for a `content://` SAF pick,
+`decodeByteArray` for inline `dataBase64`), resizes with
+`Bitmap.createScaledBitmap` to match the same resize-longest-side-to-1024
+math the Apple side uses, and returns the raw RGB bytes base64-encoded —
+same generic JNI RPC bridge (`AndroidRPC.call`, now `public` so a
+cross-module target can reach it) `AndroidArchiveExtractor` uses for zip
+work. `MobileSAMBackend` itself, `OrtRuntime`, and `OrtModelSession` are
+otherwise identical Swift on both platforms — only the image-decode step
+differs.
 
 Unlike llama.cpp (no Android backend at all in this repo), Microsoft ships
 a usable prebuilt Android artifact for ONNX Runtime — the
@@ -813,6 +833,18 @@ committed target) is a plain library with no product forcing a real link
 yet, so `swift build --target` against it only proves compile +
 module-resolution; the link+runtime proof lives in that throwaway
 executable, not in anything committed to this repo.
+
+The real `MobileSAMBackend` (`SwiftPWASegmentation` target) is verified the
+same way — a throwaway executable depending on the `SwiftPWASegmentation`
+product, built with the same `TOOLCHAINS`/`LIBRARY_PATH`/`--swift-sdk`
+invocation, links successfully with `OrtGetApiBase@VERS_1.27.0` showing as
+an undefined symbol resolving against the real vendored `.so` (`nm` on the
+resulting binary, not a stub). What this **hasn't** verified yet: an
+actual on-device `openSession`/`segment` round trip through the
+`vision.preprocessImage` RPC bridge — that needs a full app scaffold (the
+generated `SwiftPWASystemPlugins.kt` only exists inside a `swift-pwa build
+--target android` output, not in this repo directly) plus pushing real
+MobileSAM weights to a device. Follow-up work, not blocking.
 
 ## 8. Known limitations
 

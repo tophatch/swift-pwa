@@ -107,7 +107,11 @@ adb install -r app/build/outputs/apk/debug/app-debug.apk
 Alongside the fact generator, this app wires **`MobileSAMBackend`**
 (`SwiftPWASegmentation`) — promptable on-device image segmentation, verified
 end-to-end on both Apple and a real Android device (Galaxy Z Fold7) against
-a real photo. It's enabled via **`ai.local_onnx_runtime: true`** in
+a real photo. The **"🐱 Tap-to-segment a kitten"** button on the main page
+opens [web/segment.html](Sources/CritterFacts/web/segment.html): a full-screen
+canvas showing a photo of kittens where tapping one draws a mask over it (tap
+elsewhere to reselect) — the canonical SAM tap-to-segment interaction, running
+entirely on-device. It's enabled via **`ai.local_onnx_runtime: true`** in
 [pwa.json](pwa.json), the same pattern as `ai.local_llama` — `swift-pwa
 build` sets `SWIFT_PWA_ONNXRUNTIME=1` for you (Apple + Android; on Android it
 also resolves + stages `libonnxruntime.so` per ABI automatically).

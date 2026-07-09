@@ -103,10 +103,11 @@ session primitive `AIBackend` has no room for):
 `ctx.use(VisionPlugin(MyBackend()))`, or `ctx.use(VisionPlugin())` to wire
 the JS contract against `NoneSegmentationBackend`. Shipping backend:
 `MobileSAMBackend` (`SwiftPWASegmentation`, Apple-only, env-gated behind
-`SWIFT_PWA_ONNXRUNTIME`) — runs MobileSAM's encoder/decoder as ONNX
-Runtime sessions; takes on-disk model paths directly (no downloadable-model
-tier yet, and real decoder weights aren't verified yet — see the proposal
-doc). See
+`SWIFT_PWA_ONNXRUNTIME`) — runs MobileSAM's encoder plus one of two decoder
+variants as ONNX Runtime sessions, verified against real weights (see the
+`mobilesam-vendor` GitHub Release); takes on-disk
+`encoderPath`/`decoderSinglePath`/`decoderMultiPath` directly (no
+downloadable-model tier yet). See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the design and current implementation status.
 

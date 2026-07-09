@@ -1,0 +1,6 @@
+module ONNXRuntimeAndroid {
+    header "onnxruntime_c_api.h"
+    header "cpu_provider_factory.h"
+    header "nnapi_provider_factory.h"
+    export *
+}

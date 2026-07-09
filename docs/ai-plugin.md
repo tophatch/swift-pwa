@@ -89,6 +89,12 @@ const receipt = await __SWIFT_PWA__.invoke('ai.generateJSON', {
 
 A backend that reports `vision: false` ignores `images`.
 
+> Not to be confused with **`ai.vision.*`** — a separate, discriminative
+> plugin (promptable image *segmentation*, not generative image
+> understanding) installed via `VisionPlugin`, not `AIPlugin`. See
+> [docs/javascript-api.md](javascript-api.md#aivision--promptable-on-device-image-segmentation)
+> and [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md).
+
 ### Image generation (text-to-image)
 
 When `info.imageGeneration` is true, `ai.generateImage` turns a prompt into

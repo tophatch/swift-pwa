@@ -39,12 +39,14 @@ jobs:
           prerelease: true
           files: Vendor/llama/llama.xcframework.zip
       - name: Pin the checksum in Package.swift
-        # Replace the CLlama binaryTarget's checksum (the only 64-hex checksum
-        # in the manifest, placeholder or previously-pinned). The value is
+        # Replace the CLlama binaryTarget's checksum specifically — scoped to
+        # the line following its `url:` (Package.swift now has more than one
+        # `.binaryTarget` with a 64-hex checksum, e.g. ONNXRuntime's, so an
+        # unscoped replace would clobber the wrong one). The value is
         # computed from the exact zip just uploaded, so the pin matches by
         # construction — no CI re-verification needed.
         run: |
-          sed -i '' -E 's/checksum: "[0-9a-f]{64}"/checksum: "${{ steps.sum.outputs.sha256 }}"/' Package.swift
+          sed -i '' -E '/llama\.xcframework\.zip/{N;s/checksum: "[0-9a-f]{64}"/checksum: "${{ steps.sum.outputs.sha256 }}"/;}' Package.swift
           echo "::notice::Pinned CLlama checksum = ${{ steps.sum.outputs.sha256 }}"
       - name: Open PR with the pinned checksum
         uses: peter-evans/create-pull-request@v7

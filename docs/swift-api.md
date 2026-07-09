@@ -95,6 +95,17 @@ or `ctx.use(AIPlugin())` to wire the JS contract against `NoneBackend`
 (`SwiftPWALlama`, opt in via `ai.local_llama` in `pwa.json`). See
 [docs/ai-plugin.md](ai-plugin.md).
 
+`VisionPlugin` (promptable on-device image segmentation behind
+`ai.vision.*`) follows the same shape but takes a `SegmentationBackend` —
+a **separate** protocol/plugin from `AIBackend`/`AIPlugin` (segmentation
+is discriminative, not generative, and needs an encode-once/decode-many
+session primitive `AIBackend` has no room for):
+`ctx.use(VisionPlugin(MyBackend()))`, or `ctx.use(VisionPlugin())` to wire
+the JS contract against `NoneSegmentationBackend`. No backend ships yet as
+of this writing — see
+[docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
+for the design and current implementation status.
+
 ## Multi-window
 
 ```swift

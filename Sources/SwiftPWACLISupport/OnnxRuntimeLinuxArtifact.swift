@@ -37,30 +37,36 @@ enum OnnxRuntimeLinuxArtifact {
         let description: String
     }
 
-    /// Ensure `libonnxruntime.so` is available and return the **directory**
-    /// holding it (for `LIBRARY_PATH` + runtime staging). Throws on a download
-    /// failure or checksum mismatch.
+    /// Ensure the ONNX Runtime lib is available and return the **directory**
+    /// holding it — normalized so both names resolve: `libonnxruntime.so.1`
+    /// (the SONAME the binary's NEEDED entry references at runtime) and a
+    /// `libonnxruntime.so` symlink (what `-lonnxruntime` finds at link time).
+    /// Used for `LIBRARY_PATH` (link) + `linuxdeploy --library` (runtime).
+    /// Throws on a download failure or checksum mismatch.
     static func ensureLibDir(projectRoot: URL) async throws -> URL {
         let fm = FileManager.default
 
         if let dir = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_LINUX_LIB_DIR"], !dir.isEmpty {
             let url = URL(fileURLWithPath: dir)
-            guard fm.fileExists(atPath: url.appendingPathComponent("libonnxruntime.so").path) else {
+            guard hasLib(url) else {
                 throw ArtifactError(
-                    description: "SWIFT_PWA_ONNXRUNTIME_LINUX_LIB_DIR=\(dir) has no libonnxruntime.so"
+                    description: "SWIFT_PWA_ONNXRUNTIME_LINUX_LIB_DIR=\(dir) has no libonnxruntime.so[.1]"
                 )
             }
+            try? normalizeSoname(in: url)
             return url
         }
 
         let local = projectRoot.appendingPathComponent("Vendor/onnxruntime-desktop/linux-x86_64")
-        if fm.fileExists(atPath: local.appendingPathComponent("libonnxruntime.so").path) {
+        if hasLib(local) {
+            try? normalizeSoname(in: local)
             return local
         }
 
         let cacheDir = cacheRoot().appendingPathComponent(sha256, isDirectory: true)
-        let lib = cacheDir.appendingPathComponent("libonnxruntime.so")
-        if fm.fileExists(atPath: lib.path), (try? sha256Hex(ofFileAt: lib)) == sha256 {
+        let versioned = cacheDir.appendingPathComponent("libonnxruntime.so.1")
+        if fm.fileExists(atPath: versioned.path), (try? sha256Hex(ofFileAt: versioned)) == sha256 {
+            try? normalizeSoname(in: cacheDir)
             return cacheDir
         }
 
@@ -78,8 +84,33 @@ enum OnnxRuntimeLinuxArtifact {
         guard got == sha256 else {
             throw ArtifactError(description: "libonnxruntime.so checksum mismatch (expected \(sha256), got \(got))")
         }
-        try data.write(to: lib)
+        // Save under the SONAME name; normalizeSoname adds the `.so` symlink.
+        try data.write(to: versioned)
+        try? normalizeSoname(in: cacheDir)
         return cacheDir
+    }
+
+    private static func hasLib(_ dir: URL) -> Bool {
+        let fm = FileManager.default
+        return fm.fileExists(atPath: dir.appendingPathComponent("libonnxruntime.so.1").path)
+            || fm.fileExists(atPath: dir.appendingPathComponent("libonnxruntime.so").path)
+    }
+
+    /// Ensure a lib dir has both `libonnxruntime.so.1` (runtime SONAME) and a
+    /// `libonnxruntime.so` symlink (link-time name). Idempotent; tolerates a
+    /// dir that already has one, the other, or both.
+    private static func normalizeSoname(in dir: URL) throws {
+        let fm = FileManager.default
+        let versioned = dir.appendingPathComponent("libonnxruntime.so.1")
+        let plain = dir.appendingPathComponent("libonnxruntime.so")
+        if !fm.fileExists(atPath: versioned.path), fm.fileExists(atPath: plain.path) {
+            // Only the plain name present (e.g. an older vendoring) — copy it
+            // to the SONAME name the loader needs.
+            try fm.copyItem(at: plain, to: versioned)
+        }
+        if !fm.fileExists(atPath: plain.path) {
+            try fm.createSymbolicLink(atPath: plain.path, withDestinationPath: "libonnxruntime.so.1")
+        }
     }
 
     private static func cacheRoot() -> URL {

@@ -61,17 +61,24 @@ module ONNXRuntimeDesktop {
 EOF
 
 # --- shared lib: the release ships lib/libonnxruntime.so.<ver> plus an
-# unversioned libonnxruntime.so symlink. We vendor the real file under the
-# plain SONAME the linker expects (`-lonnxruntime` → libonnxruntime.so). ---
+# unversioned libonnxruntime.so symlink. The lib's SONAME is
+# `libonnxruntime.so.1`, so a binary linked against it records
+# `libonnxruntime.so.1` as its NEEDED entry and the loader looks for exactly
+# that at runtime. We therefore vendor the real file as `libonnxruntime.so.1`
+# (the runtime name) plus a `libonnxruntime.so` symlink (the plain name the
+# linker's `-lonnxruntime` search wants at link time). ---
 REALSO="$(readlink -f "$SRC/lib/libonnxruntime.so" 2>/dev/null || echo "$SRC/lib/libonnxruntime.so.${ONNXRUNTIME_VERSION}")"
 [ -f "$REALSO" ] || { echo "FATAL: no libonnxruntime.so in $SRC/lib" >&2; exit 1; }
-cp "$REALSO" "$OUT/libonnxruntime.so"
-echo "=== wrote $OUT/libonnxruntime.so ($(du -h "$OUT/libonnxruntime.so" | cut -f1)) ==="
+cp "$REALSO" "$OUT/libonnxruntime.so.1"
+ln -sf libonnxruntime.so.1 "$OUT/libonnxruntime.so"
+echo "=== wrote $OUT/libonnxruntime.so.1 ($(du -h "$OUT/libonnxruntime.so.1" | cut -f1)) + libonnxruntime.so symlink ==="
 
-# The publishable asset: the raw .so with an arch-tagged name (mirroring
+# The publishable asset: the raw lib with an arch-tagged name (mirroring
 # build-llama-linux.sh's `libllama-linux-$ARCH.a`) — the CLI's
-# OnnxRuntimeLinuxArtifact downloads this directly and verifies its SHA-256.
-cp -f "$OUT/libonnxruntime.so" "$OUT/libonnxruntime-linux-x86_64.so"
+# OnnxRuntimeLinuxArtifact downloads this directly, saves it under the SONAME
+# name, and re-creates the `.so` symlink. (Content is identical to the .so.1,
+# so the pinned SHA-256 is unaffected by the naming.)
+cp -f "$OUT/libonnxruntime.so.1" "$OUT/libonnxruntime-linux-x86_64.so"
 
 echo
 echo "=== publishable asset checksum (sha256; pin into OnnxRuntimeLinuxArtifact.swift) ==="

@@ -128,8 +128,11 @@ struct AppImageBundler {
         // idempotent resolve the link-time gate used — see OnnxRuntimeLinuxArtifact.)
         if manifest.ai?.localOnnxRuntime == true {
             let libDir = try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
-            args += ["--library", libDir.appendingPathComponent("libonnxruntime.so").path]
-            print("swift-pwa: bundling libonnxruntime.so into the AppImage (ai.local_onnx_runtime)")
+            // Deploy the SONAME'd file (`libonnxruntime.so.1`) — that's the
+            // name the binary's NEEDED entry references, so linuxdeploy must
+            // land it under exactly that filename in the AppDir's usr/lib.
+            args += ["--library", libDir.appendingPathComponent("libonnxruntime.so.1").path]
+            print("swift-pwa: bundling libonnxruntime.so.1 into the AppImage (ai.local_onnx_runtime)")
         }
         args += ["--output", "appimage"]
         try await Shell.run("/usr/bin/env", args, cwd: outputDir)

@@ -435,6 +435,30 @@ Swift installed already has it), else a standard LLVM install. Run the script,
 then point the build at the result with
 `$env:SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR='…\Vendor\llama-windows'`.
 
+### On-device segmentation (`ai.vision.*`, ONNX Runtime)
+
+Promptable image segmentation (`MobileSAMBackend`, SAM-family) runs on Windows
+x64 via Microsoft's prebuilt **CPU** ONNX Runtime. Opt in exactly like llama:
+
+```json
+{
+  "ai": { "local_onnx_runtime": true }
+}
+```
+
+`swift-pwa build --target windows` then downloads the checksum-pinned
+`onnxruntime.lib` + `onnxruntime.dll` (cached under
+`%LOCALAPPDATA%\swift-pwa\onnxruntime-windows\`), puts the lib dir on `LIB` for
+the link step, and **stages `onnxruntime.dll` next to the built `.exe`** so it
+loads at launch (even for a `--single-file` build — a shared lib can't live in
+the exe overlay). No SDK is needed (image decode uses a vendored stb_image, not
+any Windows imaging API). See [docs/ai-plugin.md](ai-plugin.md) and the
+[segmentation proposal](proposals/segmentation-plugin.md) for the API.
+
+Building/publishing the vendored libs yourself uses
+[`Scripts/vendor-onnxruntime-windows.sh`](../Scripts/vendor-onnxruntime-windows.sh)
+(then `$env:SWIFT_PWA_ONNXRUNTIME_WINDOWS_LIB_DIR='…\Vendor\onnxruntime-desktop\windows-x86_64'`).
+
 ## 5. On-device AI: Phi Silica
 
 The `ai.*` plugin's Windows platform built-in is **Phi Silica**, via the

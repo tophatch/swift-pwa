@@ -102,8 +102,9 @@ is discriminative, not generative, and needs an encode-once/decode-many
 session primitive `AIBackend` has no room for):
 `ctx.use(VisionPlugin(MyBackend()))`, or `ctx.use(VisionPlugin())` to wire
 the JS contract against `NoneSegmentationBackend`. Shipping backend:
-`MobileSAMBackend` (`SwiftPWASegmentation`, Apple + Android, opt in via
-`ai.local_onnx_runtime` in `pwa.json`) — runs MobileSAM's encoder plus one of two
+`MobileSAMBackend` (`SwiftPWASegmentation`, **all platforms** — Apple + Android
+since 0.8.0, Linux x86_64 + Windows x64 since; opt in via `ai.local_onnx_runtime`
+in `pwa.json`) — runs MobileSAM's encoder plus one of two
 decoder variants as ONNX Runtime sessions, verified against real weights
 (see the `mobilesam-vendor` GitHub Release). Two initializers, mirroring
 `LlamaBackend`: `init(encoderPath:decoderSinglePath:decoderMultiPath:)` for
@@ -111,13 +112,17 @@ weights already on disk (bundled / bring-your-own), or
 `init(cacheDirectory:source:)` for the **downloadable** tier — `ai.vision.ensureModel`
 then fetches the three ONNX files (default `MobileSAMModelSource.mobileSAM`,
 resumable + checksum-pinned via `ModelDownloader`) into `cacheDirectory` on
-first use. Android has no CoreGraphics/ImageIO, so image decode/resize routes
-through a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` instead.
-`MobileSAMBackend` also implements **automatic mask generation**
-(`ai.vision.segmentAll` / `segmentAllStream`, `autoMask: true`) — a grid-of-
-prompts sweep + NMS returning every distinct object as its own mask, streaming
-per-cell progress — and **`ai.vision.benchmark`** (synthetic encode/decode/AMG
-timing → a coarse `high`/`mid`/`low` `deviceClass`). See
+first use. Image decode/resize is per-platform: CoreGraphics/ImageIO on Apple,
+a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` on Android, and a
+vendored stb_image + pure-Swift bilinear resize on Linux/Windows desktop (no
+CoreGraphics there). Desktop links Microsoft's prebuilt CPU ONNX Runtime,
+staged into the AppImage / next to the `.exe` automatically (Linux needs Swift
+6.1+ to build the segmentation target). `MobileSAMBackend` also implements
+**automatic mask generation** (`ai.vision.segmentAll` / `segmentAllStream`,
+`autoMask: true`) — a grid-of-prompts sweep + NMS returning every distinct
+object as its own mask, streaming per-cell progress — and
+**`ai.vision.benchmark`** (synthetic encode/decode/AMG timing → a coarse
+`high`/`mid`/`low` `deviceClass`). See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the design and current implementation status.
 

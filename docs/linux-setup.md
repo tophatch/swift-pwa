@@ -252,6 +252,35 @@ alone is not enough). Install the [LunarG SDK](https://vulkan.lunarg.com/sdk/hom
 `source <sdk>/setup-env.sh`, run the script, then point the build at the
 result with `SWIFT_PWA_LLAMA_LINUX_LIB_DIR=…/Vendor/llama-linux`.
 
+## 8. Optional — On-device segmentation (`ai.vision.*`, ONNX Runtime)
+
+Promptable image segmentation (`MobileSAMBackend`, SAM-family) runs on Linux
+x86_64 via Microsoft's prebuilt **CPU** ONNX Runtime. Same `pwa.json` opt-in
+shape as llama:
+
+```json
+{
+  "ai": { "local_onnx_runtime": true }
+}
+```
+
+`swift-pwa build --target linux` then downloads the checksum-pinned
+`libonnxruntime.so` (cached under `~/.cache/swift-pwa/onnxruntime-linux/`),
+links it, and hands it to `linuxdeploy --library` so it's bundled into the
+AppImage (SONAME-correct). No system package is needed — the runtime is
+self-contained; image decode uses a vendored stb_image, so there's no
+CoreGraphics dependency. See [docs/ai-plugin.md](ai-plugin.md) and the
+[segmentation proposal](proposals/segmentation-plugin.md) for the API.
+
+> **Swift 6.1+ required for this target.** The `SwiftPWASegmentation` target's
+> actor-isolated error-mapping helper trips a strict-concurrency diagnostic on
+> Swift 6.0.x that region-based isolation in 6.1 resolved. The rest of
+> swift-pwa still builds on 6.0; only `ai.local_onnx_runtime` needs 6.1+.
+
+Building/publishing the vendored lib yourself uses
+[`Scripts/vendor-onnxruntime-linux.sh`](../Scripts/vendor-onnxruntime-linux.sh)
+(then `SWIFT_PWA_ONNXRUNTIME_LINUX_LIB_DIR=…/Vendor/onnxruntime-desktop/linux-x86_64`).
+
 ## Known limitations on Linux
 
 The Linux backends are hand-rolled against the GTK / WebKitGTK C APIs.

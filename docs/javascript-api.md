@@ -606,8 +606,8 @@ const b = await __SWIFT_PWA__.invoke('ai.vision.benchmark', {});
 if (b.deviceClass === 'high') enableSegmentEverythingUX();
 ```
 
-A real backend (`MobileSAMBackend`, Apple +
-Android, verified against real weights) exists as of this writing, but isn't
+A real backend (`MobileSAMBackend`, all platforms — Apple/Android/Linux/Windows,
+verified against real weights) exists as of this writing, but isn't
 auto-installed — an app must opt in via `ctx.use(VisionPlugin(...))` and either
 bundle weights or use the downloadable tier (see the `mobilesam-vendor` GitHub
 Release), so `ai.vision.info` reports `available: false` until then. See

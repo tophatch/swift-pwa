@@ -17,6 +17,11 @@ let llamaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil
 // platform built-in (Phi Silica). `swift-pwa build` sets SWIFT_PWA_PHI_SILICA
 // from `ai.phi_silica: true`; add the dependency only then, same as llama.
 let phiSilicaEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_PHI_SILICA"] != nil
+// `SwiftPWASegmentation` (MobileSAMBackend, `ai.vision.*`) is the analogous
+// env-gated product for on-device segmentation — `SWIFT_PWA_ONNXRUNTIME` set
+// by hand for now (no `pwa.json` flag/bundler wiring exists yet, unlike
+// `ai.local_llama`/`ai.phi_silica` above).
+let onnxRuntimeEnabled = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil
 
 var appDependencies: [Target.Dependency] = [
     .product(name: "SwiftPWA", package: "swift-pwa"),
@@ -28,6 +33,9 @@ if llamaEnabled {
 }
 if phiSilicaEnabled {
     appDependencies.append(.product(name: "SwiftPWAPhiSilica", package: "swift-pwa"))
+}
+if onnxRuntimeEnabled {
+    appDependencies.append(.product(name: "SwiftPWASegmentation", package: "swift-pwa"))
 }
 
 let package = Package(
@@ -51,6 +59,13 @@ let package = Package(
                     ["-Xlinker", "-no-pie", "-Xlinker", "-shared"],
                     .when(platforms: [.android])
                 ),
+                // The vendored ONNX Runtime xcframework embeds protobuf,
+                // which needs the C++ standard library (Arena, exception
+                // personality routines) — an explicit executable target
+                // doesn't link libc++ by default the way a test bundle does
+                // (only test targets happened to pull it in incidentally
+                // before this app tried to link SwiftPWASegmentation).
+                .linkedLibrary("c++", .when(platforms: [.macOS, .iOS])),
             ]
         ),
     ]

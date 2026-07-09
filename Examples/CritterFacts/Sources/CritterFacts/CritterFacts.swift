@@ -12,6 +12,12 @@ import SwiftPWAModelStore // ModelSpec
 #if canImport(SwiftPWAPhiSilica)
     import SwiftPWAPhiSilica
 #endif
+// The on-device segmentation backend (MobileSAMBackend, `ai.vision.*`) —
+// env-gated the same way, `SWIFT_PWA_ONNXRUNTIME` set by hand (see
+// Package.swift) since there's no `pwa.json` flag for this yet.
+#if canImport(SwiftPWASegmentation)
+    import SwiftPWASegmentation
+#endif
 
 #if canImport(SwiftPWALlama)
     /// The downloadable model (tiny, ~400 MB, Apache-2.0) — shared by the
@@ -151,6 +157,44 @@ func configure(_ ctx: any AppContext) throws {
                 + "`swift-pwa build` (ai.local_llama is set in pwa.json) or export "
                 + "SWIFT_PWA_LLAMA=1 before `swift run` to enable on-device facts."
         )
+    #endif
+
+    // Filesystem plugin — needed by `web/mobilesam.js`'s `fs.mkdir`/
+    // `fs.exists`/`fs.writeBinary` calls (materializing the bundled
+    // segmentation weights on Android; see below). No archive extractor:
+    // this app doesn't need `fs.extractZip`.
+    ctx.use(FsPlugin(SystemFs()))
+
+    // On-device segmentation demo (`ai.vision.*`) — MobileSAMBackend, a
+    // *separate* plugin/namespace from the `ai.*` generative backend picked
+    // above, so it's wired unconditionally rather than as another `#elseif`
+    // branch. The Android path (including this bundled-weights wiring) is
+    // device-verified end-to-end against a real photo on a Galaxy Z Fold7;
+    // the Apple path reuses the same unchanged `MobileSAMBackend`/
+    // `ImagePreprocessing` code already verified in SwiftPWASegmentationTests
+    // and the earlier CGImage-based device pass — this app's only Apple-side
+    // change is which directory it points at. No downloadable-model tier
+    // exists yet (see the proposal doc), so this app bundles the weights
+    // itself under `web/models/
+    // mobilesam/` (staged into the SwiftPM resource bundle on Apple *and*
+    // into the APK's assets/web/ on Android by the same existing pipelines
+    // that already stage the rest of `web/` — no separate resource
+    // declaration needed). ONNX Runtime needs a real filesystem path, and an
+    // Android APK asset isn't one — Apple points straight at the bundled
+    // resource; Android materializes the three files into `dataDirectory()`
+    // once via `fs.writeBinary` (see `web/mobilesam.js`), so this only sets
+    // up where the *native* backend expects to find them already on disk.
+    #if canImport(SwiftPWASegmentation)
+        #if os(Android)
+            let mobileSAMDir = ctx.dataDirectory().appendingPathComponent("mobilesam", isDirectory: true)
+        #else
+            let mobileSAMDir = locateWebRoot().appendingPathComponent("models/mobilesam", isDirectory: true)
+        #endif
+        ctx.use(VisionPlugin(MobileSAMBackend(
+            encoderPath: mobileSAMDir.appendingPathComponent("encoder.onnx").path,
+            decoderSinglePath: mobileSAMDir.appendingPathComponent("decoder_single.onnx").path,
+            decoderMultiPath: mobileSAMDir.appendingPathComponent("decoder_multi.onnx").path
+        )))
     #endif
 
     // Android serves bundled web assets through the WebViewAssetLoader virtual

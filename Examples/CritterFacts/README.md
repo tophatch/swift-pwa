@@ -24,6 +24,10 @@ The llama model runs **Metal-accelerated on Apple** and **Vulkan-accelerated on
 Linux and Windows** (GPU if present, CPU fallback otherwise); Gemini Nano runs
 on the device's NPU/accelerator via AICore — same page, same `ai.*` calls.
 
+It also carries an on-device **segmentation** demo (`ai.vision.*`,
+`MobileSAMBackend`) on Apple + Android — see
+[On-device segmentation](#on-device-segmentation-aivision) below.
+
 ## Build & run
 
 The backend is opt-in, so build through the CLI (which sets `SWIFT_PWA_LLAMA`
@@ -97,6 +101,65 @@ swift run --package-path ../.. swift-pwa build \
 cd build/CritterFacts-android && ./gradlew assembleDebug
 adb install -r app/build/outputs/apk/debug/app-debug.apk
 ```
+
+## On-device segmentation (`ai.vision.*`)
+
+Alongside the fact generator, this app wires **`MobileSAMBackend`**
+(`SwiftPWASegmentation`) — promptable on-device image segmentation, verified
+end-to-end on both Apple and a real Android device (Galaxy Z Fold7) against
+a real photo. It's env-gated behind `SWIFT_PWA_ONNXRUNTIME` (no `pwa.json`
+flag exists for this yet, unlike `ai.local_llama`), and the three MobileSAM
+ONNX weight files (~60 MB, Apache-2.0, sourced from
+[`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM) — see
+[docs/proposals/segmentation-plugin.md](../../docs/proposals/segmentation-plugin.md))
+are bundled with the app itself under
+[Sources/CritterFacts/web/models/mobilesam/](Sources/CritterFacts/web/models/mobilesam/),
+since there's no downloadable-model tier (`ai.vision.ensureModel`) yet.
+
+**Build**: same as above, with `SWIFT_PWA_ONNXRUNTIME=1` set alongside (or
+instead of) `SWIFT_PWA_LLAMA`/`ai.gemini_nano`:
+
+```bash
+cd Examples/CritterFacts
+SWIFT_PWA_ONNXRUNTIME=1 swift build   # or add it to the swift-pwa build env for a real bundle
+```
+
+On Apple, `MobileSAMBackend` reads the bundled weights directly — nothing
+else needed. **On Android**, an APK asset isn't a real filesystem path ONNX
+Runtime can open, so the page materializes the three files into
+`ctx.dataDirectory()` once, the first time it needs them, via
+[web/mobilesam.js](Sources/CritterFacts/web/mobilesam.js)'s
+`window.ensureMobileSAMWeights(onProgress)` — a plain `fetch()` of the
+app's own bundled asset + the existing `fs.mkdir`/`fs.exists`/
+`fs.writeBinary` commands, no new native code. Call it once before your
+first `ai.vision.openSession`:
+
+```js
+await ensureMobileSAMWeights((done, total, name) => console.log(`${done}/${total} ${name}`));
+const { sessionId, width, height } = await __SWIFT_PWA__.invoke('ai.vision.openSession', {
+    image: { path: /* a real on-device path, or use dataBase64 */ }
+});
+const { masks } = await __SWIFT_PWA__.invoke('ai.vision.segment', {
+    sessionId, points: [{ x: width / 2, y: height / 2, label: 1 }], multimask: true,
+});
+```
+
+**Gotchas hit building this** (see
+[docs/android-setup.md §9.1](../../docs/android-setup.md) for the full
+writeup):
+
+- Apple's vendored xcframework embeds protobuf, which needs `libc++`
+  linked — add `.linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))` to
+  your executable target's `linkerSettings` (see this app's `Package.swift`)
+  or you'll hit unresolved-symbol linker errors.
+- `swift-pwa build --target android` doesn't yet stage the vendored
+  `libonnxruntime.so` into `jniLibs/` (no bundler wiring for this feature
+  exists yet) — copy `Vendor/onnxruntime-android/arm64-v8a/libonnxruntime.so`
+  into `build/CritterFacts-android/app/src/main/jniLibs/arm64-v8a/` by hand
+  before `./gradlew assembleDebug`, or the app crashes on launch with
+  `UnsatisfiedLinkError`.
+- This app's `configure(_:)` needs `ctx.use(FsPlugin(SystemFs()))` wired
+  (it wasn't, before this) — `web/mobilesam.js` depends on `fs.*` commands.
 
 ## Swapping the model
 

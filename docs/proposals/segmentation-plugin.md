@@ -51,12 +51,25 @@
 > new `vision.preprocessImage` RPC method over the same generic JNI bridge
 > `AndroidArchiveExtractor` uses for zip work; verified by cross-compiling
 > to `aarch64-unknown-linux-android28` and confirming `OrtGetApiBase`
-> resolves against the real vendored `.so` at link time — an actual
-> on-device encode/decode round trip through the RPC bridge is a follow-up.
+> resolves against the real vendored `.so` at link time. **A full on-device
+> `openSession`/`segment` round trip through the RPC bridge is now verified
+> too**, on a Galaxy Z Fold7 against a real photo (two kittens in a basket)
+> — point/multimask prompts correctly segmented the prompted subjects, IoU
+> ~0.99, rendered and visually confirmed, not just checked by shape.
 > **Model hosting**: the `mobilesam-vendor` release exists, but no
-> downloadable-model tier (`ensureModel`) wires it up yet —
-> `MobileSAMBackend` still takes on-disk model paths directly.
-> Linux/Windows backends don't exist yet.
+> downloadable-model tier (`ensureModel`) wires it up yet.
+> `Examples/CritterFacts` demonstrates the pattern an app can use meanwhile —
+> bundle the three ONNX files itself under `web/models/mobilesam/` (picked
+> up automatically by both the SwiftPM resource bundle on Apple and the
+> Android APK's `assets/web/` staging, since both already copy the whole
+> `web/` tree) and point `MobileSAMBackend` at that bundled location on
+> Apple directly, or — on Android, where an APK asset isn't a real
+> filesystem path ONNX Runtime can open — materialize the three files into
+> `ctx.dataDirectory()` once via a small JS helper (`web/mobilesam.js`)
+> using the existing `fs.mkdir`/`fs.exists`/`fs.writeBinary` commands and a
+> plain `fetch()` of the app's own bundled asset. No new native code needed
+> for this — it's all existing `Fs`/`AppPlugin` surface. Linux/Windows
+> backends don't exist yet.
 
 ## Motivation
 

@@ -835,16 +835,31 @@ module-resolution; the link+runtime proof lives in that throwaway
 executable, not in anything committed to this repo.
 
 The real `MobileSAMBackend` (`SwiftPWASegmentation` target) is verified the
-same way — a throwaway executable depending on the `SwiftPWASegmentation`
-product, built with the same `TOOLCHAINS`/`LIBRARY_PATH`/`--swift-sdk`
-invocation, links successfully with `OrtGetApiBase@VERS_1.27.0` showing as
-an undefined symbol resolving against the real vendored `.so` (`nm` on the
-resulting binary, not a stub). What this **hasn't** verified yet: an
-actual on-device `openSession`/`segment` round trip through the
-`vision.preprocessImage` RPC bridge — that needs a full app scaffold (the
-generated `SwiftPWASystemPlugins.kt` only exists inside a `swift-pwa build
---target android` output, not in this repo directly) plus pushing real
-MobileSAM weights to a device. Follow-up work, not blocking.
+same way at the link level — a throwaway executable depending on the
+`SwiftPWASegmentation` product, built with the same
+`TOOLCHAINS`/`LIBRARY_PATH`/`--swift-sdk` invocation, links successfully
+with `OrtGetApiBase@VERS_1.27.0` showing as an undefined symbol resolving
+against the real vendored `.so` (`nm` on the resulting binary, not a stub).
+
+Beyond that, a **full on-device `openSession`/`segment` round trip through
+the `vision.preprocessImage` RPC bridge is verified**, using
+`Examples/CritterFacts` (a real `swift-pwa build --target android`
+app, not a throwaway executable) on a Galaxy Z Fold7 against a real photo:
+`ai.vision.openSession` on a 6018×4024 kitten photo (fetched from the
+app's own bundled web asset, base64'd to `dataBase64`) succeeded, and
+`ai.vision.segment` with a point prompt + `multimask: true` returned 4
+ranked masks (best IoU ~0.99) whose decoded RLE, rendered back onto the
+source photo, precisely outlined the prompted kittens — visually confirmed,
+not just checked by shape. See `Examples/CritterFacts/Sources/CritterFacts/
+CritterFacts.swift`'s `configure(_:)` and `web/mobilesam.js` for the
+bundled-weights + on-device-materialize pattern this used (also documented
+in the proposal doc). One extra gotcha hit along the way: `swift-pwa build
+--target android` doesn't stage the vendored `libonnxruntime.so` into
+`jniLibs/` (no `pwa.json`/bundler wiring for this exists yet, unlike
+llama's artifacts) — copy it in by hand before `./gradlew assembleDebug`,
+or the app crashes on launch with `UnsatisfiedLinkError: ... library
+"libonnxruntime.so" not found`. This is a real gap for whenever `ai.vision.*`
+gets real bundler wiring.
 
 ## 8. Known limitations
 

@@ -570,6 +570,13 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 
 ## Known limitations (Windows-specific)
 
+- **No `system.memoryPressure` event.** `system.memory` works (total RAM and
+  `availableBytes` via `GlobalMemoryStatusEx`), but the runtime doesn't emit
+  the `system.memoryPressure` event on Windows (it fires on iOS/macOS/Android).
+  Windows *does* expose `CreateMemoryResourceNotification`, but it's a coarse
+  low/high object rather than the graded warning/critical bands the event
+  models, so it isn't wired yet — size memory-scaled caches from a
+  `system.memory` read and treat the event as best-effort.
 - **The portable `.exe` icon is a single source image, not a multi-size
   set (yet).** `pwa.json`'s `icon` is now embedded into the portable
   `.exe` — it shows in Explorer / the taskbar / Alt-Tab — by injecting an

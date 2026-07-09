@@ -369,6 +369,16 @@ struct AndroidBundler {
         for abi in abis {
             let triple = tripleFor(abi: abi)
             do {
+                // Guard the stale-incremental-cross-compile hazard: if the
+                // swift-pwa runtime sources changed since this triple was last
+                // built, SwiftPM's Android incremental build can leave a caller
+                // module compiled against an *old* struct layout while core uses
+                // the new one — producing a startup SIGSEGV (a value-witness
+                // retain on a garbage field, e.g. after a field is inserted mid
+                // `WindowConfig`). Fingerprint the runtime sources and wipe the
+                // triple's build dir on a mismatch so the next `swift build`
+                // recompiles everything against one consistent layout.
+                Self.cleanStaleCrossCompileCacheIfNeeded(projectRoot: projectRoot, triple: triple)
                 try await Shell.run(
                     buildTool.exe,
                     buildTool.leadingArgs + ["swift", "build", "-c", "release", "--swift-sdk", triple],
@@ -503,6 +513,104 @@ struct AndroidBundler {
             return nil
         }
         return String(id[range].dropFirst("swift-".count))
+    }
+
+    /// Wipe `.build/<triple>` when the swift-pwa runtime sources (the shared-ABI
+    /// surface) have changed since this triple was last cross-compiled, so the
+    /// next `swift build` recompiles caller and library modules against one
+    /// consistent struct layout.
+    ///
+    /// Rationale: a stored-property change in a core type (e.g. inserting a
+    /// field mid-`WindowConfig`) shifts the struct's layout, but SwiftPM's
+    /// Android incremental build doesn't always recompile a *caller* module that
+    /// constructs the type — leaving old and new layouts linked together. The
+    /// symptom is a `swift_retain` SIGSEGV in the type's value-witness copy at
+    /// runtime (seen after PR #49). This is advisory-free self-healing: the
+    /// common trigger — bumping the swift-pwa dependency to a version with a
+    /// changed core type — is caught by the source fingerprint below, and a
+    /// clean cross-compile is only forced when something actually changed.
+    static func cleanStaleCrossCompileCacheIfNeeded(projectRoot: URL, triple: String) {
+        let fm = FileManager.default
+        let tripleDir = projectRoot.appendingPathComponent(".build/\(triple)")
+        // Nothing cached yet → the upcoming build is already clean.
+        guard fm.fileExists(atPath: tripleDir.path) else { return }
+        let stampFile = tripleDir.appendingPathComponent(".swiftpwa-abi-fingerprint")
+        let current = runtimeABIFingerprint(projectRoot: projectRoot)
+        let previous = try? String(contentsOf: stampFile, encoding: .utf8)
+        guard previous != current else { return }
+        // Changed (or a pre-guard cache with no stamp): force a clean so no
+        // stale caller object survives against the new layout.
+        try? fm.removeItem(at: tripleDir)
+        try? fm.createDirectory(at: tripleDir, withIntermediateDirectories: true)
+        try? current.write(to: stampFile, atomically: true, encoding: .utf8)
+        print(
+            "note: swift-pwa runtime changed since the last \(triple) build — "
+                + "cleaned .build/\(triple) to avoid a stale-layout crash"
+        )
+    }
+
+    /// A stable digest of the swift-pwa runtime sources plus the CLI version.
+    /// Content-based (not mtime) so a `git checkout` that doesn't change bytes
+    /// doesn't force a needless clean. Falls back to the CLI version alone when
+    /// the sources can't be located (still catches a dependency-version bump,
+    /// since a released CLI is version-stamped).
+    static func runtimeABIFingerprint(projectRoot: URL) -> String {
+        var acc: UInt64 = 1_469_598_103_934_665_603 // FNV-1a offset basis
+        func mix(_ s: String) {
+            for byte in s.utf8 {
+                acc ^= UInt64(byte)
+                acc = acc &* 1_099_511_628_211
+            }
+        }
+        mix("cli:\(SwiftPWAVersion.current)\n")
+        if let sourcesRoot = locateSwiftPWASources(projectRoot: projectRoot),
+           let en = FileManager.default.enumerator(at: sourcesRoot, includingPropertiesForKeys: nil)
+        {
+            var files: [URL] = []
+            for case let url as URL in en where url.pathExtension == "swift" {
+                files.append(url)
+            }
+            // Sort by path so the digest is order-independent.
+            for url in files.sorted(by: { $0.path < $1.path }) {
+                mix(url.lastPathComponent)
+                if let data = try? Data(contentsOf: url) {
+                    // Fold the bytes in; cheap and content-sensitive.
+                    for byte in data {
+                        acc ^= UInt64(byte)
+                        acc = acc &* 1_099_511_628_211
+                    }
+                }
+            }
+        }
+        return String(acc, radix: 16)
+    }
+
+    /// Locate the swift-pwa runtime `Sources/` directory from a consumer
+    /// project, so its ABI surface can be fingerprinted. Handles both a local
+    /// `path:` dependency (this repo's `Examples/*` use `../..`) and a resolved
+    /// git dependency under `.build/checkouts`. Returns `nil` if none is found.
+    static func locateSwiftPWASources(projectRoot: URL) -> URL? {
+        let fm = FileManager.default
+        var candidates: [URL] = [
+            // path dependency `../..` (the layout this repo's examples use)
+            projectRoot.deletingLastPathComponent().deletingLastPathComponent()
+                .appendingPathComponent("Sources"),
+            // conventional git-checkout name
+            projectRoot.appendingPathComponent(".build/checkouts/swift-pwa/Sources")
+        ]
+        // Any other checkout dir that looks like swift-pwa (fork / rename).
+        let checkouts = projectRoot.appendingPathComponent(".build/checkouts")
+        if let entries = try? fm.contentsOfDirectory(at: checkouts, includingPropertiesForKeys: nil) {
+            for entry in entries where entry.lastPathComponent.lowercased().contains("swift-pwa") {
+                candidates.append(entry.appendingPathComponent("Sources"))
+            }
+        }
+        return candidates.first {
+            var isDir: ObjCBool = false
+            // Confirm it's actually the runtime tree, not some unrelated Sources.
+            let core = $0.appendingPathComponent("SwiftPWACore")
+            return fm.fileExists(atPath: core.path, isDirectory: &isDir) && isDir.boolValue
+        }
     }
 
     /// Copy the Swift stdlib runtime `.so`s (`libswiftCore.so` and

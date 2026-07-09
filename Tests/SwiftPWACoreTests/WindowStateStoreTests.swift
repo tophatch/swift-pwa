@@ -100,8 +100,14 @@ struct WindowStateStoreTests {
 
         win.emit(.didResize(Size(width: 1000, height: 700)))
         win.emit(.didMove(Point(x: 30, y: 40)))
-        // Let the async event-stream consumer drain.
-        try? await Task.sleep(nanoseconds: 100_000_000)
+        // The event-stream consumer runs on the cooperative pool, so poll until
+        // it has folded in the last-emitted event rather than assuming a fixed
+        // delay — a fixed sleep raced the consumer under CI load and flushed
+        // before `.didMove` landed (x/y still nil). Waiting for y == 40 implies
+        // the earlier `.didResize` was processed too (the stream is in-order).
+        for _ in 0 ..< 200 where store.state(for: "main")?.y != 40 {
+            try? await Task.sleep(nanoseconds: 10_000_000) // up to ~2s
+        }
 
         store.flushNow()
         let reopened = WindowStateStore(directory: dir)

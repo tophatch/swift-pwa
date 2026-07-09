@@ -17,6 +17,7 @@
         private init() {
             use(WindowPlugin())
             use(PlatformInfoPlugin())
+            use(SystemPlugin())
             use(AppPlugin())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))

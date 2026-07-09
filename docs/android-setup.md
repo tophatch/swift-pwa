@@ -266,6 +266,19 @@ re-stage by hand.
 > against a 6.2 SDK with a 6.3 compiler fails with a `module compiled
 > with Swift 6.2 cannot be imported by the Swift 6.3 compiler` error.
 
+One more automatic safeguard runs on the way in:
+
+> **Stale-cache guard (automatic).** Before each ABI's `swift build`, the
+> bundler fingerprints the swift-pwa runtime sources and, if they changed since
+> that triple was last built, wipes `.build/<triple>` so the build recompiles
+> against one consistent struct layout. This heads off a class of startup
+> `SIGSEGV` (a `swift_retain` fault in a type's value-witness copy) that
+> SwiftPM's incremental Android build can otherwise produce when a core type's
+> stored fields change — most commonly after you bump the swift-pwa dependency.
+> You'll see a one-line `note: … cleaned .build/<triple> …` when it fires; an
+> unchanged tree keeps the fast incremental path. If you ever hit that crash on
+> a build predating this guard, `rm -rf .build/*android*` and rebuild.
+
 The bundler also drops a vendored Gradle 8.10.2 wrapper into the
 generated project (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`) so
 `./gradlew assembleDebug` works straight out of the scaffold — no

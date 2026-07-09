@@ -722,10 +722,13 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             )
         ])
     #else
-        // Linux / Windows: no ONNX Runtime backend story yet (see the doc
-        // comment above). The env var is a deliberate no-op on these hosts
-        // rather than a build failure — nothing depends on
-        // `SwiftPWAONNXRuntimeSmoke` yet, so there's nothing to break.
+        // Linux / Windows: the desktop ONNX Runtime target (`ONNXRuntimeDesktop`,
+        // a `.systemLibrary` over committed headers) is declared host-agnostically
+        // below alongside the Android one — same reasoning: a systemLibrary over
+        // committed headers is safe to put in the graph on any host, and the
+        // actual `libonnxruntime.so` / `onnxruntime.dll`+`.lib` is found at link
+        // time via `LIBRARY_PATH` / `LIB` (Microsoft's prebuilt CPU build,
+        // vendored by Scripts/vendor-onnxruntime-{linux,windows}.sh).
     #endif
 
     // Android — host-agnostic to declare (a plain `.systemLibrary` over
@@ -739,6 +742,24 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             dependencies: [.target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android]))],
             swiftSettings: swiftSettings,
             linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.android]))]
+        )
+    ])
+
+    // Desktop (Linux x86_64 + Windows x64) — a plain `.systemLibrary` over the
+    // same committed C API headers (module `ONNXRuntimeDesktop`; the headers
+    // are identical to the Android release's, just a separate modulemap dir).
+    // Host-agnostic to declare, like `ONNXRuntimeAndroid`. The `.so`/`.dll`+
+    // `.lib` are Microsoft's prebuilt **CPU** desktop build (vendored by
+    // Scripts/vendor-onnxruntime-{linux,windows}.sh), found at link time via
+    // `LIBRARY_PATH` (Linux) / `LIB` (Windows) — the same env-search mechanism
+    // SwiftPWALlama uses off-Apple, never `unsafeFlags`.
+    package.targets.append(contentsOf: [
+        .systemLibrary(name: "ONNXRuntimeDesktop", path: "Vendor/onnxruntime-desktop-headers"),
+        .target(
+            name: "SwiftPWAONNXRuntimeDesktopSmoke",
+            dependencies: [.target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows]))],
+            swiftSettings: swiftSettings,
+            linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.linux, .windows]))]
         )
     ])
 
@@ -765,17 +786,26 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     #endif
     segmentationDependencies.append(contentsOf: [
         .target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android])),
-        .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
+        .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
+        .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows])),
+        // Desktop has no CoreGraphics (Apple) or BitmapFactory-over-RPC
+        // (Android) to decode/resize an image, so a tiny vendored stb_image
+        // C target does it (see Sources/CStbImage). Linux/Windows only.
+        .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))
     ])
 
     package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
     package.targets.append(contentsOf: [
+        // Vendored stb_image (single-header, public-domain) — the desktop
+        // image decoder (Linux/Windows have no CoreGraphics / BitmapFactory).
+        // Compiled only where SwiftPWASegmentation depends on it (linux/windows).
+        .target(name: "CStbImage", path: "Sources/CStbImage", publicHeadersPath: "include"),
         .target(
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,
             swiftSettings: swiftSettings,
             linkerSettings: [
-                .linkedLibrary("onnxruntime", .when(platforms: [.android])),
+                .linkedLibrary("onnxruntime", .when(platforms: [.android, .linux, .windows])),
                 // The vendored ONNX Runtime xcframework embeds protobuf (C++),
                 // which needs libc++ (Arena, exception-personality symbols). A
                 // `.binaryTarget` can't declare linker settings, so we hang it

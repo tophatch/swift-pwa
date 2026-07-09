@@ -2,6 +2,8 @@
     import ONNXRuntime
 #elseif canImport(ONNXRuntimeAndroid)
     import ONNXRuntimeAndroid
+#elseif canImport(ONNXRuntimeDesktop)
+    import ONNXRuntimeDesktop
 #endif
 import Foundation
 
@@ -9,10 +11,12 @@ import Foundation
 // just inside `#if canImport` blocks), so the whole body is gated —
 // `SwiftPWASegmentation` is declared host-agnostically in Package.swift (so
 // an Android cross-compile from a Linux host sees it too), but on a
-// destination with neither ONNXRuntime nor ONNXRuntimeAndroid linked
-// (Linux/Windows-native) this compiles to an empty, harmless stub — the
-// same shape `CSwiftPWAAndroidJNI`'s C shim uses for non-Android hosts.
-#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid)
+// destination with none of the three ONNX Runtime modules linked this
+// compiles to an empty, harmless stub — the same shape `CSwiftPWAAndroidJNI`'s
+// C shim uses for non-Android hosts. The three modules (Apple xcframework
+// binaryTarget / Android + desktop systemLibraries) all expose the identical
+// ONNX Runtime C API, so the code below is written once against it.
+#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop)
 
     /// Thin, minimal Swift wrapper over the ONNX Runtime C API — the shared
     /// "ONNX Runtime backend tier" investment the 0.8 maintainer evaluation

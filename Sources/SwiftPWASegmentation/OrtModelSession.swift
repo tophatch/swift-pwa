@@ -2,13 +2,15 @@
     import ONNXRuntime
 #elseif canImport(ONNXRuntimeAndroid)
     import ONNXRuntimeAndroid
+#elseif canImport(ONNXRuntimeDesktop)
+    import ONNXRuntimeDesktop
 #endif
 import Foundation
 
 // See the matching comment in OrtRuntime.swift — this type references ONNX
 // Runtime C API types unconditionally, so the whole body is gated to
-// destinations where one of the two imports above actually succeeded.
-#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid)
+// destinations where one of the three imports above actually succeeded.
+#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop)
 
     /// A loaded ONNX model, runnable against named float32 tensors. Deliberately
     /// narrow — SAM's encoder/decoder graphs (and the other ONNX-Runtime-tier

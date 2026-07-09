@@ -163,6 +163,11 @@ struct WindowsBundler {
                 }
                 try FileManager.default.moveItem(at: bundledExe, to: singleExe)
                 try? FileManager.default.removeItem(at: bundleDir)
+                // A shared-lib dependency can't live in the exe overlay — the
+                // OS loader needs it as a real file beside the exe. So even a
+                // "single-file" build emits onnxruntime.dll alongside when
+                // ai.local_onnx_runtime is on.
+                try await stageOnnxRuntimeDLLIfNeeded(nextTo: outputDir)
                 print("swift-pwa: single-file build — web/ embedded into \(exeName)")
                 return singleExe
             }
@@ -188,6 +193,10 @@ struct WindowsBundler {
                 )
             }
 
+            // Stage onnxruntime.dll next to the exe so the segmentation
+            // backend's shared-lib dependency resolves at launch.
+            try await stageOnnxRuntimeDLLIfNeeded(nextTo: bundleDir)
+
             if bootstrapWebView2 {
                 try await downloadBootstrapper(into: bundleDir)
             }
@@ -206,6 +215,23 @@ struct WindowsBundler {
     /// `web/` recursively, preserving relative paths (forward-slashed, the form
     /// request URLs use). A no-op-safe append after the PE image — the loader
     /// ignores trailing bytes.
+    /// Stage `onnxruntime.dll` into `dir` when `ai.local_onnx_runtime` is on.
+    /// The segmentation backend links ONNX Runtime as a *shared* lib, so the
+    /// DLL must be resolvable at launch — Windows searches the exe's own
+    /// directory first. The same `onnxruntime.dll` the link-time gate put on
+    /// `LIB` (via `OnnxRuntimeWindowsArtifact`, an idempotent/cached resolve).
+    private func stageOnnxRuntimeDLLIfNeeded(nextTo dir: URL) async throws {
+        guard manifest.ai?.localOnnxRuntime == true else { return }
+        let libDir = try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
+        let src = libDir.appendingPathComponent("onnxruntime.dll")
+        let dest = dir.appendingPathComponent("onnxruntime.dll")
+        if FileManager.default.fileExists(atPath: dest.path) {
+            try FileManager.default.removeItem(at: dest)
+        }
+        try FileManager.default.copyItem(at: src, to: dest)
+        print("swift-pwa: staged onnxruntime.dll next to the app (ai.local_onnx_runtime)")
+    }
+
     private func embedWebOverlay(into exe: URL) throws {
         let webRoot = projectRoot.appendingPathComponent(manifest.web.directory)
         guard FileManager.default.fileExists(atPath: webRoot.path) else {

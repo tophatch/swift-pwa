@@ -1,0 +1,67 @@
+name: onnxruntime desktop
+
+# Re-host Microsoft's official prebuilt ONNX Runtime **desktop** (Linux x64 +
+# Windows x64, CPU build) as STABLE swift-pwa release assets, so the CLI's
+# OnnxRuntime{Linux,Windows}Artifact resolvers fetch from a URL we control
+# (matching how llama-{linux,windows}.yml and onnxruntime-android.yml publish).
+# Both artifacts are just downloads of Microsoft's release archives, so a
+# single ubuntu runner vendors both (the vendor scripts are host-independent —
+# only *linking* against the result needs the matching OS).
+#
+# Run manually (workflow_dispatch) only when the pinned ONNX Runtime version in
+# Scripts/vendor-onnxruntime-{linux,windows}.sh changes; then update the pinned
+# checksums in the two CLI resolvers to the ones this prints.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Vendor Linux x86_64 libonnxruntime.so
+        id: linux
+        run: |
+          bash Scripts/vendor-onnxruntime-linux.sh
+          asset="Vendor/onnxruntime-desktop/linux-x86_64/libonnxruntime-linux-x86_64.so"
+          echo "sha256=$(sha256sum "$asset" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+      - name: Publish to onnxruntime-vendor-linux
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: onnxruntime-vendor-linux
+          name: ONNX Runtime Linux x86_64 libonnxruntime.so (vendored, CPU)
+          prerelease: true
+          files: ${{ steps.linux.outputs.asset }}
+
+      - name: Vendor Windows x64 onnxruntime.dll + onnxruntime.lib
+        id: windows
+        run: bash Scripts/vendor-onnxruntime-windows.sh
+      - name: Publish to onnxruntime-vendor-windows
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: onnxruntime-vendor-windows
+          name: ONNX Runtime Windows x64 onnxruntime.dll + .lib (vendored, CPU)
+          prerelease: true
+          files: |
+            Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime.dll
+            Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime.lib
+
+      - name: Report checksums to pin into the CLI resolvers
+        run: |
+          lin="Vendor/onnxruntime-desktop/linux-x86_64/libonnxruntime-linux-x86_64.so"
+          wdll="Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime.dll"
+          wlib="Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime.lib"
+          {
+            echo "### ONNX Runtime desktop artifacts published"
+            echo
+            echo "Pin these into OnnxRuntimeLinuxArtifact.swift / OnnxRuntimeWindowsArtifact.swift:"
+            echo
+            echo "- linux libonnxruntime.so: \`$(sha256sum "$lin" | awk '{print $1}')\`"
+            echo "- windows onnxruntime.dll: \`$(sha256sum "$wdll" | awk '{print $1}')\`"
+            echo "- windows onnxruntime.lib: \`$(sha256sum "$wlib" | awk '{print $1}')\`"
+          } >> "$GITHUB_STEP_SUMMARY"

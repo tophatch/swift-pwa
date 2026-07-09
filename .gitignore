@@ -32,3 +32,8 @@ Vendor/onnxruntime/
 # release asset). Headers under Vendor/onnxruntime-android-headers/ ARE
 # committed (the systemLibrary modulemap) — only the .so is ignored.
 Vendor/onnxruntime-android/
+# Vendored ONNX Runtime desktop libs (Linux .so / Windows .dll+.lib, built by
+# Scripts/vendor-onnxruntime-{linux,windows}.sh; adopters get the checksummed
+# release asset). Headers under Vendor/onnxruntime-desktop-headers/ ARE
+# committed (the shared systemLibrary modulemap) — only the libs are ignored.
+Vendor/onnxruntime-desktop/

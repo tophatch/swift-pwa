@@ -2,7 +2,7 @@
 
 A Swift-native, thin-client PWA wrapper around system webviews — Tauri/Wails for the Swift world.
 
-> **Status:** [`v0.7.9`](https://github.com/tophatch/swift-pwa/releases/tag/v0.7.9) is the current release — macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class, with **built-in on-device AI on every platform**: the OS platform model (Apple Foundation Models, Android Gemini Nano, Windows Phi Silica) *and* portable GPU/CPU-accelerated llama.cpp (Apple Metal, Linux + Windows x64 Vulkan, Windows arm64). **0.7.9 adds `dialog.exportFile` — a content-first "save this" that finally works on iOS — completes `app.openFile` on Android, and fixes Linux `window.isFullscreen()`.** See the [feature matrix](#feature-matrix), the per-platform [setup docs](docs/), and [`CHANGELOG.md`](CHANGELOG.md).
+> **Status:** [`v0.7.10`](https://github.com/tophatch/swift-pwa/releases/tag/v0.7.10) is the current release — macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class, with **built-in on-device AI on every platform**: the OS platform model (Apple Foundation Models, Android Gemini Nano, Windows Phi Silica) *and* portable GPU/CPU-accelerated llama.cpp (Apple Metal, Linux + Windows x64 Vulkan, Windows arm64). **0.7.10 bridges device memory to JS — a `system.*` plugin (`system.memory` + a `system.memoryPressure` event) plus exact, uncapped RAM on `__platform.info`, beating `navigator.deviceMemory` (and working on iOS, where it's absent).** See the [feature matrix](#feature-matrix), the per-platform [setup docs](docs/), and [`CHANGELOG.md`](CHANGELOG.md).
 
 ## Why
 

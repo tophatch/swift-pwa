@@ -1,0 +1,57 @@
+name: onnxruntime android
+
+# Vendor the ONNX Runtime Android C API + arm64-v8a libonnxruntime.so (via
+# Scripts/vendor-onnxruntime-android.sh) and publish it as a STABLE release
+# asset. The Android analogue of onnxruntime-xcframework.yml / llama-linux.yml
+# — except, unlike those two, there is currently NO destination to
+# auto-pin the checksum into. `SwiftPWAONNXRuntimeAndroidSmoke` links against
+# a local `Vendor/onnxruntime-android/` (see the vendoring script) rather than
+# a downloaded release asset — there's no `OnnxRuntimeAndroidArtifact.swift`
+# CLI resolver yet (the `LlamaLinuxArtifact.swift` analogue), because nothing
+# in the CLI/bundler wires up ai.vision.* / a real segmentation backend yet.
+# That resolver — and this workflow's self-completing "pin the checksum" step
+# — is a follow-up for whenever that lands; until then, run this manually,
+# publish the asset, and hand-carry the printed checksum into that file once
+# it exists.
+#
+# Run this manually (workflow_dispatch) only when the pinned ONNX Runtime
+# version in Scripts/vendor-onnxruntime-android.sh changes.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Vendor the Android artifact (headers + arm64-v8a .so)
+        id: build
+        run: |
+          bash Scripts/vendor-onnxruntime-android.sh
+          asset="Vendor/onnxruntime-android/libonnxruntime-android-arm64-v8a.so"
+          echo "sha256=$(sha256sum "$asset" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+      - name: Publish to the stable onnxruntime-vendor-android release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: onnxruntime-vendor-android
+          name: ONNX Runtime Android arm64-v8a libonnxruntime.so (vendored)
+          prerelease: true
+          files: ${{ steps.build.outputs.asset }}
+      - name: Report the checksum to hand-carry once a CLI resolver exists
+        run: |
+          echo "::notice::libonnxruntime-android-arm64-v8a.so sha256 = ${{ steps.build.outputs.sha256 }}"
+          {
+            echo "### ONNX Runtime Android artifact published"
+            echo
+            echo "- asset: \`libonnxruntime-android-arm64-v8a.so\`"
+            echo "- sha256: \`${{ steps.build.outputs.sha256 }}\`"
+            echo "- url: \`https://github.com/${{ github.repository }}/releases/download/onnxruntime-vendor-android/libonnxruntime-android-arm64-v8a.so\`"
+            echo
+            echo "No CLI-side fetcher exists yet to auto-pin this into (the"
+            echo "\`LlamaLinuxArtifact.swift\` analogue for Android). Hand-carry"
+            echo "this checksum into that file once it's written."
+          } >> "$GITHUB_STEP_SUMMARY"

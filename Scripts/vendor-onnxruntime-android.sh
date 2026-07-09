@@ -92,11 +92,18 @@ for abi in "${ABIS[@]}"; do
     mkdir -p "$OUT/$abi"
     cp "$src" "$OUT/$abi/libonnxruntime.so"
     echo "=== wrote $OUT/$abi/libonnxruntime.so ($(du -h "$src" | cut -f1)) ==="
+
+    # The publishable asset: the raw .so renamed per-ABI (mirroring
+    # build-llama-linux.sh's `libllama-linux-$ARCH.a` convention) — the CLI
+    # (once it has an Android artifact resolver, LlamaLinuxArtifact-style)
+    # downloads this directly and verifies its SHA-256, no archive/unzip
+    # dependency needed.
+    cp -f "$OUT/$abi/libonnxruntime.so" "$OUT/libonnxruntime-android-$abi.so"
 done
 
 echo
 echo "=== publishable asset checksums (sha256; for a future CLI-side fetch, see LlamaLinuxArtifact.swift for the pattern) ==="
 for abi in "${ABIS[@]}"; do
     printf '%s: ' "$abi"
-    shasum -a 256 "$OUT/$abi/libonnxruntime.so" | awk '{print $1}'
+    shasum -a 256 "$OUT/libonnxruntime-android-$abi.so" | awk '{print $1}'
 done

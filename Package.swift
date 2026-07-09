@@ -636,6 +636,78 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
     ])
 }
 
+// MARK: - Optional ONNX Runtime packaging spike (env-gated, Apple only)
+
+// SPIKE, not a shipped backend. De-risks the packaging story for the 0.8
+// ONNX Runtime tier (first consumer: `ai.vision.*` / MobileSAM segmentation
+// — see docs/proposals/segmentation-plugin.md) before investing in the
+// actual encoder/decoder backend. `SwiftPWAONNXRuntimeSmoke` links the real
+// vendored xcframework and calls one real C API function
+// (`OrtGetApiBase`); it proves the artifact/link/import chain works and
+// nothing more.
+//
+// Mirrors the llama.cpp `.binaryTarget` pattern above exactly, but the
+// upstream artifact needs a repackaging step first: Microsoft's official
+// Apple distribution (no GitHub Release asset — the stable, versioned
+// download lives on Microsoft's own CDN, the same artifact
+// `onnxruntime-swift-package-manager` vendors internally) ships each slice
+// as a versioned `.framework` *bundle* with no `Modules/module.modulemap`,
+// so `import onnxruntime` doesn't work out of the box — yet the binary
+// inside is a plain static archive (`ar` format), not a dylib. Rather than
+// hand-patch Microsoft's bundle layout, `Scripts/vendor-onnxruntime-
+// apple.sh` extracts the static lib + headers from each slice and
+// re-packages them via `xcodebuild -create-xcframework -library -headers`
+// into the same flat-library-plus-headers shape `Vendor/llama-headers`
+// already uses — our own `module.modulemap` (named `ONNXRuntime`, matching
+// this target) covering the C API headers a segmentation backend needs.
+// Verified end-to-end: the script's output actually links and its C API is
+// callable (`SwiftPWAONNXRuntimeSmokeTests`).
+//
+// Apple-only for now — Linux/Windows have no ONNX Runtime backend story
+// yet, and Android needs a from-scratch vendoring step (Maven AAR →
+// extract per-ABI `libonnxruntime.so` + headers, fed into a
+// `CSwiftPWAAndroidJNI`-style C shim) since SwiftPM's `.binaryTarget` is
+// Apple-only; both are follow-ups once a real segmentation backend is
+// being built, not part of this packaging spike.
+if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
+    #if os(macOS)
+        let localOnnxXcframework = "Vendor/onnxruntime/onnxruntime.xcframework"
+        let onnxRuntimeTarget: Target = FileManager.default.fileExists(atPath: localOnnxXcframework)
+            ? .binaryTarget(name: "ONNXRuntime", path: localOnnxXcframework)
+            // PENDING: no swift-pwa release has published a
+            // `onnxruntime.xcframework.zip` asset yet (the llama.cpp
+            // equivalent of `.github/workflows/llama-xcframework.yml` +
+            // its release asset is a follow-up, not part of this spike).
+            // Until then this branch is unreachable for anyone without a
+            // local `Vendor/onnxruntime/` — run
+            // `Scripts/vendor-onnxruntime-apple.sh` to produce one.
+            : .binaryTarget(
+                name: "ONNXRuntime",
+                url: "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor/onnxruntime.xcframework.zip",
+                checksum: "0000000000000000000000000000000000000000000000000000000000000000"
+            )
+
+        package.targets.append(contentsOf: [
+            onnxRuntimeTarget,
+            .target(
+                name: "SwiftPWAONNXRuntimeSmoke",
+                dependencies: [.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS]))],
+                swiftSettings: swiftSettings
+            ),
+            .testTarget(
+                name: "SwiftPWAONNXRuntimeSmokeTests",
+                dependencies: ["SwiftPWAONNXRuntimeSmoke"],
+                swiftSettings: swiftSettings
+            )
+        ])
+    #else
+        // Linux / Windows: no ONNX Runtime backend story yet (see the doc
+        // comment above). The env var is a deliberate no-op on these hosts
+        // rather than a build failure — nothing depends on
+        // `SwiftPWAONNXRuntimeSmoke` yet, so there's nothing to break.
+    #endif
+}
+
 // MARK: - Optional Windows Phi Silica backend (env-gated, Windows App SDK)
 
 // `SwiftPWAPhiSilica` / `PhiSilicaBackend` exposes Windows Phi Silica (the

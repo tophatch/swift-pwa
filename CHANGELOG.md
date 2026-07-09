@@ -5,6 +5,14 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ai.vision.*` segmentation contract (0.8, in progress).** The JS/Swift contract for promptable on-device image segmentation (SAM-family) is wired: `ai.vision.info` / `openSession` (runs the encoder) / `segment` (runs the decoder against a cached embedding) / `closeSession`, plus reserved (default-`E_UNIMPLEMENTED`) `segmentAll(Stream)` / `ensureModel` / `benchmark` surfaces so their request shapes are stable ahead of a real backend — mirroring how `ai.generateImage`/`ai.generateAudio` shipped in `AIPlugin` before an image/audio backend existed. A new `SegmentationBackend` protocol + `VisionPlugin` (in `SwiftPWACore`, dependency-free) is a **separate** plugin from `AIBackend`/`AIPlugin` — segmentation is discriminative (image + spatial prompt → masks) and needs an encode-once/decode-many **session** primitive that doesn't map onto `AIBackend`'s generate-only shape — sharing the `ai.*` namespace and reusing `AIImage`/`AIEnsureModelRequest`/`AIDownloadEvent`/`BridgeError` conventions. Installed exactly like `AIPlugin`: `ctx.use(VisionPlugin(MyBackend()))` or `ctx.use(VisionPlugin())` for the contract-only `NoneSegmentationBackend`. No backend yet — see the ONNX Runtime packaging spike below and [docs/proposals/segmentation-plugin.md](docs/proposals/segmentation-plugin.md) for the accepted design and 0.8 scope. Covered by unit tests in `SwiftPWACoreTests`.
+
+- **ONNX Runtime Apple packaging spike (`SWIFT_PWA_ONNXRUNTIME`, not a shipped backend).** De-risks the 0.8 ONNX Runtime tier's cross-platform packaging story before investing in a real MobileSAM backend. Finding: Microsoft's official Apple distribution (no GitHub Release asset — a versioned pod-archive zip on their own CDN) ships each slice as a `.framework` *bundle* with no `Modules/module.modulemap`, so `import onnxruntime` doesn't work out of the box, even though the binary inside is actually a plain static archive, not a dylib. `Scripts/vendor-onnxruntime-apple.sh` repackages it into the same flat static-lib + headers xcframework shape `SwiftPWALlama` already uses (our own `module.modulemap`, named `ONNXRuntime`) — verified end-to-end: the repackaged artifact links and its C API (`OrtGetApiBase`) is callable, confirmed against the real ONNX Runtime 1.27.0 version string (`SwiftPWAONNXRuntimeSmokeTests`). Apple-only for now; Android needs its own from-scratch vendoring step (Maven AAR → per-ABI `.so` + headers) and Linux/Windows have no ONNX Runtime story yet — both are follow-ups. No swift-pwa release has published the repackaged xcframework as a release asset yet, so the checksummed-URL fallback in `Package.swift` is a placeholder pending that follow-up.
+
 ## [0.7.10] - 2026-07-07
 
 ### Added

@@ -23,3 +23,7 @@ Vendor/llama-linux/
 # Prebuilt llama.cpp Windows static lib (built by Scripts/build-llama-windows.ps1;
 # adopters get the checksummed release asset). Shares Vendor/llama-headers/.
 Vendor/llama-windows/
+# Repackaged ONNX Runtime Apple xcframework (built by
+# Scripts/vendor-onnxruntime-apple.sh; adopters get the checksummed release
+# asset — never committed).
+Vendor/onnxruntime/

@@ -1,11 +1,22 @@
 # Proposal: on-device segmentation plugin (`vision.*`)
 
-> **Status: proposal / RFC.** Nothing here is implemented. Written to unblock
-> a consumer feature ("Object Select" in Sprites/pixelart) that needs
-> promptable on-device image segmentation (SAM-family). The intent is that
-> the framework team can build the native side against this contract in
-> parallel with the web-side integration. API names/shapes are the decision
-> under review — see **Open questions** at the end.
+> **Status: accepted, in progress (0.8).** Written to unblock a consumer
+> feature ("Object Select" in Sprites/pixelart) that needs promptable
+> on-device image segmentation (SAM-family). See the **Maintainer
+> evaluation / decision** section below for what shipped vs. changed from
+> the original proposal.
+>
+> **Implementation status (see [CHANGELOG.md](../../CHANGELOG.md#unreleased)
+> for the current detail):** the `ai.vision.*` contract — `SegmentationBackend`,
+> `VisionPlugin`, all request/result types, `NoneSegmentationBackend` — has
+> landed in `SwiftPWACore`, unblocking web-side integration against a stable
+> API today. A packaging **spike** (not a shipped backend) has verified the
+> Apple side of the ONNX Runtime tier this needs: Microsoft's official Apple
+> xcframework requires repackaging (`Scripts/vendor-onnxruntime-apple.sh`) to
+> be importable from Swift at all — confirmed linking and calling its C API
+> end-to-end. Not yet done: a real `MobileSAMBackend`, the Android ONNX
+> Runtime vendoring step, and publishing the repackaged Apple artifact as a
+> release asset.
 
 ## Motivation
 

@@ -56,20 +56,20 @@
 > too**, on a Galaxy Z Fold7 against a real photo (two kittens in a basket)
 > — point/multimask prompts correctly segmented the prompted subjects, IoU
 > ~0.99, rendered and visually confirmed, not just checked by shape.
-> **Model hosting**: the `mobilesam-vendor` release exists, but no
-> downloadable-model tier (`ensureModel`) wires it up yet.
-> `Examples/CritterFacts` demonstrates the pattern an app can use meanwhile —
-> bundle the three ONNX files itself under `web/models/mobilesam/` (picked
-> up automatically by both the SwiftPM resource bundle on Apple and the
-> Android APK's `assets/web/` staging, since both already copy the whole
-> `web/` tree) and point `MobileSAMBackend` at that bundled location on
-> Apple directly, or — on Android, where an APK asset isn't a real
-> filesystem path ONNX Runtime can open — materialize the three files into
-> `ctx.dataDirectory()` once via a small JS helper (`web/mobilesam.js`)
-> using the existing `fs.mkdir`/`fs.exists`/`fs.writeBinary` commands and a
-> plain `fetch()` of the app's own bundled asset. No new native code needed
-> for this — it's all existing `Fs`/`AppPlugin` surface. Linux/Windows
-> backends don't exist yet.
+> **Model hosting**: the three weights are hosted on the stable
+> `mobilesam-vendor` release, and the **downloadable-model tier is now
+> wired** — `MobileSAMBackend(cacheDirectory:)` + `ai.vision.ensureModel`
+> fetch them on first use (resumable + SHA-256-pinned via the same
+> `ModelDownloader` the llama GGUF path uses; default source
+> `MobileSAMModelSource.mobileSAM`), verified end-to-end on macOS (real
+> network download + segment) and device-verified on Android. On Android
+> this is the preferred path over bundling weights as APK assets — the
+> downloader writes straight to a real filesystem path, so there's no
+> "an APK asset isn't a file ONNX Runtime can open" materialization step.
+> `Examples/CritterFacts` uses this tier. The fixed-path initializer
+> (`init(encoderPath:decoderSinglePath:decoderMultiPath:)`) remains for
+> apps that prefer to bundle/ship their own weights. Linux/Windows backends
+> don't exist yet.
 
 ## Motivation
 

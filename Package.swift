@@ -755,7 +755,11 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // in the graph regardless of platform conditions. On a destination with
     // neither ONNX Runtime linked (Linux/Windows-native), the source itself
     // compiles to an empty stub (see the guard in OrtRuntime.swift).
-    var segmentationDependencies: [Target.Dependency] = ["SwiftPWACore"]
+    // SwiftPWAModelStore (ModelDownloader/ModelSpec) backs the downloadable-
+    // model tier (`ai.vision.ensureModel`) — the same resumable, checksum-
+    // pinned download machinery SwiftPWALlama uses, modality-agnostic. Plain
+    // Foundation, cross-platform, no gating.
+    var segmentationDependencies: [Target.Dependency] = ["SwiftPWACore", "SwiftPWAModelStore"]
     #if os(macOS)
         segmentationDependencies.append(.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS])))
     #endif

@@ -1046,6 +1046,9 @@ enum AndroidTemplates {
     import org.json.JSONObject
     import java.io.File
     import java.io.FileOutputStream
+    import java.net.HttpURLConnection
+    import java.net.URL
+    import java.security.MessageDigest
     import java.util.UUID
     import java.util.concurrent.Executors
     /*__SWIFT_PWA_GENAI_IMPORTS__*/
@@ -1201,6 +1204,7 @@ enum AndroidTemplates {
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
                 "vision.preprocessImage" -> visionPreprocessImage(json, done)
+                "net.downloadFile" -> netDownloadFile(json, done)
                 "system.memory" -> systemMemory(done)
                 /*__SWIFT_PWA_GENAI_DISPATCH__*/
                 else -> done(null, "swift-pwa: unknown rpc method $method")
@@ -2078,6 +2082,102 @@ enum AndroidTemplates {
                     done(null, "swift-pwa: vision.preprocessImage failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
+        }
+
+        // -----------------------------------------------------------
+        // Network — download a file to a real path over Android's own
+        // TLS stack (HttpURLConnection). Swift's URLSession is libcurl +
+        // BoringSSL on Android and has no injectable CA trust store, so
+        // any HTTPS download from Swift fails with "unable to get local
+        // issuer certificate"; downloads route through here instead (the
+        // Swift side calls this from a downloadable-model tier, e.g.
+        // `ai.vision.ensureModel`). Cache-reuse + checksum-verify + atomic
+        // rename mirror Swift's `ModelDownloader`, so the two platforms
+        // behave the same. HTTPS trust is the system's — no bundled CA.
+        // -----------------------------------------------------------
+
+        private fun netDownloadFile(json: JSONObject, done: (String?, String?) -> Unit) {
+            val urlString = json.optString("url", "")
+            val destPath = json.optString("destPath", "")
+            val sha256 = if (json.has("sha256")) json.getString("sha256").lowercase() else null
+            if (urlString.isEmpty() || destPath.isEmpty()) {
+                done(null, "swift-pwa: net.downloadFile: url and destPath required")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val dest = File(destPath)
+                    // Cache reuse: an intact file (checksum match, or any
+                    // file when unpinned) is returned without a network call.
+                    if (dest.exists()) {
+                        if (sha256 == null || sha256Hex(dest) == sha256) {
+                            done(JSONObject().put("bytesWritten", dest.length()).toString(), null)
+                            return@execute
+                        }
+                        dest.delete() // stale/corrupt — re-fetch
+                    }
+                    dest.parentFile?.mkdirs()
+                    val part = File(destPath + ".part")
+
+                    val conn = URL(urlString).openConnection() as HttpURLConnection
+                    conn.instanceFollowRedirects = true // GitHub → objects.githubusercontent.com (https→https)
+                    conn.connectTimeout = 30000
+                    conn.readTimeout = 60000
+                    try {
+                        val code = conn.responseCode
+                        if (code !in 200..299) {
+                            done(null, "swift-pwa: net.downloadFile: HTTP $code for $urlString")
+                            return@execute
+                        }
+                        val digest = MessageDigest.getInstance("SHA-256")
+                        var written = 0L
+                        conn.inputStream.use { input ->
+                            FileOutputStream(part).use { output ->
+                                val buffer = ByteArray(1 shl 16)
+                                while (true) {
+                                    val n = input.read(buffer)
+                                    if (n < 0) break
+                                    output.write(buffer, 0, n)
+                                    if (sha256 != null) digest.update(buffer, 0, n)
+                                    written += n
+                                }
+                            }
+                        }
+                        if (sha256 != null) {
+                            val got = digest.digest().joinToString("") { "%02x".format(it) }
+                            if (got != sha256) {
+                                part.delete()
+                                done(null, "swift-pwa: net.downloadFile: checksum mismatch (expected $sha256, got $got)")
+                                return@execute
+                            }
+                        }
+                        dest.delete()
+                        if (!part.renameTo(dest)) {
+                            part.delete()
+                            done(null, "swift-pwa: net.downloadFile: could not move into place")
+                            return@execute
+                        }
+                        done(JSONObject().put("bytesWritten", written).toString(), null)
+                    } finally {
+                        conn.disconnect()
+                    }
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: net.downloadFile failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun sha256Hex(file: File): String {
+            val digest = MessageDigest.getInstance("SHA-256")
+            file.inputStream().use { input ->
+                val buffer = ByteArray(1 shl 16)
+                while (true) {
+                    val n = input.read(buffer)
+                    if (n < 0) break
+                    digest.update(buffer, 0, n)
+                }
+            }
+            return digest.digest().joinToString("") { "%02x".format(it) }
         }
         /*__SWIFT_PWA_GENAI_METHODS__*/
     }

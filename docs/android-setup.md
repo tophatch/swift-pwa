@@ -773,13 +773,32 @@ android --cross-compile-android` resolves + stages the vendored
 `libonnxruntime.so` into `jniLibs/<abi>/` for you (`OnnxRuntimeAndroidArtifact`,
 checksum-verified per ABI — only `arm64-v8a` is published today; an
 unpublished ABI fails the build with an actionable message rather than
-shipping a `.so`-less APK). An app still opts in to the *model* itself with
-`ctx.use(VisionPlugin(MobileSAMBackend(...)))` and its own on-disk weight
-paths (same as Apple) — there's no downloadable-model tier
-(`ai.vision.ensureModel`) yet. This section documents the packaging spike
-this was built on plus the Android-specific plumbing, so anyone picking up
-the remaining follow-up (`ensureModel` wiring) knows where things stand and
-how to reproduce the toolchain locally.
+shipping a `.so`-less APK). An app opts in to the *model* with
+`ctx.use(VisionPlugin(MobileSAMBackend(...)))`, either bundling weights or —
+preferably on Android — using the **downloadable tier**:
+`MobileSAMBackend(cacheDirectory:)` plus `ai.vision.ensureModel` fetches the
+three ONNX files from the `mobilesam-vendor` release on first use
+(checksum-pinned) straight to a real filesystem path. That sidesteps the "an
+APK asset isn't a file ONNX Runtime can open" problem entirely — no
+`fs.writeBinary` materialization step, no ~60 MB of weights in the APK.
+`Examples/CritterFacts` uses this tier (device-verified on a Galaxy Z Fold7).
+
+> **Downloads on Android don't use `URLSession`.** swift-corelibs-foundation's
+> `URLSession` here is libcurl + BoringSSL with no injectable CA trust store —
+> `libFoundationNetworking` only reads a fixed list of read-only Linux CA
+> paths (`/etc/ssl/certs/ca-certificates.crt`, …) that don't exist on Android,
+> and neither `CURL_CA_BUNDLE` nor `SSL_CERT_FILE`/`SSL_CERT_DIR` is honored,
+> so any HTTPS download from Swift fails with "unable to get local issuer
+> certificate". `MobileSAMBackend`'s Android `ensureModel` therefore downloads
+> through a Kotlin `net.downloadFile` RPC (`HttpURLConnection`, the platform's
+> own system TLS), which mirrors `ModelDownloader`'s cache-reuse + streamed
+> SHA-256 verification + atomic rename. If you write an Android backend that
+> needs to fetch over HTTPS, route it through that RPC (or your own Kotlin
+> HTTP), not `URLSession`.
+
+This section documents the packaging spike this was built on plus the
+Android-specific plumbing, so anyone reproducing the toolchain locally knows
+where things stand.
 
 **No CoreGraphics/ImageIO on Android**, so `ImagePreprocessing`'s Android
 half (`Sources/SwiftPWASegmentation/AndroidImagePreprocessing.swift`)

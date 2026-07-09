@@ -110,14 +110,18 @@ end-to-end on both Apple and a real Android device (Galaxy Z Fold7) against
 a real photo. It's enabled via **`ai.local_onnx_runtime: true`** in
 [pwa.json](pwa.json), the same pattern as `ai.local_llama` — `swift-pwa
 build` sets `SWIFT_PWA_ONNXRUNTIME=1` for you (Apple + Android; on Android it
-also resolves + stages `libonnxruntime.so` per ABI, see the Gotchas below for
-what that replaced). The three MobileSAM ONNX weight files (~60 MB,
-Apache-2.0, sourced from
+also resolves + stages `libonnxruntime.so` per ABI automatically).
+
+The three MobileSAM ONNX weight files (~60 MB, Apache-2.0, sourced from
 [`Acly/MobileSAM`](https://huggingface.co/Acly/MobileSAM) — see
 [docs/proposals/segmentation-plugin.md](../../docs/proposals/segmentation-plugin.md))
-are bundled with the app itself under
-[Sources/CritterFacts/web/models/mobilesam/](Sources/CritterFacts/web/models/mobilesam/),
-since there's no downloadable-model tier (`ai.vision.ensureModel`) yet.
+are **not** shipped with the app. It uses the **downloadable tier**:
+`MobileSAMBackend(cacheDirectory:)` fetches them on first use from the
+`mobilesam-vendor` release (resumable + checksum-pinned via the same
+`ModelDownloader` the llama GGUF uses), into the app's data directory. Same
+wiring on Apple and Android — and on Android it sidesteps the "an APK asset
+isn't a file ONNX Runtime can open" problem for free, since the downloader
+writes straight to a real path.
 
 **Build**: same as above — no extra flag needed, `pwa.json` already turns it
 on. For a quick `swift build`/`swift run` dev loop that bypasses the CLI, set
@@ -128,18 +132,12 @@ cd Examples/CritterFacts
 SWIFT_PWA_ONNXRUNTIME=1 swift build
 ```
 
-On Apple, `MobileSAMBackend` reads the bundled weights directly — nothing
-else needed. **On Android**, an APK asset isn't a real filesystem path ONNX
-Runtime can open, so the page materializes the three files into
-`ctx.dataDirectory()` once, the first time it needs them, via
-[web/mobilesam.js](Sources/CritterFacts/web/mobilesam.js)'s
-`window.ensureMobileSAMWeights(onProgress)` — a plain `fetch()` of the
-app's own bundled asset + the existing `fs.mkdir`/`fs.exists`/
-`fs.writeBinary` commands, no new native code. Call it once before your
-first `ai.vision.openSession`:
+Drive the download once before your first `ai.vision.openSession`.
+[web/mobilesam.js](Sources/CritterFacts/web/mobilesam.js) wraps
+`ai.vision.ensureModel` as `window.ensureSegmentationModel(onProgress)`:
 
 ```js
-await ensureMobileSAMWeights((done, total, name) => console.log(`${done}/${total} ${name}`));
+await ensureSegmentationModel((done, total) => console.log(`${done}/${total} bytes`));
 const { sessionId, width, height } = await __SWIFT_PWA__.invoke('ai.vision.openSession', {
     image: { path: /* a real on-device path, or use dataBase64 */ }
 });
@@ -148,23 +146,14 @@ const { masks } = await __SWIFT_PWA__.invoke('ai.vision.segment', {
 });
 ```
 
-**Gotchas hit building this** (see
+**One gotcha worth carrying to your own app** (see
 [docs/android-setup.md §9.1](../../docs/android-setup.md) for the full
-writeup):
-
-- Apple's vendored xcframework embeds protobuf, which needs `libc++`
-  linked — add `.linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))` to
-  your executable target's `linkerSettings` (see this app's `Package.swift`)
-  or you'll hit unresolved-symbol linker errors.
-- This app's `configure(_:)` needs `ctx.use(FsPlugin(SystemFs()))` wired
-  (it wasn't, before this) — `web/mobilesam.js` depends on `fs.*` commands.
-
-`swift-pwa build --target android --cross-compile-android` now resolves +
-stages `libonnxruntime.so` into `jniLibs/<abi>/` for you (via
-`OnnxRuntimeAndroidArtifact`, checksum-verified per ABI) — no manual `cp`
-step anymore. Only `arm64-v8a` is published today; requesting another ABI
-with `ai.local_onnx_runtime` on fails the build with an actionable message
-rather than silently shipping a `.so`-less APK.
+writeup): Apple's vendored ONNX Runtime xcframework embeds protobuf, which
+needs `libc++` linked — add
+`.linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))` to your executable
+target's `linkerSettings` (see this app's `Package.swift`), or you'll hit
+unresolved-symbol linker errors. The Android `libonnxruntime.so` staging and
+the per-ABI `.so` fetch are handled for you by `swift-pwa build`.
 
 ## Swapping the model
 

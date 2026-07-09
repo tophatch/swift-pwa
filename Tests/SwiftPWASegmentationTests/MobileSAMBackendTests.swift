@@ -159,6 +159,54 @@
             }
         }
 
+        @Test("a fixed-path backend's ensureModel reports unsupportedPlatform (nothing to download)")
+        func fixedPathEnsureModelUnsupported() async throws {
+            let backend = try backend()
+            var caught: VisionError?
+            do {
+                for try await _ in backend.ensureModel(AIEnsureModelRequest()) {}
+                Issue.record("expected ensureModel to throw for a fixed-path backend")
+            } catch let error as VisionError {
+                caught = error
+            }
+            #expect(caught?.code == BridgeError.unimplemented)
+        }
+
+        @Test("a downloadable backend resolves its three model paths under the cache directory")
+        func downloadableBackendResolvesPaths() async {
+            // Constructing the downloadable tier must not touch the network —
+            // it only resolves where the files *will* live. (The actual
+            // download is covered by ModelDownloaderTests + on-device
+            // verification; asserting it here would need a live fetch.)
+            let cache = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("swift-pwa-mobilesam-cache-\(UUID().uuidString)", isDirectory: true)
+            let backend = MobileSAMBackend(cacheDirectory: cache)
+            // info() still reports available (ONNX linked); model presence is
+            // a separate concern from backend capability.
+            let caps = await backend.info()
+            #expect(caps.available == true)
+            #expect(caps.backend == VisionBackendID.mobileSAMONNX)
+        }
+
+        @Test("the default MobileSAMModelSource pins the canonical mobilesam-vendor assets")
+        func defaultModelSourcePinned() {
+            let source = MobileSAMModelSource.mobileSAM
+            #expect(source.encoder.fileName == "mobile_sam_image_encoder.onnx")
+            #expect(source.decoderSingle.fileName == "sam_mask_decoder_single.onnx")
+            #expect(source.decoderMulti.fileName == "sam_mask_decoder_multi.onnx")
+            // Checksums are byte-verified against the committed CritterFacts
+            // bundled weights (same source) — a mismatch here means a
+            // re-publish silently changed the pinned artifact.
+            #expect(source.encoder.sha256 == "580f5fb648ea1062c0aabc26217aed56921985f03f0cbbd852bba81d760cc749")
+            #expect(source.decoderSingle.sha256 == "93915fc7c993ab9d59ab8c9ccd3bce37f7509c81ab4150a74abd4d2abbd8570d")
+            #expect(source.decoderMulti.sha256 == "8976b90a87ba50a6a72217a5ff994f7d25ce16f2229fcc1ed259e1294c622ffe")
+            // Every asset lives on the stable mobilesam-vendor release.
+            for file in [source.encoder, source.decoderSingle, source.decoderMulti] {
+                #expect(file.url.absoluteString.contains("/releases/download/mobilesam-vendor/"))
+                #expect(file.sizeBytes > 0)
+            }
+        }
+
         @Test("the encoder's cached embedding is reused across multiple segment calls")
         func embeddingReusedAcrossSegmentCalls() async throws {
             let backend = try backend()

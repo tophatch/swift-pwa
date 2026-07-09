@@ -81,11 +81,22 @@ struct PlatformInfoMemoryTests {
 
     @Test("__platform.info surfaces an injected app-memory limit")
     func platformInfoInjectedLimit() async throws {
+        // The closure is spelled with its exact target type and the result is
+        // unwrapped before comparison on purpose: passing a bare `{ literal }`
+        // to the `@Sendable () async -> UInt64?` parameter and then writing
+        // `#expect(optionalUInt64 == literal)` crashes the Windows swiftc 6.1.2
+        // SILGen (a reabstraction-thunk bug over `UInt64?`). Both forms below
+        // sidestep it while asserting the same thing.
+        let expected: UInt64 = 256 * 1024 * 1024
+        let provide: @Sendable () async -> UInt64? = { expected }
         let app = MockAppContext()
-        app.use(PlatformInfoPlugin(appMemoryLimit: { 256 * 1024 * 1024 }))
+        app.use(PlatformInfoPlugin(appMemoryLimit: provide))
         let result = await dispatch("__platform.info", on: app)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let info = try JSONDecoder().decode(PlatformInfo.self, from: data)
-        #expect(info.appMemoryLimitBytes == 256 * 1024 * 1024)
+        guard let limit = info.appMemoryLimitBytes else {
+            Issue.record("appMemoryLimitBytes was nil"); return
+        }
+        #expect(limit == expected)
     }
 }

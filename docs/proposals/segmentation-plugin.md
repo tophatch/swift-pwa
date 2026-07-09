@@ -1,12 +1,12 @@
 # Proposal: on-device segmentation plugin (`vision.*`)
 
-> **Status: accepted, in progress (0.8).** Written to unblock a consumer
+> **Status: shipped in v0.8.0.** Written to unblock a consumer
 > feature ("Object Select" in Sprites/pixelart) that needs promptable
 > on-device image segmentation (SAM-family). See the **Maintainer
 > evaluation / decision** section below for what shipped vs. changed from
 > the original proposal.
 >
-> **Implementation status (see [CHANGELOG.md](../../CHANGELOG.md#unreleased)
+> **Implementation status (see [CHANGELOG.md](../../CHANGELOG.md#080---2026-07-09)
 > for the current detail):** the `ai.vision.*` contract — `SegmentationBackend`,
 > `VisionPlugin`, all request/result types, `NoneSegmentationBackend` — has
 > landed in `SwiftPWACore`, unblocking web-side integration against a stable

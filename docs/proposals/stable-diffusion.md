@@ -1,12 +1,26 @@
 # Proposal: on-device text→image (`stable-diffusion-onnx`)
 
-> **Status: proposed.** The second `ai.generateImage` backend, after LaMa
-> inpainting (shipped v0.8.3/0.8.4). Adds **text→image** generation on the
-> shared ONNX Runtime tier, targeting a **small distilled model** (SD-Turbo /
-> LCM — 1–4 denoising steps) so it's actually usable on-device. This
-> increment is **design + backend skeleton + the CLIP tokenizer** (which needs
-> no weights); the denoising/scheduler internals get finalized against real
-> weights in a follow-up. See **Scoping calls** at the bottom.
+> **Status: skeleton landed; real-weights pass pending.** The second
+> `ai.generateImage` backend, after LaMa inpainting (shipped v0.8.3/0.8.4).
+> Adds **text→image** generation on the shared ONNX Runtime tier, targeting a
+> **small distilled model** (SD-Turbo / LCM — 1–4 denoising steps) so it's
+> actually usable on-device.
+>
+> **Done (this increment):** the `SwiftPWAStableDiffusion` target +
+> `StableDiffusionBackend` (`stable-diffusion-onnx`, `imageGeneration: true`);
+> the fully-implemented, unit-tested **CLIP byte-level BPE tokenizer**
+> (`CLIPTokenizer`, needs no weights); the deterministic seeded latent init +
+> timestep schedule (`StableDiffusionSampling`); a configurable
+> `StableDiffusionModelSpec`; a multi-file downloadable
+> `StableDiffusionModelSource` + `ai.ensureModel` wiring. `generateImage`
+> tokenizes the prompt, then throws a clear "pending real-weights integration"
+> error at the denoising boundary.
+>
+> **Next (real-weights pass):** (1) integer input tensors — the shared
+> `OrtModelSession` is float32-only, but the standard export types `input_ids`
+> as int32 and the UNet `timestep` as int64; (2) the scheduler `step()` math +
+> confirmation of the assumed tensor names / VAE scaling / scheduler constants
+> against a real checkpoint. See **Scoping calls** at the bottom.
 
 ## Motivation
 

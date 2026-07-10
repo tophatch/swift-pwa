@@ -950,6 +950,35 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             swiftSettings: swiftSettings
         )
     ])
+
+    // MARK: - Stable Diffusion backend (ai.generateImage text→image, SD via ONNX Runtime)
+
+    // `StableDiffusionBackend` conforms to Core's `AIBackend` and is the
+    // text→image consumer of `ai.generateImage` (a `prompt`, no input image;
+    // see docs/proposals/stable-diffusion.md). It reuses the shared
+    // `SwiftPWAONNX` tier (same OrtModelSession + desktop GPU providers as
+    // MobileSAM/LaMa) and keeps its own ONNX-module dependencies so the
+    // backend's `canImport(ONNXRuntime*)` gate stays exact. The weight-free
+    // pieces (the CLIP tokenizer, seeded latent init, timestep schedule) are
+    // ungated and unit-tested now; the denoising loop is finalized against
+    // real weights in a follow-up (a clear runtime error until then).
+    package.products.append(.library(name: "SwiftPWAStableDiffusion", targets: ["SwiftPWAStableDiffusion"]))
+    package.targets.append(contentsOf: [
+        .target(
+            name: "SwiftPWAStableDiffusion",
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
+                + onnxRuntimeModuleDependencies()
+                // Android routes the model download through the Kotlin RPC.
+                + [.target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))],
+            swiftSettings: segmentationSwiftSettings,
+            linkerSettings: onnxRuntimeLinkerSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAStableDiffusionTests",
+            dependencies: ["SwiftPWAStableDiffusion", "SwiftPWACore"],
+            swiftSettings: swiftSettings
+        )
+    ])
 }
 
 // MARK: - Optional Windows Phi Silica backend (env-gated, Windows App SDK)

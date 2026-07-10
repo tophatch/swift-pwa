@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Android `ImageCodec` for `ai.generateImage` (LaMa inpainting).** The one platform the 0.8.3 image-edit tier didn't cover. Decode/encode run Kotlin-side over the same generic JNI RPC bridge segmentation's `AndroidImagePreprocessing` uses — two new handlers: `image.decode` (BitmapFactory decode + optional exact resize → raw RGB or grayscale bytes) and `image.encodePng` (`Bitmap.compress`), which also handle SAF `content://` URIs (stb can't). Because the RPC is async, the internal `ImageCodec` API is now `async` throughout (Apple/desktop impls are otherwise unchanged; `LaMaBackend`'s inference path awaits accordingly). Cross-compile-verified for `aarch64-unknown-linux-android28`; on-device verification on a Galaxy Tab S10+ is the remaining step (the project norm for Android, since CI can't cross-compile). Completes `ai.generateImage` inpainting on all five platforms.
+
 ## [0.8.3] - 2026-07-11
 
 ### Added

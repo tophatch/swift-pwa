@@ -679,10 +679,11 @@ adjusting the spec, not the plumbing.
 > release are in; `LaMaBackend(cacheDirectory:)` fetches out of the box. The
 > **real-weights pass is done on Apple/CPU and Linux/CPU** — the big-lama
 > fp32 export runs end-to-end (a masked region inpaints away, unmasked pixels
-> stay pristine), confirming `LaMaModelSpec.bigLama`. Remaining follow-up: the
-> **Android** codec (BitmapFactory over the Kotlin RPC — the last platform;
-> `ai.generateImage` throws a clear `E_AI_GENERATION` there until it lands).
-> See [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md).
+> stay pristine), confirming `LaMaModelSpec.bigLama`. The **Android** codec
+> (BitmapFactory decode + `Bitmap.compress` over the Kotlin RPC) is
+> implemented and cross-compile-verified; on-device verification on the Tab
+> S10+ is the last step. See
+> [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md).
 
 ### Structured output: native vs. the shared fallback
 

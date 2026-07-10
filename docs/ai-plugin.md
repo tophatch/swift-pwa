@@ -674,18 +674,15 @@ graph contract + pre/post-processing are a configurable `LaMaModelSpec`
 `[0,1]` binary mask, `[0,255]` output); point it at a different export by
 adjusting the spec, not the plumbing.
 
-> **Status:** the contract, the backend, the **Apple** image codec, and the
-> `Scripts/vendor-lama.sh` + `lama-vendor.yml` weights-hosting path are in,
-> and the **real-weights pass is done on Apple/CPU** — the big-lama fp32
-> export runs end-to-end (a masked region inpaints away, unmasked pixels
-> stay pristine), confirming `LaMaModelSpec.bigLama`. Immediate follow-ups:
-> publish the `lama-vendor` release (run the workflow) so
-> `LaMaBackend(cacheDirectory:)` fetches out of the box, the **desktop
-> (stb_image) / Android (BitmapFactory-RPC) codecs**, and GPU / other-platform
-> verification (see
-> [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md)).
-> On a non-Apple platform today `ai.generateImage` throws a clear
-> `E_AI_GENERATION` from the codec rather than mis-decoding.
+> **Status:** the contract, the backend, the **Apple + desktop
+> (Linux/Windows)** image codecs, and the published **`lama-vendor`** weights
+> release are in; `LaMaBackend(cacheDirectory:)` fetches out of the box. The
+> **real-weights pass is done on Apple/CPU and Linux/CPU** — the big-lama
+> fp32 export runs end-to-end (a masked region inpaints away, unmasked pixels
+> stay pristine), confirming `LaMaModelSpec.bigLama`. Remaining follow-up: the
+> **Android** codec (BitmapFactory over the Kotlin RPC — the last platform;
+> `ai.generateImage` throws a clear `E_AI_GENERATION` there until it lands).
+> See [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md).
 
 ### Structured output: native vs. the shared fallback
 

@@ -9,14 +9,18 @@
 > `LaMaModelSpec`, resize-to-square + composite-back, and a
 > downloadable-model tier; and the **`Scripts/vendor-lama.sh`** +
 > **`.github/workflows/lama-vendor.yml`** weights-hosting path.
-> **Real-weights pass done (Apple/CPU):** the actual big-lama fp32 export
-> ran end-to-end — the assumed `LaMaModelSpec` (input names `image`/`mask`,
-> output `output`, `[0,1]` image, `[0,255]` output, **fixed 512² input** —
-> the one correction from the assumed dynamic size) is confirmed; a masked
-> block inpaints away and unmasked pixels stay pristine. **Immediate
-> follow-ups:** publish the `lama-vendor` release (run the workflow) + it's
-> live for `LaMaBackend(cacheDirectory:)`; the desktop (stb_image) / Android
-> (BitmapFactory-RPC) image codecs; GPU / other-platform verification; and a
+> **Real-weights pass done (Apple/CPU + Linux/CPU):** the actual big-lama
+> fp32 export ran end-to-end on both — the assumed `LaMaModelSpec` (input
+> names `image`/`mask`, output `output`, `[0,1]` image, `[0,255]` output,
+> **fixed 512² input** — the one correction from the assumed dynamic size)
+> is confirmed; a masked block inpaints away and unmasked pixels stay
+> pristine. The **`lama-vendor` release is published** (so
+> `LaMaBackend(cacheDirectory:)` fetches out of the box), and the **desktop
+> (Linux/Windows) `ImageCodec`** is in (stb_image / stb_image_write via
+> `CStbImage`) and Linux-verified. **Remaining follow-ups:** the **Android**
+> image codec (BitmapFactory over the Kotlin RPC — the last platform), GPU
+> verification (LaMa reuses the same `OrtModelSession` as the CUDA/DirectML-
+> verified segmentation tier, so this is expected to just work), and a
 > CritterFacts tap-to-erase example. Original proposal text below.
 >
 > **Status (original): proposed, targeting v0.9.0.** The text→image half of the

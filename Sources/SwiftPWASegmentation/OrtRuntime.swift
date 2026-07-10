@@ -2,6 +2,8 @@
     import ONNXRuntime
 #elseif canImport(ONNXRuntimeAndroid)
     import ONNXRuntimeAndroid
+#elseif canImport(ONNXRuntimeDirectML)
+    import ONNXRuntimeDirectML
 #elseif canImport(ONNXRuntimeDesktop)
     import ONNXRuntimeDesktop
 #endif
@@ -16,7 +18,8 @@ import Foundation
 // C shim uses for non-Android hosts. The three modules (Apple xcframework
 // binaryTarget / Android + desktop systemLibraries) all expose the identical
 // ONNX Runtime C API, so the code below is written once against it.
-#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop)
+// swiftformat:disable:next wrap wrapArguments
+#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop) || canImport(ONNXRuntimeDirectML)
 
     /// Thin, minimal Swift wrapper over the ONNX Runtime C API — the shared
     /// "ONNX Runtime backend tier" investment the 0.8 maintainer evaluation

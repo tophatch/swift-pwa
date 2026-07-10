@@ -126,7 +126,19 @@ struct AppImageBundler {
         // `--library`. linuxdeploy copies it into the AppDir's usr/lib and
         // patches the rpath, so the app resolves it at runtime. (The same
         // idempotent resolve the link-time gate used — see OnnxRuntimeLinuxArtifact.)
-        if manifest.ai?.localOnnxRuntime == true {
+        if manifest.ai?.onnxGpu == true {
+            // GPU (CUDA 12) build: three shared libs — the runtime plus the
+            // out-of-tree provider libs the runtime dlopens when the CUDA EP is
+            // appended. All must land under their SONAME name in usr/lib. (The
+            // CUDA runtime + cuDNN are NOT bundled — expected on the target; a
+            // missing/mismatched runtime makes the CUDA EP fail to load, which
+            // OrtModelSession turns into a transparent CPU fallback.)
+            let libDir = try await OnnxRuntimeLinuxGpuArtifact.ensureLibDir(projectRoot: projectRoot)
+            for lib in ["libonnxruntime.so.1"] + OnnxRuntimeLinuxGpuArtifact.providerNames {
+                args += ["--library", libDir.appendingPathComponent(lib).path]
+            }
+            print("swift-pwa: bundling ONNX Runtime CUDA libs into the AppImage (ai.onnx_gpu)")
+        } else if manifest.ai?.localOnnxRuntime == true {
             let libDir = try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
             // Deploy the SONAME'd file (`libonnxruntime.so.1`) — that's the
             // name the binary's NEEDED entry references, so linuxdeploy must

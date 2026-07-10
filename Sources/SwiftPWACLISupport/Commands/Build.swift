@@ -497,17 +497,23 @@ struct Build: AsyncParsableCommand {
     ///   stages the `.so` per ABI via `OnnxRuntimeAndroidArtifact` inside
     ///   its cross-compile loop.
     static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
-        guard manifest.ai?.localOnnxRuntime == true else { return }
+        // `ai.onnx_gpu` (desktop GPU execution providers — DirectML on Windows,
+        // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md)
+        // implies the ONNX Runtime tier, so either flag enables it.
+        let onnxGpu = manifest.ai?.onnxGpu == true
+        guard manifest.ai?.localOnnxRuntime == true || onnxGpu else { return }
         switch target {
         case .macos, .ios:
             #if !os(Windows)
                 setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
             #endif
+            if onnxGpu { warnOnnxGpuIgnored(target: target) }
             print("swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier (SwiftPWASegmentation)")
         case .android:
             #if !os(Windows)
                 setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
             #endif
+            if onnxGpu { warnOnnxGpuIgnored(target: target) }
             print(
                 "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
                     + "(SwiftPWASegmentation); libonnxruntime.so resolved per-ABI during cross-compile"
@@ -515,16 +521,23 @@ struct Build: AsyncParsableCommand {
         case .linux:
             // ONNX Runtime desktop is a *shared* lib (unlike llama's static
             // Linux slice), so the dir goes on LIBRARY_PATH for the link step
-            // here and the `.so` is staged into the AppImage at runtime (see
+            // here and the `.so`(s) are staged into the AppImage at runtime (see
             // LinuxBundler, which re-resolves via the same idempotent call).
             #if os(Linux)
-                let libDir = try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
+                // GPU (CUDA 12) resolves three libs; CPU resolves one. Both put
+                // the dir on LIBRARY_PATH; the GPU build additionally defines
+                // SWIFT_PWA_ONNXRUNTIME_GPU so the manifest links the CUDA-aware
+                // module and OrtModelSession compiles the CUDA EP append.
+                let libDir = onnxGpu
+                    ? try await OnnxRuntimeLinuxGpuArtifact.ensureLibDir(projectRoot: projectRoot)
+                    : try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
                 setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
+                if onnxGpu { setenv("SWIFT_PWA_ONNXRUNTIME_GPU", "1", 1) }
                 let existing = ProcessInfo.processInfo.environment["LIBRARY_PATH"]
                 setenv("LIBRARY_PATH", existing.map { "\(libDir.path):\($0)" } ?? libDir.path, 1)
                 print(
                     "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
-                        + "(SwiftPWASegmentation, CPU); libonnxruntime.so from \(libDir.path)"
+                        + "(SwiftPWASegmentation, \(onnxGpu ? "GPU/CUDA" : "CPU")); libonnxruntime.so from \(libDir.path)"
                 )
             #else
                 print(
@@ -534,19 +547,28 @@ struct Build: AsyncParsableCommand {
             #endif
         case .windows:
             #if os(Windows)
-                let libDir = try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
+                // GPU (DirectML) resolves onnxruntime.lib/.dll +
+                // onnxruntime_providers_shared.dll + DirectML.dll; CPU resolves
+                // the lib/.dll pair. Both put the dir on LIB; the GPU build
+                // additionally defines SWIFT_PWA_ONNXRUNTIME_GPU so the manifest
+                // links the DirectML module (its own pinned 1.24.4 headers) and
+                // OrtModelSession compiles the DirectML EP append.
+                let libDir = onnxGpu
+                    ? try await OnnxRuntimeWindowsDirectMLArtifact.ensureLibDir(projectRoot: projectRoot)
+                    : try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
                 // `_putenv_s` (not POSIX `setenv`) so both CRT + Win32 env
                 // blocks update — WindowsBundler reads `LIB` back through
-                // ProcessInfo. onnxruntime.dll from the same dir is staged
-                // next to the .exe by WindowsBundler at runtime.
+                // ProcessInfo. The runtime DLLs from the same dir are staged
+                // next to the .exe by WindowsBundler.
                 _ = _putenv_s("SWIFT_PWA_ONNXRUNTIME", "1")
+                if onnxGpu { _ = _putenv_s("SWIFT_PWA_ONNXRUNTIME_GPU", "1") }
                 let env = ProcessInfo.processInfo.environment
                 let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
                 let combined = (existing.map { [libDir.path, $0] } ?? [libDir.path]).joined(separator: ";")
                 _ = _putenv_s("LIB", combined)
                 print(
                     "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
-                        + "(SwiftPWASegmentation, CPU); onnxruntime.lib from \(libDir.path)"
+                        + "(SwiftPWASegmentation, \(onnxGpu ? "GPU/DirectML" : "CPU")); onnxruntime.lib from \(libDir.path)"
                 )
             #else
                 print(
@@ -555,6 +577,17 @@ struct Build: AsyncParsableCommand {
                 )
             #endif
         }
+    }
+
+    /// `ai.onnx_gpu` is desktop-only (Windows DirectML / Linux CUDA). On
+    /// Apple/Android the OS/EP owns GPU acceleration, so the flag is a no-op —
+    /// warn so a misplaced flag isn't silently mistaken for a GPU build.
+    private static func warnOnnxGpuIgnored(target: BuildTarget) {
+        print(
+            "swift-pwa: ai.onnx_gpu is set but the ONNX Runtime GPU tier is desktop-only "
+                + "(Windows DirectML / Linux CUDA) — ignoring it for \(target); "
+                + "the CPU ONNX Runtime tier still ships."
+        )
     }
 
     /// Run `pwa.json`'s `build.prebuild` command (if any) from the project

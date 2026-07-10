@@ -780,6 +780,17 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // model tier (`ai.vision.ensureModel`) — the same resumable, checksum-
     // pinned download machinery SwiftPWALlama uses, modality-agnostic. Plain
     // Foundation, cross-platform, no gating.
+    // `ai.onnx_gpu` opts a desktop build into the GPU execution-provider ONNX
+    // Runtime artifacts (DirectML on Windows, CUDA on Linux; see
+    // docs/proposals/onnx-gpu-execution-providers.md). Build.swift sets
+    // SWIFT_PWA_ONNXRUNTIME_GPU when the flag is on. It changes *which* ONNX
+    // Runtime module the desktop segmentation build links: Linux keeps
+    // `ONNXRuntimeDesktop` (the CUDA build's headers are the identical ORT
+    // 1.27 C API — CUDA's append-EP is an in-header C function), but Windows
+    // swaps to `ONNXRuntimeDirectML`, whose own pinned ORT 1.24.4 headers match
+    // the DirectML runtime's API version and add `dml_provider_factory.h`.
+    let onnxGpu = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
+
     var segmentationDependencies: [Target.Dependency] = ["SwiftPWACore", "SwiftPWAModelStore"]
     #if os(macOS)
         segmentationDependencies.append(.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS])))
@@ -787,28 +798,52 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     segmentationDependencies.append(contentsOf: [
         .target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android])),
         .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
-        .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows])),
         // Desktop has no CoreGraphics (Apple) or BitmapFactory-over-RPC
         // (Android) to decode/resize an image, so a tiny vendored stb_image
         // C target does it (see Sources/CStbImage). Linux/Windows only.
         .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))
     ])
+    if onnxGpu {
+        segmentationDependencies.append(contentsOf: [
+            .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux])),
+            .target(name: "ONNXRuntimeDirectML", condition: .when(platforms: [.windows]))
+        ])
+    } else {
+        segmentationDependencies.append(
+            .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows]))
+        )
+    }
 
     package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
 
+    // The Windows DirectML systemLibrary: its own pinned ORT 1.24.4 header set
+    // (module `ONNXRuntimeDirectML`, committed under
+    // `Vendor/onnxruntime-directml-headers/`, incl. `dml_provider_factory.h`),
+    // separate from the shared 1.27 `ONNXRuntimeDesktop` set because the
+    // DirectML NuGet runtime lags at 1.24.4 (a 1.27 header would request a
+    // newer `ORT_API_VERSION` than that runtime provides → crash). Only added
+    // to the graph when `ai.onnx_gpu` is on — referencing a target name that
+    // isn't declared is a SwiftPM error regardless of platform conditions, so
+    // the dependency above is likewise `onnxGpu`-guarded. The `.dll`+`.lib` are
+    // found at link time via `LIB` (vendored by
+    // Scripts/vendor-onnxruntime-windows-directml.sh), same env-search
+    // mechanism as the CPU desktop build.
+    if onnxGpu {
+        package.targets.append(
+            .systemLibrary(name: "ONNXRuntimeDirectML", path: "Vendor/onnxruntime-directml-headers")
+        )
+    }
+
     // `ai.onnx_gpu` (desktop GPU execution providers — DirectML on Windows,
-    // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md) sets
-    // this env at build time (Build.applyLocalOnnxRuntimeGate). It gates the
-    // GPU execution-provider selection in OrtModelSession behind a compile
+    // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md) gates
+    // the GPU execution-provider selection in OrtModelSession behind a compile
     // define, because those append-EP symbols (`OrtSessionOptionsAppend
     // ExecutionProvider_{CUDA,DML}`) only exist in the GPU-enabled ONNX Runtime
     // build we link when the flag is on — referencing them unconditionally
     // would break the CPU-artifact link. The CPU build simply doesn't compile
     // that code.
     let segmentationSwiftSettings: [SwiftSetting] =
-        ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
-            ? swiftSettings + [.define("SWIFT_PWA_ONNXRUNTIME_GPU")]
-            : swiftSettings
+        onnxGpu ? swiftSettings + [.define("SWIFT_PWA_ONNXRUNTIME_GPU")] : swiftSettings
 
     package.targets.append(contentsOf: [
         // Vendored stb_image (single-header, public-domain) — the desktop

@@ -36,6 +36,15 @@ public struct LaMaModelSpec: Sendable, Equatable {
     /// resolution and composited over the original **only within the masked
     /// region**, so unmasked pixels stay pristine (no global resize loss).
     public var inputSize: Int
+    /// The longest side of the **working** resolution. The source image + mask
+    /// are decoded and the result composited at most this large (aspect
+    /// preserved); the returned image is at that working size, not necessarily
+    /// the source's. This bounds memory + (on Android) the base64 payload that
+    /// crosses the RPC bridge — a 24-megapixel phone photo composited at full
+    /// resolution is ~72 MB of RGB per buffer, which OOMs the JNI RPC. The
+    /// model still runs at `inputSize`; this only caps the decode/composite
+    /// resolution. `0` means "no cap" (use the source resolution).
+    public var maxWorkingSide: Int
 
     public init(
         imageInputName: String = "image",
@@ -44,7 +53,8 @@ public struct LaMaModelSpec: Sendable, Equatable {
         normalizeImageTo01: Bool = true,
         outputIs0To255: Bool = true,
         maskThreshold: UInt8 = 128,
-        inputSize: Int = 512
+        inputSize: Int = 512,
+        maxWorkingSide: Int = 2048
     ) {
         self.imageInputName = imageInputName
         self.maskInputName = maskInputName
@@ -53,12 +63,23 @@ public struct LaMaModelSpec: Sendable, Equatable {
         self.outputIs0To255 = outputIs0To255
         self.maskThreshold = maskThreshold
         self.inputSize = inputSize
+        self.maxWorkingSide = maxWorkingSide
     }
 
     /// The big-lama fp32 contract (all defaults) — `image`/`mask`
     /// `[1,C,512,512]` float32, image `[0,1]` RGB, mask `[0,1]` (white =
     /// fill), `output` `[0,255]` RGB.
     public static let bigLama = LaMaModelSpec()
+
+    /// The working `(width, height)` for a source of `(width, height)`: scaled
+    /// so the longer side is at most `maxWorkingSide` (aspect preserved), or
+    /// the source size unchanged when it already fits (or the cap is `0`).
+    func workingSize(forWidth width: Int, height: Int) -> (width: Int, height: Int) {
+        let longest = max(width, height)
+        guard maxWorkingSide > 0, longest > maxWorkingSide else { return (width, height) }
+        let scale = Double(maxWorkingSide) / Double(longest)
+        return (max(1, Int((Double(width) * scale).rounded())), max(1, Int((Double(height) * scale).rounded())))
+    }
 }
 
 /// A downloadable LaMa ONNX model. Mirrors `SwiftPWASegmentation`'s

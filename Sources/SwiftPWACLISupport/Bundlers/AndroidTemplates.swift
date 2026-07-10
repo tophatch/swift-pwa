@@ -2100,6 +2100,7 @@ enum AndroidTemplates {
             val dataBase64 = json.optString("dataBase64", "")
             val reqW = if (json.has("width")) json.getInt("width") else 0
             val reqH = if (json.has("height")) json.getInt("height") else 0
+            val maxSide = if (json.has("maxSide")) json.getInt("maxSide") else 0
             val channels = if (json.has("channels")) json.getInt("channels") else 3
             if (path.isEmpty() && dataBase64.isEmpty()) {
                 done(null, "swift-pwa: image.decode: path or dataBase64 required")
@@ -2107,24 +2108,47 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val bitmap = when {
-                        dataBase64.isNotEmpty() -> {
-                            val bytes = Base64.decode(dataBase64, Base64.DEFAULT)
-                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
-                        }
-                        path.startsWith("content://") -> {
-                            activity.contentResolver.openInputStream(Uri.parse(path))?.use {
-                                BitmapFactory.decodeStream(it)
-                            }
-                        }
-                        else -> BitmapFactory.decodeFile(path)
-                    } ?: run {
+                    // Raw source bytes (for content:// too), so we can probe the
+                    // bounds first and decode down-sampled — a 24-megapixel phone
+                    // photo would OOM if fully materialized as an ARGB_8888 bitmap.
+                    val src: ByteArray = when {
+                        dataBase64.isNotEmpty() -> Base64.decode(dataBase64, Base64.DEFAULT)
+                        path.startsWith("content://") ->
+                            activity.contentResolver.openInputStream(Uri.parse(path))?.use { it.readBytes() }
+                                ?: ByteArray(0)
+                        else -> java.io.File(path).readBytes()
+                    }
+                    if (src.isEmpty()) {
+                        done(null, "swift-pwa: image.decode: could not read image bytes")
+                        return@execute
+                    }
+                    // 1. Probe native dimensions without allocating pixels.
+                    val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+                    BitmapFactory.decodeByteArray(src, 0, src.size, bounds)
+                    val nativeW = bounds.outWidth
+                    val nativeH = bounds.outHeight
+                    if (nativeW <= 0 || nativeH <= 0) {
+                        done(null, "swift-pwa: image.decode: could not decode image")
+                        return@execute
+                    }
+                    // 2. Target dims: explicit (reqW/reqH), else fit-to-maxSide, else native.
+                    var w = if (reqW > 0) reqW else nativeW
+                    var h = if (reqH > 0) reqH else nativeH
+                    if (reqW <= 0 && reqH <= 0 && maxSide > 0 && maxOf(nativeW, nativeH) > maxSide) {
+                        val scale = maxSide.toDouble() / maxOf(nativeW, nativeH).toDouble()
+                        w = maxOf(1, Math.round(nativeW * scale).toInt())
+                        h = maxOf(1, Math.round(nativeH * scale).toInt())
+                    }
+                    // 3. Down-sample during decode (power-of-two) close to the target,
+                    //    then exact-scale — bounds peak memory to ~2× the target.
+                    var sample = 1
+                    while (nativeW / (sample * 2) >= w && nativeH / (sample * 2) >= h) sample *= 2
+                    val opts = BitmapFactory.Options().apply { inSampleSize = sample }
+                    val bitmap = BitmapFactory.decodeByteArray(src, 0, src.size, opts) ?: run {
                         done(null, "swift-pwa: image.decode: could not decode image")
                         return@execute
                     }
 
-                    val w = if (reqW > 0) reqW else bitmap.width
-                    val h = if (reqH > 0) reqH else bitmap.height
                     val scaled = if (w != bitmap.width || h != bitmap.height) {
                         Bitmap.createScaledBitmap(bitmap, w, h, true)
                     } else bitmap

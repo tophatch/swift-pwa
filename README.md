@@ -314,7 +314,7 @@ Next up, in priority order:
 5. **Bidirectional bridge sessions (live streaming).** The bridge is request → server-stream-out today; a duplex/session primitive (client can push frames into an open subscription) would unlock real-time use cases — continuous-mic speech evaluation, collaborative streams — that the current `subscribe` can't express. A bridge-layer capability, broader than any one plugin.
 6. **Delta updates** — ship binary diffs instead of full artifacts to cut update download size. Builds on (1); extend the publishing CLI to emit per-version patches and the runtime to apply them.
 
-On-device segmentation (`ai.vision.*`) shipped in **v0.8.0** (above); `segmentAll`/AMG + `ai.vision.benchmark` remain fast-follow.
+On-device segmentation (`ai.vision.*`) shipped in **v0.8.0** (above); `segmentAll`/AMG (automatic "segment everything" mask generation) and `ai.vision.benchmark` (device-capability timing) both landed post-0.8.0 on `MobileSAMBackend`. Desktop (Linux/Windows) ONNX backends remain fast-follow.
 8. **Mandatory-update kill-switch (`min_supported_version`)** — let a manifest force-upgrade clients below a floor. Called out as a known gap in [docs/auto-updates.md](docs/auto-updates.md); also builds on (1).
 9. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` from the registered command set, replacing the stringly-typed envelope at the call site.
 10. **Crisp multi-size Windows `.exe` icon** — the portable `.exe` now embeds the `pwa.json` icon (via `UpdateResource`), but as a single source image the shell downscales; a WIC resize to ship dedicated 16/32/48/256 px slots would sharpen the small sizes.

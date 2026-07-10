@@ -380,7 +380,12 @@ Apple, prebuilt artifacts, checksum-pin workflows). Therefore **0.8 scope**:
 - **Fast-follow (not 0.8):** `segmentAll`/AMG + `segmentAllStream`,
   `ai.vision.benchmark`, multi-point / negative-point refine, and any desktop
   (Linux/Windows) backend. None of these change the request shapes, so they
-  land without a contract break.
+  land without a contract break. **Status:** `segmentAll`/`segmentAllStream`
+  (grid-of-prompts + NMS, `autoMask: true`) and `ai.vision.benchmark` (synthetic
+  encode/decode/AMG timing → a `high`/`mid`/`low` `deviceClass`) both shipped on
+  `MobileSAMBackend` post-0.8.0, verified against real weights on macOS. The
+  desktop (Linux/Windows) backends are still open; multi-point / negative refine
+  already works (the `segment` contract loops over `points`).
 
 ### 3. Answers to the open questions
 

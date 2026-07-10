@@ -574,14 +574,43 @@ trivial to decode into a bitmap. Errors carry stable codes
 `AIDownloadEvent` frames — a single aggregate `progress` bar then a terminal
 `done` — the same shape as `ai.ensureModel` for the llama model; call it once
 before the first `ai.vision.openSession` when using a downloadable backend
-(`MobileSAMBackend(cacheDirectory:)`). `ai.vision.segmentAll(Stream)` /
-`benchmark` remain **reserved** — they throw `E_UNIMPLEMENTED` until a backend
-that supports them is injected, same as `ai.generateImage` did before an image
-backend existed. A real backend (`MobileSAMBackend`, Apple + Android, verified
-against real weights) exists as of this writing, but isn't auto-installed — an
-app must opt in via `ctx.use(VisionPlugin(...))` and either bundle weights or
-use the downloadable tier (see the `mobilesam-vendor` GitHub Release), so
-`ai.vision.info` reports `available: false` until then. See
+(`MobileSAMBackend(cacheDirectory:)`).
+
+**Automatic mask generation** (`autoMask: true` backends, e.g. `MobileSAMBackend`)
+segments *every* object at once — a grid-of-prompts sweep + non-max-suppression:
+
+```js
+// Streaming (recommended — a full sweep is many decoder passes):
+__SWIFT_PWA__.subscribe('ai.vision.segmentAllStream',
+    { sessionId, pointsPerSide: 16, iouThreshold: 0.88, minAreaPx: 16 },
+    (e) => {
+        if (e.type === 'progress') setBar(e.done, e.total);
+        else if (e.type === 'done') useMasks(e.masks); // same [{bounds,rle,score}] shape
+    });
+// Unary ai.vision.segmentAll returns the final masks in one reply (small images).
+```
+
+`pointsPerSide` (default 16, capped at 32) sets grid density; `iouThreshold`
+(default 0.88) is the NMS dedup threshold; `minAreaPx` drops specks. Masks come
+back best-score-first.
+
+**Device-capability timing** (`autoMask: true` backends) — `ai.vision.benchmark`
+runs a synthetic encode + decode + small AMG sweep and returns
+`{ encodeMs, decodeMs, segmentAllMs, deviceClass }` (`deviceClass` is a coarse
+`'high'`/`'mid'`/`'low'` bucket). Use it for a one-shot capability gate — though
+timing your own first real `openSession`/`segment` and caching the verdict is
+cheaper and more representative of your actual images.
+
+```js
+const b = await __SWIFT_PWA__.invoke('ai.vision.benchmark', {});
+if (b.deviceClass === 'high') enableSegmentEverythingUX();
+```
+
+A real backend (`MobileSAMBackend`, Apple +
+Android, verified against real weights) exists as of this writing, but isn't
+auto-installed — an app must opt in via `ctx.use(VisionPlugin(...))` and either
+bundle weights or use the downloadable tier (see the `mobilesam-vendor` GitHub
+Release), so `ai.vision.info` reports `available: false` until then. See
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the full design, current implementation status, and the ONNX Runtime
 packaging work underway.

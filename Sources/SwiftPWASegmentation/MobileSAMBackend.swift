@@ -169,7 +169,7 @@
             guard OrtRuntime.shared != nil else { return .none }
             return VisionCapabilities(
                 available: true, backend: VisionBackendID.mobileSAMONNX, model: "mobile-sam",
-                pointPrompts: true, boxPrompts: true, multimask: true, autoMask: false,
+                pointPrompts: true, boxPrompts: true, multimask: true, autoMask: true,
                 maxImageSize: 1024, sessionCaching: true
             )
         }
@@ -234,33 +234,15 @@
             guard !labels.isEmpty else {
                 throw VisionError.segmentationFailed("segment requires at least one point or a box prompt")
             }
-            let numPoints = Int64(labels.count)
 
             let decoderPath = request.multimask ? decoderMultiPath : decoderSinglePath
             let decoder = try await mapping { try OrtModelSession(modelPath: decoderPath, runtime: runtime) }
-            let outputs = try await mapping {
-                try decoder.run(
-                    inputs: [
-                        "image_embeddings": cached.embedding,
-                        "point_coords": .init(values: coords, shape: [1, numPoints, 2]),
-                        "point_labels": .init(values: labels, shape: [1, numPoints]),
-                        "mask_input": .init(values: [Float](repeating: 0, count: 256 * 256), shape: [1, 1, 256, 256]),
-                        "has_mask_input": .init(values: [0], shape: [1]),
-                        "orig_im_size": .init(
-                            values: [
-                                Float(cached.preprocessed.originalHeight),
-                                Float(cached.preprocessed.originalWidth)
-                            ],
-                            shape: [2]
-                        )
-                    ],
-                    outputNames: ["masks", "iou_predictions"]
+            let (masksTensor, iouTensor) = try await mapping {
+                try Self.runDecoder(
+                    session: decoder, embedding: cached.embedding, coords: coords, labels: labels,
+                    origHeight: Float(cached.preprocessed.originalHeight),
+                    origWidth: Float(cached.preprocessed.originalWidth)
                 )
-            }
-            guard let masksTensor = outputs["masks"], let iouTensor = outputs["iou_predictions"],
-                  masksTensor.shape.count == 4
-            else {
-                throw VisionError.segmentationFailed("decoder produced no usable masks/iou_predictions output")
             }
 
             let numMasks = Int(masksTensor.shape[1])
@@ -287,6 +269,213 @@
         public func closeSession(_ sessionID: String) async {
             sessions.removeValue(forKey: sessionID)
             sessionOrder.removeAll { $0 == sessionID }
+        }
+
+        /// Automatic mask generation — a `pointsPerSide × pointsPerSide` grid
+        /// of positive-point prompts through the (multi-mask) decoder, then
+        /// NMS to dedup overlapping masks. The unary form drains the streaming
+        /// form with a no-op progress sink; both share one AMG pass.
+        public func segmentAll(_ request: SegmentAllRequest) async throws -> SegmentResult {
+            try await SegmentResult(masks: runAutomaticMaskGeneration(request) { _, _ in })
+        }
+
+        /// Streaming AMG: yields a `progress(done, total)` frame per grid cell
+        /// as it sweeps, then a terminal `done` carrying every deduped mask
+        /// (best-score-first). Cancelling the subscription cancels the sweep.
+        public nonisolated func segmentAllStream(_ request: SegmentAllRequest)
+            -> AsyncThrowingStream<VisionProgress, any Error>
+        {
+            AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        let masks = try await runAutomaticMaskGeneration(request) { done, total in
+                            continuation.yield(.progress(done: done, total: total))
+                        }
+                        continuation.yield(.done(masks: masks))
+                        continuation.finish()
+                    } catch let error as VisionError {
+                        continuation.finish(throwing: error)
+                    } catch {
+                        continuation.finish(throwing: VisionError.segmentationFailed("\(error)"))
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+        }
+
+        /// The shared AMG pass behind `segmentAll` / `segmentAllStream`.
+        ///
+        /// SAM's mask decoder is cheap relative to the encoder (which ran once
+        /// in `openSession` and is cached), so AMG is "prompt at every grid
+        /// point, keep the good masks, dedup." Two efficiency choices keep a
+        /// full sweep tractable on a phone:
+        ///
+        /// - **One decoder session, reused for the whole grid** — the graph is
+        ///   parsed once, not per point.
+        /// - **Discover at a reduced working resolution** — the decoder
+        ///   upsamples masks to whatever `orig_im_size` we hand it, so passing
+        ///   a capped working size (``amgWorkingSize``) yields small masks that
+        ///   are fast to threshold/NMS. Surviving masks are then nearest-
+        ///   upsampled to source pixels for the returned `bounds`/`rle`. AMG
+        ///   masks are inherently approximate (a hover-highlight / pre-segment
+        ///   affordance), so the coarse upsample is an accepted trade.
+        private func runAutomaticMaskGeneration(
+            _ request: SegmentAllRequest,
+            onProgress: @Sendable (Int, Int) -> Void
+        ) async throws -> [VisionMask] {
+            guard let cached = sessions[request.sessionID] else {
+                throw VisionError.session("unknown or evicted session \(request.sessionID)")
+            }
+            guard let runtime = OrtRuntime.shared else {
+                throw VisionError.unavailable("no ONNX Runtime linked (SWIFT_PWA_ONNXRUNTIME is off)")
+            }
+
+            // Clamp the grid so a pathological request can't spin up an
+            // unbounded number of decoder passes (pointsPerSide² of them).
+            let pointsPerSide = min(
+                Self.amgMaxPointsPerSide,
+                max(1, request.pointsPerSide ?? Self.amgDefaultPointsPerSide)
+            )
+            return try await automaticMasks(
+                cached: cached, runtime: runtime, pointsPerSide: pointsPerSide,
+                nmsThreshold: request.iouThreshold ?? Self.amgDefaultNMSThreshold,
+                minAreaPx: max(0, request.minAreaPx ?? 0), onProgress: onProgress
+            )
+        }
+
+        /// The AMG algorithm proper, over an already-resolved session + params.
+        /// Split from `runAutomaticMaskGeneration` so `benchmark` can time a
+        /// grid sweep against a synthetic session without touching `sessions`.
+        private func automaticMasks(
+            cached: CachedSession, runtime: OrtRuntime, pointsPerSide: Int,
+            nmsThreshold: Double, minAreaPx: Int,
+            onProgress: @Sendable (Int, Int) -> Void
+        ) async throws -> [VisionMask] {
+            let originalWidth = cached.preprocessed.originalWidth
+            let originalHeight = cached.preprocessed.originalHeight
+
+            let longSide = Double(max(originalWidth, originalHeight, 1))
+            let workScale = min(1.0, Double(Self.amgWorkingSize) / longSide) // never upscale small images
+            let workWidth = max(1, Int((Double(originalWidth) * workScale).rounded()))
+            let workHeight = max(1, Int((Double(originalHeight) * workScale).rounded()))
+            let minAreaWork = Double(minAreaPx) * workScale * workScale
+
+            let decoder = try await mapping { try OrtModelSession(modelPath: decoderMultiPath, runtime: runtime) }
+
+            var candidates: [AMGCandidate] = []
+            let total = pointsPerSide * pointsPerSide
+            var done = 0
+            for row in 0 ..< pointsPerSide {
+                for col in 0 ..< pointsPerSide {
+                    try Task.checkCancellation()
+                    // Cell-centered grid point in source pixels → resized frame.
+                    let sx = (Double(col) + 0.5) / Double(pointsPerSide) * Double(originalWidth)
+                    let sy = (Double(row) + 0.5) / Double(pointsPerSide) * Double(originalHeight)
+                    let mapped = cached.preprocessed.mapPoint(x: sx, y: sy)
+                    let (masksTensor, iouTensor) = try await mapping {
+                        try Self.runDecoder(
+                            session: decoder, embedding: cached.embedding,
+                            coords: [Float(mapped.x), Float(mapped.y)], labels: [1],
+                            origHeight: Float(workHeight), origWidth: Float(workWidth)
+                        )
+                    }
+                    candidates.append(
+                        contentsOf: Self.extractCandidates(
+                            masks: masksTensor, iou: iouTensor,
+                            qualityFloor: Self.amgQualityFloor, minAreaWork: minAreaWork
+                        )
+                    )
+                    done += 1
+                    onProgress(done, total)
+                    await Task.yield() // stay a good citizen across a long sweep
+                }
+            }
+
+            // Greedy NMS: best score first, drop any later mask overlapping a
+            // kept one by more than `nmsThreshold` (mask IoU on the work grid).
+            candidates.sort { $0.score > $1.score }
+            var kept: [AMGCandidate] = []
+            for candidate in candidates where !kept.contains(where: { Self.maskIoU($0, candidate) > nmsThreshold }) {
+                kept.append(candidate)
+            }
+
+            return kept.compactMap { candidate in
+                guard let encoded = MaskPostprocessing.encodeUpsampledRLE(
+                    workMask: candidate.mask, workWidth: workWidth, workHeight: workHeight,
+                    workBounds: candidate.bounds, scale: workScale,
+                    sourceWidth: originalWidth, sourceHeight: originalHeight
+                ) else { return nil }
+                return VisionMask(bounds: encoded.bounds, rle: encoded.rle, score: candidate.score)
+            }
+        }
+
+        /// Real synthetic timing for the consumer's device-capability gate.
+        /// Times a single encode, a single decode, and a small AMG sweep on a
+        /// synthetic 1024² image (image content doesn't affect timing — only
+        /// tensor shape does — so a cheap gradient stands in, keeping the probe
+        /// free of any image-codec/platform-decode dependency). Session
+        /// creation (graph parse) is done outside the timed regions so the
+        /// numbers reflect steady-state per-call cost, not one-time load. The
+        /// `deviceClass` bucket is a coarse convenience — the proposal's
+        /// primary device-classing path is the app timing its own first real
+        /// `openSession`/`segment`.
+        public func benchmark() async throws -> VisionBenchmark {
+            guard let runtime = OrtRuntime.shared else {
+                throw VisionError.unavailable("no ONNX Runtime linked (SWIFT_PWA_ONNXRUNTIME is off)")
+            }
+            let side = Self.benchmarkImageSide
+            var tensor = [Float](repeating: 0, count: side * side * 3)
+            for index in 0 ..< (side * side) {
+                let value = Float(index % 256)
+                tensor[index * 3] = value
+                tensor[index * 3 + 1] = value
+                tensor[index * 3 + 2] = value
+            }
+            let preprocessed = PreprocessedImage(
+                tensor: tensor, originalWidth: side, originalHeight: side,
+                resizedWidth: side, resizedHeight: side, scale: 1.0
+            )
+
+            let clock = ContinuousClock()
+            let encoder = try await mapping { try OrtModelSession(modelPath: encoderPath, runtime: runtime) }
+            let decoder = try await mapping { try OrtModelSession(modelPath: decoderSinglePath, runtime: runtime) }
+
+            let encodeStart = clock.now
+            let outputs = try await mapping {
+                try encoder.run(
+                    inputs: ["input_image": .init(values: preprocessed.tensor, shape: [Int64(side), Int64(side), 3])],
+                    outputNames: ["image_embeddings"]
+                )
+            }
+            let encodeMs = Self.milliseconds(clock.now - encodeStart)
+            guard let embedding = outputs["image_embeddings"] else {
+                throw VisionError.segmentationFailed("benchmark encoder produced no embedding")
+            }
+            let cached = CachedSession(embedding: embedding, preprocessed: preprocessed)
+
+            let decodeStart = clock.now
+            _ = try await mapping {
+                try Self.runDecoder(
+                    session: decoder, embedding: embedding,
+                    coords: [Float(side) / 2, Float(side) / 2], labels: [1],
+                    origHeight: Float(side), origWidth: Float(side)
+                )
+            }
+            let decodeMs = Self.milliseconds(clock.now - decodeStart)
+
+            // A small AMG sweep (not the full default grid — a benchmark
+            // shouldn't stall for seconds) times the "segment everything" path.
+            let amgStart = clock.now
+            _ = try await automaticMasks(
+                cached: cached, runtime: runtime, pointsPerSide: Self.benchmarkPointsPerSide,
+                nmsThreshold: Self.amgDefaultNMSThreshold, minAreaPx: 0
+            ) { _, _ in }
+            let segmentAllMs = Self.milliseconds(clock.now - amgStart)
+
+            return VisionBenchmark(
+                encodeMs: encodeMs, decodeMs: decodeMs, segmentAllMs: segmentAllMs,
+                deviceClass: Self.deviceClass(encodeMs: encodeMs)
+            )
         }
 
         /// Downloadable-model tier: fetch the three ONNX files (encoder +
@@ -374,6 +563,147 @@
                 let bytesWritten: Int64
             }
         #endif
+
+        // MARK: - Automatic mask generation internals
+
+        /// AMG grid density used when `pointsPerSide` is unset — matches the
+        /// proposal's example. 16² = 256 decoder passes on the cached embedding.
+        private static let amgDefaultPointsPerSide = 16
+        /// Hard cap on `pointsPerSide` so a request can't fan out into an
+        /// unbounded number of decoder passes.
+        private static let amgMaxPointsPerSide = 32
+        /// Default NMS dedup threshold (mask IoU) when `iouThreshold` is unset
+        /// — matches the proposal's example. Masks overlapping a kept mask by
+        /// more than this are treated as duplicates.
+        private static let amgDefaultNMSThreshold = 0.88
+        /// Drop candidate masks whose predicted IoU is below this before NMS —
+        /// culls the low-confidence junk a single grid point often produces on
+        /// background/ambiguous locations.
+        private static let amgQualityFloor = 0.7
+        /// Longest-side working resolution for the AMG discovery pass (see
+        /// `runAutomaticMaskGeneration`). Small enough that a full grid of
+        /// masks fits comfortably in memory; survivors are upsampled to source.
+        private static let amgWorkingSize = 256
+
+        // MARK: - Benchmark internals
+
+        /// The encoder's native square input — a benchmark on a fixed 1024²
+        /// image is representative since the encoder resizes any image to this.
+        private static let benchmarkImageSide = 1024
+        /// A modest AMG grid for the benchmark's `segmentAllMs` — enough to
+        /// exercise the sweep + NMS without the multi-second cost of the full
+        /// default grid.
+        private static let benchmarkPointsPerSide = 8
+
+        /// Coarse device-class bucket keyed on encode time — the dominant,
+        /// most stable cost (a fixed 1024² ViT regardless of source image).
+        /// Heuristic thresholds; calibrated so a modern desktop/phone GPU-class
+        /// encode lands in `high` and a slow CPU-only path in `low`.
+        private static func deviceClass(encodeMs: Int) -> String {
+            switch encodeMs {
+            case ..<400: "high"
+            case ..<1500: "mid"
+            default: "low"
+            }
+        }
+
+        /// `Duration` → whole milliseconds (`components` is seconds +
+        /// attoseconds; 1 ms = 1e15 as).
+        private static func milliseconds(_ duration: Duration) -> Int {
+            let components = duration.components
+            return Int(Double(components.seconds) * 1000 + Double(components.attoseconds) / 1e15)
+        }
+
+        /// One AMG mask candidate at working resolution, before NMS/upsample.
+        private struct AMGCandidate {
+            var mask: [Bool] // row-major, `width * height`
+            var width: Int // working-grid row stride
+            var bounds: [Int] // tight bbox in working px, `[x0, y0, x1, y1]`
+            var area: Int // set pixels, for IoU
+            var score: Double
+        }
+
+        /// Turns one decoder run's `masks`/`iou_predictions` into working-res
+        /// candidates: threshold each mask's logits at 0, drop the ones below
+        /// `qualityFloor` or `minAreaWork`, and record a tight bbox + area for
+        /// the later NMS pass. Pure/static so the AMG loop calls it without an
+        /// isolation hop.
+        private static func extractCandidates(
+            masks: OrtModelSession.Tensor, iou: OrtModelSession.Tensor,
+            qualityFloor: Double, minAreaWork: Double
+        ) -> [AMGCandidate] {
+            let numMasks = Int(masks.shape[1])
+            let height = Int(masks.shape[2])
+            let width = Int(masks.shape[3])
+            let plane = width * height
+            var out: [AMGCandidate] = []
+            for maskIndex in 0 ..< numMasks {
+                let score = maskIndex < iou.values.count ? Double(iou.values[maskIndex]) : 0
+                guard score >= qualityFloor else { continue }
+                let offset = maskIndex * plane
+                guard offset + plane <= masks.values.count else { continue }
+                var mask = [Bool](repeating: false, count: plane)
+                var area = 0
+                var minX = width, minY = height, maxX = -1, maxY = -1
+                for index in 0 ..< plane where masks.values[offset + index] > 0 {
+                    mask[index] = true
+                    area += 1
+                    let x = index % width, y = index / width
+                    if x < minX { minX = x }
+                    if x > maxX { maxX = x }
+                    if y < minY { minY = y }
+                    if y > maxY { maxY = y }
+                }
+                guard maxX >= minX, Double(area) >= minAreaWork else { continue }
+                out.append(
+                    AMGCandidate(mask: mask, width: width, bounds: [minX, minY, maxX, maxY], area: area, score: score)
+                )
+            }
+            return out
+        }
+
+        /// Mask IoU between two working-res candidates (which share a working
+        /// grid, so `a.width == b.width`). Bounding boxes are checked first —
+        /// disjoint bounds short-circuit to 0 without scanning any pixels.
+        private static func maskIoU(_ a: AMGCandidate, _ b: AMGCandidate) -> Double {
+            let ix0 = max(a.bounds[0], b.bounds[0]), iy0 = max(a.bounds[1], b.bounds[1])
+            let ix1 = min(a.bounds[2], b.bounds[2]), iy1 = min(a.bounds[3], b.bounds[3])
+            guard ix1 >= ix0, iy1 >= iy0 else { return 0 }
+            var intersection = 0
+            for y in iy0 ... iy1 {
+                let base = y * a.width
+                for x in ix0 ... ix1 where a.mask[base + x] && b.mask[base + x] { intersection += 1 }
+            }
+            let union = a.area + b.area - intersection
+            return union > 0 ? Double(intersection) / Double(union) : 0
+        }
+
+        /// Runs the mask decoder once and returns the raw `masks` /
+        /// `iou_predictions` tensors. Shared by `segment` (source-resolution
+        /// `orig_im_size`) and the AMG grid sweep (a reduced working
+        /// resolution). Static/pure — no actor state — so the AMG loop can call
+        /// it hundreds of times against one reused session.
+        private static func runDecoder(
+            session: OrtModelSession, embedding: OrtModelSession.Tensor,
+            coords: [Float], labels: [Float], origHeight: Float, origWidth: Float
+        ) throws -> (masks: OrtModelSession.Tensor, iou: OrtModelSession.Tensor) {
+            let numPoints = Int64(labels.count)
+            let outputs = try session.run(
+                inputs: [
+                    "image_embeddings": embedding,
+                    "point_coords": .init(values: coords, shape: [1, numPoints, 2]),
+                    "point_labels": .init(values: labels, shape: [1, numPoints]),
+                    "mask_input": .init(values: [Float](repeating: 0, count: 256 * 256), shape: [1, 1, 256, 256]),
+                    "has_mask_input": .init(values: [0], shape: [1]),
+                    "orig_im_size": .init(values: [origHeight, origWidth], shape: [2])
+                ],
+                outputNames: ["masks", "iou_predictions"]
+            )
+            guard let masks = outputs["masks"], let iou = outputs["iou_predictions"], masks.shape.count == 4 else {
+                throw OrtError.failed("decoder produced no usable masks/iou_predictions output")
+            }
+            return (masks, iou)
+        }
 
         private func evictIfNeeded() {
             while sessionOrder.count > maxSessions {

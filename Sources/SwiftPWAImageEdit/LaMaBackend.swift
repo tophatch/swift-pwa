@@ -90,8 +90,8 @@
                 throw AIError.generationFailed("this backend inpaints — supply a `mask` marking the region to fill")
             }
 
-            let output = try runInpaint(image: image, mask: mask)
-            let png = try mapCodec { try ImageCodec.encodePNG(output) }
+            let output = try await runInpaint(image: image, mask: mask)
+            let png = try await mapCodec { try await ImageCodec.encodePNG(output) }
 
             let generated: AIGeneratedImage
             if let directory = request.outputDirectory {
@@ -142,25 +142,25 @@
         /// composite it over the original **only within the masked region** so
         /// unmasked pixels stay pristine (the resize round-trip never touches
         /// them). Returns a source-resolution RGB `RawImage`.
-        private func runInpaint(image: AIImage, mask: AIImage) throws -> RawImage {
+        private func runInpaint(image: AIImage, mask: AIImage) async throws -> RawImage {
             // The pristine original + a source-resolution mask for compositing.
-            let base = try mapCodec {
-                try ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: nil)
+            let base = try await mapCodec {
+                try await ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: nil)
             }
-            let baseMask = try mapCodec {
-                try ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: nil)
+            let baseMask = try await mapCodec {
+                try await ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: nil)
             }
             let width = base.width, height = base.height
 
             // Model inputs at the fixed square (e.g. 512×512).
             let n = spec.inputSize
             let square = (width: n, height: n)
-            let rgb = try mapCodec { try ImageCodec.decodeRGB(
+            let rgb = try await mapCodec { try await ImageCodec.decodeRGB(
                 path: image.path,
                 dataBase64: image.dataBase64,
                 size: square
             ) }
-            let gray = try mapCodec { try ImageCodec.decodeGray(
+            let gray = try await mapCodec { try await ImageCodec.decodeGray(
                 path: mask.path,
                 dataBase64: mask.dataBase64,
                 size: square
@@ -210,7 +210,11 @@
 
             // Resize the fill back to source resolution and composite it into
             // the original only where the mask is set.
-            let filled = try mapCodec { try ImageCodec.resizeRGB(filledSquare, toWidth: width, height: height) }
+            let filled = try await mapCodec { try await ImageCodec.resizeRGB(
+                filledSquare,
+                toWidth: width,
+                height: height
+            ) }
             var composited = base.pixels
             for pixel in 0 ..< (width * height) where baseMask.pixels[pixel] >= spec.maskThreshold {
                 composited[pixel * 3] = filled.pixels[pixel * 3]
@@ -248,8 +252,8 @@
             }
         }
 
-        private func mapCodec<T>(_ body: () throws -> T) throws -> T {
-            do { return try body() } catch let error as ImageCodecError {
+        private func mapCodec<T>(_ body: () async throws -> T) async throws -> T {
+            do { return try await body() } catch let error as ImageCodecError {
                 throw AIError.generationFailed("\(error)")
             }
         }

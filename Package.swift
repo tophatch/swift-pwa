@@ -936,7 +936,11 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             name: "SwiftPWAImageEdit",
             dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
                 + onnxRuntimeModuleDependencies()
-                + [.target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))],
+                + [
+                    .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
+                    // Android decodes/encodes via BitmapFactory over the Kotlin RPC.
+                    .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
+                ],
             swiftSettings: segmentationSwiftSettings,
             linkerSettings: onnxRuntimeLinkerSettings
         ),

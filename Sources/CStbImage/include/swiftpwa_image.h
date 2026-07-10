@@ -15,4 +15,15 @@ unsigned char *swiftpwa_decode_image_rgb(const unsigned char *data, int len,
 // Free a buffer returned by swiftpwa_decode_image_rgb.
 void swiftpwa_free_image(unsigned char *pixels);
 
+// Encode tightly-packed RGB8 pixels (`width * height * 3` bytes, row-major) to
+// an in-memory PNG. Returns a freshly allocated buffer (free with
+// swiftpwa_free_png) and writes its byte length to *out_len; returns NULL on
+// failure. Used by SwiftPWAImageEdit's desktop ImageCodec (Linux/Windows have
+// no CoreGraphics PNG encoder).
+unsigned char *swiftpwa_encode_png_rgb(const unsigned char *pixels, int width,
+                                       int height, int *out_len);
+
+// Free a buffer returned by swiftpwa_encode_png_rgb.
+void swiftpwa_free_png(unsigned char *data);
+
 #endif

@@ -1,13 +1,14 @@
-#if !(canImport(CoreGraphics) && canImport(ImageIO))
+#if !(canImport(CoreGraphics) && canImport(ImageIO)) && !os(Linux) && !os(Windows)
     import Foundation
 
-    /// Non-Apple `ImageCodec` placeholder. The desktop (stb_image /
-    /// stb_image_write, reusing `CStbImage`) and Android (`BitmapFactory` over
+    /// Fallback `ImageCodec` for platforms without a real implementation yet —
+    /// i.e. **Android** (Apple uses CoreGraphics, Linux/Windows use stb_image
+    /// via `CStbImage`). The Android decode/encode path — `BitmapFactory` over
     /// the Kotlin RPC, as `SwiftPWASegmentation`'s `AndroidImagePreprocessing`
-    /// does) decode/encode paths are the immediate follow-up to the Apple-first
-    /// `LaMaBackend` cut — see `docs/proposals/image-generation-editing.md`.
-    /// Until they land, `ai.generateImage` on this backend throws a clear
-    /// `E_AI_GENERATION` here rather than mis-decoding.
+    /// does — is the remaining follow-up (see
+    /// `docs/proposals/image-generation-editing.md`); until it lands,
+    /// `ai.generateImage` throws a clear `E_AI_GENERATION` here rather than
+    /// mis-decoding.
     extension ImageCodec {
         static func decodeRGB(
             path _: String?,

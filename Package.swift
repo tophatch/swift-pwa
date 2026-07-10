@@ -927,14 +927,16 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // `SwiftPWAONNX` tier (same OrtModelSession + desktop GPU providers as
     // MobileSAM) and keeps its own ONNX-module dependencies so `LaMaBackend`'s
     // `canImport(ONNXRuntime*)` gate stays exact. Image decode/encode
-    // (`ImageCodec`) is Apple-first (CoreGraphics/ImageIO); the desktop/Android
-    // codec paths are a documented follow-up (a clear runtime error until then).
+    // (`ImageCodec`) is CoreGraphics/ImageIO on Apple and stb_image /
+    // stb_image_write (`CStbImage`, same as segmentation) on Linux/Windows; the
+    // Android codec is a documented follow-up (a clear runtime error until then).
     package.products.append(.library(name: "SwiftPWAImageEdit", targets: ["SwiftPWAImageEdit"]))
     package.targets.append(contentsOf: [
         .target(
             name: "SwiftPWAImageEdit",
             dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
-                + onnxRuntimeModuleDependencies(),
+                + onnxRuntimeModuleDependencies()
+                + [.target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))],
             swiftSettings: segmentationSwiftSettings,
             linkerSettings: onnxRuntimeLinkerSettings
         ),

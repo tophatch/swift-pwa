@@ -41,6 +41,12 @@ if onnxRuntimeEnabled {
     appDependencies.append(.product(name: "SwiftPWAImageEdit", package: "swift-pwa"))
 }
 
+// Opt-in build flag for the headless on-device LaMa inpaint smoke (Android
+// verification of the image-edit codec path — see CritterFacts.swift). Off in
+// normal builds; set SWIFT_PWA_CF_LAMA_SMOKE=1 to compile it in.
+let lamaSmoke = ProcessInfo.processInfo.environment["SWIFT_PWA_CF_LAMA_SMOKE"] != nil
+let appSwiftSettings: [SwiftSetting] = lamaSmoke ? [.define("CRITTERFACTS_LAMA_SMOKE")] : []
+
 let package = Package(
     name: "CritterFacts",
     platforms: [.macOS(.v15), .iOS(.v18)],
@@ -52,6 +58,7 @@ let package = Package(
             name: "CritterFacts",
             dependencies: appDependencies,
             resources: [.copy("web")],
+            swiftSettings: appSwiftSettings,
             linkerSettings: [
                 // On Android the binary is loaded by the generated Kotlin
                 // Activity via `System.loadLibrary`, so it must be a shared

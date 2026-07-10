@@ -681,8 +681,8 @@ adjusting the spec, not the plumbing.
 > fp32 export runs end-to-end (a masked region inpaints away, unmasked pixels
 > stay pristine), confirming `LaMaModelSpec.bigLama`. The **Android** codec
 > (BitmapFactory decode + `Bitmap.compress` over the Kotlin RPC) is
-> implemented and cross-compile-verified; on-device verification on the Tab
-> S10+ is the last step. See
+> **device-verified on a Galaxy Tab S10+**, so inpainting runs on all five
+> platforms. See
 > [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md).
 
 ### Structured output: native vs. the shared fallback

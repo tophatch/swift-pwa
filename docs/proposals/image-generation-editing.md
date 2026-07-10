@@ -19,13 +19,15 @@
 > (Linux/Windows) `ImageCodec`** is in (stb_image / stb_image_write via
 > `CStbImage`) and Linux-verified. The **Android `ImageCodec`** (BitmapFactory
 > decode + `Bitmap.compress` encode over the Kotlin RPC — the whole
-> `ImageCodec` API is now `async` to accommodate it) is implemented and
-> **cross-compile-verified** for `aarch64-unknown-linux-android28`; on-device
-> verification on the Tab S10+ is the last step (the project norm for Android,
-> since CI can't cross-compile). **Remaining:** Android on-device verify, and
-> GPU verification (LaMa reuses the same `OrtModelSession` as the
-> CUDA/DirectML-verified segmentation tier, so it's expected to just work).
-> Original proposal text below.
+> `ImageCodec` API is now `async` to accommodate it) is **device-verified
+> end-to-end on a Galaxy Tab S10+** (Android 16): a masked block inpaints
+> away, unmasked pixels stay pristine. `LaMaBackend.ensureModel` also routes
+> its download through the Kotlin `net.downloadFile` RPC on Android (Swift's
+> URLSession has no CA store there — a bug device verification caught). So
+> **`ai.generateImage` inpainting now runs on all five platforms.**
+> **Remaining:** GPU verification (LaMa reuses the same `OrtModelSession` as
+> the CUDA/DirectML-verified segmentation tier, so it's expected to just
+> work). Original proposal text below.
 >
 > **Status (original): proposed, targeting v0.9.0.** The text→image half of the
 > `ai.*` contract (`ai.generateImage` / `ai.generateImageStream`,

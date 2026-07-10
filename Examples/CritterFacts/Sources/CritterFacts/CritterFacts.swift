@@ -175,6 +175,36 @@ func configure(_ ctx: any AppContext) throws {
         ctx.use(VisionPlugin(MobileSAMBackend(cacheDirectory: mobileSAMDir)))
     #endif
 
+    #if os(Android) && CRITTERFACTS_LAMA_SMOKE && canImport(SwiftPWAImageEdit)
+        // Headless on-device verification of the Android image-edit path
+        // (LaMaBackend + the BitmapFactory-over-RPC ImageCodec). Gated behind a
+        // compile flag (SWIFT_PWA_CF_LAMA_SMOKE at build time) so it's absent
+        // from normal builds. Runs one inpaint against a tiny embedded test
+        // image + mask and logs the outcome to logcat (the WebView's console
+        // isn't forwarded there, but swiftPWALog is) — the Android analogue of
+        // the desktop runSmoke. Spawned detached with a short delay so the JNI
+        // RPC bridge (MainActivity.rpcCall) is up before the codec RPC fires.
+        let lamaSmokeDir = ctx.dataDirectory().appendingPathComponent("lama", isDirectory: true)
+        let lamaSmokeOut = ctx.dataDirectory().appendingPathComponent("erased", isDirectory: true).path
+        Task.detached {
+            do {
+                try await Task.sleep(nanoseconds: 3_000_000_000)
+                let backend = LaMaBackend(cacheDirectory: lamaSmokeDir)
+                swiftPWALog("CF_LAMA_SMOKE: ensuring big-lama…")
+                for try await _ in backend.ensureModel(AIEnsureModelRequest(model: "inpaint")) {}
+                swiftPWALog("CF_LAMA_SMOKE: model ready; running inpaint…")
+                let result = try await backend.generateImage(AIGenerateImageRequest(
+                    outputDirectory: lamaSmokeOut,
+                    image: .inline(cfSmokeImageBase64),
+                    mask: .inline(cfSmokeMaskBase64)
+                ))
+                swiftPWALog("CF_LAMA_SMOKE_OK backend=\(result.backend) path=\(result.images.first?.path ?? "nil")")
+            } catch {
+                swiftPWALog("CF_LAMA_SMOKE_ERR \(error)")
+            }
+        }
+    #endif
+
     // Android serves bundled web assets through the WebViewAssetLoader virtual
     // host (the adapter ignores the directory path); desktop resolves the
     // real `web/` from the resource bundle.

@@ -1,6 +1,20 @@
 # Proposal: on-device image generation & editing (`ai.generateImage`)
 
-> **Status: proposed, targeting v0.9.0.** The text→image half of the
+> **Status: in progress, targeting v0.9.0.** Landed so far (Apple,
+> verified): the generalized `ai.generateImage` **contract** (optional
+> `prompt`, new `image`/`mask`/`strength`/`guidanceScale`,
+> `AICapabilities.imageEditing`); a shared **`SwiftPWAONNX`** target
+> extracted from `SwiftPWASegmentation` so backends can reuse the ONNX
+> Runtime tier; and **`LaMaBackend`** (`SwiftPWAImageEdit`) with an
+> Apple image codec (`ImageCodec`), a configurable `LaMaModelSpec`, and a
+> downloadable-model tier. **Immediate follow-ups:** the desktop
+> (stb_image) / Android (BitmapFactory-RPC) image codecs, the
+> `lama-vendor` weights release + publish workflow, the on-hardware
+> real-weights verification pass (to confirm the assumed `LaMaModelSpec`
+> constants), and a CritterFacts tap-to-erase example. Original proposal
+> text below.
+>
+> **Status (original): proposed, targeting v0.9.0.** The text→image half of the
 > `ai.*` contract (`ai.generateImage` / `ai.generateImageStream`,
 > `AICapabilities.imageGeneration`) has shipped **contract-only** since
 > the v0.7.0 image/audio landing — the request/result/streaming types

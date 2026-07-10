@@ -642,6 +642,47 @@ than vendoring ggml source because the source is 135+ per-arch model files
 plus a shader-embed step and per-file SIMD flags SwiftPM can't express — and
 `unsafeFlags` would poison dependency resolution for every adopter.
 
+### Available backend: LaMa inpainting (image editing)
+
+`SwiftPWAImageEdit` ships `LaMaBackend` — the first backend for the
+**editing** side of `ai.generateImage` (an `image` + `mask` → the masked
+region reconstructed; see the [contract above](#image-generation--editing-aigenerateimage)).
+It reports `imageEditing: true` / `imageGeneration: false`, so `ai.generate`
+(text) throws unsupported; it only edits images. It pairs directly with
+[`ai.vision.*` segmentation](javascript-api.md#aivision--promptable-on-device-image-segmentation):
+a SAM mask, decoded to a white-on-black PNG, is exactly the `mask` it
+consumes — "tap to erase".
+
+```swift
+import SwiftPWAImageEdit
+
+runtime.run { ctx in
+    // Bundled / bring-your-own weights:
+    ctx.use(AIPlugin(LaMaBackend(modelPath: myBigLamaONNXPath)))
+    // …or the downloadable tier (ai.ensureModel fetches + checksum-pins):
+    ctx.use(AIPlugin(LaMaBackend(cacheDirectory: dataDir)))
+}
+```
+
+It reuses the shared **ONNX Runtime tier** (`SwiftPWAONNX` — the same
+`OrtModelSession` MobileSAM runs on, including the desktop **CUDA / DirectML
+GPU** providers under [`ai.onnx_gpu`](../docs/windows-setup.md) with transparent
+CPU fallback). Opt in exactly like segmentation — set `ai.local_onnx_runtime:
+true` in `pwa.json` so the build links ONNX Runtime; no separate flag. The
+graph contract + pre/post-processing are a configurable `LaMaModelSpec`
+(defaulting to the big-lama fp32 export — dynamic `H×W`, `[0,1]` RGB image +
+`[0,1]` binary mask, `[0,255]` output); point it at a different export by
+adjusting the spec, not the plumbing.
+
+> **Status:** the contract, the backend, and the **Apple** image codec are
+> in; the **desktop (stb_image) / Android (BitmapFactory-RPC) codecs**, the
+> `lama-vendor` weights release (so `LaMaBackend(cacheDirectory:)` works out
+> of the box), and the on-hardware real-weights verification pass are the
+> immediate follow-ups (see
+> [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md)).
+> On a non-Apple platform today `ai.generateImage` throws a clear
+> `E_AI_GENERATION` from the codec rather than mis-decoding.
+
 ### Structured output: native vs. the shared fallback
 
 `ai.generateJSON` must return schema-valid JSON *regardless of backend*,

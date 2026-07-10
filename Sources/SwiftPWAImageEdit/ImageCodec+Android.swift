@@ -16,7 +16,7 @@
             dataBase64: String?,
             size: (width: Int, height: Int)?
         ) async throws -> RawImage {
-            try await decode(path: path, dataBase64: dataBase64, size: size, channels: 3)
+            try await decode(path: path, dataBase64: dataBase64, size: size, maxSide: nil, channels: 3)
         }
 
         static func decodeGray(
@@ -24,7 +24,11 @@
             dataBase64: String?,
             size: (width: Int, height: Int)?
         ) async throws -> RawImage {
-            try await decode(path: path, dataBase64: dataBase64, size: size, channels: 1)
+            try await decode(path: path, dataBase64: dataBase64, size: size, maxSide: nil, channels: 1)
+        }
+
+        static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
+            try await decode(path: path, dataBase64: dataBase64, size: nil, maxSide: maxSide, channels: 3)
         }
 
         static func encodePNG(_ image: RawImage) async throws -> Data {
@@ -60,7 +64,7 @@
         }
 
         private static func decode(
-            path: String?, dataBase64: String?, size: (width: Int, height: Int)?, channels: Int
+            path: String?, dataBase64: String?, size: (width: Int, height: Int)?, maxSide: Int?, channels: Int
         ) async throws -> RawImage {
             let result: DecodeResult
             do {
@@ -71,6 +75,7 @@
                         dataBase64: dataBase64,
                         width: size?.width,
                         height: size?.height,
+                        maxSide: maxSide,
                         channels: channels
                     ),
                     as: DecodeResult.self
@@ -93,6 +98,7 @@
             let dataBase64: String?
             let width: Int?
             let height: Int?
+            let maxSide: Int?
             let channels: Int
         }
 

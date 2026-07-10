@@ -168,16 +168,21 @@
         /// run the graph, resize the result back to the source resolution, and
         /// composite it over the original **only within the masked region** so
         /// unmasked pixels stay pristine (the resize round-trip never touches
-        /// them). Returns a source-resolution RGB `RawImage`.
+        /// them). Returns a **working-resolution** RGB `RawImage` — capped at
+        /// `spec.maxWorkingSide` so a huge source photo doesn't blow memory (or,
+        /// on Android, the RPC payload); the mask is decoded to match.
         private func runInpaint(image: AIImage, mask: AIImage) async throws -> RawImage {
-            // The pristine original + a source-resolution mask for compositing.
+            // The base image at the (capped) working resolution, plus a mask
+            // decoded to exactly those dims so the composite indexes line up.
             let base = try await mapCodec {
-                try await ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: nil)
-            }
-            let baseMask = try await mapCodec {
-                try await ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: nil)
+                try await ImageCodec.decodeRGBFit(
+                    path: image.path, dataBase64: image.dataBase64, maxSide: spec.maxWorkingSide
+                )
             }
             let width = base.width, height = base.height
+            let baseMask = try await mapCodec {
+                try await ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: (width, height))
+            }
 
             // Model inputs at the fixed square (e.g. 512×512).
             let n = spec.inputSize

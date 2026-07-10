@@ -28,6 +28,10 @@
             throw ImageCodecError.encodeFailed("PNG encode is not implemented on this platform")
         }
 
+        static func decodeRGBFit(path _: String?, dataBase64 _: String?, maxSide _: Int) async throws -> RawImage {
+            throw ImageCodecError.decodeFailed("image decode is not implemented on this platform")
+        }
+
         static func resizeRGB(_: RawImage, toWidth _: Int, height _: Int) async throws -> RawImage {
             throw ImageCodecError.encodeFailed("image resize is not implemented on this platform")
         }

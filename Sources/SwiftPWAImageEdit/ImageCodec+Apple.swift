@@ -30,6 +30,19 @@
             return try render(cgImage, channels: 1, size: size)
         }
 
+        /// Decode to RGB fitting the longest side to `maxSide` (aspect
+        /// preserved), returning the actual decoded dims. Bounds the working
+        /// resolution so a huge source photo never materializes at full size.
+        static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
+            let cgImage = try loadCGImage(path: path, dataBase64: dataBase64)
+            let longest = max(cgImage.width, cgImage.height)
+            guard maxSide > 0, longest > maxSide else { return try render(cgImage, channels: 3, size: nil) }
+            let scale = Double(maxSide) / Double(longest)
+            let w = max(1, Int((Double(cgImage.width) * scale).rounded()))
+            let h = max(1, Int((Double(cgImage.height) * scale).rounded()))
+            return try render(cgImage, channels: 3, size: (w, h))
+        }
+
         /// Resize an RGB `RawImage` to `width × height` (no-op if already that
         /// size). Reuses the verified encode/decode paths — a lossless PNG
         /// round-trip through the resizing decoder.

@@ -50,6 +50,16 @@
             return Data(bytes: encoded, count: Int(outLen))
         }
 
+        static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
+            let native = try decodeNativeRGB(path: path, dataBase64: dataBase64)
+            let longest = max(native.width, native.height)
+            guard maxSide > 0, longest > maxSide else { return native }
+            let scale = Double(maxSide) / Double(longest)
+            let w = max(1, Int((Double(native.width) * scale).rounded()))
+            let h = max(1, Int((Double(native.height) * scale).rounded()))
+            return resample(native, toWidth: w, height: h)
+        }
+
         static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
             if image.width == width, image.height == height { return image }
             return resample(image, toWidth: width, height: height)

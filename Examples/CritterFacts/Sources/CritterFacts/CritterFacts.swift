@@ -186,17 +186,25 @@ func configure(_ ctx: any AppContext) throws {
         // RPC bridge (MainActivity.rpcCall) is up before the codec RPC fires.
         let lamaSmokeDir = ctx.dataDirectory().appendingPathComponent("lama", isDirectory: true)
         let lamaSmokeOut = ctx.dataDirectory().appendingPathComponent("erased", isDirectory: true).path
+        // Prefer real files pushed into the app's data dir (image.jpg/mask.png
+        // under a `cf_smoke/` folder) so the smoke can exercise a full-size
+        // photo — the 24-megapixel case that the tiny embedded fallback can't.
+        let smokeFiles = ctx.dataDirectory().appendingPathComponent("cf_smoke", isDirectory: true)
+        let smokeImagePath = smokeFiles.appendingPathComponent("image.jpg").path
+        let smokeMaskPath = smokeFiles.appendingPathComponent("mask.png").path
         Task.detached {
             do {
                 try await Task.sleep(nanoseconds: 3_000_000_000)
                 let backend = LaMaBackend(cacheDirectory: lamaSmokeDir)
                 swiftPWALog("CF_LAMA_SMOKE: ensuring big-lama…")
                 for try await _ in backend.ensureModel(AIEnsureModelRequest(model: "inpaint")) {}
-                swiftPWALog("CF_LAMA_SMOKE: model ready; running inpaint…")
+                let haveFiles = FileManager.default.fileExists(atPath: smokeImagePath)
+                    && FileManager.default.fileExists(atPath: smokeMaskPath)
+                let image: AIImage = haveFiles ? .file(smokeImagePath) : .inline(cfSmokeImageBase64)
+                let mask: AIImage = haveFiles ? .file(smokeMaskPath) : .inline(cfSmokeMaskBase64)
+                swiftPWALog("CF_LAMA_SMOKE: model ready; running inpaint (files=\(haveFiles))…")
                 let result = try await backend.generateImage(AIGenerateImageRequest(
-                    outputDirectory: lamaSmokeOut,
-                    image: .inline(cfSmokeImageBase64),
-                    mask: .inline(cfSmokeMaskBase64)
+                    outputDirectory: lamaSmokeOut, image: image, mask: mask
                 ))
                 swiftPWALog("CF_LAMA_SMOKE_OK backend=\(result.backend) path=\(result.images.first?.path ?? "nil")")
             } catch {

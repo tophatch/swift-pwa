@@ -10,6 +10,9 @@
     import SwiftPWACore
     import SwiftPWAModelStore
     import SwiftPWAONNX
+    #if os(Android)
+        import SwiftPWAAndroid // AndroidRPC — model download routes through Kotlin's HTTP stack
+    #endif
 
     /// An `AIBackend` that inpaints via a LaMa-family ONNX model — the first
     /// consumer of the generalized `ai.generateImage` **editing** path (an
@@ -90,8 +93,8 @@
                 throw AIError.generationFailed("this backend inpaints — supply a `mask` marking the region to fill")
             }
 
-            let output = try runInpaint(image: image, mask: mask)
-            let png = try mapCodec { try ImageCodec.encodePNG(output) }
+            let output = try await runInpaint(image: image, mask: mask)
+            let png = try await mapCodec { try await ImageCodec.encodePNG(output) }
 
             let generated: AIGeneratedImage
             if let directory = request.outputDirectory {
@@ -120,9 +123,33 @@
             return AsyncThrowingStream { continuation in
                 let task = Task {
                     do {
-                        _ = try await downloader.ensure(spec) { bytesDone, total in
-                            continuation.yield(.progress(bytesDone: bytesDone, totalBytes: total ?? source.sizeBytes))
-                        }
+                        #if os(Android)
+                            // Swift's URLSession (libcurl + BoringSSL) has no
+                            // injectable CA trust store on Android, so HTTPS
+                            // fails ("unable to get local issuer certificate");
+                            // download through Android's own HTTP stack via the
+                            // Kotlin `net.downloadFile` RPC (system TLS,
+                            // checksum-verified, cache-reusing) — same as
+                            // MobileSAMBackend. Progress is per-file (no byte
+                            // callback across the RPC).
+                            continuation.yield(.progress(bytesDone: 0, totalBytes: source.sizeBytes))
+                            _ = try await AndroidRPC.call(
+                                "net.downloadFile",
+                                DownloadFileArgs(
+                                    url: source.url.absoluteString,
+                                    destPath: downloader.localURL(for: spec).path,
+                                    sha256: source.sha256
+                                ),
+                                as: DownloadFileResult.self
+                            )
+                        #else
+                            _ = try await downloader.ensure(spec) { bytesDone, total in
+                                continuation.yield(.progress(
+                                    bytesDone: bytesDone,
+                                    totalBytes: total ?? source.sizeBytes
+                                ))
+                            }
+                        #endif
                         continuation.yield(.done)
                         continuation.finish()
                     } catch let error as AIError {
@@ -142,25 +169,25 @@
         /// composite it over the original **only within the masked region** so
         /// unmasked pixels stay pristine (the resize round-trip never touches
         /// them). Returns a source-resolution RGB `RawImage`.
-        private func runInpaint(image: AIImage, mask: AIImage) throws -> RawImage {
+        private func runInpaint(image: AIImage, mask: AIImage) async throws -> RawImage {
             // The pristine original + a source-resolution mask for compositing.
-            let base = try mapCodec {
-                try ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: nil)
+            let base = try await mapCodec {
+                try await ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: nil)
             }
-            let baseMask = try mapCodec {
-                try ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: nil)
+            let baseMask = try await mapCodec {
+                try await ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: nil)
             }
             let width = base.width, height = base.height
 
             // Model inputs at the fixed square (e.g. 512×512).
             let n = spec.inputSize
             let square = (width: n, height: n)
-            let rgb = try mapCodec { try ImageCodec.decodeRGB(
+            let rgb = try await mapCodec { try await ImageCodec.decodeRGB(
                 path: image.path,
                 dataBase64: image.dataBase64,
                 size: square
             ) }
-            let gray = try mapCodec { try ImageCodec.decodeGray(
+            let gray = try await mapCodec { try await ImageCodec.decodeGray(
                 path: mask.path,
                 dataBase64: mask.dataBase64,
                 size: square
@@ -210,7 +237,11 @@
 
             // Resize the fill back to source resolution and composite it into
             // the original only where the mask is set.
-            let filled = try mapCodec { try ImageCodec.resizeRGB(filledSquare, toWidth: width, height: height) }
+            let filled = try await mapCodec { try await ImageCodec.resizeRGB(
+                filledSquare,
+                toWidth: width,
+                height: height
+            ) }
             var composited = base.pixels
             for pixel in 0 ..< (width * height) where baseMask.pixels[pixel] >= spec.maskThreshold {
                 composited[pixel * 3] = filled.pixels[pixel * 3]
@@ -248,10 +279,24 @@
             }
         }
 
-        private func mapCodec<T>(_ body: () throws -> T) throws -> T {
-            do { return try body() } catch let error as ImageCodecError {
+        private func mapCodec<T>(_ body: () async throws -> T) async throws -> T {
+            do { return try await body() } catch let error as ImageCodecError {
                 throw AIError.generationFailed("\(error)")
             }
         }
+
+        #if os(Android)
+            /// Args/result for the Kotlin `net.downloadFile` RPC (Android's HTTP
+            /// stack does the TLS + write; see `ensureModel`).
+            private struct DownloadFileArgs: Encodable {
+                let url: String
+                let destPath: String
+                let sha256: String?
+            }
+
+            private struct DownloadFileResult: Decodable {
+                let bytesWritten: Int64
+            }
+        #endif
     }
 #endif

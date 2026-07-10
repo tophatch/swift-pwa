@@ -9,7 +9,11 @@
     /// `DesktopImagePreprocessing` uses). Produces the same `RawImage` / PNG
     /// bytes as the Apple path.
     extension ImageCodec {
-        static func decodeRGB(path: String?, dataBase64: String?, size: (width: Int, height: Int)?) throws -> RawImage {
+        static func decodeRGB(
+            path: String?,
+            dataBase64: String?,
+            size: (width: Int, height: Int)?
+        ) async throws -> RawImage {
             let native = try decodeNativeRGB(path: path, dataBase64: dataBase64)
             guard let size, size.width != native.width || size.height != native.height else { return native }
             return resample(native, toWidth: size.width, height: size.height)
@@ -19,8 +23,8 @@
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
-        ) throws -> RawImage {
-            let rgb = try decodeRGB(path: path, dataBase64: dataBase64, size: size)
+        ) async throws -> RawImage {
+            let rgb = try await decodeRGB(path: path, dataBase64: dataBase64, size: size)
             var gray = [UInt8](repeating: 0, count: rgb.width * rgb.height)
             for pixel in 0 ..< (rgb.width * rgb.height) {
                 let r = Int(rgb.pixels[pixel * 3])
@@ -31,7 +35,7 @@
             return RawImage(pixels: gray, width: rgb.width, height: rgb.height, channels: 1)
         }
 
-        static func encodePNG(_ image: RawImage) throws -> Data {
+        static func encodePNG(_ image: RawImage) async throws -> Data {
             guard image.channels == 3 else {
                 throw ImageCodecError.encodeFailed("encodePNG expects RGB (3 channels), got \(image.channels)")
             }
@@ -46,7 +50,7 @@
             return Data(bytes: encoded, count: Int(outLen))
         }
 
-        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) throws -> RawImage {
+        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
             if image.width == width, image.height == height { return image }
             return resample(image, toWidth: width, height: height)
         }

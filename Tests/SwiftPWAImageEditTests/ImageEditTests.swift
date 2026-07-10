@@ -23,7 +23,7 @@ struct LaMaModelSpecTests {
     @Suite("ImageCodec round-trip")
     struct ImageCodecTests {
         @Test("RGB → PNG → RGB round-trips losslessly at the same size")
-        func rgbRoundTrip() throws {
+        func rgbRoundTrip() async throws {
             // A 4x3 image with distinct per-pixel colors.
             let width = 4, height = 3
             var pixels = [UInt8](repeating: 0, count: width * height * 3)
@@ -34,8 +34,8 @@ struct LaMaModelSpecTests {
             }
             let source = RawImage(pixels: pixels, width: width, height: height, channels: 3)
 
-            let png = try ImageCodec.encodePNG(source)
-            let decoded = try ImageCodec.decodeRGB(
+            let png = try await ImageCodec.encodePNG(source)
+            let decoded = try await ImageCodec.decodeRGB(
                 path: nil, dataBase64: png.base64EncodedString(), size: nil
             )
             #expect(decoded.width == width)
@@ -45,15 +45,15 @@ struct LaMaModelSpecTests {
         }
 
         @Test("mask decodes to a single luminance channel")
-        func maskGray() throws {
+        func maskGray() async throws {
             // A 2x1 image: one white pixel, one black.
-            let png = try ImageCodec.encodePNG(RawImage(
+            let png = try await ImageCodec.encodePNG(RawImage(
                 pixels: [255, 255, 255, 0, 0, 0],
                 width: 2,
                 height: 1,
                 channels: 3
             ))
-            let gray = try ImageCodec.decodeGray(path: nil, dataBase64: png.base64EncodedString(), size: nil)
+            let gray = try await ImageCodec.decodeGray(path: nil, dataBase64: png.base64EncodedString(), size: nil)
             #expect(gray.channels == 1)
             #expect(gray.pixels.count == 2)
             #expect(gray.pixels[0] >= 250) // white
@@ -61,11 +61,11 @@ struct LaMaModelSpecTests {
         }
 
         @Test("decode resizes to the requested working size")
-        func resize() throws {
-            let png = try ImageCodec.encodePNG(RawImage(
+        func resize() async throws {
+            let png = try await ImageCodec.encodePNG(RawImage(
                 pixels: [UInt8](repeating: 128, count: 10 * 10 * 3), width: 10, height: 10, channels: 3
             ))
-            let decoded = try ImageCodec.decodeRGB(
+            let decoded = try await ImageCodec.decodeRGB(
                 path: nil, dataBase64: png.base64EncodedString(), size: (width: 8, height: 8)
             )
             #expect(decoded.width == 8 && decoded.height == 8)

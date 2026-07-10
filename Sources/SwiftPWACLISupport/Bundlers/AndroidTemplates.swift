@@ -1204,6 +1204,8 @@ enum AndroidTemplates {
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
                 "vision.preprocessImage" -> visionPreprocessImage(json, done)
+                "image.decode" -> imageDecode(json, done)
+                "image.encodePng" -> imageEncodePng(json, done)
                 "net.downloadFile" -> netDownloadFile(json, done)
                 "system.memory" -> systemMemory(done)
                 /*__SWIFT_PWA_GENAI_DISPATCH__*/
@@ -2080,6 +2082,116 @@ enum AndroidTemplates {
                     done(result.toString(), null)
                 } catch (t: Throwable) {
                     done(null, "swift-pwa: vision.preprocessImage failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        // -----------------------------------------------------------
+        // ai.generateImage (LaMaBackend, SwiftPWAImageEdit) — no CoreGraphics
+        // on Android, so image decode/encode for the inpaint path runs here
+        // via BitmapFactory / Bitmap.compress. `image.decode` optionally
+        // resizes to an exact (width, height) and returns raw RGB (channels=3)
+        // or grayscale (channels=1) bytes; `image.encodePng` turns raw RGB back
+        // into a PNG. Mirrors ImageCodec+Android.swift.
+        // -----------------------------------------------------------
+
+        private fun imageDecode(json: JSONObject, done: (String?, String?) -> Unit) {
+            val path = json.optString("path", "")
+            val dataBase64 = json.optString("dataBase64", "")
+            val reqW = if (json.has("width")) json.getInt("width") else 0
+            val reqH = if (json.has("height")) json.getInt("height") else 0
+            val channels = if (json.has("channels")) json.getInt("channels") else 3
+            if (path.isEmpty() && dataBase64.isEmpty()) {
+                done(null, "swift-pwa: image.decode: path or dataBase64 required")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val bitmap = when {
+                        dataBase64.isNotEmpty() -> {
+                            val bytes = Base64.decode(dataBase64, Base64.DEFAULT)
+                            BitmapFactory.decodeByteArray(bytes, 0, bytes.size)
+                        }
+                        path.startsWith("content://") -> {
+                            activity.contentResolver.openInputStream(Uri.parse(path))?.use {
+                                BitmapFactory.decodeStream(it)
+                            }
+                        }
+                        else -> BitmapFactory.decodeFile(path)
+                    } ?: run {
+                        done(null, "swift-pwa: image.decode: could not decode image")
+                        return@execute
+                    }
+
+                    val w = if (reqW > 0) reqW else bitmap.width
+                    val h = if (reqH > 0) reqH else bitmap.height
+                    val scaled = if (w != bitmap.width || h != bitmap.height) {
+                        Bitmap.createScaledBitmap(bitmap, w, h, true)
+                    } else bitmap
+                    val pixels = IntArray(w * h)
+                    scaled.getPixels(pixels, 0, w, 0, 0, w, h)
+
+                    val out: ByteArray
+                    if (channels == 1) {
+                        out = ByteArray(w * h)
+                        for (i in pixels.indices) {
+                            val p = pixels[i]
+                            val r = (p shr 16) and 0xFF
+                            val g = (p shr 8) and 0xFF
+                            val b = p and 0xFF
+                            out[i] = ((299 * r + 587 * g + 114 * b) / 1000).toByte() // Rec. 601 luma
+                        }
+                    } else {
+                        out = ByteArray(w * h * 3)
+                        for (i in pixels.indices) {
+                            val p = pixels[i]
+                            out[i * 3] = ((p shr 16) and 0xFF).toByte()
+                            out[i * 3 + 1] = ((p shr 8) and 0xFF).toByte()
+                            out[i * 3 + 2] = (p and 0xFF).toByte()
+                        }
+                    }
+                    val result = JSONObject()
+                        .put("pixelsBase64", Base64.encodeToString(out, Base64.NO_WRAP))
+                        .put("width", w)
+                        .put("height", h)
+                    done(result.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: image.decode failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun imageEncodePng(json: JSONObject, done: (String?, String?) -> Unit) {
+            val rgbBase64 = json.optString("rgbBase64", "")
+            val w = if (json.has("width")) json.getInt("width") else 0
+            val h = if (json.has("height")) json.getInt("height") else 0
+            if (rgbBase64.isEmpty() || w <= 0 || h <= 0) {
+                done(null, "swift-pwa: image.encodePng: rgbBase64, width, height required")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val rgb = Base64.decode(rgbBase64, Base64.DEFAULT)
+                    if (rgb.size != w * h * 3) {
+                        done(null, "swift-pwa: image.encodePng: expected ${w * h * 3} RGB bytes, got ${rgb.size}")
+                        return@execute
+                    }
+                    val pixels = IntArray(w * h)
+                    for (i in 0 until w * h) {
+                        val r = rgb[i * 3].toInt() and 0xFF
+                        val g = rgb[i * 3 + 1].toInt() and 0xFF
+                        val b = rgb[i * 3 + 2].toInt() and 0xFF
+                        pixels[i] = (0xFF shl 24) or (r shl 16) or (g shl 8) or b
+                    }
+                    val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
+                    bmp.setPixels(pixels, 0, w, 0, 0, w, h)
+                    val baos = java.io.ByteArrayOutputStream()
+                    bmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                    val result = JSONObject()
+                        .put("dataBase64", Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
+                    done(result.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: image.encodePng failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
         }

@@ -17,11 +17,17 @@
 > pristine. The **`lama-vendor` release is published** (so
 > `LaMaBackend(cacheDirectory:)` fetches out of the box), and the **desktop
 > (Linux/Windows) `ImageCodec`** is in (stb_image / stb_image_write via
-> `CStbImage`) and Linux-verified. **Remaining follow-ups:** the **Android**
-> image codec (BitmapFactory over the Kotlin RPC — the last platform), GPU
-> verification (LaMa reuses the same `OrtModelSession` as the CUDA/DirectML-
-> verified segmentation tier, so this is expected to just work), and a
-> CritterFacts tap-to-erase example. Original proposal text below.
+> `CStbImage`) and Linux-verified. The **Android `ImageCodec`** (BitmapFactory
+> decode + `Bitmap.compress` encode over the Kotlin RPC — the whole
+> `ImageCodec` API is now `async` to accommodate it) is **device-verified
+> end-to-end on a Galaxy Tab S10+** (Android 16): a masked block inpaints
+> away, unmasked pixels stay pristine. `LaMaBackend.ensureModel` also routes
+> its download through the Kotlin `net.downloadFile` RPC on Android (Swift's
+> URLSession has no CA store there — a bug device verification caught). So
+> **`ai.generateImage` inpainting now runs on all five platforms.**
+> **Remaining:** GPU verification (LaMa reuses the same `OrtModelSession` as
+> the CUDA/DirectML-verified segmentation tier, so it's expected to just
+> work). Original proposal text below.
 >
 > **Status (original): proposed, targeting v0.9.0.** The text→image half of the
 > `ai.*` contract (`ai.generateImage` / `ai.generateImageStream`,

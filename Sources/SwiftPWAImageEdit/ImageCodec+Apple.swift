@@ -10,7 +10,11 @@
     extension ImageCodec {
         /// Decode an image file / base64 blob to RGB (`channels == 3`),
         /// resized to `size` when given (nearest-fit exact `width × height`).
-        static func decodeRGB(path: String?, dataBase64: String?, size: (width: Int, height: Int)?) throws -> RawImage {
+        static func decodeRGB(
+            path: String?,
+            dataBase64: String?,
+            size: (width: Int, height: Int)?
+        ) async throws -> RawImage {
             let cgImage = try loadCGImage(path: path, dataBase64: dataBase64)
             return try render(cgImage, channels: 3, size: size)
         }
@@ -21,7 +25,7 @@
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
-        ) throws -> RawImage {
+        ) async throws -> RawImage {
             let cgImage = try loadCGImage(path: path, dataBase64: dataBase64)
             return try render(cgImage, channels: 1, size: size)
         }
@@ -29,14 +33,14 @@
         /// Resize an RGB `RawImage` to `width × height` (no-op if already that
         /// size). Reuses the verified encode/decode paths — a lossless PNG
         /// round-trip through the resizing decoder.
-        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) throws -> RawImage {
+        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
             if image.width == width, image.height == height { return image }
-            let png = try encodePNG(image)
-            return try decodeRGB(path: nil, dataBase64: png.base64EncodedString(), size: (width, height))
+            let png = try await encodePNG(image)
+            return try await decodeRGB(path: nil, dataBase64: png.base64EncodedString(), size: (width, height))
         }
 
         /// Encode tightly-packed RGB pixels to PNG bytes.
-        static func encodePNG(_ image: RawImage) throws -> Data {
+        static func encodePNG(_ image: RawImage) async throws -> Data {
             guard image.channels == 3 else {
                 throw ImageCodecError.encodeFailed("encodePNG expects RGB (3 channels), got \(image.channels)")
             }

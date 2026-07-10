@@ -49,9 +49,9 @@
             try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
             let imagePath = dir.appendingPathComponent("image.png").path
             let maskPath = dir.appendingPathComponent("mask.png").path
-            try ImageCodec.encodePNG(RawImage(pixels: pixels, width: width, height: height, channels: 3))
+            try await ImageCodec.encodePNG(RawImage(pixels: pixels, width: width, height: height, channels: 3))
                 .write(to: URL(fileURLWithPath: imagePath))
-            try ImageCodec.encodePNG(RawImage(pixels: maskPixels, width: width, height: height, channels: 3))
+            try await ImageCodec.encodePNG(RawImage(pixels: maskPixels, width: width, height: height, channels: 3))
                 .write(to: URL(fileURLWithPath: maskPath))
 
             let backend = LaMaBackend(modelPath: modelPath)
@@ -60,7 +60,7 @@
             ))
             #expect(result.backend == AIBackendID.lamaONNX)
             let outPath = try #require(result.images.first.flatMap(\.path))
-            let out = try ImageCodec.decodeRGB(path: outPath, dataBase64: nil, size: nil)
+            let out = try await ImageCodec.decodeRGB(path: outPath, dataBase64: nil, size: nil)
 
             // Same size as the source (composited back).
             #expect(out.width == width)

@@ -1,41 +1,35 @@
-#if !(canImport(CoreGraphics) && canImport(ImageIO)) && !os(Linux) && !os(Windows)
+#if !(canImport(CoreGraphics) && canImport(ImageIO)) && !os(Linux) && !os(Windows) && !os(Android)
     import Foundation
 
-    /// Fallback `ImageCodec` for platforms without a real implementation yet —
-    /// i.e. **Android** (Apple uses CoreGraphics, Linux/Windows use stb_image
-    /// via `CStbImage`). The Android decode/encode path — `BitmapFactory` over
-    /// the Kotlin RPC, as `SwiftPWASegmentation`'s `AndroidImagePreprocessing`
-    /// does — is the remaining follow-up (see
-    /// `docs/proposals/image-generation-editing.md`); until it lands,
-    /// `ai.generateImage` throws a clear `E_AI_GENERATION` here rather than
-    /// mis-decoding.
+    /// Fallback `ImageCodec` for any platform without a real implementation —
+    /// none of the ones this package targets (Apple uses CoreGraphics,
+    /// Linux/Windows use stb_image via `CStbImage`, Android uses BitmapFactory
+    /// over the Kotlin RPC). Kept as a safety stub so the target still compiles
+    /// on an unexpected destination, throwing a clear `E_AI_GENERATION` rather
+    /// than mis-decoding.
     extension ImageCodec {
         static func decodeRGB(
             path _: String?,
             dataBase64 _: String?,
             size _: (width: Int, height: Int)?
-        ) throws -> RawImage {
-            throw ImageCodecError
-                .decodeFailed("image decode is not yet implemented on this platform (Apple-only for now)")
+        ) async throws -> RawImage {
+            throw ImageCodecError.decodeFailed("image decode is not implemented on this platform")
         }
 
         static func decodeGray(
             path _: String?,
             dataBase64 _: String?,
             size _: (width: Int, height: Int)?
-        ) throws -> RawImage {
-            throw ImageCodecError
-                .decodeFailed("image decode is not yet implemented on this platform (Apple-only for now)")
+        ) async throws -> RawImage {
+            throw ImageCodecError.decodeFailed("image decode is not implemented on this platform")
         }
 
-        static func encodePNG(_: RawImage) throws -> Data {
-            throw ImageCodecError
-                .encodeFailed("PNG encode is not yet implemented on this platform (Apple-only for now)")
+        static func encodePNG(_: RawImage) async throws -> Data {
+            throw ImageCodecError.encodeFailed("PNG encode is not implemented on this platform")
         }
 
-        static func resizeRGB(_: RawImage, toWidth _: Int, height _: Int) throws -> RawImage {
-            throw ImageCodecError
-                .encodeFailed("image resize is not yet implemented on this platform (Apple-only for now)")
+        static func resizeRGB(_: RawImage, toWidth _: Int, height _: Int) async throws -> RawImage {
+            throw ImageCodecError.encodeFailed("image resize is not implemented on this platform")
         }
     }
 #endif

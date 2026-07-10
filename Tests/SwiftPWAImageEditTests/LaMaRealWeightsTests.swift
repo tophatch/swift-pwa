@@ -1,4 +1,6 @@
-#if canImport(CoreGraphics) && canImport(ImageIO)
+// Runs wherever a real ImageCodec exists (Apple + Linux/Windows via stb);
+// Android has only the throwing fallback codec, so it's excluded.
+#if canImport(CoreGraphics) || os(Linux) || os(Windows)
     import Foundation
     import SwiftPWACore
     @testable import SwiftPWAImageEdit

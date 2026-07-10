@@ -17,8 +17,10 @@ struct LaMaModelSpecTests {
     }
 }
 
-#if canImport(CoreGraphics) && canImport(ImageIO)
-    @Suite("ImageCodec (Apple) round-trip")
+// The real ImageCodec (Apple CoreGraphics / desktop stb); Android has only the
+// throwing fallback, so these are excluded there.
+#if canImport(CoreGraphics) || os(Linux) || os(Windows)
+    @Suite("ImageCodec round-trip")
     struct ImageCodecTests {
         @Test("RGB → PNG → RGB round-trips losslessly at the same size")
         func rgbRoundTrip() throws {

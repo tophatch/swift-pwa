@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`ai.generateImage` (LaMa) now runs the model on a crop around the mask, for sharper localized edits.** Previously the whole (capped) image was resized to the model's fixed 512² input, so a small edit on a large photo reached the model as a handful of pixels and came back soft. `LaMaBackend` now crops a padded, squared region around the mask's bounding box, resizes *just that crop* to 512², runs the graph, and composites the result back into the full image within the mask — so the edited region fills most of the model input and keeps detail. Two `LaMaModelSpec` knobs: `cropToMask` (default `true`; `false` restores whole-image behavior) and `cropPadding` (default `0.5` — context margin around the box, since LaMa fills from surrounding pixels). Falls back to the whole image when the padded box already covers most of it, and is a no-op when the mask is empty. Pure in-backend array math (no codec/RPC change), so it's identical on every platform. Device-verified on the Tab S10+ against the 24-megapixel demo photo.
+
 ## [0.8.4] - 2026-07-11
 
 ### Added

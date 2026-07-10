@@ -164,16 +164,14 @@
 
         // MARK: - Inference
 
-        /// The full inpaint: resize image+mask to the model's fixed square,
-        /// run the graph, resize the result back to the source resolution, and
-        /// composite it over the original **only within the masked region** so
-        /// unmasked pixels stay pristine (the resize round-trip never touches
-        /// them). Returns a **working-resolution** RGB `RawImage` — capped at
-        /// `spec.maxWorkingSide` so a huge source photo doesn't blow memory (or,
-        /// on Android, the RPC payload); the mask is decoded to match.
+        /// The full inpaint. Decodes the image + mask at the capped working
+        /// resolution, then — to give the model detail on a large photo with a
+        /// small edit — crops a padded, squared region **around the mask**,
+        /// resizes just that crop to the model's fixed square, runs the graph,
+        /// resizes the result back to the crop, and composites it into the base
+        /// **only within the masked region** (unmasked pixels stay pristine).
+        /// Returns the base at working resolution (≤ `spec.maxWorkingSide`).
         private func runInpaint(image: AIImage, mask: AIImage) async throws -> RawImage {
-            // The base image at the (capped) working resolution, plus a mask
-            // decoded to exactly those dims so the composite indexes line up.
             let base = try await mapCodec {
                 try await ImageCodec.decodeRGBFit(
                     path: image.path, dataBase64: image.dataBase64, maxSide: spec.maxWorkingSide
@@ -184,19 +182,20 @@
                 try await ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: (width, height))
             }
 
-            // Model inputs at the fixed square (e.g. 512×512).
+            // The region to actually run through the model. No masked pixels →
+            // nothing to inpaint, return the image untouched.
+            guard let bbox = maskBounds(baseMask, threshold: spec.maskThreshold) else { return base }
+            let rect: (x: Int, y: Int, w: Int, h: Int) = spec.cropToMask
+                ? cropRect(bbox: bbox, imageW: width, imageH: height, padding: spec.cropPadding)
+                : (x: 0, y: 0, w: width, h: height)
+
+            let cropImg = cropRawImage(base, rect)
+            let cropMask = cropRawImage(baseMask, rect)
+
+            // Model inputs at the fixed square (e.g. 512×512), from the crop.
             let n = spec.inputSize
-            let square = (width: n, height: n)
-            let rgb = try await mapCodec { try await ImageCodec.decodeRGB(
-                path: image.path,
-                dataBase64: image.dataBase64,
-                size: square
-            ) }
-            let gray = try await mapCodec { try await ImageCodec.decodeGray(
-                path: mask.path,
-                dataBase64: mask.dataBase64,
-                size: square
-            ) }
+            let modelImg = resample(cropImg, toWidth: n, height: n)
+            let modelMask = resample(cropMask, toWidth: n, height: n)
             let squarePixels = n * n
 
             // Image → NCHW float32 (channel-planar), optionally /255.
@@ -204,13 +203,14 @@
             let imageScale: Float = spec.normalizeImageTo01 ? 255 : 1
             for pixel in 0 ..< squarePixels {
                 for channel in 0 ..< 3 {
-                    imageValues[channel * squarePixels + pixel] = Float(rgb.pixels[pixel * 3 + channel]) / imageScale
+                    imageValues[channel * squarePixels + pixel] = Float(modelImg.pixels[pixel * 3 + channel]) /
+                        imageScale
                 }
             }
             // Mask → NCHW float32 [1,1,n,n], binarized (white = fill).
             var maskValues = [Float](repeating: 0, count: squarePixels)
             for pixel in 0 ..< squarePixels {
-                maskValues[pixel] = gray.pixels[pixel] >= spec.maskThreshold ? 1 : 0
+                maskValues[pixel] = modelMask.pixels[pixel] >= spec.maskThreshold ? 1 : 0
             }
 
             let session = try loadedSession()
@@ -238,22 +238,98 @@
                     raw[pixel * 3 + channel] = UInt8(max(0, min(255, value.rounded())))
                 }
             }
-            let filledSquare = RawImage(pixels: raw, width: outW, height: outH, channels: 3)
 
-            // Resize the fill back to source resolution and composite it into
-            // the original only where the mask is set.
-            let filled = try await mapCodec { try await ImageCodec.resizeRGB(
-                filledSquare,
-                toWidth: width,
-                height: height
-            ) }
+            // Fill → crop size, composited into the base within the crop, masked.
+            let filledCrop = resample(
+                RawImage(pixels: raw, width: outW, height: outH, channels: 3),
+                toWidth: rect.w, height: rect.h
+            )
             var composited = base.pixels
-            for pixel in 0 ..< (width * height) where baseMask.pixels[pixel] >= spec.maskThreshold {
-                composited[pixel * 3] = filled.pixels[pixel * 3]
-                composited[pixel * 3 + 1] = filled.pixels[pixel * 3 + 1]
-                composited[pixel * 3 + 2] = filled.pixels[pixel * 3 + 2]
+            for j in 0 ..< rect.h {
+                for i in 0 ..< rect.w where cropMask.pixels[j * rect.w + i] >= spec.maskThreshold {
+                    let baseIdx = ((rect.y + j) * width + (rect.x + i)) * 3
+                    let cropIdx = (j * rect.w + i) * 3
+                    composited[baseIdx] = filledCrop.pixels[cropIdx]
+                    composited[baseIdx + 1] = filledCrop.pixels[cropIdx + 1]
+                    composited[baseIdx + 2] = filledCrop.pixels[cropIdx + 2]
+                }
             }
             return RawImage(pixels: composited, width: width, height: height, channels: 3)
+        }
+
+        // MARK: - Crop / resample helpers (pure Swift, no codec round-trip)
+
+        /// Inclusive bounding box of pixels at/above `threshold`, or nil if none.
+        private func maskBounds(_ mask: RawImage, threshold: UInt8) -> (x0: Int, y0: Int, x1: Int, y1: Int)? {
+            var x0 = mask.width, y0 = mask.height, x1 = -1, y1 = -1
+            for y in 0 ..< mask.height {
+                let row = y * mask.width
+                for x in 0 ..< mask.width where mask.pixels[row + x] >= threshold {
+                    if x < x0 { x0 = x }
+                    if x > x1 { x1 = x }
+                    if y < y0 { y0 = y }
+                    if y > y1 { y1 = y }
+                }
+            }
+            return x1 >= x0 && y1 >= y0 ? (x0, y0, x1, y1) : nil
+        }
+
+        /// A padded, square crop rect centered on `bbox`, clamped to the image.
+        /// Falls back to the clamped padded (non-square) box only when the mask
+        /// is larger than a square that fits the image.
+        private func cropRect(
+            bbox: (x0: Int, y0: Int, x1: Int, y1: Int), imageW: Int, imageH: Int, padding: Double
+        ) -> (x: Int, y: Int, w: Int, h: Int) {
+            let bw = bbox.x1 - bbox.x0 + 1, bh = bbox.y1 - bbox.y0 + 1
+            let pad = Int((Double(max(bw, bh)) * max(0, padding)).rounded())
+            let side = min(max(bw, bh) + 2 * pad, min(imageW, imageH))
+            if side < bw || side < bh {
+                let px0 = max(0, bbox.x0 - pad), py0 = max(0, bbox.y0 - pad)
+                let px1 = min(imageW - 1, bbox.x1 + pad), py1 = min(imageH - 1, bbox.y1 + pad)
+                return (px0, py0, px1 - px0 + 1, py1 - py0 + 1)
+            }
+            let cx = (bbox.x0 + bbox.x1) / 2, cy = (bbox.y0 + bbox.y1) / 2
+            let x = max(0, min(imageW - side, cx - side / 2))
+            let y = max(0, min(imageH - side, cy - side / 2))
+            return (x, y, side, side)
+        }
+
+        /// Copy a sub-rect out of `img` into a tightly-packed `RawImage`.
+        private func cropRawImage(_ img: RawImage, _ rect: (x: Int, y: Int, w: Int, h: Int)) -> RawImage {
+            let c = img.channels
+            var out = [UInt8](repeating: 0, count: rect.w * rect.h * c)
+            for j in 0 ..< rect.h {
+                let srcRow = ((rect.y + j) * img.width + rect.x) * c
+                let dstRow = (j * rect.w) * c
+                for i in 0 ..< (rect.w * c) { out[dstRow + i] = img.pixels[srcRow + i] }
+            }
+            return RawImage(pixels: out, width: rect.w, height: rect.h, channels: c)
+        }
+
+        /// Channel-agnostic bilinear resample (pixel-center mapping).
+        private func resample(_ img: RawImage, toWidth dstW: Int, height dstH: Int) -> RawImage {
+            if img.width == dstW, img.height == dstH { return img }
+            let c = img.channels, srcW = img.width, srcH = img.height
+            var out = [UInt8](repeating: 0, count: dstW * dstH * c)
+            let sxScale = Double(srcW) / Double(dstW), syScale = Double(srcH) / Double(dstH)
+            for dy in 0 ..< dstH {
+                let syf = (Double(dy) + 0.5) * syScale - 0.5
+                let sy0 = max(0, min(srcH - 1, Int(syf.rounded(.down)))), sy1 = min(srcH - 1, sy0 + 1)
+                let wy = max(0.0, min(1.0, syf - Double(sy0)))
+                for dx in 0 ..< dstW {
+                    let sxf = (Double(dx) + 0.5) * sxScale - 0.5
+                    let sx0 = max(0, min(srcW - 1, Int(sxf.rounded(.down)))), sx1 = min(srcW - 1, sx0 + 1)
+                    let wx = max(0.0, min(1.0, sxf - Double(sx0)))
+                    let r0 = sy0 * srcW, r1 = sy1 * srcW, dst = (dy * dstW + dx) * c
+                    for ch in 0 ..< c {
+                        let p00 = Double(img.pixels[(r0 + sx0) * c + ch]), p01 = Double(img.pixels[(r0 + sx1) * c + ch])
+                        let p10 = Double(img.pixels[(r1 + sx0) * c + ch]), p11 = Double(img.pixels[(r1 + sx1) * c + ch])
+                        let top = p00 + (p01 - p00) * wx, bot = p10 + (p11 - p10) * wx
+                        out[dst + ch] = UInt8(max(0, min(255, (top + (bot - top) * wy).rounded())))
+                    }
+                }
+            }
+            return RawImage(pixels: out, width: dstW, height: dstH, channels: c)
         }
 
         private func loadedSession() throws -> OrtModelSession {

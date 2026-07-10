@@ -45,6 +45,19 @@ public struct LaMaModelSpec: Sendable, Equatable {
     /// model still runs at `inputSize`; this only caps the decode/composite
     /// resolution. `0` means "no cap" (use the source resolution).
     public var maxWorkingSide: Int
+    /// Run the model on a **crop around the mask** rather than the whole
+    /// image. The mask's bounding box (expanded by `cropPadding` for context
+    /// and squared off) is cropped out, resized to `inputSize` for the model,
+    /// and the result composited back — so the edited region fills most of the
+    /// model's fixed input instead of a few pixels, recovering detail on a
+    /// large photo with a small edit. When `false`, the whole (capped) image is
+    /// fed to the model. Falls back to the whole image when the padded box
+    /// already covers most of it.
+    public var cropToMask: Bool
+    /// Context margin added around the mask's bounding box before cropping,
+    /// as a fraction of the box's longer side (`0.5` = expand by 50%). LaMa
+    /// fills from surrounding pixels, so some context around the hole matters.
+    public var cropPadding: Double
 
     public init(
         imageInputName: String = "image",
@@ -54,7 +67,9 @@ public struct LaMaModelSpec: Sendable, Equatable {
         outputIs0To255: Bool = true,
         maskThreshold: UInt8 = 128,
         inputSize: Int = 512,
-        maxWorkingSide: Int = 2048
+        maxWorkingSide: Int = 2048,
+        cropToMask: Bool = true,
+        cropPadding: Double = 0.5
     ) {
         self.imageInputName = imageInputName
         self.maskInputName = maskInputName
@@ -64,6 +79,8 @@ public struct LaMaModelSpec: Sendable, Equatable {
         self.maskThreshold = maskThreshold
         self.inputSize = inputSize
         self.maxWorkingSide = maxWorkingSide
+        self.cropToMask = cropToMask
+        self.cropPadding = cropPadding
     }
 
     /// The big-lama fp32 contract (all defaults) — `image`/`mask`

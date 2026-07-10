@@ -23,6 +23,46 @@
             return try #require(context.makeImage())
         }
 
+        /// A two-tone `width × height` CGImage: the top half is `top`, the
+        /// bottom half is `bottom`. Unlike `solidImage`, this is *orientation-
+        /// sensitive* — a vertical flip swaps which half lands at buffer row 0,
+        /// so it catches an upside-down preprocess (see `topDownOrientation`).
+        private func twoToneImage(
+            width: Int, height: Int,
+            top: (UInt8, UInt8, UInt8), bottom: (UInt8, UInt8, UInt8)
+        ) throws -> CGImage {
+            var pixels = [UInt8](repeating: 0, count: width * height * 4)
+            for y in 0 ..< height {
+                let c = y < height / 2 ? top : bottom
+                for x in 0 ..< width {
+                    let i = (y * width + x) * 4
+                    pixels[i] = c.0; pixels[i + 1] = c.1; pixels[i + 2] = c.2; pixels[i + 3] = 255
+                }
+            }
+            let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
+            let context = try #require(CGContext(
+                data: &pixels, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                space: colorSpace, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            ))
+            return try #require(context.makeImage())
+        }
+
+        @Test("the tensor is top-down — buffer row 0 is the image's visual top")
+        func topDownOrientation() throws {
+            // Top half red, bottom half blue. The tensor is row-major HWC, so
+            // tensor[0..<3] is the first (top) row and the last row starts at
+            // (H-1)*W*3. A correct top-down preprocess puts red first, blue last;
+            // an erroneous y-flip swaps them (the SAM "upside-down mask" bug).
+            let image = try twoToneImage(width: 8, height: 8, top: (255, 0, 0), bottom: (0, 0, 255))
+            let out = try ImagePreprocessing.preprocess(image, targetSize: 8)
+            #expect(out.resizedWidth == 8 && out.resizedHeight == 8)
+            // Row 0 (top) is red.
+            #expect(out.tensor[0] > 200 && out.tensor[2] < 50)
+            // Last row (bottom) is blue.
+            let lastRow = (out.resizedHeight - 1) * out.resizedWidth * 3
+            #expect(out.tensor[lastRow] < 50 && out.tensor[lastRow + 2] > 200)
+        }
+
         @Test("a square image resizes to exactly targetSize, no padding")
         func squareResize() throws {
             let image = try solidImage(width: 20, height: 20, r: 255, g: 0, b: 0)

@@ -120,6 +120,13 @@ public struct VisionCapabilities: Sendable, Codable, Equatable {
     /// Whether an opened session's embedding is cached for repeat
     /// `segment` calls (vs. re-encoding every call).
     public let sessionCaching: Bool
+    /// The execution provider the backend is running on, once known —
+    /// `"cpu"`, `"cuda"` (Linux GPU build on NVIDIA), or `"directml"` (Windows
+    /// GPU build on any DX12 GPU). `nil` until a session has been created
+    /// (the provider is only decided at `CreateSession`), and on backends that
+    /// don't model it (the OS picks on Apple/Android). See the `ai.onnx_gpu`
+    /// desktop GPU tier.
+    public let provider: String?
 
     public init(
         available: Bool,
@@ -130,7 +137,8 @@ public struct VisionCapabilities: Sendable, Codable, Equatable {
         multimask: Bool = false,
         autoMask: Bool = false,
         maxImageSize: Int? = nil,
-        sessionCaching: Bool = false
+        sessionCaching: Bool = false,
+        provider: String? = nil
     ) {
         self.available = available
         self.backend = backend
@@ -141,6 +149,7 @@ public struct VisionCapabilities: Sendable, Codable, Equatable {
         self.autoMask = autoMask
         self.maxImageSize = maxImageSize
         self.sessionCaching = sessionCaching
+        self.provider = provider
     }
 
     /// The capabilities of a host with no usable backend.

@@ -60,6 +60,22 @@
             #expect(caps.available == true)
             #expect(caps.backend == VisionBackendID.mobileSAMONNX)
             #expect(caps.sessionCaching == true)
+            // No session has run yet, so the execution provider is undecided.
+            #expect(caps.provider == nil)
+        }
+
+        @Test("info reports the execution provider once a session has run")
+        func infoProviderAfterSession() async throws {
+            let backend = try backend()
+            let imageURL = try writeTestImage()
+            defer { try? FileManager.default.removeItem(at: imageURL) }
+
+            _ = try await backend.openSession(.init(image: .file(imageURL.path)))
+            // This is the CPU test build (no ai.onnx_gpu / SWIFT_PWA_ONNXRUNTIME_GPU),
+            // so the encoder runs on the default CPU EP. The GPU providers
+            // (cuda/directml) are exercised in on-device verification.
+            let caps = try await backend.info()
+            #expect(caps.provider == "cpu")
         }
 
         @Test("openSession -> segment -> closeSession, single point, default (best-only)")

@@ -281,6 +281,42 @@ Building/publishing the vendored lib yourself uses
 [`Scripts/vendor-onnxruntime-linux.sh`](../Scripts/vendor-onnxruntime-linux.sh)
 (then `SWIFT_PWA_ONNXRUNTIME_LINUX_LIB_DIR=…/Vendor/onnxruntime-desktop/linux-x86_64`).
 
+### GPU acceleration (`ai.onnx_gpu`, NVIDIA CUDA)
+
+To run the segmentation encoder/decoder on an **NVIDIA GPU** instead of the
+CPU, add the sibling flag (it implies `ai.local_onnx_runtime`):
+
+```json
+{
+  "ai": { "local_onnx_runtime": true, "onnx_gpu": true }
+}
+```
+
+`swift-pwa build --target linux` then vendors the checksum-pinned **CUDA 12**
+ONNX Runtime — three shared libs (the runtime, the shared-provider bridge, and
+the CUDA execution provider, ~366 MB) — and bundles all three into the AppImage.
+At runtime the CUDA EP is tried first and the app **falls back to the CPU
+transparently** if a GPU can't be used, so the same AppImage runs on machines
+without an NVIDIA GPU. `ai.vision.info` reports the active `provider`
+(`"cuda"` or `"cpu"`).
+
+> **The CUDA runtime + cuDNN are *not* bundled** — they're expected on the
+> target machine, and ONNX Runtime pins the **major** versions it was built
+> against (ORT 1.27 → CUDA 12.x + cuDNN 9.x). Install NVIDIA's CUDA 12 toolkit +
+> cuDNN 9 (e.g. via NVIDIA's apt repo). A missing or mismatched CUDA runtime is
+> not an error — the CUDA EP just fails to load and the app runs on CPU (a
+> one-line notice on stderr; `ai.vision.info` reports `"cpu"`). This brittleness
+> is why Linux GPU is CUDA/NVIDIA-only and behind an explicit opt-in.
+
+There is **no** cross-vendor prebuilt GPU path on Linux (unlike Windows
+DirectML, and unlike llama.cpp's single Vulkan build): AMD Radeon iGPUs aren't
+ROCm targets and ONNX Runtime ships no native Vulkan/WebGPU EP, so AMD/Intel
+parts stay on the CPU here. See
+[docs/proposals/onnx-gpu-execution-providers.md](proposals/onnx-gpu-execution-providers.md)
+for the full matrix. Vendoring the GPU libs yourself uses
+[`Scripts/vendor-onnxruntime-linux-gpu.sh`](../Scripts/vendor-onnxruntime-linux-gpu.sh)
+(then `SWIFT_PWA_ONNXRUNTIME_LINUX_GPU_LIB_DIR=…/Vendor/onnxruntime-desktop-gpu/linux-x86_64`).
+
 ## Known limitations on Linux
 
 The Linux backends are hand-rolled against the GTK / WebKitGTK C APIs.

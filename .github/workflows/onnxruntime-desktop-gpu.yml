@@ -1,0 +1,75 @@
+name: onnxruntime desktop gpu
+
+# Re-host the ONNX Runtime **desktop GPU** builds as STABLE swift-pwa release
+# assets, so the CLI's OnnxRuntimeLinuxGpuArtifact / OnnxRuntimeWindowsDirectML
+# Artifact resolvers fetch from URLs we control (the GPU analogue of
+# onnxruntime-desktop.yml; see docs/proposals/onnx-gpu-execution-providers.md):
+#   - Linux x64 CUDA 12  → Microsoft's GitHub release tarball (three .so's:
+#     the runtime + the shared-provider bridge + the CUDA EP)
+#   - Windows x64 DirectML → NuGet (Microsoft.ML.OnnxRuntime.DirectML +
+#     Microsoft.AI.DirectML): onnxruntime.dll/.lib +
+#     onnxruntime_providers_shared.dll + DirectML.dll
+# Both vendor scripts are host-independent (download + extract only — only
+# *linking*/running against the result needs the matching OS), so one ubuntu
+# runner vendors both.
+#
+# Run manually (workflow_dispatch) only when the pinned versions in
+# Scripts/vendor-onnxruntime-{linux-gpu,windows-directml}.sh change; then update
+# the pinned checksums in the two CLI resolvers to the ones this prints.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Vendor Linux x86_64 CUDA libs
+        run: bash Scripts/vendor-onnxruntime-linux-gpu.sh
+      - name: Publish to onnxruntime-vendor-linux-gpu
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: onnxruntime-vendor-linux-gpu
+          name: ONNX Runtime Linux x86_64 CUDA 12 libs (vendored, GPU)
+          prerelease: true
+          files: |
+            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime-linux-x86_64-gpu.so
+            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime_providers_shared.so
+            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime_providers_cuda.so
+
+      - name: Vendor Windows x64 DirectML libs
+        run: bash Scripts/vendor-onnxruntime-windows-directml.sh
+      - name: Publish to onnxruntime-vendor-windows-directml
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: onnxruntime-vendor-windows-directml
+          name: ONNX Runtime Windows x64 DirectML libs (vendored, GPU)
+          prerelease: true
+          files: |
+            Vendor/onnxruntime-desktop-gpu/windows-x86_64/onnxruntime.dll
+            Vendor/onnxruntime-desktop-gpu/windows-x86_64/onnxruntime.lib
+            Vendor/onnxruntime-desktop-gpu/windows-x86_64/onnxruntime_providers_shared.dll
+            Vendor/onnxruntime-desktop-gpu/windows-x86_64/DirectML.dll
+
+      - name: Report checksums to pin into the CLI resolvers
+        run: |
+          gpu="Vendor/onnxruntime-desktop-gpu"
+          {
+            echo "### ONNX Runtime desktop GPU artifacts published"
+            echo
+            echo "Pin into OnnxRuntimeLinuxGpuArtifact.swift:"
+            echo
+            for f in libonnxruntime-linux-x86_64-gpu.so libonnxruntime_providers_shared.so libonnxruntime_providers_cuda.so; do
+              echo "- linux $f: \`$(sha256sum "$gpu/linux-x86_64/$f" | awk '{print $1}')\`"
+            done
+            echo
+            echo "Pin into OnnxRuntimeWindowsDirectMLArtifact.swift:"
+            echo
+            for f in onnxruntime.lib onnxruntime.dll onnxruntime_providers_shared.dll DirectML.dll; do
+              echo "- windows $f: \`$(sha256sum "$gpu/windows-x86_64/$f" | awk '{print $1}')\`"
+            done
+          } >> "$GITHUB_STEP_SUMMARY"

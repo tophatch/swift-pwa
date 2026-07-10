@@ -269,24 +269,49 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         ///   `.so` into `jniLibs/<abi>/` so the APK doesn't crash at launch
         ///   with `UnsatisfiedLinkError`. Only `arm64-v8a` is published today
         ///   — see `OnnxRuntimeAndroidArtifact`.
-        /// - **Linux / Windows** — not supported yet (no ONNX Runtime
-        ///   backend on either); `SegmentationBackend` falls back to a
-        ///   documented `NoneBackend` there. Ignored (with a warning) for
-        ///   these targets.
+        /// - **Linux / Windows** — resolves Microsoft's prebuilt **CPU**
+        ///   `libonnxruntime.so` / `onnxruntime.dll`+`.lib` (downloaded +
+        ///   checksum-verified, or from a local `Vendor/onnxruntime-desktop/`
+        ///   vendoring), puts its directory on `LIBRARY_PATH` (Linux) / `LIB`
+        ///   (Windows) for the link step, and stages the shared lib into the
+        ///   AppImage / next to the `.exe`. See `ai.onnx_gpu` below to move
+        ///   desktop inference onto the GPU.
         ///
-        /// No app-shipped model weights of its own — bundle the MobileSAM
-        /// ONNX files yourself (see `Examples/CritterFacts`) until
-        /// `ai.vision.ensureModel` lands. Off by default.
+        /// Off by default.
         public var localOnnxRuntime: Bool?
+
+        /// Move the desktop (Linux / Windows) ONNX Runtime tier onto the
+        /// **GPU**, layered on `ai.local_onnx_runtime` (which must also be
+        /// set). When `true`, `swift-pwa build` resolves the GPU-enabled
+        /// ONNX Runtime build instead of the CPU one and sets
+        /// `SWIFT_PWA_ONNXRUNTIME_GPU=1` so `MobileSAMBackend` compiles its
+        /// execution-provider selection in:
+        /// - **Windows** — **DirectML** (cross-vendor: any DX12 GPU —
+        ///   NVIDIA / AMD / Intel — with no external runtime dependency, since
+        ///   DirectML is in-box on Windows 10+). `DirectML.dll` is staged next
+        ///   to the `.exe` alongside the DirectML `onnxruntime.dll`.
+        /// - **Linux** — **CUDA** (NVIDIA only). The CUDA runtime + cuDNN are
+        ///   *not* bundled — they must be present on the target; a missing or
+        ///   mismatched CUDA runtime is not fatal, it just falls back to CPU.
+        ///
+        /// Inference **auto-detects** at runtime: the GPU execution provider is
+        /// tried first and transparently falls back to CPU when no usable GPU /
+        /// driver (Linux: / CUDA runtime) is present, so a GPU-built app still
+        /// runs everywhere. `ai.vision.info`'s `provider` field reports which
+        /// engaged. Desktop-only — ignored (with a warning) on macOS / iOS /
+        /// Android (those already run the OS-appropriate ONNX Runtime build).
+        /// See [docs/proposals/onnx-gpu-execution-providers.md]. Off by default.
+        public var onnxGpu: Bool?
 
         public init(
             localLlama: Bool? = nil, geminiNano: Bool? = nil, phiSilica: Bool? = nil,
-            localOnnxRuntime: Bool? = nil
+            localOnnxRuntime: Bool? = nil, onnxGpu: Bool? = nil
         ) {
             self.localLlama = localLlama
             self.geminiNano = geminiNano
             self.phiSilica = phiSilica
             self.localOnnxRuntime = localOnnxRuntime
+            self.onnxGpu = onnxGpu
         }
     }
 

@@ -215,21 +215,41 @@ struct WindowsBundler {
     /// `web/` recursively, preserving relative paths (forward-slashed, the form
     /// request URLs use). A no-op-safe append after the PE image — the loader
     /// ignores trailing bytes.
-    /// Stage `onnxruntime.dll` into `dir` when `ai.local_onnx_runtime` is on.
-    /// The segmentation backend links ONNX Runtime as a *shared* lib, so the
-    /// DLL must be resolvable at launch — Windows searches the exe's own
-    /// directory first. The same `onnxruntime.dll` the link-time gate put on
-    /// `LIB` (via `OnnxRuntimeWindowsArtifact`, an idempotent/cached resolve).
+    /// Stage the ONNX Runtime runtime DLLs into `dir` when the tier is on. The
+    /// segmentation backend links ONNX Runtime as a *shared* lib, so its DLL(s)
+    /// must be resolvable at launch — Windows searches the exe's own directory
+    /// first. The same files the link-time gate put on `LIB` (an
+    /// idempotent/cached resolve).
+    ///
+    /// - `ai.onnx_gpu` (DirectML) stages `onnxruntime.dll` (the DirectML build,
+    ///   which retains the CPU EP for fallback), the shared-provider bridge
+    ///   `onnxruntime_providers_shared.dll`, and `DirectML.dll`. DirectML ships
+    ///   in-box on Windows 10+, so there's no CUDA-style external dependency.
+    /// - `ai.local_onnx_runtime` (CPU) stages just `onnxruntime.dll`.
     private func stageOnnxRuntimeDLLIfNeeded(nextTo dir: URL) async throws {
-        guard manifest.ai?.localOnnxRuntime == true else { return }
-        let libDir = try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
-        let src = libDir.appendingPathComponent("onnxruntime.dll")
-        let dest = dir.appendingPathComponent("onnxruntime.dll")
-        if FileManager.default.fileExists(atPath: dest.path) {
-            try FileManager.default.removeItem(at: dest)
+        let dlls: [String]
+        let libDir: URL
+        let reason: String
+        if manifest.ai?.onnxGpu == true {
+            libDir = try await OnnxRuntimeWindowsDirectMLArtifact.ensureLibDir(projectRoot: projectRoot)
+            dlls = ["onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll"]
+            reason = "ai.onnx_gpu"
+        } else if manifest.ai?.localOnnxRuntime == true {
+            libDir = try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
+            dlls = ["onnxruntime.dll"]
+            reason = "ai.local_onnx_runtime"
+        } else {
+            return
         }
-        try FileManager.default.copyItem(at: src, to: dest)
-        print("swift-pwa: staged onnxruntime.dll next to the app (ai.local_onnx_runtime)")
+        for dll in dlls {
+            let src = libDir.appendingPathComponent(dll)
+            let dest = dir.appendingPathComponent(dll)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: src, to: dest)
+        }
+        print("swift-pwa: staged \(dlls.joined(separator: ", ")) next to the app (\(reason))")
     }
 
     private func embedWebOverlay(into exe: URL) throws {

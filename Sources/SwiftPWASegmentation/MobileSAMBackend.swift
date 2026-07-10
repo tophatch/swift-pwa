@@ -3,7 +3,8 @@
 // desktop Linux/Windows (vendored stb_image, see DesktopImagePreprocessing.swift)
 // — but gated together wherever an ONNX Runtime is actually linked (see
 // OrtRuntime.swift).
-#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop)
+// swiftformat:disable:next wrap wrapArguments
+#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop) || canImport(ONNXRuntimeDirectML)
     import Foundation
     import SwiftPWACore
     import SwiftPWAModelStore
@@ -130,6 +131,11 @@
 
         private var sessions: [String: CachedSession] = [:]
         private var sessionOrder: [String] = [] // oldest-first, for LRU eviction
+        /// The execution provider the most recent encoder session ran on,
+        /// reported by `info()`. `nil` until the first `openSession`/`benchmark`
+        /// (the provider is only decided when a session is created). See the
+        /// `ai.onnx_gpu` desktop GPU tier.
+        private var activeProvider: OrtExecutionProvider?
 
         /// Back three ONNX graphs already present on disk (bundled with the
         /// app, or otherwise fetched by the caller). `ensureModel` reports
@@ -171,7 +177,7 @@
             return VisionCapabilities(
                 available: true, backend: VisionBackendID.mobileSAMONNX, model: "mobile-sam",
                 pointPrompts: true, boxPrompts: true, multimask: true, autoMask: true,
-                maxImageSize: 1024, sessionCaching: true
+                maxImageSize: 1024, sessionCaching: true, provider: activeProvider?.rawValue
             )
         }
 
@@ -181,6 +187,7 @@
             }
             let preprocessed = try await mapping { try await preprocess(request.image) }
             let encoder = try await mapping { try OrtModelSession(modelPath: encoderPath, runtime: runtime) }
+            activeProvider = encoder.provider
             let outputs = try await mapping {
                 try encoder.run(
                     inputs: [
@@ -439,6 +446,7 @@
 
             let clock = ContinuousClock()
             let encoder = try await mapping { try OrtModelSession(modelPath: encoderPath, runtime: runtime) }
+            activeProvider = encoder.provider
             let decoder = try await mapping { try OrtModelSession(modelPath: decoderSinglePath, runtime: runtime) }
 
             let encodeStart = clock.now

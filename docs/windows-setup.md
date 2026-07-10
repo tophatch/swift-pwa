@@ -459,6 +459,36 @@ Building/publishing the vendored libs yourself uses
 [`Scripts/vendor-onnxruntime-windows.sh`](../Scripts/vendor-onnxruntime-windows.sh)
 (then `$env:SWIFT_PWA_ONNXRUNTIME_WINDOWS_LIB_DIR='…\Vendor\onnxruntime-desktop\windows-x86_64'`).
 
+#### GPU acceleration (`ai.onnx_gpu`, DirectML)
+
+To run segmentation on the **GPU**, add the sibling flag (it implies
+`ai.local_onnx_runtime`):
+
+```json
+{
+  "ai": { "local_onnx_runtime": true, "onnx_gpu": true }
+}
+```
+
+Windows uses **DirectML**, which is genuinely **cross-vendor** — any Direct3D
+12 GPU (NVIDIA, AMD, Intel) — and **in-box on Windows 10+**, so there's no
+external runtime to install (unlike Linux CUDA). `swift-pwa build --target
+windows` vendors the checksum-pinned DirectML ONNX Runtime and stages
+`onnxruntime.dll` (the DirectML build, which keeps the CPU EP for fallback),
+`onnxruntime_providers_shared.dll`, and `DirectML.dll` next to the `.exe`
+(including `--single-file`). At runtime the DirectML EP is tried first with a
+**transparent CPU fallback** if no usable GPU is present; `ai.vision.info`
+reports the active `provider` (`"directml"` or `"cpu"`).
+
+> The DirectML build is NuGet-only and its latest version (ORT 1.24.4) lags the
+> CPU build (1.27.0), so it links against its own pinned header set — an
+> internal detail that doesn't affect the `pwa.json` opt-in. See
+> [docs/proposals/onnx-gpu-execution-providers.md](proposals/onnx-gpu-execution-providers.md).
+
+Vendoring the GPU libs yourself uses
+[`Scripts/vendor-onnxruntime-windows-directml.sh`](../Scripts/vendor-onnxruntime-windows-directml.sh)
+(then `$env:SWIFT_PWA_ONNXRUNTIME_WINDOWS_DIRECTML_LIB_DIR='…\Vendor\onnxruntime-desktop-gpu\windows-x86_64'`).
+
 ## 5. On-device AI: Phi Silica
 
 The `ai.*` plugin's Windows platform built-in is **Phi Silica**, via the

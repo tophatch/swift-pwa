@@ -24,9 +24,11 @@ The llama model runs **Metal-accelerated on Apple** and **Vulkan-accelerated on
 Linux and Windows** (GPU if present, CPU fallback otherwise); Gemini Nano runs
 on the device's NPU/accelerator via AICore — same page, same `ai.*` calls.
 
-It also carries an on-device **segmentation** demo (`ai.vision.*`,
-`MobileSAMBackend`) on Apple + Android — see
-[On-device segmentation](#on-device-segmentation-aivision) below.
+It also carries two on-device vision demos: **segmentation** (`ai.vision.*`,
+`MobileSAMBackend`) and **tap-to-erase inpainting** (`ai.generateImage`,
+`LaMaBackend`) that chains the two — see
+[On-device segmentation](#on-device-segmentation-aivision) and
+[On-device erase](#on-device-erase-aigenerateimage-inpainting) below.
 
 ## Build & run
 
@@ -156,6 +158,26 @@ declares that link itself, and the Android `libonnxruntime.so` staging + the
 per-ABI `.so` fetch are handled for you by `swift-pwa build`. So this app's
 `Package.swift` just adds the `SwiftPWASegmentation` product — no extra
 `linkerSettings`.
+
+## On-device erase (`ai.generateImage` inpainting)
+
+The **"🪄 Tap-to-erase a kitten"** button
+([web/erase.html](Sources/CritterFacts/web/erase.html)) chains segmentation into
+**LaMa inpainting** (`SwiftPWAImageEdit`'s `LaMaBackend`): tap a kitten →
+`ai.vision.segment` produces a mask → the page paints it into a white-on-black
+PNG → `ai.generateImage({ image, mask })` reconstructs the region, erasing the
+kitten. The whole pipeline runs on-device (Apple + Linux/Windows today; the
+Android image codec is a follow-up).
+
+Because `AIPlugin` takes **one** backend but this app wants both text (facts)
+*and* image editing on the `ai.*` surface, it composes them behind a tiny
+[`CompositeAIBackend`](Sources/CritterFacts/CompositeAIBackend.swift) — text
+requests go to the platform/llama backend, `generateImage` to LaMa, and
+`ai.ensureModel({ model: "inpaint" })` routes the big-lama download. That's the
+intended "an adopter gives one `ai.*` surface more than one purpose" pattern:
+the backends we ship are examples, not a fixed menu. Enabled by the same
+**`ai.local_onnx_runtime: true`** flag as segmentation (the big-lama ONNX,
+~200 MB, is fetched on first use from the `lama-vendor` release).
 
 ## Swapping the model
 

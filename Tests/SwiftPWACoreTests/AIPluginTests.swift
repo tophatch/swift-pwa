@@ -556,17 +556,20 @@ struct AIStructuredFallbackTests {
 
 @Suite("AI wire contract")
 struct AIWireContractTests {
-    @Test("AICapabilities round-trips (including vision / imageGeneration)")
+    @Test("AICapabilities round-trips (including vision / imageGeneration / imageEditing)")
     func capabilities() throws {
         let caps = AICapabilities(
             available: true, backend: "apple-foundation-models",
             model: "system", streaming: true, structuredOutput: true,
-            vision: true, imageGeneration: false
+            vision: true, imageGeneration: false, imageEditing: true
         )
         let data = try JSONEncoder().encode(caps)
         let decoded = try JSONDecoder().decode(AICapabilities.self, from: data)
         #expect(decoded == caps)
         #expect(decoded.vision == true)
+        #expect(decoded.imageEditing == true)
+        // imageEditing defaults off (backward-compatible for text-only backends).
+        #expect(AICapabilities(available: true, backend: "x").imageEditing == false)
     }
 
     @Test("AIImage / AIGeneratedImage / image request round-trip")
@@ -576,6 +579,15 @@ struct AIWireContractTests {
 
         let req = AIGenerateImageRequest(prompt: "a cat", width: 512, height: 512, steps: 20, seed: 3, count: 2)
         #expect(try JSONDecoder().decode(AIGenerateImageRequest.self, from: JSONEncoder().encode(req)) == req)
+
+        // Prompt-free inpaint shape (LaMa): image + mask, no prompt.
+        let inpaint = AIGenerateImageRequest(
+            image: .file("/photo.jpg", mimeType: "image/jpeg"),
+            mask: .file("/mask.png", mimeType: "image/png"),
+            strength: 0.6, guidanceScale: 7.5
+        )
+        #expect(inpaint.prompt == nil)
+        #expect(try JSONDecoder().decode(AIGenerateImageRequest.self, from: JSONEncoder().encode(inpaint)) == inpaint)
 
         let gen = AIGeneratedImage(path: "/out/0.png", mimeType: "image/png", seed: 3)
         #expect(try JSONDecoder().decode(AIGeneratedImage.self, from: JSONEncoder().encode(gen)) == gen)

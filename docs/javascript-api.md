@@ -499,9 +499,15 @@ await __SWIFT_PWA__.invoke('ai.generate', {
     prompt: 'Describe this.', images: [{ path: '/photo.jpg' }],
 });
 
-// Text-to-image (when info.imageGeneration).
+// Image gen/edit — one command, operation chosen by which fields you send.
+// Text→image (when info.imageGeneration):
 const { images } = await __SWIFT_PWA__.invoke('ai.generateImage', {
     prompt: 'a watercolor fox', steps: 20, outputDirectory: dataDir + '/gen',
+});
+// Inpaint (when info.imageEditing) — image + mask (white = edit), prompt optional:
+await __SWIFT_PWA__.invoke('ai.generateImage', {
+    image: { path: '/photo.jpg' }, mask: { path: '/mask.png' },
+    outputDirectory: dataDir + '/edited',
 });
 // streaming variant: subscribe('ai.generateImageStream', …) for step progress
 

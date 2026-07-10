@@ -1,0 +1,56 @@
+name: lama vendor
+
+# Re-host a LaMa inpainting ONNX model as a STABLE swift-pwa release asset, so
+# SwiftPWAImageEdit's LaMaBackend fetches the weights (at runtime, via
+# ModelDownloader / ai.ensureModel) from a URL we control — the model analogue
+# of onnxruntime-desktop.yml / the mobilesam-vendor release. Weights aren't
+# built, just downloaded + verified by Scripts/vendor-lama.sh.
+#
+# Run manually (workflow_dispatch). After it publishes, pin the sha256 +
+# sizeBytes it prints into LaMaModelSource.bigLama
+# (Sources/SwiftPWAImageEdit/LaMaModelSpec.swift). Optionally override the
+# source export via the `source_url` input.
+on:
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "LaMa ONNX source URL (default: Carve big-lama fp32)"
+        required: false
+        default: ""
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Vendor big-lama.onnx
+        id: vendor
+        run: |
+          bash Scripts/vendor-lama.sh ${{ inputs.source_url }}
+          asset="Vendor/lama/big-lama.onnx"
+          echo "asset=$asset" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(sha256sum "$asset" | awk '{print $1}')" >> "$GITHUB_OUTPUT"
+          echo "size=$(wc -c < "$asset" | tr -d '[:space:]')" >> "$GITHUB_OUTPUT"
+
+      - name: Publish to lama-vendor
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: lama-vendor
+          name: LaMa inpainting ONNX (big-lama fp32, vendored)
+          prerelease: true
+          files: ${{ steps.vendor.outputs.asset }}
+
+      - name: Report checksum to pin into LaMaModelSource
+        run: |
+          {
+            echo "### LaMa weights published to the \`lama-vendor\` release"
+            echo
+            echo "Pin these into \`LaMaModelSource.bigLama\` (SwiftPWAImageEdit/LaMaModelSpec.swift):"
+            echo
+            echo "- sha256:    \`${{ steps.vendor.outputs.sha256 }}\`"
+            echo "- sizeBytes: \`${{ steps.vendor.outputs.size }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"

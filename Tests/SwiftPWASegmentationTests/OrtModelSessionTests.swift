@@ -1,5 +1,5 @@
 import Foundation
-@testable import SwiftPWASegmentation
+import SwiftPWAONNX
 import Testing
 
 @Suite("OrtModelSession (packaging + plumbing proof, no real model)")

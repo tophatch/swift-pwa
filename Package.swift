@@ -791,28 +791,58 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // the DirectML runtime's API version and add `dml_provider_factory.h`.
     let onnxGpu = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
 
-    var segmentationDependencies: [Target.Dependency] = ["SwiftPWACore", "SwiftPWAModelStore"]
-    #if os(macOS)
-        segmentationDependencies.append(.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS])))
-    #endif
+    /// The ONNX Runtime module dependencies (per-platform, plus the GPU swap on
+    /// Windows). Shared by the ONNX tier target (`SwiftPWAONNX`, which owns the
+    /// runtime wrapper + linkage) and, for `canImport` gating in their own
+    /// sources, the backend targets that consume it (`SwiftPWASegmentation`,
+    /// `SwiftPWAImageEdit`).
+    func onnxRuntimeModuleDependencies() -> [Target.Dependency] {
+        var deps: [Target.Dependency] = []
+        #if os(macOS)
+            deps.append(.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS])))
+        #endif
+        deps.append(.target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android])))
+        if onnxGpu {
+            deps.append(contentsOf: [
+                .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux])),
+                .target(name: "ONNXRuntimeDirectML", condition: .when(platforms: [.windows]))
+            ])
+        } else {
+            deps.append(.target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows])))
+        }
+        return deps
+    }
+
+    // The shared ONNX Runtime C API library used by all backends (the desktop
+    // GPU providers need it staged as a runtime library too — see comment on
+    // the target below).
+    let onnxRuntimeLinkerSettings: [LinkerSetting] = [
+        .linkedLibrary("onnxruntime", .when(platforms: [.android, .linux, .windows])),
+        // The vendored ONNX Runtime xcframework embeds protobuf (C++), which
+        // needs libc++ (Arena, exception-personality symbols). A `.binaryTarget`
+        // can't declare linker settings, so we hang it on the target that links
+        // it (`SwiftPWAONNX`) — SwiftPM propagates a target's linkerSettings to
+        // the final executable link, so any app that transitively links it gets
+        // libc++ automatically. Without this, a consuming app hits unresolved
+        // `___gxx_personality_v0` / protobuf symbols and has to add the flag.
+        .linkedLibrary("c++", .when(platforms: [.macOS, .iOS]))
+    ]
+
+    // `SwiftPWAONNX` depends on the runtime for `canImport`; the backends
+    // consume its public `OrtRuntime`/`OrtModelSession` and keep the module
+    // dependency themselves so their own `#if canImport(ONNXRuntime*)` gate
+    // (which stubs the whole backend out on a destination with no ONNX Runtime)
+    // stays exact — the shared wrapper types stub out under the identical gate,
+    // so both sides appear/disappear together.
+    var segmentationDependencies: [Target.Dependency] = ["SwiftPWACore", "SwiftPWAModelStore", "SwiftPWAONNX"]
+    segmentationDependencies.append(contentsOf: onnxRuntimeModuleDependencies())
     segmentationDependencies.append(contentsOf: [
-        .target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android])),
         .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
         // Desktop has no CoreGraphics (Apple) or BitmapFactory-over-RPC
         // (Android) to decode/resize an image, so a tiny vendored stb_image
         // C target does it (see Sources/CStbImage). Linux/Windows only.
         .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))
     ])
-    if onnxGpu {
-        segmentationDependencies.append(contentsOf: [
-            .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux])),
-            .target(name: "ONNXRuntimeDirectML", condition: .when(platforms: [.windows]))
-        ])
-    } else {
-        segmentationDependencies.append(
-            .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows]))
-        )
-    }
 
     package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
 
@@ -846,6 +876,18 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         onnxGpu ? swiftSettings + [.define("SWIFT_PWA_ONNXRUNTIME_GPU")] : swiftSettings
 
     package.targets.append(contentsOf: [
+        // The shared ONNX Runtime tier: the `OrtRuntime`/`OrtModelSession`
+        // wrapper + all ORT linkage, owned here so more than one backend can
+        // reuse it (`SwiftPWASegmentation` MobileSAM, `SwiftPWAImageEdit` LaMa,
+        // future gemma/stable-diffusion). Host-agnostic to declare — its
+        // sources compile to an empty stub on a destination with no ONNX
+        // Runtime linked (same guard shape as the backends).
+        .target(
+            name: "SwiftPWAONNX",
+            dependencies: ["SwiftPWACore"] + onnxRuntimeModuleDependencies(),
+            swiftSettings: segmentationSwiftSettings,
+            linkerSettings: onnxRuntimeLinkerSettings
+        ),
         // Vendored stb_image (single-header, public-domain) — the desktop
         // image decoder (Linux/Windows have no CoreGraphics / BitmapFactory).
         // Compiled only where SwiftPWASegmentation depends on it (linux/windows).
@@ -871,8 +913,36 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         ),
         .testTarget(
             name: "SwiftPWASegmentationTests",
-            dependencies: ["SwiftPWASegmentation", "SwiftPWACore"],
+            dependencies: ["SwiftPWASegmentation", "SwiftPWACore", "SwiftPWAONNX"],
             resources: [.copy("Fixtures")],
+            swiftSettings: swiftSettings
+        )
+    ])
+
+    // MARK: - Image-edit backend (ai.generateImage inpainting, LaMa via ONNX Runtime)
+
+    // `LaMaBackend` conforms to Core's `AIBackend` and is the first consumer of
+    // the generalized `ai.generateImage` editing path (image + mask → image;
+    // see docs/proposals/image-generation-editing.md). It reuses the shared
+    // `SwiftPWAONNX` tier (same OrtModelSession + desktop GPU providers as
+    // MobileSAM) and keeps its own ONNX-module dependencies so `LaMaBackend`'s
+    // `canImport(ONNXRuntime*)` gate stays exact. Image decode/encode
+    // (`ImageCodec`) is CoreGraphics/ImageIO on Apple and stb_image /
+    // stb_image_write (`CStbImage`, same as segmentation) on Linux/Windows; the
+    // Android codec is a documented follow-up (a clear runtime error until then).
+    package.products.append(.library(name: "SwiftPWAImageEdit", targets: ["SwiftPWAImageEdit"]))
+    package.targets.append(contentsOf: [
+        .target(
+            name: "SwiftPWAImageEdit",
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
+                + onnxRuntimeModuleDependencies()
+                + [.target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))],
+            swiftSettings: segmentationSwiftSettings,
+            linkerSettings: onnxRuntimeLinkerSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAImageEditTests",
+            dependencies: ["SwiftPWAImageEdit", "SwiftPWACore"],
             swiftSettings: swiftSettings
         )
     ])

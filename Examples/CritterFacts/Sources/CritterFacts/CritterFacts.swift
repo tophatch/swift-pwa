@@ -17,6 +17,12 @@ import SwiftPWAModelStore // ModelSpec
 #if canImport(SwiftPWASegmentation)
     import SwiftPWASegmentation
 #endif
+// The on-device image-edit backend (LaMaBackend, `ai.generateImage`
+// inpainting) — same `ai.local_onnx_runtime` gate. Composed with the text
+// backend behind one `ai.*` surface (see CompositeAIBackend).
+#if canImport(SwiftPWAImageEdit)
+    import SwiftPWAImageEdit
+#endif
 
 #if canImport(SwiftPWALlama)
     /// The downloadable model (tiny, ~400 MB, Apache-2.0) — shared by the
@@ -124,38 +130,30 @@ struct CritterFactsApp {
 /// `run(_:)` signature.
 @MainActor
 func configure(_ ctx: any AppContext) throws {
-    #if os(Android)
-        // Android's platform built-in: Gemini Nano via ML Kit GenAI (AICore).
-        // Same `ai.*` contract as the llama path below — the page is identical.
-        // No app-shipped weights: `ai.ensureModel` triggers AICore's on-demand
-        // download. Enabled by `ai.gemini_nano: true` in pwa.json.
-        ctx.use(AIPlugin(GeminiNanoBackend()))
-    #elseif os(Windows) && canImport(SwiftPWAPhiSilica)
-        // Windows' platform built-in: Phi Silica via the Windows AI APIs
-        // (Windows App SDK). Preferred over llama on Windows when
-        // `ai.phi_silica: true` — system-managed model, no app-shipped weights.
-        // The Limited Access Feature unlock token (per package family name,
-        // from Microsoft) is a secret, so it comes from the environment rather
-        // than checked-in config. Requires an MSIX-packaged build to use.
-        ctx.use(AIPlugin(PhiSilicaBackend(
-            unlockToken: ProcessInfo.processInfo.environment["PHI_SILICA_LAF_TOKEN"]
-        )))
-    #elseif canImport(SwiftPWALlama)
-        // A tiny (~400 MB), Apache-2.0 instruct model. It's *downloadable*: the
-        // page calls `ai.ensureModel` before its first `ai.generate`, and
-        // ModelDownloader fetches it once (resumable + checksum-pinned) into the
-        // app's data directory, then reuses it. Swap the spec for any GGUF — a
-        // bigger model just means a longer first-run download. On Apple it runs
-        // Metal-accelerated; on Linux and Windows, Vulkan (GPU if present, else
-        // CPU).
-        let modelsDir = ctx.dataDirectory().appendingPathComponent("models", isDirectory: true)
-        ctx.use(AIPlugin(LlamaBackend(model: factModelSpec, cacheDirectory: modelsDir)))
+    // Build the text backend for this platform (nil if none is in the build).
+    let textBackend = makeTextBackend(ctx)
+
+    #if canImport(SwiftPWAImageEdit)
+        // Image editing is on (`ai.local_onnx_runtime`): compose the text
+        // backend and LaMa inpainting behind the one `ai.*` surface — the demo
+        // of "an adopter gives AIPlugin more than one purpose" (see
+        // CompositeAIBackend). The big-lama ONNX (~200 MB, downloadable) is
+        // fetched on first use from the `lama-vendor` release, like the text
+        // model; the page calls `ai.ensureModel({ model: "inpaint" })` before
+        // its first `ai.generateImage`. See web/erase.html.
+        let lamaDir = ctx.dataDirectory().appendingPathComponent("lama", isDirectory: true)
+        let lama = LaMaBackend(cacheDirectory: lamaDir)
+        ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
     #else
-        print(
-            "CritterFacts: built without the llama backend. Build with "
-                + "`swift-pwa build` (ai.local_llama is set in pwa.json) or export "
-                + "SWIFT_PWA_LLAMA=1 before `swift run` to enable on-device facts."
-        )
+        if let textBackend {
+            ctx.use(AIPlugin(textBackend))
+        } else {
+            print(
+                "CritterFacts: built without an AI backend. Build with "
+                    + "`swift-pwa build` (ai.local_llama / ai.local_onnx_runtime in pwa.json) "
+                    + "or export SWIFT_PWA_LLAMA=1 before `swift run` to enable on-device AI."
+            )
+        }
     #endif
 
     // On-device segmentation demo (`ai.vision.*`) — MobileSAMBackend, a
@@ -190,6 +188,34 @@ func configure(_ ctx: any AppContext) throws {
         size: Size(width: 720, height: 720),
         content: content
     ))
+}
+
+/// The platform's text `AIBackend` (`ai.generate` / streaming / JSON), or `nil`
+/// when none is in this build. Split out so both the composed (image-edit on)
+/// and plain wiring in `configure` share it.
+@MainActor
+func makeTextBackend(_ ctx: any AppContext) -> (any AIBackend)? {
+    #if os(Android)
+        // Android's platform built-in: Gemini Nano via ML Kit GenAI (AICore).
+        // No app-shipped weights: `ai.ensureModel` triggers AICore's on-demand
+        // download. Enabled by `ai.gemini_nano: true` in pwa.json.
+        return GeminiNanoBackend()
+    #elseif os(Windows) && canImport(SwiftPWAPhiSilica)
+        // Windows' platform built-in: Phi Silica via the Windows AI APIs. The
+        // Limited Access Feature unlock token (a secret) comes from the
+        // environment. Requires an MSIX-packaged build to use.
+        return PhiSilicaBackend(unlockToken: ProcessInfo.processInfo.environment["PHI_SILICA_LAF_TOKEN"])
+    #elseif canImport(SwiftPWALlama)
+        // A tiny (~400 MB), Apache-2.0 instruct model. Downloadable: the page
+        // calls `ai.ensureModel` before its first `ai.generate`, and
+        // ModelDownloader fetches it once (resumable + checksum-pinned). Metal
+        // on Apple; Vulkan (GPU if present, else CPU) on Linux/Windows.
+        let modelsDir = ctx.dataDirectory().appendingPathComponent("models", isDirectory: true)
+        return LlamaBackend(model: factModelSpec, cacheDirectory: modelsDir)
+    #else
+        _ = ctx
+        return nil
+    #endif
 }
 
 /// Locates the bundled `web/` folder: the `.app` resource bundle when built by

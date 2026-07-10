@@ -8,6 +8,7 @@
     import Foundation
     import SwiftPWACore
     import SwiftPWAModelStore
+    import SwiftPWAONNX // OrtRuntime / OrtModelSession / OrtExecutionProvider (shared ONNX tier)
     #if os(Android)
         import SwiftPWAAndroid // AndroidRPC — the model download routes through Kotlin's HTTP stack
     #endif

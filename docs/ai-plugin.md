@@ -95,23 +95,54 @@ A backend that reports `vision: false` ignores `images`.
 > [docs/javascript-api.md](javascript-api.md#aivision--promptable-on-device-image-segmentation)
 > and [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md).
 
-### Image generation (text-to-image)
+### Image generation & editing (`ai.generateImage`)
 
-When `info.imageGeneration` is true, `ai.generateImage` turns a prompt into
-one or more images. Supply an `outputDirectory` to have them **written to
-disk** and get back file paths (bridge-efficient — multi-MB image bytes
-don't cross as base64; mount the directory with `serveDirectory` to show
-them); omit it to get base64 bytes inline (fine for a single small image).
+`ai.generateImage` is a **single, purpose-agnostic image op** — the
+operation is chosen by *which fields you send*, not by a separate command:
+
+| you send | operation | capability |
+| --- | --- | --- |
+| `prompt` | text→image | `imageGeneration` |
+| `prompt` + `image` | image→image (img2img) | `imageEditing` |
+| `image` + `mask` (± `prompt`) | inpaint — fill the masked region | `imageEditing` |
+
+The **model and the operation are a backend choice, invisible to JS** — a
+page checks `info.imageGeneration` / `info.imageEditing` to decide which
+affordances to show and never names a model. The backends we ship (LaMa
+inpainting; Stable-Diffusion-class text→image as a follow) are *examples*
+of the contract, not the contract itself — wire your own model behind the
+same surface.
+
+Supply an `outputDirectory` to have results **written to disk** and get
+back file paths (bridge-efficient — multi-MB image bytes don't cross as
+base64; mount the directory with `serveDirectory` to show them); omit it
+to get base64 bytes inline (fine for a single small image).
 
 ```js
+// text→image
 const { images, backend } = await __SWIFT_PWA__.invoke('ai.generateImage', {
     prompt: 'a watercolor fox', negativePrompt: 'blurry',
     width: 512, height: 512, steps: 20, seed: 42, count: 1,
+    guidanceScale: 7.5,
     outputDirectory: dataDir + '/generated',   // omit for inline base64
 });
 // → images: [{ path?|dataBase64?, mimeType, seed }], backend
 
+// inpaint (prompt-free, e.g. LaMa) — mask convention: white = edit, black = keep.
+// Pairs with ai.vision.* segmentation: the SAM mask becomes the edit mask.
+await __SWIFT_PWA__.invoke('ai.generateImage', {
+    image: { path: dataDir + '/photo.jpg' },
+    mask:  { path: dataDir + '/mask.png' },
+    outputDirectory: dataDir + '/edited',
+});
+
+// img2img — re-imagine an image under a prompt; `strength` (0…1) = how far to deviate.
+await __SWIFT_PWA__.invoke('ai.generateImage', {
+    prompt: 'a watercolor version', image: { path: src }, strength: 0.6,
+});
+
 // Streaming — denoising-step progress with optional intermediate previews.
+// (Single-pass backends like LaMa emit one `done`.)
 __SWIFT_PWA__.subscribe('ai.generateImageStream', { prompt }, (e) => {
     if (e.type === 'progress') setBar(e.step, e.totalSteps); // e.preview? optional
     else if (e.type === 'done') show(e.images);
@@ -229,9 +260,15 @@ whole `ai.*` command set:
 - **`ensureModel`** defaults to throwing `.unsupportedPlatform`. Override
   it only for the downloadable-model tier.
 - **`generateImage`** defaults to throwing `.unsupportedPlatform`. Override
-  it for a text-to-image backend (then set `imageGeneration: true`).
+  it for an image backend and set the flag(s) that match what it reads from
+  the request: `imageGeneration: true` if it honors `prompt` (text→image),
+  `imageEditing: true` if it honors `image` (± `mask`) for img2img / inpaint
+  — a prompt-free inpainter reports `imageEditing` alone. Validate a
+  required `prompt`'s presence and throw `.generationFailed` if a
+  text-conditioned request arrives without one.
 - **`generateImageStream`** defaults to wrapping `generateImage` in a
-  single `done`. Override it to report per-step denoising progress.
+  single `done`. Override it to report per-step denoising progress (a
+  single-pass backend like LaMa keeps the default).
 - **`generateAudio`** defaults to throwing `.unsupportedPlatform`. Override
   it for a TTS / generative-audio backend (then set `audioGeneration: true`).
 - **`generateAudioStream`** defaults to wrapping `generateAudio` in a
@@ -604,6 +641,48 @@ package CMake's output rather
 than vendoring ggml source because the source is 135+ per-arch model files
 plus a shader-embed step and per-file SIMD flags SwiftPM can't express — and
 `unsafeFlags` would poison dependency resolution for every adopter.
+
+### Available backend: LaMa inpainting (image editing)
+
+`SwiftPWAImageEdit` ships `LaMaBackend` — the first backend for the
+**editing** side of `ai.generateImage` (an `image` + `mask` → the masked
+region reconstructed; see the [contract above](#image-generation--editing-aigenerateimage)).
+It reports `imageEditing: true` / `imageGeneration: false`, so `ai.generate`
+(text) throws unsupported; it only edits images. It pairs directly with
+[`ai.vision.*` segmentation](javascript-api.md#aivision--promptable-on-device-image-segmentation):
+a SAM mask, decoded to a white-on-black PNG, is exactly the `mask` it
+consumes — "tap to erase".
+
+```swift
+import SwiftPWAImageEdit
+
+runtime.run { ctx in
+    // Bundled / bring-your-own weights:
+    ctx.use(AIPlugin(LaMaBackend(modelPath: myBigLamaONNXPath)))
+    // …or the downloadable tier (ai.ensureModel fetches + checksum-pins):
+    ctx.use(AIPlugin(LaMaBackend(cacheDirectory: dataDir)))
+}
+```
+
+It reuses the shared **ONNX Runtime tier** (`SwiftPWAONNX` — the same
+`OrtModelSession` MobileSAM runs on, including the desktop **CUDA / DirectML
+GPU** providers under [`ai.onnx_gpu`](../docs/windows-setup.md) with transparent
+CPU fallback). Opt in exactly like segmentation — set `ai.local_onnx_runtime:
+true` in `pwa.json` so the build links ONNX Runtime; no separate flag. The
+graph contract + pre/post-processing are a configurable `LaMaModelSpec`
+(defaulting to the big-lama fp32 export — dynamic `H×W`, `[0,1]` RGB image +
+`[0,1]` binary mask, `[0,255]` output); point it at a different export by
+adjusting the spec, not the plumbing.
+
+> **Status:** the contract, the backend, the **Apple + desktop
+> (Linux/Windows)** image codecs, and the published **`lama-vendor`** weights
+> release are in; `LaMaBackend(cacheDirectory:)` fetches out of the box. The
+> **real-weights pass is done on Apple/CPU and Linux/CPU** — the big-lama
+> fp32 export runs end-to-end (a masked region inpaints away, unmasked pixels
+> stay pristine), confirming `LaMaModelSpec.bigLama`. Remaining follow-up: the
+> **Android** codec (BitmapFactory over the Kotlin RPC — the last platform;
+> `ai.generateImage` throws a clear `E_AI_GENERATION` there until it lands).
+> See [docs/proposals/image-generation-editing.md](proposals/image-generation-editing.md).
 
 ### Structured output: native vs. the shared fallback
 

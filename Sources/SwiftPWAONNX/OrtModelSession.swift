@@ -22,7 +22,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
     /// `ai.vision.info` can surface it (see `MobileSAMBackend`). On Apple /
     /// Android / desktop-CPU builds it is always `.cpu` — the OS-level EP choice
     /// (CoreML/NNAPI) isn't modeled here.
-    enum OrtExecutionProvider: String {
+    public enum OrtExecutionProvider: String {
         case cpu, cuda, directml
     }
 
@@ -48,14 +48,14 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
     /// narrow — SAM's encoder/decoder graphs (and the other ONNX-Runtime-tier
     /// backends the 0.8 evaluation anticipates) only need float32 in/out; a
     /// backend that needs another element type extends this, not the contract.
-    final class OrtModelSession: @unchecked Sendable {
+    public final class OrtModelSession: @unchecked Sendable {
         private let runtime: OrtRuntime
         private let session: OpaquePointer
         private let cpuMemoryInfo: OpaquePointer
         /// The execution provider this session actually loaded on — the GPU
         /// provider on an `ai.onnx_gpu` build where the GPU EP initialized,
         /// `.cpu` otherwise (including a transparent fallback).
-        let provider: OrtExecutionProvider
+        public let provider: OrtExecutionProvider
 
         /// Loads `path` under `runtime`'s shared environment. Throws
         /// `OrtError.apiUnavailable` if `runtime` itself failed to initialize
@@ -68,7 +68,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// fails to create with it — no capable GPU, no driver, or (Linux) no
         /// CUDA/cuDNN runtime present — we log once and retry on CPU. Inference
         /// is never broken by the absence of a usable GPU.
-        init(modelPath: String, runtime: OrtRuntime) throws {
+        public init(modelPath: String, runtime: OrtRuntime) throws {
             self.runtime = runtime
             let api = runtime.api
 
@@ -165,11 +165,11 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
 
         /// One named float32 input/output tensor: its flat row-major values plus
         /// shape (e.g. `[1, 3, 1024, 1024]` for an NCHW image).
-        struct Tensor {
-            var values: [Float]
-            var shape: [Int64]
+        public struct Tensor {
+            public var values: [Float]
+            public var shape: [Int64]
 
-            init(values: [Float], shape: [Int64]) {
+            public init(values: [Float], shape: [Int64]) {
                 self.values = values
                 self.shape = shape
             }
@@ -179,7 +179,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// declared names exactly (ONNX Runtime doesn't validate name typos
         /// beyond "not found"). Returns one `Tensor` per requested output name,
         /// each carrying the shape ONNX Runtime reports for it.
-        func run(inputs: [String: Tensor], outputNames: [String]) throws -> [String: Tensor] {
+        public func run(inputs: [String: Tensor], outputNames: [String]) throws -> [String: Tensor] {
             let api = runtime.api
 
             // Build input OrtValues. Each wraps `values`' own storage directly

@@ -1,0 +1,269 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Tap-to-erase · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
+            --line: #232a35;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; overflow: hidden; }
+        body {
+            background: var(--bg); color: var(--ink);
+            font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column;
+        }
+        .bar {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            border-bottom: 1px solid var(--line); background: #131820;
+            padding-top: calc(12px + env(safe-area-inset-top));
+        }
+        .back, .btn {
+            text-decoration: none; color: var(--ink); font-weight: 700;
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+            background: none; font: inherit; cursor: pointer;
+        }
+        .back:active, .btn:active { transform: translateY(1px); }
+        .btn[disabled] { opacity: 0.4; cursor: default; }
+        .hint { color: var(--muted); font-size: 13px; flex: 1; }
+        .hint b { color: var(--accent); }
+        .stage { position: relative; flex: 1; min-height: 0; }
+        canvas { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; touch-action: manipulation; }
+        .overlay {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; padding: 24px;
+            background: rgba(14,17,22,0.72); text-align: center;
+        }
+        .overlay small { color: var(--muted); }
+        progress { width: min(320px, 70vw); height: 8px; accent-color: var(--accent); }
+        .err { color: #f0c9c9; max-width: 40ch; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="back" href="index.html">← Back</a>
+        <div class="hint" id="hint"><b>Tap</b> a kitten to erase it. Each tap re-erases from the original.</div>
+        <button class="btn" id="reset" disabled>Reset</button>
+    </div>
+
+    <div class="stage">
+        <canvas id="canvas"></canvas>
+        <div class="overlay" id="overlay">
+            <div id="status">Loading…</div>
+            <progress id="bar" max="1" value="0" hidden></progress>
+            <small id="sub"></small>
+        </div>
+    </div>
+
+    <script src="mobilesam.js"></script>
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+        const IMAGE_URL = "assets/jari-hytonen-YCPkW_r_6uA-unsplash.jpg";
+
+        const canvas = $("canvas");
+        const ctx = canvas.getContext("2d");
+
+        let originalBitmap = null;  // the source image (segmented + inpainted against)
+        let shownBitmap = null;     // what's currently drawn (original or a result)
+        let originalBase64 = "";    // source bytes, for openSession + generateImage
+        let sessionId = null;       // cached encoder embedding (on the original)
+        let imageW = 0, imageH = 0; // source pixel dims
+        let layout = null;
+        let busy = false;
+
+        function setStatus(text, sub = "") {
+            $("overlay").hidden = false; $("status").textContent = text;
+            $("sub").textContent = sub; $("bar").hidden = true;
+        }
+        function hideOverlay() { $("overlay").hidden = true; }
+        function showError(msg) {
+            $("overlay").hidden = false;
+            $("status").innerHTML = '<div class="err">⚠️ ' + msg + "</div>";
+            $("sub").textContent = ""; $("bar").hidden = true;
+        }
+
+        // --- rendering -------------------------------------------------------
+
+        function computeLayout() {
+            const dpr = window.devicePixelRatio || 1;
+            const cssW = canvas.clientWidth, cssH = canvas.clientHeight;
+            canvas.width = Math.round(cssW * dpr);
+            canvas.height = Math.round(cssH * dpr);
+            ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+            const scale = Math.min(cssW / imageW, cssH / imageH);
+            layout = { scale, offsetX: (cssW - imageW * scale) / 2, offsetY: (cssH - imageH * scale) / 2, cssW, cssH };
+        }
+
+        function redraw() {
+            if (!layout) return;
+            ctx.clearRect(0, 0, layout.cssW, layout.cssH);
+            if (shownBitmap) {
+                ctx.drawImage(shownBitmap, layout.offsetX, layout.offsetY, imageW * layout.scale, imageH * layout.scale);
+            }
+        }
+
+        // Decode the SAM mask's RLE (row-major over its bounds box, background
+        // first) into a **full-image** black/white PNG — white = erase — which is
+        // exactly the `mask` ai.generateImage (LaMa) consumes. Returns base64.
+        function maskToBase64(mask) {
+            const c = document.createElement("canvas");
+            c.width = imageW; c.height = imageH;
+            const cx = c.getContext("2d");
+            cx.fillStyle = "#000"; cx.fillRect(0, 0, imageW, imageH); // outside bounds = keep
+            const [x0, y0, x1, y1] = mask.bounds;
+            const bw = x1 - x0 + 1, bh = y1 - y0 + 1;
+            if (bw > 0 && bh > 0) {
+                const img = cx.createImageData(bw, bh);
+                const d = img.data;
+                let idx = 0, fg = false;
+                for (const run of mask.rle) {
+                    const v = fg ? 255 : 0; // white = erase, black = keep (opaque)
+                    for (let p = idx; p < idx + run; p++) {
+                        const o = p * 4; d[o] = v; d[o + 1] = v; d[o + 2] = v; d[o + 3] = 255;
+                    }
+                    idx += run; fg = !fg;
+                }
+                cx.putImageData(img, x0, y0); // putImageData overwrites, so bg is opaque black
+            }
+            return c.toDataURL("image/png").split(",")[1];
+        }
+
+        // --- interaction -----------------------------------------------------
+
+        async function onTap(clientX, clientY) {
+            if (!sessionId || busy || !layout) return;
+            const rect = canvas.getBoundingClientRect();
+            const sx = (clientX - rect.left - layout.offsetX) / layout.scale;
+            const sy = (clientY - rect.top - layout.offsetY) / layout.scale;
+            if (sx < 0 || sy < 0 || sx >= imageW || sy >= imageH) return;
+
+            busy = true; setStatus("Selecting…");
+            try {
+                // 1. Segment at the tap → the best-scored mask.
+                const { masks } = await bridge.invoke("ai.vision.segment", {
+                    sessionId, points: [{ x: sx, y: sy, label: 1 }], multimask: true,
+                });
+                const mask = masks && masks.length ? masks[0] : null;
+                if (!mask) { $("hint").innerHTML = "No object found there — try another spot."; return; }
+
+                // 2. Turn the mask into a white-on-black PNG and inpaint the
+                //    original: image + mask → the region reconstructed.
+                setStatus("Erasing…");
+                const maskBase64 = maskToBase64(mask);
+                const { images } = await bridge.invoke("ai.generateImage", {
+                    image: { dataBase64: originalBase64 },
+                    mask: { dataBase64: maskBase64 },
+                });
+                const out = images && images[0];
+                if (!out || !out.dataBase64) throw new Error("no image returned");
+
+                // 3. Show the result (segmentation still runs against the original).
+                shownBitmap = await createImageBitmap(await (await fetch(
+                    "data:" + (out.mimeType || "image/png") + ";base64," + out.dataBase64
+                )).blob());
+                redraw();
+                $("reset").disabled = false;
+                $("hint").innerHTML = "Erased. <b>Tap</b> again, or <b>Reset</b>.";
+            } catch (e) {
+                showError((e && e.message) || "erase failed");
+                return;
+            } finally {
+                busy = false; hideOverlay();
+            }
+        }
+
+        canvas.addEventListener("click", (e) => onTap(e.clientX, e.clientY));
+        $("reset").addEventListener("click", () => {
+            shownBitmap = originalBitmap; $("reset").disabled = true;
+            $("hint").innerHTML = "<b>Tap</b> a kitten to erase it.";
+            redraw();
+        });
+
+        let resizeRaf = 0;
+        window.addEventListener("resize", () => {
+            cancelAnimationFrame(resizeRaf);
+            resizeRaf = requestAnimationFrame(() => { computeLayout(); redraw(); });
+        });
+
+        // --- startup ---------------------------------------------------------
+
+        async function start() {
+            try {
+                const vinfo = await bridge.invoke("ai.vision.info", {});
+                const ainfo = await bridge.invoke("ai.info", {});
+                if (!vinfo || !vinfo.available || !ainfo || !ainfo.imageEditing) {
+                    showError("On-device erase needs segmentation + image editing. " +
+                        "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
+                    return;
+                }
+
+                // 1. Ensure both models: SAM (via mobilesam.js) and big-lama
+                //    (routed by the composite backend on model:"inpaint").
+                setStatus("Preparing models…"); $("bar").hidden = false;
+                await window.ensureSegmentationModel((done, total) => {
+                    $("sub").textContent = "Downloading segmentation model… " +
+                        (done / 1048576).toFixed(0) + (total ? " / " + (total / 1048576).toFixed(0) : "") + " MB";
+                    if (total) { $("bar").value = done / total; }
+                });
+                await ensureInpaintModel((done, total) => {
+                    $("sub").textContent = "Downloading inpainting model… " +
+                        (done / 1048576).toFixed(0) + (total ? " / " + (total / 1048576).toFixed(0) : "") + " MB";
+                    if (total) { $("bar").value = done / total; }
+                });
+
+                // 2. Fetch the image once; decode for display + base64 for the model.
+                setStatus("Loading image…"); $("bar").hidden = true;
+                const buf = await (await fetch(IMAGE_URL)).arrayBuffer();
+                originalBase64 = arrayBufferToBase64(buf);
+                originalBitmap = await createImageBitmap(new Blob([buf]));
+                shownBitmap = originalBitmap;
+
+                // 3. Encode once; every tap reuses the cached embedding.
+                setStatus("Analyzing image…");
+                const session = await bridge.invoke("ai.vision.openSession", {
+                    image: { dataBase64: originalBase64 },
+                });
+                sessionId = session.sessionId;
+                imageW = session.width; imageH = session.height;
+
+                computeLayout(); redraw(); hideOverlay();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            }
+        }
+
+        // Drive ai.ensureModel for the inpainting model (composite routes on
+        // model:"inpaint"). Same event shape as ensureSegmentationModel.
+        function ensureInpaintModel(onProgress) {
+            return new Promise((resolve, reject) => {
+                const unsub = bridge.subscribe("ai.ensureModel", { model: "inpaint" }, (e) => {
+                    if (e.type === "progress") onProgress?.(e.bytesDone ?? 0, e.totalBytes ?? null);
+                    else if (e.type === "done") { unsub(); resolve(); }
+                    else if (e.type === "error") { unsub(); reject(new Error(e.message || "inpaint model download failed")); }
+                });
+            });
+        }
+
+        function arrayBufferToBase64(buf) {
+            const bytes = new Uint8Array(buf);
+            let binary = "";
+            const chunk = 0x8000;
+            for (let i = 0; i < bytes.length; i += chunk) {
+                binary += String.fromCharCode.apply(null, bytes.subarray(i, i + chunk));
+            }
+            return btoa(binary);
+        }
+
+        window.addEventListener("pagehide", () => {
+            if (sessionId) bridge.invoke("ai.vision.closeSession", { sessionId }).catch(() => {});
+        });
+
+        start();
+    </script>
+</body>
+</html>

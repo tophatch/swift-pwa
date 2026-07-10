@@ -795,6 +795,21 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     ])
 
     package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))
+
+    // `ai.onnx_gpu` (desktop GPU execution providers — DirectML on Windows,
+    // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md) sets
+    // this env at build time (Build.applyLocalOnnxRuntimeGate). It gates the
+    // GPU execution-provider selection in OrtModelSession behind a compile
+    // define, because those append-EP symbols (`OrtSessionOptionsAppend
+    // ExecutionProvider_{CUDA,DML}`) only exist in the GPU-enabled ONNX Runtime
+    // build we link when the flag is on — referencing them unconditionally
+    // would break the CPU-artifact link. The CPU build simply doesn't compile
+    // that code.
+    let segmentationSwiftSettings: [SwiftSetting] =
+        ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
+            ? swiftSettings + [.define("SWIFT_PWA_ONNXRUNTIME_GPU")]
+            : swiftSettings
+
     package.targets.append(contentsOf: [
         // Vendored stb_image (single-header, public-domain) — the desktop
         // image decoder (Linux/Windows have no CoreGraphics / BitmapFactory).
@@ -803,7 +818,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         .target(
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,
-            swiftSettings: swiftSettings,
+            swiftSettings: segmentationSwiftSettings,
             linkerSettings: [
                 .linkedLibrary("onnxruntime", .when(platforms: [.android, .linux, .windows])),
                 // The vendored ONNX Runtime xcframework embeds protobuf (C++),

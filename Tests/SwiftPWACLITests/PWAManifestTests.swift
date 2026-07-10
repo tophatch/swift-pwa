@@ -185,6 +185,29 @@ struct PWAManifestTests {
         #expect(try String(contentsOf: tmp, encoding: .utf8).contains("local_onnx_runtime"))
     }
 
+    @Test("ai.onnx_gpu decodes from snake_case and round-trips")
+    func aiOnnxGpu() throws {
+        let json = #"""
+        {
+          "id": "com.example.hi", "name": "Hi", "version": "1.0.0",
+          "web": { "directory": "web", "entry": "index.html" },
+          "window": { "title": "Hi", "width": 1024, "height": 768, "resizable": true, "fullscreen": false },
+          "ai": { "local_onnx_runtime": true, "onnx_gpu": true }
+        }
+        """#
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        #expect(m.ai?.onnxGpu == true)
+        #expect(m.ai?.localOnnxRuntime == true)
+
+        let tmp = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("pwa-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: tmp) }
+        try m.write(to: tmp)
+        #expect(try String(contentsOf: tmp, encoding: .utf8).contains("onnx_gpu"))
+    }
+
     @Test("executable_name round-trips and drives binaryName; otherwise falls back to name")
     func executableNameRoundTrips() throws {
         var m = PWAManifest(

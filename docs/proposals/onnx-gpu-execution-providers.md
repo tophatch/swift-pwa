@@ -91,16 +91,12 @@ otherwise, transparently — the right default for shipped consumer apps.
 The GPU-capable ORT builds are larger (and on Linux imply a CUDA
 runtime expectation on the target). So pulling them is a **build-time
 opt-in**, keeping the default `ai.local_onnx_runtime` on the lean CPU
-artifact. Two candidate shapes (decision deferred to implementation):
-
-- extend the existing flag to a mode — `ai.local_onnx_runtime: "gpu"`
-  (vs. today's `true` = CPU); or
-- a sibling boolean — `ai.onnx_gpu: true` — layered on
-  `ai.local_onnx_runtime`.
-
-Either way the runtime behavior above is unconditional once the
-GPU-capable artifact is present; the flag only chooses *which artifact
-ships*.
+artifact. The flag is a sibling boolean — **`ai.onnx_gpu: true`** —
+layered on `ai.local_onnx_runtime` (chosen for simplicity over a
+`ai.local_onnx_runtime: "gpu"` mode). It only chooses *which artifact
+ships*; the auto-detect runtime behavior above is unconditional once the
+GPU-capable artifact is present. Desktop-only, like its CPU counterpart
+— ignored (with a warning) on macOS/iOS/Android.
 
 ### Packaging — reuse the 0.8.1 desktop infrastructure
 
@@ -126,6 +122,29 @@ at the GPU builds:
     the target; a missing/mismatched CUDA runtime surfaces as the GPU EP
     failing to load, which the auto-fallback turns into a CPU run + a
     one-line log (and `benchmark`/`info` reporting `cpu`).
+
+### Concrete artifact sources (verified against the v1.27.0 release)
+
+- **Linux CUDA** — `onnxruntime-linux-x64-gpu_cuda12-1.27.0.tgz`
+  (Microsoft's GitHub release; the naming is now split by CUDA major —
+  we take **CUDA 12**, vastly the broader install base over CUDA 13).
+  **ORT 1.27.0 — matches our committed desktop headers**, so this reuses
+  the existing `ONNXRuntimeDesktop` module directly. ~228 MB (vs. the
+  8 MB CPU tarball — it carries the CUDA + TensorRT providers).
+- **Windows DirectML** — the `Microsoft.ML.OnnxRuntime.DirectML` **NuGet
+  package** (the DirectML build is *not* a GitHub-release asset; the
+  release `-gpu_cuda12/13-` Windows zips are CUDA, which would be
+  NVIDIA-only and can't be verified on our AMD Radeon Windows box). Its
+  latest version is **1.24.4**, which **lags** our 1.27.0 desktop
+  headers — a 1.27 header requests a newer `ORT_API_VERSION` than a
+  1.24.4 runtime provides (`OrtGetApiBase()->GetApi()` returns null →
+  crash). So DirectML gets its **own pinned 1.24.4 header set + module**
+  (`ONNXRuntimeDirectML`, including `dml_provider_factory.h` for the
+  `OrtSessionOptionsAppendExecutionProvider_DML` C function, which is not
+  in the CPU/CUDA header set), kept separate from `ONNXRuntimeDesktop`
+  so each artifact's headers match its runtime's API version. DirectML
+  stays the Windows choice regardless of the lag: it is the only
+  cross-vendor path *and* the only one verifiable on our hardware.
 
 ### The CUDA/cuDNN version-pinning risk (Linux)
 

@@ -58,12 +58,14 @@
             else {
                 throw ImagePreprocessingError.unsupportedColorFormat("could not create an RGBA bitmap context")
             }
-            // CGContext's logical coordinate system is bottom-left/y-up —
-            // without a flip, drawing at y=0 lands at the *last* rows of the
-            // pixel buffer, not the first. Flip so the buffer's row 0 is the
-            // visual top.
-            context.translateBy(x: 0, y: CGFloat(resizedHeight))
-            context.scaleBy(x: 1, y: -1)
+            // Draw with NO manual y-flip. A CGImage rendered into a bitmap-backed
+            // CGContext already lands top-down in the pixel buffer (row 0 = the
+            // image's visual top) — CoreGraphics maps image rows to buffer rows
+            // directly here. Adding a translateBy/scaleBy(-1) flip inverts that and
+            // feeds the encoder an upside-down image, so SAM returns a vertically
+            // mirrored mask (the Android BitmapFactory and desktop stb_image paths
+            // are top-down without a flip; this keeps Apple consistent). Guarded by
+            // the "top-down" orientation test in ImagePreprocessingTests.
             context.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(resizedWidth), height: CGFloat(resizedHeight)))
 
             var tensor = [Float](repeating: 0, count: resizedWidth * resizedHeight * 3)

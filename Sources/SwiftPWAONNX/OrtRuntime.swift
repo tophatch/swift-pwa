@@ -23,11 +23,13 @@ import Foundation
 
     /// Thin, minimal Swift wrapper over the ONNX Runtime C API — the shared
     /// "ONNX Runtime backend tier" investment the 0.8 maintainer evaluation
-    /// calls out (reusable later for `gemma-onnx` / `stable-diffusion-onnx`,
-    /// not just segmentation). Deliberately narrow: only the primitives a
-    /// two-graph (encoder/decoder) SAM-style backend needs — load a model,
-    /// run it against named float32 tensors, read results back. Not a
-    /// general-purpose binding.
+    /// calls out. This target (`SwiftPWAONNX`) owns the runtime + linkage so
+    /// more than one backend can reuse it: `SwiftPWASegmentation`'s
+    /// `MobileSAMBackend` (`ai.vision.*`) and `SwiftPWAImageEdit`'s
+    /// `LaMaBackend` (`ai.generateImage` inpainting), with `gemma-onnx` /
+    /// `stable-diffusion-onnx` anticipated. Deliberately narrow: only the
+    /// primitives an ONNX-graph backend needs — load a model, run it against
+    /// named float32 tensors, read results back. Not a general-purpose binding.
     public enum OrtError: Error, CustomStringConvertible, Equatable {
         /// `OrtGetApiBase()`/`GetApi` returned nothing usable — no ONNX Runtime
         /// linked in, or a version mismatch against `ORT_API_VERSION`.
@@ -52,13 +54,13 @@ import Foundation
     /// the wrapped `api`/`env` pointers are set once at init and never mutated
     /// afterward, and ONNX Runtime documents `OrtEnv` + running sessions as
     /// thread-safe for concurrent use.
-    final class OrtRuntime: @unchecked Sendable {
+    public final class OrtRuntime: @unchecked Sendable {
         /// `nil` when no usable ONNX Runtime is linked (e.g. the
         /// `SWIFT_PWA_ONNXRUNTIME` gate is off, or on a platform/host with no
-        /// linked artifact). Callers translate that into `.unavailable` at the
-        /// `SegmentationBackend` boundary — this type doesn't know about
-        /// `VisionError`.
-        static let shared: OrtRuntime? = OrtRuntime()
+        /// linked artifact). Callers translate that into `.unavailable` at
+        /// their backend boundary (e.g. `VisionError` / `AIError`) — this type
+        /// doesn't know about those.
+        public static let shared: OrtRuntime? = OrtRuntime()
 
         let api: UnsafePointer<OrtApi>
         let env: OpaquePointer

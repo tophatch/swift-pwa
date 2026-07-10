@@ -36,6 +36,9 @@ if phiSilicaEnabled {
 }
 if onnxRuntimeEnabled {
     appDependencies.append(.product(name: "SwiftPWASegmentation", package: "swift-pwa"))
+    // LaMaBackend (`ai.generateImage` inpainting) — same ONNX Runtime gate,
+    // composed with the text backend behind one `ai.*` surface (tap-to-erase).
+    appDependencies.append(.product(name: "SwiftPWAImageEdit", package: "swift-pwa"))
 }
 
 let package = Package(

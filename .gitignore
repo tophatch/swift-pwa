@@ -37,3 +37,10 @@ Vendor/onnxruntime-android/
 # release asset). Headers under Vendor/onnxruntime-desktop-headers/ ARE
 # committed (the shared systemLibrary modulemap) — only the libs are ignored.
 Vendor/onnxruntime-desktop/
+# Vendored ONNX Runtime desktop GPU libs (Linux CUDA .so's / Windows DirectML
+# .dll+.lib, built by Scripts/vendor-onnxruntime-{linux-gpu,windows-directml}.sh;
+# adopters get the checksummed release asset). The DirectML headers under
+# Vendor/onnxruntime-directml-headers/ ARE committed (module ONNXRuntimeDirectML,
+# ORT 1.24.4 — a separate API version from the 1.27 desktop set); only the libs
+# are ignored. (Linux GPU reuses the committed 1.27 onnxruntime-desktop-headers.)
+Vendor/onnxruntime-desktop-gpu/

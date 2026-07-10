@@ -918,6 +918,32 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             swiftSettings: swiftSettings
         )
     ])
+
+    // MARK: - Image-edit backend (ai.generateImage inpainting, LaMa via ONNX Runtime)
+
+    // `LaMaBackend` conforms to Core's `AIBackend` and is the first consumer of
+    // the generalized `ai.generateImage` editing path (image + mask → image;
+    // see docs/proposals/image-generation-editing.md). It reuses the shared
+    // `SwiftPWAONNX` tier (same OrtModelSession + desktop GPU providers as
+    // MobileSAM) and keeps its own ONNX-module dependencies so `LaMaBackend`'s
+    // `canImport(ONNXRuntime*)` gate stays exact. Image decode/encode
+    // (`ImageCodec`) is Apple-first (CoreGraphics/ImageIO); the desktop/Android
+    // codec paths are a documented follow-up (a clear runtime error until then).
+    package.products.append(.library(name: "SwiftPWAImageEdit", targets: ["SwiftPWAImageEdit"]))
+    package.targets.append(contentsOf: [
+        .target(
+            name: "SwiftPWAImageEdit",
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
+                + onnxRuntimeModuleDependencies(),
+            swiftSettings: segmentationSwiftSettings,
+            linkerSettings: onnxRuntimeLinkerSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAImageEditTests",
+            dependencies: ["SwiftPWAImageEdit", "SwiftPWACore"],
+            swiftSettings: swiftSettings
+        )
+    ])
 }
 
 // MARK: - Optional Windows Phi Silica backend (env-gated, Windows App SDK)

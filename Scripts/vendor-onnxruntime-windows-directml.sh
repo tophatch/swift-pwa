@@ -46,7 +46,12 @@ fetch_nupkg() { # id version -> extracted dir
     dir="$WORK/${lower}.${ver}"
     if [ ! -d "$dir" ]; then
         local pkg="$WORK/${lower}.${ver}.nupkg"
-        [ -f "$pkg" ] || { echo "=== downloading $id $ver ==="; \
+        # NB: this status line MUST go to stderr — fetch_nupkg returns $dir via
+        # stdout (captured by `ORT_DIR="$(fetch_nupkg …)"`), so anything printed
+        # to stdout here gets prepended to the path. Only bites on a cold runner
+        # where the download branch actually runs, which is why it passed
+        # locally (warm .build cache) but failed in CI.
+        [ -f "$pkg" ] || { echo "=== downloading $id $ver ===" >&2; \
             curl -sL --fail -o "$pkg" \
             "https://api.nuget.org/v3-flatcontainer/${lower}/${ver}/${lower}.${ver}.nupkg"; }
         mkdir -p "$dir" && unzip -oq "$pkg" -d "$dir"

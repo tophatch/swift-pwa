@@ -198,7 +198,7 @@ struct Build: AsyncParsableCommand {
         try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
         Self.applyGeminiNanoGate(manifest: pwa, target: target)
         Self.applyPhiSilicaGate(manifest: pwa, target: target)
-        Self.applyLocalOnnxRuntimeGate(manifest: pwa, target: target)
+        try await Self.applyLocalOnnxRuntimeGate(manifest: pwa, target: target, projectRoot: cwd)
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
@@ -496,7 +496,7 @@ struct Build: AsyncParsableCommand {
     ///   `manifest.ai?.localOnnxRuntime` flag directly and resolves +
     ///   stages the `.so` per ABI via `OnnxRuntimeAndroidArtifact` inside
     ///   its cross-compile loop.
-    static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget) {
+    static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         guard manifest.ai?.localOnnxRuntime == true else { return }
         switch target {
         case .macos, .ios:
@@ -512,11 +512,48 @@ struct Build: AsyncParsableCommand {
                 "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
                     + "(SwiftPWASegmentation); libonnxruntime.so resolved per-ABI during cross-compile"
             )
-        default:
-            print(
-                "swift-pwa: ai.local_onnx_runtime is set but ONNX Runtime has no \(target) backend yet "
-                    + "(segmentation ships a NoneBackend there) — ignoring it for this build."
-            )
+        case .linux:
+            // ONNX Runtime desktop is a *shared* lib (unlike llama's static
+            // Linux slice), so the dir goes on LIBRARY_PATH for the link step
+            // here and the `.so` is staged into the AppImage at runtime (see
+            // LinuxBundler, which re-resolves via the same idempotent call).
+            #if os(Linux)
+                let libDir = try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
+                setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
+                let existing = ProcessInfo.processInfo.environment["LIBRARY_PATH"]
+                setenv("LIBRARY_PATH", existing.map { "\(libDir.path):\($0)" } ?? libDir.path, 1)
+                print(
+                    "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
+                        + "(SwiftPWASegmentation, CPU); libonnxruntime.so from \(libDir.path)"
+                )
+            #else
+                print(
+                    "swift-pwa: ai.local_onnx_runtime for --target linux must be run on a Linux host — "
+                        + "ignoring it for this build."
+                )
+            #endif
+        case .windows:
+            #if os(Windows)
+                let libDir = try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
+                // `_putenv_s` (not POSIX `setenv`) so both CRT + Win32 env
+                // blocks update — WindowsBundler reads `LIB` back through
+                // ProcessInfo. onnxruntime.dll from the same dir is staged
+                // next to the .exe by WindowsBundler at runtime.
+                _ = _putenv_s("SWIFT_PWA_ONNXRUNTIME", "1")
+                let env = ProcessInfo.processInfo.environment
+                let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
+                let combined = (existing.map { [libDir.path, $0] } ?? [libDir.path]).joined(separator: ";")
+                _ = _putenv_s("LIB", combined)
+                print(
+                    "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
+                        + "(SwiftPWASegmentation, CPU); onnxruntime.lib from \(libDir.path)"
+                )
+            #else
+                print(
+                    "swift-pwa: ai.local_onnx_runtime for --target windows must be run on a Windows host — "
+                        + "ignoring it for this build."
+                )
+            #endif
         }
     }
 

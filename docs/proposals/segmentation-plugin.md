@@ -25,8 +25,9 @@
 > recorded for the still-needed CLI-side fetch resolver,
 > `LlamaLinuxArtifact`-style, once something calls it).
 >
-> **`MobileSAMBackend` (Apple + Android) is real, wired, and verified
-> against real weights**, in its own `SwiftPWASegmentation` target:
+> **`MobileSAMBackend` (all platforms — Apple + Android in 0.8.0, Linux +
+> Windows desktop since) is real, wired, and verified against real weights**,
+> in its own `SwiftPWASegmentation` target:
 > `openSession`/`segment`/`closeSession` run MobileSAM's encoder + one of
 > two decoder variants as ONNX Runtime sessions, with `ImagePreprocessing`
 > (resize-only — see below) and `MaskPostprocessing` (RLE) as
@@ -68,8 +69,12 @@
 > "an APK asset isn't a file ONNX Runtime can open" materialization step.
 > `Examples/CritterFacts` uses this tier. The fixed-path initializer
 > (`init(encoderPath:decoderSinglePath:decoderMultiPath:)`) remains for
-> apps that prefer to bundle/ship their own weights. Linux/Windows backends
-> don't exist yet.
+> apps that prefer to bundle/ship their own weights. **Linux x86_64 +
+> Windows x64 desktop backends landed post-0.8.0** (CPU ONNX Runtime; image
+> decode via a vendored stb_image + a pure-Swift resize, since there's no
+> CoreGraphics / `BitmapFactory` there), completing cross-platform parity —
+> real compile/link/run verified on both. Linux needs Swift 6.1+ for the
+> segmentation target (a 6.0.x strict-concurrency diagnostic).
 
 ## Motivation
 
@@ -378,14 +383,15 @@ Apple, prebuilt artifacts, checksum-pin workflows). Therefore **0.8 scope**:
   `segment` (single positive point **+ optional box**) / `closeSession` /
   `ensureModel`; on **Apple + Android** (the platforms the consumer needs).
 - **Fast-follow (not 0.8):** `segmentAll`/AMG + `segmentAllStream`,
-  `ai.vision.benchmark`, multi-point / negative-point refine, and any desktop
-  (Linux/Windows) backend. None of these change the request shapes, so they
-  land without a contract break. **Status:** `segmentAll`/`segmentAllStream`
-  (grid-of-prompts + NMS, `autoMask: true`) and `ai.vision.benchmark` (synthetic
-  encode/decode/AMG timing → a `high`/`mid`/`low` `deviceClass`) both shipped on
-  `MobileSAMBackend` post-0.8.0, verified against real weights on macOS. The
-  desktop (Linux/Windows) backends are still open; multi-point / negative refine
-  already works (the `segment` contract loops over `points`).
+  `ai.vision.benchmark`, multi-point / negative-point refine, and the desktop
+  (Linux/Windows) backends. None of these change the request shapes, so they
+  land without a contract break. **Status:** all shipped post-0.8.0 —
+  `segmentAll`/`segmentAllStream` (grid-of-prompts + NMS, `autoMask: true`),
+  `ai.vision.benchmark` (synthetic encode/decode/AMG timing → a
+  `high`/`mid`/`low` `deviceClass`), and the Linux + Windows desktop backends
+  (CPU ONNX Runtime, verified on real hardware). Multi-point / negative refine
+  already works (the `segment` contract loops over `points`). A GPU
+  execution-provider desktop build is the only remaining fast-follow.
 
 ### 3. Answers to the open questions
 
@@ -408,9 +414,11 @@ Apple, prebuilt artifacts, checksum-pin workflows). Therefore **0.8 scope**:
 ### 4. Gaps to close before implementation
 
 - **Cross-platform parity is a documented exception here.** Per the repo's
-  parity-by-default rule, state explicitly that Linux/Windows ship a
-  `NoneBackend` (`available:false`) in 0.8 — this is a scoped-down exception,
-  not an oversight — and note it in the relevant platform docs.
+  parity-by-default rule, Linux/Windows shipped a `NoneBackend`
+  (`available:false`) in 0.8 as a scoped-down exception, noted in the platform
+  docs. **Resolved post-0.8.0:** the Linux + Windows desktop backends now
+  exist (CPU ONNX Runtime), so the exception is closed — all five backends
+  report `available:true` when `ai.local_onnx_runtime` is on.
 - **iOS vs macOS.** "Apple" must be pinned down: a ViT encoder on an iPhone NPU
   (CoreML EP) is viable but memory-heavy, and the ~4 MB/embedding LRU cap
   interacts with iOS memory limits. Decide iOS in or out for 0.8 explicitly.

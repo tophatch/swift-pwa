@@ -1,8 +1,9 @@
-// Apple (CoreGraphics/ImageIO-based preprocessing) or Android (RPC-based
-// preprocessing, see AndroidImagePreprocessing.swift) — matches wherever an
-// ONNX Runtime is actually linked (see OrtRuntime.swift). Linux/Windows have
-// no ONNX Runtime story yet (see docs/proposals/segmentation-plugin.md).
-#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid)
+// Preprocessing is platform-specific — Apple (CoreGraphics/ImageIO), Android
+// (RPC to Kotlin BitmapFactory, see AndroidImagePreprocessing.swift), or
+// desktop Linux/Windows (vendored stb_image, see DesktopImagePreprocessing.swift)
+// — but gated together wherever an ONNX Runtime is actually linked (see
+// OrtRuntime.swift).
+#if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop)
     import Foundation
     import SwiftPWACore
     import SwiftPWAModelStore

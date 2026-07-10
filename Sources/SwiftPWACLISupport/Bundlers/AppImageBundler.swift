@@ -114,13 +114,28 @@ struct AppImageBundler {
         let linuxdeploy = try await Self.findOrThrow("linuxdeploy")
         let desktopPath = appDir.appendingPathComponent("usr/share/applications/\(exeName).desktop").path
         let iconPath = iconDst.path
-        try await Shell.run("/usr/bin/env", [
+        var args = [
             linuxdeploy.lastPathComponent,
             "--appdir", appDir.path,
             "--desktop-file", desktopPath,
-            "--icon-file", iconPath,
-            "--output", "appimage"
-        ], cwd: outputDir)
+            "--icon-file", iconPath
+        ]
+        // ai.local_onnx_runtime links ONNX Runtime as a *shared* lib
+        // (libonnxruntime.so), which isn't a NEEDED entry linuxdeploy can find
+        // on a system path — so hand it to linuxdeploy explicitly with
+        // `--library`. linuxdeploy copies it into the AppDir's usr/lib and
+        // patches the rpath, so the app resolves it at runtime. (The same
+        // idempotent resolve the link-time gate used — see OnnxRuntimeLinuxArtifact.)
+        if manifest.ai?.localOnnxRuntime == true {
+            let libDir = try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
+            // Deploy the SONAME'd file (`libonnxruntime.so.1`) — that's the
+            // name the binary's NEEDED entry references, so linuxdeploy must
+            // land it under exactly that filename in the AppDir's usr/lib.
+            args += ["--library", libDir.appendingPathComponent("libonnxruntime.so.1").path]
+            print("swift-pwa: bundling libonnxruntime.so.1 into the AppImage (ai.local_onnx_runtime)")
+        }
+        args += ["--output", "appimage"]
+        try await Shell.run("/usr/bin/env", args, cwd: outputDir)
 
         // linuxdeploy emits <Name>-<arch>.AppImage in cwd.
         let candidates = (try? FileManager.default.contentsOfDirectory(atPath: outputDir.path)) ?? []

@@ -199,8 +199,14 @@ public struct AICapabilities: Sendable, Codable, Equatable {
     /// is honored rather than ignored.
     public let vision: Bool
     /// Whether the backend supports text→image generation
-    /// (`ai.generateImage` / `ai.generateImageStream`).
+    /// (`ai.generateImage` / `ai.generateImageStream` with a `prompt`).
     public let imageGeneration: Bool
+    /// Whether the backend accepts an input `image` (± `mask`) on
+    /// `ai.generateImage` / `ai.generateImageStream` — i.e. image→image
+    /// and inpaint. Orthogonal to `imageGeneration`: a prompt-free
+    /// inpainter (LaMa) reports `imageEditing` alone, a Stable-Diffusion
+    /// backend may report both.
+    public let imageEditing: Bool
     /// Whether the backend accepts audio input — i.e. `audio` on
     /// `ai.generate` / `ai.generateJSON` / `ai.generateStream` is honored
     /// (phoneme evaluation, transcription, audio Q&A).
@@ -223,6 +229,7 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         structuredOutput: Bool = false,
         vision: Bool = false,
         imageGeneration: Bool = false,
+        imageEditing: Bool = false,
         audioInput: Bool = false,
         audioGeneration: Bool = false,
         voiceCloning: Bool = false
@@ -234,6 +241,7 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         self.structuredOutput = structuredOutput
         self.vision = vision
         self.imageGeneration = imageGeneration
+        self.imageEditing = imageEditing
         self.audioInput = audioInput
         self.audioGeneration = audioGeneration
         self.voiceCloning = voiceCloning
@@ -256,11 +264,12 @@ public enum AIBackendID {
     public static let gemmaONNX = "gemma-onnx"
     public static let gemmaLlamaCpp = "gemma-llamacpp"
 
-    // Image-generation (text→image) backends.
+    // Image generation / editing backends (text→image, img2img, inpaint).
     public static let appleImagePlayground = "apple-image-playground"
     public static let stableDiffusionMLX = "stable-diffusion-mlx"
     public static let stableDiffusionONNX = "stable-diffusion-onnx"
     public static let stableDiffusionMediaPipe = "stable-diffusion-mediapipe"
+    public static let lamaONNX = "lama-onnx"
 
     // Audio backends (input: ASR / phoneme eval; output: TTS).
     public static let appleSpeech = "apple-speech"
@@ -443,12 +452,20 @@ public struct AIChunk: Sendable, Codable, Equatable {
 
 // MARK: - Image generation (text→image)
 
-/// A text→image generation request (`ai.generateImage` /
-/// `ai.generateImageStream`). All knobs are optional with backend-chosen
-/// defaults so a bare `{ prompt }` works.
+/// An image generation / editing request (`ai.generateImage` /
+/// `ai.generateImageStream`). The **operation is selected by which fields
+/// are present**, not by a separate command — text→image (`prompt`
+/// only), image→image (`prompt` + `image`), or inpaint (`image` + `mask`,
+/// with or without a `prompt`). All knobs are optional with backend-chosen
+/// defaults so a bare `{ prompt }` (text→image) or `{ image, mask }`
+/// (prompt-free inpaint, e.g. LaMa) both work. The model and the operation
+/// are a backend choice, invisible to JS — a backend honors the fields it
+/// understands and reports what it can do via `AICapabilities`.
 public struct AIGenerateImageRequest: Sendable, Codable, Equatable {
-    /// The image prompt. Required.
-    public var prompt: String
+    /// The image prompt. Optional: text→image and img2img backends
+    /// require it (and throw `E_AI_GENERATION` if absent), but a
+    /// prompt-free editing backend (e.g. LaMa inpainting) needs none.
+    public var prompt: String?
     /// Optional negative prompt (what to avoid), for backends that accept one.
     public var negativePrompt: String?
     public var width: Int?
@@ -466,15 +483,38 @@ public struct AIGenerateImageRequest: Sendable, Codable, Equatable {
     /// Mirrors `fs`'s path-to-path stance for large binary payloads.
     public var outputDirectory: String?
 
+    /// Source / init image. Its presence turns text→image into
+    /// image→image (or, with `mask`, an inpaint). Inline base64 or an
+    /// on-disk `path` — the same `AIImage` carrier vision input uses, so a
+    /// large image need not cross the bridge as base64. Honored only by a
+    /// backend reporting `imageEditing: true`; ignored otherwise.
+    public var image: AIImage?
+    /// Edit mask (grayscale) accompanying `image`. Convention: **white
+    /// (255) = edit this region, black (0) = keep**. Same `AIImage`
+    /// carrier. A pure-inpaint backend (LaMa) reconstructs the white
+    /// region; ignored without `image`.
+    public var mask: AIImage?
+    /// img2img denoising strength (0…1): how far to deviate from `image`.
+    /// `nil` lets the backend choose. Ignored by pure-inpaint (LaMa) and
+    /// text→image backends.
+    public var strength: Double?
+    /// Classifier-free-guidance scale (a Stable-Diffusion-family knob).
+    /// `nil` lets the backend choose; a prompt-free backend ignores it.
+    public var guidanceScale: Double?
+
     public init(
-        prompt: String,
+        prompt: String? = nil,
         negativePrompt: String? = nil,
         width: Int? = nil,
         height: Int? = nil,
         steps: Int? = nil,
         seed: Int? = nil,
         count: Int? = nil,
-        outputDirectory: String? = nil
+        outputDirectory: String? = nil,
+        image: AIImage? = nil,
+        mask: AIImage? = nil,
+        strength: Double? = nil,
+        guidanceScale: Double? = nil
     ) {
         self.prompt = prompt
         self.negativePrompt = negativePrompt
@@ -484,6 +524,10 @@ public struct AIGenerateImageRequest: Sendable, Codable, Equatable {
         self.seed = seed
         self.count = count
         self.outputDirectory = outputDirectory
+        self.image = image
+        self.mask = mask
+        self.strength = strength
+        self.guidanceScale = guidanceScale
     }
 }
 

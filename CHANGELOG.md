@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **`ai.generateImage` generalized from text→image to a purpose-agnostic image op.** The command (contract-only since v0.7.0) now selects its operation by *which fields are present* rather than by a separate command per mode: `prompt` alone → text→image; `prompt` + `image` → image→image (img2img); `image` + `mask` (with or without a `prompt`) → inpaint. `AIGenerateImageRequest` gains optional `image`, `mask` (both `AIImage` — inline base64 or on-disk `path`, mask convention white=edit/black=keep), `strength` (img2img denoising), and `guidanceScale` (CFG); `prompt` relaxes from required to optional (a prompt-free inpainter like LaMa needs none — no shipped backend read it yet, so zero blast radius). `AICapabilities` gains **`imageEditing`** (accepts an input `image` ± `mask`) orthogonal to the existing `imageGeneration` (honors `prompt`): a prompt-free inpainter reports `imageEditing` alone, a Stable-Diffusion backend may report both. Result / streaming types are unchanged (an edited image *is* a generated image). Rationale + the SAM→inpaint pairing in [docs/proposals/image-generation-editing.md](docs/proposals/image-generation-editing.md): the model and the operation are a backend choice invisible to JS, and the backends we ship are examples of the contract, not doctrine. `AIBackendID` reserves `lama-onnx` for the first backend (LaMa inpainting on the shipped ONNX Runtime tier).
+
 ## [0.8.2] - 2026-07-10
 
 ### Added

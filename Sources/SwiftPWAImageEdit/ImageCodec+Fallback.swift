@@ -31,5 +31,10 @@
             throw ImageCodecError
                 .encodeFailed("PNG encode is not yet implemented on this platform (Apple-only for now)")
         }
+
+        static func resizeRGB(_: RawImage, toWidth _: Int, height _: Int) throws -> RawImage {
+            throw ImageCodecError
+                .encodeFailed("image resize is not yet implemented on this platform (Apple-only for now)")
+        }
     }
 #endif

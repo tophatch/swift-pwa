@@ -1,18 +1,23 @@
 # Proposal: on-device image generation & editing (`ai.generateImage`)
 
-> **Status: in progress, targeting v0.9.0.** Landed so far (Apple,
-> verified): the generalized `ai.generateImage` **contract** (optional
-> `prompt`, new `image`/`mask`/`strength`/`guidanceScale`,
-> `AICapabilities.imageEditing`); a shared **`SwiftPWAONNX`** target
-> extracted from `SwiftPWASegmentation` so backends can reuse the ONNX
-> Runtime tier; and **`LaMaBackend`** (`SwiftPWAImageEdit`) with an
-> Apple image codec (`ImageCodec`), a configurable `LaMaModelSpec`, and a
-> downloadable-model tier. **Immediate follow-ups:** the desktop
-> (stb_image) / Android (BitmapFactory-RPC) image codecs, the
-> `lama-vendor` weights release + publish workflow, the on-hardware
-> real-weights verification pass (to confirm the assumed `LaMaModelSpec`
-> constants), and a CritterFacts tap-to-erase example. Original proposal
-> text below.
+> **Status: in progress, targeting v0.9.0.** Landed + verified on Apple:
+> the generalized `ai.generateImage` **contract** (optional `prompt`, new
+> `image`/`mask`/`strength`/`guidanceScale`, `AICapabilities.imageEditing`);
+> a shared **`SwiftPWAONNX`** target extracted from `SwiftPWASegmentation`
+> so backends reuse the ONNX Runtime tier; **`LaMaBackend`**
+> (`SwiftPWAImageEdit`) with an Apple `ImageCodec`, a configurable
+> `LaMaModelSpec`, resize-to-square + composite-back, and a
+> downloadable-model tier; and the **`Scripts/vendor-lama.sh`** +
+> **`.github/workflows/lama-vendor.yml`** weights-hosting path.
+> **Real-weights pass done (Apple/CPU):** the actual big-lama fp32 export
+> ran end-to-end — the assumed `LaMaModelSpec` (input names `image`/`mask`,
+> output `output`, `[0,1]` image, `[0,255]` output, **fixed 512² input** —
+> the one correction from the assumed dynamic size) is confirmed; a masked
+> block inpaints away and unmasked pixels stay pristine. **Immediate
+> follow-ups:** publish the `lama-vendor` release (run the workflow) + it's
+> live for `LaMaBackend(cacheDirectory:)`; the desktop (stb_image) / Android
+> (BitmapFactory-RPC) image codecs; GPU / other-platform verification; and a
+> CritterFacts tap-to-erase example. Original proposal text below.
 >
 > **Status (original): proposed, targeting v0.9.0.** The text→image half of the
 > `ai.*` contract (`ai.generateImage` / `ai.generateImageStream`,

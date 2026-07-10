@@ -3,19 +3,17 @@ import SwiftPWACore
 @testable import SwiftPWAImageEdit
 import Testing
 
-@Suite("LaMaModelSpec working-size geometry")
+@Suite("LaMaModelSpec")
 struct LaMaModelSpecTests {
-    @Test("working size caps the longest side and rounds to a multiple of 8")
-    func working() {
-        let spec = LaMaModelSpec(maxWorkingSide: 1024, sizeMultiple: 8)
-        // No downscale: 500x300 rounds to nearest /8 (504x304... rounded).
-        let small = spec.workingSize(forWidth: 500, height: 300)
-        #expect(small.width % 8 == 0)
-        #expect(small.height % 8 == 0)
-        // Downscale: 4000x2000 → longest capped at 1024, still /8.
-        let big = spec.workingSize(forWidth: 4000, height: 2000)
-        #expect(max(big.width, big.height) <= 1024)
-        #expect(big.width % 8 == 0 && big.height % 8 == 0)
+    @Test("big-lama defaults match the introspected graph contract")
+    func bigLamaDefaults() {
+        let spec = LaMaModelSpec.bigLama
+        #expect(spec.inputSize == 512) // fixed 512×512 image/mask inputs
+        #expect(spec.imageInputName == "image")
+        #expect(spec.maskInputName == "mask")
+        #expect(spec.outputName == "output")
+        #expect(spec.normalizeImageTo01 == true)
+        #expect(spec.outputIs0To255 == true)
     }
 }
 

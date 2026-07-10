@@ -29,14 +29,13 @@ public struct LaMaModelSpec: Sendable, Equatable {
     /// Mask threshold on `0…255` luminance: at or above → "inpaint here"
     /// (fed as 1.0), below → keep (0.0). Mask convention is white=edit.
     public var maskThreshold: UInt8
-    /// Longest working side. The image+mask are resized so the longer side
-    /// is at most this, each dimension rounded to a multiple of
-    /// `sizeMultiple`; the result comes back at that working resolution.
-    /// Caps inference cost/memory on large inputs.
-    public var maxWorkingSide: Int
-    /// Both working dimensions are rounded to a multiple of this (LaMa
-    /// requires `H,W` divisible by 8).
-    public var sizeMultiple: Int
+    /// The square pixel size the graph's `image`/`mask` inputs require. The
+    /// big-lama fp32 export has **fixed** `512×512` inputs (confirmed by
+    /// graph introspection), so the image + mask are resized to this square
+    /// for inference; the model output is then resized back to the source
+    /// resolution and composited over the original **only within the masked
+    /// region**, so unmasked pixels stay pristine (no global resize loss).
+    public var inputSize: Int
 
     public init(
         imageInputName: String = "image",
@@ -45,8 +44,7 @@ public struct LaMaModelSpec: Sendable, Equatable {
         normalizeImageTo01: Bool = true,
         outputIs0To255: Bool = true,
         maskThreshold: UInt8 = 128,
-        maxWorkingSide: Int = 1024,
-        sizeMultiple: Int = 8
+        inputSize: Int = 512
     ) {
         self.imageInputName = imageInputName
         self.maskInputName = maskInputName
@@ -54,24 +52,13 @@ public struct LaMaModelSpec: Sendable, Equatable {
         self.normalizeImageTo01 = normalizeImageTo01
         self.outputIs0To255 = outputIs0To255
         self.maskThreshold = maskThreshold
-        self.maxWorkingSide = maxWorkingSide
-        self.sizeMultiple = sizeMultiple
+        self.inputSize = inputSize
     }
 
-    /// The assumed big-lama fp32 contract (all defaults).
+    /// The big-lama fp32 contract (all defaults) — `image`/`mask`
+    /// `[1,C,512,512]` float32, image `[0,1]` RGB, mask `[0,1]` (white =
+    /// fill), `output` `[0,255]` RGB.
     public static let bigLama = LaMaModelSpec()
-
-    /// The working `(width, height)` for a source of `(width, height)`:
-    /// scaled so the longer side ≤ `maxWorkingSide`, each rounded (down, min
-    /// one step) to a multiple of `sizeMultiple`.
-    func workingSize(forWidth width: Int, height: Int) -> (width: Int, height: Int) {
-        let longest = max(width, height)
-        let scale = longest > maxWorkingSide ? Double(maxWorkingSide) / Double(longest) : 1
-        func round8(_ value: Double) -> Int {
-            max(sizeMultiple, Int((value / Double(sizeMultiple)).rounded()) * sizeMultiple)
-        }
-        return (round8(Double(width) * scale), round8(Double(height) * scale))
-    }
 }
 
 /// A downloadable LaMa ONNX model. Mirrors `SwiftPWASegmentation`'s
@@ -91,19 +78,19 @@ public struct LaMaModelSource: Sendable, Equatable {
         self.sizeBytes = sizeBytes
     }
 
-    /// Canonical big-lama weights on this repo's stable `lama-vendor` GitHub
-    /// Release.
+    /// Canonical big-lama fp32 weights on this repo's stable `lama-vendor`
+    /// GitHub Release (Carve's LaMa-ONNX re-export of the Apache-2.0 big-lama
+    /// checkpoint, `[1,C,512,512]` I/O). The checksum + size are pinned
+    /// against the exact bytes `Scripts/vendor-lama.sh` downloads (which
+    /// `.github/workflows/lama-vendor.yml` re-hosts byte-identically).
     ///
-    /// > PENDING: the `lama-vendor` release + its `.github/workflows/lama-
-    /// > vendor.yml` publish step are a follow-up (like MobileSAM's
-    /// > `mobilesam-vendor`); the `sha256`/`sizeBytes` below are placeholders
-    /// > to be pinned against the published asset. Until then, construct
-    /// > `LaMaBackend(modelPath:)` with a local export, or pass a custom
-    /// > `LaMaModelSource` pointing at your own hosting.
+    /// > The `lama-vendor` release must be published (run the workflow) before
+    /// > `LaMaBackend(cacheDirectory:)`'s `ai.ensureModel` can fetch from this
+    /// > URL. Until then, use `LaMaBackend(modelPath:)` with a local export.
     public static let bigLama = LaMaModelSource(
         url: URL(string: "https://github.com/tophatch/swift-pwa/releases/download/lama-vendor/big-lama.onnx")!,
-        sha256: "0000000000000000000000000000000000000000000000000000000000000000",
+        sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",
         fileName: "big-lama.onnx",
-        sizeBytes: 0
+        sizeBytes: 208_044_816
     )
 }

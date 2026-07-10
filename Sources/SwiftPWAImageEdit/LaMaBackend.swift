@@ -137,41 +137,47 @@
 
         // MARK: - Inference
 
-        /// Decode → tensors → run the graph → decode the output to an RGB
-        /// `RawImage` at the working resolution.
+        /// The full inpaint: resize image+mask to the model's fixed square,
+        /// run the graph, resize the result back to the source resolution, and
+        /// composite it over the original **only within the masked region** so
+        /// unmasked pixels stay pristine (the resize round-trip never touches
+        /// them). Returns a source-resolution RGB `RawImage`.
         private func runInpaint(image: AIImage, mask: AIImage) throws -> RawImage {
-            // Probe the source dimensions, then pick a working size (capped,
-            // multiple-of-8) and decode image + mask at it.
-            let probe = try mapCodec { try ImageCodec.decodeRGB(
+            // The pristine original + a source-resolution mask for compositing.
+            let base = try mapCodec {
+                try ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: nil)
+            }
+            let baseMask = try mapCodec {
+                try ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: nil)
+            }
+            let width = base.width, height = base.height
+
+            // Model inputs at the fixed square (e.g. 512×512).
+            let n = spec.inputSize
+            let square = (width: n, height: n)
+            let rgb = try mapCodec { try ImageCodec.decodeRGB(
                 path: image.path,
                 dataBase64: image.dataBase64,
-                size: nil
+                size: square
             ) }
-            let working = spec.workingSize(forWidth: probe.width, height: probe.height)
-            let rgb = probe.width == working.width && probe.height == working.height
-                ? probe
-                :
-                try mapCodec {
-                    try ImageCodec.decodeRGB(path: image.path, dataBase64: image.dataBase64, size: working)
-                }
-            let gray = try mapCodec {
-                try ImageCodec.decodeGray(path: mask.path, dataBase64: mask.dataBase64, size: working)
-            }
-
-            let width = working.width, height = working.height
-            let pixelCount = width * height
+            let gray = try mapCodec { try ImageCodec.decodeGray(
+                path: mask.path,
+                dataBase64: mask.dataBase64,
+                size: square
+            ) }
+            let squarePixels = n * n
 
             // Image → NCHW float32 (channel-planar), optionally /255.
-            var imageValues = [Float](repeating: 0, count: 3 * pixelCount)
+            var imageValues = [Float](repeating: 0, count: 3 * squarePixels)
             let imageScale: Float = spec.normalizeImageTo01 ? 255 : 1
-            for pixel in 0 ..< pixelCount {
+            for pixel in 0 ..< squarePixels {
                 for channel in 0 ..< 3 {
-                    imageValues[channel * pixelCount + pixel] = Float(rgb.pixels[pixel * 3 + channel]) / imageScale
+                    imageValues[channel * squarePixels + pixel] = Float(rgb.pixels[pixel * 3 + channel]) / imageScale
                 }
             }
-            // Mask → NCHW float32 [1,1,H,W], binarized (white = fill).
-            var maskValues = [Float](repeating: 0, count: pixelCount)
-            for pixel in 0 ..< pixelCount {
+            // Mask → NCHW float32 [1,1,n,n], binarized (white = fill).
+            var maskValues = [Float](repeating: 0, count: squarePixels)
+            for pixel in 0 ..< squarePixels {
                 maskValues[pixel] = gray.pixels[pixel] >= spec.maskThreshold ? 1 : 0
             }
 
@@ -179,26 +185,39 @@
             let outputs = try mapOrt {
                 try session.run(
                     inputs: [
-                        spec.imageInputName: .init(values: imageValues, shape: [1, 3, Int64(height), Int64(width)]),
-                        spec.maskInputName: .init(values: maskValues, shape: [1, 1, Int64(height), Int64(width)])
+                        spec.imageInputName: .init(values: imageValues, shape: [1, 3, Int64(n), Int64(n)]),
+                        spec.maskInputName: .init(values: maskValues, shape: [1, 1, Int64(n), Int64(n)])
                     ],
                     outputNames: [spec.outputName]
                 )
             }
-            guard let out = outputs[spec.outputName] else {
-                throw AIError.generationFailed("LaMa graph produced no \"\(spec.outputName)\" output")
+            guard let out = outputs[spec.outputName], out.shape.count == 4 else {
+                throw AIError.generationFailed("LaMa graph produced no 4-D \"\(spec.outputName)\" output")
             }
+            let outH = Int(out.shape[2]), outW = Int(out.shape[3])
+            let outPixels = outW * outH
 
-            // Output NCHW [1,3,H,W] → packed RGB bytes.
+            // Output NCHW [1,3,outH,outW] → packed RGB bytes.
             let outScale: Float = spec.outputIs0To255 ? 1 : 255
-            var pixels = [UInt8](repeating: 0, count: 3 * pixelCount)
-            for pixel in 0 ..< pixelCount {
+            var raw = [UInt8](repeating: 0, count: 3 * outPixels)
+            for pixel in 0 ..< outPixels {
                 for channel in 0 ..< 3 {
-                    let value = out.values[channel * pixelCount + pixel] * outScale
-                    pixels[pixel * 3 + channel] = UInt8(max(0, min(255, value.rounded())))
+                    let value = out.values[channel * outPixels + pixel] * outScale
+                    raw[pixel * 3 + channel] = UInt8(max(0, min(255, value.rounded())))
                 }
             }
-            return RawImage(pixels: pixels, width: width, height: height, channels: 3)
+            let filledSquare = RawImage(pixels: raw, width: outW, height: outH, channels: 3)
+
+            // Resize the fill back to source resolution and composite it into
+            // the original only where the mask is set.
+            let filled = try mapCodec { try ImageCodec.resizeRGB(filledSquare, toWidth: width, height: height) }
+            var composited = base.pixels
+            for pixel in 0 ..< (width * height) where baseMask.pixels[pixel] >= spec.maskThreshold {
+                composited[pixel * 3] = filled.pixels[pixel * 3]
+                composited[pixel * 3 + 1] = filled.pixels[pixel * 3 + 1]
+                composited[pixel * 3 + 2] = filled.pixels[pixel * 3 + 2]
+            }
+            return RawImage(pixels: composited, width: width, height: height, channels: 3)
         }
 
         private func loadedSession() throws -> OrtModelSession {

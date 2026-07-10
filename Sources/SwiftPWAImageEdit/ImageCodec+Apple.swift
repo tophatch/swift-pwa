@@ -26,6 +26,15 @@
             return try render(cgImage, channels: 1, size: size)
         }
 
+        /// Resize an RGB `RawImage` to `width × height` (no-op if already that
+        /// size). Reuses the verified encode/decode paths — a lossless PNG
+        /// round-trip through the resizing decoder.
+        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) throws -> RawImage {
+            if image.width == width, image.height == height { return image }
+            let png = try encodePNG(image)
+            return try decodeRGB(path: nil, dataBase64: png.base64EncodedString(), size: (width, height))
+        }
+
         /// Encode tightly-packed RGB pixels to PNG bytes.
         static func encodePNG(_ image: RawImage) throws -> Data {
             guard image.channels == 3 else {

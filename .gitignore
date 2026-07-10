@@ -44,3 +44,7 @@ Vendor/onnxruntime-desktop/
 # ORT 1.24.4 — a separate API version from the 1.27 desktop set); only the libs
 # are ignored. (Linux GPU reuses the committed 1.27 onnxruntime-desktop-headers.)
 Vendor/onnxruntime-desktop-gpu/
+# Vendored LaMa inpainting ONNX weights (downloaded + re-hosted by
+# Scripts/vendor-lama.sh; adopters get the checksummed lama-vendor release
+# asset, fetched at runtime by LaMaBackend's ModelDownloader).
+Vendor/lama/

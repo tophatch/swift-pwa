@@ -18,16 +18,25 @@ import Testing
 struct StableDiffusionReferenceVerificationTests {
     @Test func matchesDiffusersReferenceOnSDTurbo() async throws {
         guard let dirPath = ProcessInfo.processInfo.environment["SD_VERIFY_DIR"] else { return }
+        let env = ProcessInfo.processInfo.environment
         let base = URL(fileURLWithPath: dirPath)
-        let model = base.appendingPathComponent("sd-turbo-onnx")
-        let ref = base.appendingPathComponent("ref")
+        // Defaults target the fp32 optimum export; env overrides point at the
+        // fp16 export (SD_VERIFY_MODEL=sd-turbo-fp16opt, SD_VERIFY_REF=ref_fp16,
+        // SD_VERIFY_SPEC=fp16).
+        let model = base.appendingPathComponent(env["SD_VERIFY_MODEL"] ?? "sd-turbo-onnx")
+        let ref = base.appendingPathComponent(env["SD_VERIFY_REF"] ?? "ref")
+        let spec: StableDiffusionModelSpec = env["SD_VERIFY_SPEC"] == "fp16" ? .sdTurboFp16 : .sdTurbo
+        // fp16's reduced precision needs looser absolute bounds; correlation
+        // gates stay tight (structure must still match).
+        let fp16 = env["SD_VERIFY_SPEC"] == "fp16"
 
         let backend = StableDiffusionBackend(
             textEncoderPath: model.appendingPathComponent("text_encoder/model.onnx").path,
             unetPath: model.appendingPathComponent("unet/model.onnx").path,
             vaeDecoderPath: model.appendingPathComponent("vae_decoder/model.onnx").path,
             tokenizerVocabPath: model.appendingPathComponent("tokenizer/vocab.json").path,
-            tokenizerMergesPath: model.appendingPathComponent("tokenizer/merges.txt").path
+            tokenizerMergesPath: model.appendingPathComponent("tokenizer/merges.txt").path,
+            spec: spec
         )
 
         let initLatent = try floats(ref.appendingPathComponent("init_latent.bin"))
@@ -41,17 +50,18 @@ struct StableDiffusionReferenceVerificationTests {
         let refIds = try int64s(ref.appendingPathComponent("input_ids.bin"))
         #expect(out.inputIds.map(Int64.init) == refIds)
 
-        // 2. Text embedding — same ONNX graph; tiny cross-ORT-build drift only.
+        // 2. Text embedding — same ONNX graph; tiny cross-ORT-build drift only
+        //    (fp16 rounding widens it).
         let refEmb = try floats(ref.appendingPathComponent("text_emb.bin"))
         report("text_emb", out.textEmbedding.values, refEmb)
-        #expect(maxAbsDiff(out.textEmbedding.values, refEmb) < 0.05)
+        #expect(maxAbsDiff(out.textEmbedding.values, refEmb) < (fp16 ? 0.1 : 0.05))
 
         // 3. Final latent — after the UNet pass + Euler step. Cross-ORT drift
         //    compounds a little, so gate on correlation + a loose abs bound.
         let refLatent = try floats(ref.appendingPathComponent("final_latent.bin"))
         report("final_latent", out.latent, refLatent)
         #expect(correlation(out.latent, refLatent) > 0.99)
-        #expect(maxAbsDiff(out.latent, refLatent) < 0.15)
+        #expect(maxAbsDiff(out.latent, refLatent) < (fp16 ? 0.5 : 0.15))
 
         // 4. VAE image — the decoded result. Correlation confirms the image
         //    structure matches the reference (the astronaut-on-horse).

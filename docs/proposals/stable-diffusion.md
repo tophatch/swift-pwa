@@ -37,6 +37,17 @@
 > or inline base64), `generateImageStream` reports per-step denoising progress,
 > and `count` is honored.
 >
+> **fp16 variant done + verified.** `OrtModelSession` gained `OrtInput.float16`
+> (float32↔half at the ONNX boundary), and `.sdTurboFp16` runs an
+> `optimum --dtype fp16` export — **~2.5 GB vs 4.9 GB**, faster on GPU/CoreML,
+> and it still runs on the CPU EP (verified against a fp16 diffusers reference:
+> correlation > 0.99998, same image). It differs from `.sdTurbo` by one flag
+> (`float16IO`) — the contract is otherwise identical. NB: the ONNX Runtime
+> team's fp16 exports (`tlwu/…`, `onnxruntime/sd-turbo`) are **not usable** —
+> they're Olive-optimized with the `com.microsoft.NhwcConv` contrib op, which
+> the standard CPU EP can't run; our own plain `--dtype fp16` export uses
+> standard ops that do.
+>
 > **Next:** the **LCM (OpenRAIL-M)** commercial default (a second scheduler +
 > the guidance-embedding UNet input) + `sd-vendor` packaging with pinned
 > checksums (see the licensing note under **Scoping calls**).

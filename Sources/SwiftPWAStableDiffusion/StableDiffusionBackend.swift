@@ -218,6 +218,13 @@
             var seedUsed: Int
         }
 
+        /// A float model input at the export's precision — half-precision when
+        /// the model is fp16 (`spec.float16IO`), else float32. `OrtInput` carries
+        /// `[Float]` either way and converts at the ONNX boundary.
+        private func floatInput(_ values: [Float], shape: [Int64]) -> OrtModelSession.OrtInput {
+            spec.float16IO ? .float16(values, shape: shape) : .float(values, shape: shape)
+        }
+
         /// The text→image pipeline: tokenize the prompt, text-encode it, seed
         /// (or inject) the initial latent, run the Euler denoising loop against
         /// the UNet, then VAE-decode. `injectedLatent` (raw standard-normal
@@ -276,14 +283,14 @@
             for (index, timestep) in scheduler.timesteps.enumerated() {
                 let scaled = scheduler.scaleModelInput(latent, stepIndex: index)
                 let timestepInput: OrtModelSession.OrtInput = spec.timestepIsFloatScalar
-                    ? .float([Float(timestep)], shape: [])
+                    ? floatInput([Float(timestep)], shape: [])
                     : .int64([Int64(timestep)], shape: [])
                 let unetOut = try mapOrt {
                     try unet.run(
                         inputs: [
-                            spec.unetSampleName: .float(scaled, shape: latentShape),
+                            spec.unetSampleName: floatInput(scaled, shape: latentShape),
                             spec.unetTimestepName: timestepInput,
-                            spec.unetEncoderHiddenStatesName: .float(embedding.values, shape: embedding.shape)
+                            spec.unetEncoderHiddenStatesName: floatInput(embedding.values, shape: embedding.shape)
                         ],
                         outputNames: [spec.unetOutputName]
                     )
@@ -301,7 +308,7 @@
             let scaledLatent = latent.map { $0 / vaeScale }
             let vaeOut = try mapOrt {
                 try vae.run(
-                    inputs: [spec.vaeLatentName: .float(scaledLatent, shape: latentShape)],
+                    inputs: [spec.vaeLatentName: floatInput(scaledLatent, shape: latentShape)],
                     outputNames: [spec.vaeImageName]
                 )
             }

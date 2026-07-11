@@ -70,10 +70,16 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     /// types the text-encoder token-id input int64; `false` feeds int32 for an
     /// export that differs.
     public var inputIdsInt64: Bool
-    /// Feed the UNet `timestep` as a float32 scalar (`OrtInput.float`, empty
-    /// shape). The optimum SD export types it float32; `false` feeds it as an
+    /// Feed the UNet `timestep` as a float scalar (`OrtInput.float`/`.float16`,
+    /// empty shape). The optimum SD export types it float; `false` feeds an
     /// int64 scalar for an export that differs.
     public var timestepIsFloatScalar: Bool
+    /// The model's float tensors are **fp16** (`OrtInput.float16`) rather than
+    /// float32 — an `optimum --dtype fp16` export: half the download, faster on
+    /// GPU/CoreML, and still runs on the CPU EP. The pipeline stays in float32;
+    /// values are converted at the ONNX boundary. Only this flag differs from
+    /// `.sdTurbo` (same tensor names / dtypes / scheduler otherwise).
+    public var float16IO: Bool
 
     // MARK: Sampling
 
@@ -165,6 +171,7 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         embeddingDim: Int = 1024,
         inputIdsInt64: Bool = true,
         timestepIsFloatScalar: Bool = true,
+        float16IO: Bool = false,
         defaultSteps: Int = 1,
         defaultGuidanceScale: Double = 0.0,
         classifierFreeGuidance: Bool = false,
@@ -192,6 +199,7 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         self.embeddingDim = embeddingDim
         self.inputIdsInt64 = inputIdsInt64
         self.timestepIsFloatScalar = timestepIsFloatScalar
+        self.float16IO = float16IO
         self.defaultSteps = defaultSteps
         self.defaultGuidanceScale = defaultGuidanceScale
         self.classifierFreeGuidance = classifierFreeGuidance
@@ -206,8 +214,13 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
 
     /// The SD-Turbo contract (all defaults) — guidance-free, single-step,
     /// OpenCLIP ViT-H/14 text encoder (1024-dim), 512² output; tensor names,
-    /// dtypes, and scaling confirmed against the optimum ONNX export.
+    /// dtypes, and scaling confirmed against the **optimum fp32** ONNX export.
     public static let sdTurbo = StableDiffusionModelSpec()
+
+    /// SD-Turbo from an **`optimum --dtype fp16`** export — identical contract
+    /// to `.sdTurbo` but half-precision float I/O (`float16IO`): ~half the
+    /// download (~2.5 GB), faster on GPU/CoreML, still runs on the CPU EP.
+    public static let sdTurboFp16 = StableDiffusionModelSpec(float16IO: true)
 
     /// The latent `(width, height)` for an output `(width, height)`.
     func latentSize(forWidth width: Int, height: Int) -> (width: Int, height: Int) {

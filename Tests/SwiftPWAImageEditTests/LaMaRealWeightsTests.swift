@@ -4,6 +4,7 @@
     import Foundation
     import SwiftPWACore
     @testable import SwiftPWAImageEdit
+    import SwiftPWAImageIO // ImageCodec / RawImage (shared, package-internal)
     import Testing
 
     /// End-to-end inpaint against the **real** big-lama weights. Opt-in: skips

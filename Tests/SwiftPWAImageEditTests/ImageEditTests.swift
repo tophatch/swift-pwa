@@ -1,6 +1,7 @@
 import Foundation
 import SwiftPWACore
 @testable import SwiftPWAImageEdit
+import SwiftPWAImageIO // ImageCodec / RawImage (shared, package-internal)
 import Testing
 
 @Suite("LaMaModelSpec")

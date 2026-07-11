@@ -28,6 +28,16 @@ import SwiftPWAModelStore // ModelSpec
 // LaMa behind the one `ai.*` surface (see CompositeAIBackend / web/generate.html).
 #if canImport(SwiftPWAStableDiffusion)
     import SwiftPWAStableDiffusion
+
+    /// Total download size of a Stable-Diffusion model source (sum of its
+    /// files), for the picker's `AIModelInfo.availability`. A file-scope
+    /// **nonisolated** helper on purpose — a nested function inside the
+    /// `@MainActor` `configure` inherits its isolation, and its entry emits a
+    /// dynamic executor check that traps on Android (where `configure` runs
+    /// under `assumeIsolated` off the real main thread).
+    private func sdSourceSize(_ source: StableDiffusionModelSource) -> Int64 {
+        source.files.reduce(0) { $0 + $1.sizeBytes }
+    }
 #endif
 
 #if canImport(SwiftPWALlama)
@@ -151,18 +161,46 @@ func configure(_ ctx: any AppContext) throws {
         let lama = LaMaBackend(cacheDirectory: lamaDir)
         // Text→image (Stable Diffusion) rides the same composite when the SD
         // target is in the build — a bare prompt routes here, a prompt+image to
-        // LaMa (see CompositeAIBackend). We use **LCM_Dreamshaper** (the
-        // OpenRAIL-M / commercially-usable model) rather than SD-Turbo
-        // (non-commercial): a 4-step Latent Consistency Model, ~2.0 GB fp16,
-        // fetched on first use from the `sd-vendor` release. The page calls
-        // `ai.ensureModel({ model: "generate" })` before its first
-        // `ai.generateImage`. See web/generate.html.
+        // LaMa (see CompositeAIBackend). We offer **two** models the user picks
+        // between at runtime (the demo of `AICapabilities.models` +
+        // `request.model` + `MultiModelImageBackend`): **LCM_Dreamshaper**
+        // (OpenRAIL-M, commercially usable — the default) and **SD-Turbo**
+        // (non-commercial). Both are ~2–2.5 GB fp16, fetched on first use from
+        // the `sd-vendor` release; the picker on web/generate.html reads the
+        // model list from `ai.info`, filters by capability + licence, and passes
+        // the chosen `model` id to `ai.ensureModel` / `ai.generateImage`.
+        // Download sizes are derived from each source's files (no duplication).
         #if canImport(SwiftPWAStableDiffusion)
-            let sdDir = ctx.dataDirectory().appendingPathComponent("lcm-dreamshaper", isDirectory: true)
-            let sd = StableDiffusionBackend(
-                cacheDirectory: sdDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16
+            let lcmDir = ctx.dataDirectory().appendingPathComponent("lcm-dreamshaper", isDirectory: true)
+            let sdTurboDir = ctx.dataDirectory().appendingPathComponent("sd-turbo", isDirectory: true)
+            let imageModels = MultiModelImageBackend(
+                [
+                    .init(
+                        AIModelInfo(
+                            id: "lcm-dreamshaper", label: "LCM Dreamshaper (commercial)",
+                            capabilities: [.imageGeneration],
+                            availability: .downloadable(bytes: sdSourceSize(.lcmDreamshaperFp16)),
+                            offlineCapable: true, license: "OpenRAIL-M"
+                        ),
+                        StableDiffusionBackend(
+                            cacheDirectory: lcmDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16
+                        )
+                    ),
+                    .init(
+                        AIModelInfo(
+                            id: "sd-turbo", label: "SD-Turbo (non-commercial)",
+                            capabilities: [.imageGeneration],
+                            availability: .downloadable(bytes: sdSourceSize(.sdTurboFp16)),
+                            offlineCapable: true, license: "Stability Non-Commercial"
+                        ),
+                        StableDiffusionBackend(
+                            cacheDirectory: sdTurboDir, source: .sdTurboFp16, spec: .sdTurboFp16
+                        )
+                    ),
+                ],
+                default: "lcm-dreamshaper"
             )
-            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, imageGen: sd)))
+            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, imageGen: imageModels)))
         #else
             ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
         #endif

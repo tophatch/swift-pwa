@@ -184,23 +184,35 @@ the backends we ship are examples, not a fixed menu. Enabled by the same
 
 ## On-device image generation (`ai.generateImage` text→image)
 
-The **"🎨 Generate an image from a prompt"** button
+The **"🎨 Generate an image from a prompt"** page
 ([web/generate.html](Sources/CritterFacts/web/generate.html)) runs
 **Stable Diffusion** (`SwiftPWAStableDiffusion`'s `StableDiffusionBackend`)
-fully on-device: type a prompt → `ai.generateImage({ prompt })` → a PNG. The
-pipeline is **LCM_Dreamshaper** (CLIP tokenizer + text encoder + UNet + VAE
-decoder + LCM scheduler), a 4-step Latent Consistency Model — quick on a GPU, a
-few seconds on CPU. We use it (rather than SD-Turbo) because it's **OpenRAIL-M /
-commercially usable**; SD-Turbo is non-commercial. Both ship — swap the
-`StableDiffusionModelSpec`/`Source` to switch.
+fully on-device: type a prompt → `ai.generateImage({ prompt, model })` → a PNG.
 
-It joins LaMa on the same [`CompositeAIBackend`](Sources/CritterFacts/CompositeAIBackend.swift):
-`ai.generateImage` is routed by whether the request carries a source `image` —
-**present ⇒ inpaint (LaMa), absent ⇒ text→image (SD)** — so one `ai.*` surface
-serves facts, erase, *and* generation. `ai.ensureModel({ model: "generate" })`
-routes the SD download. Enabled by the same **`ai.local_onnx_runtime: true`**
-flag; the fp16 LCM_Dreamshaper weights (~2.0 GB) are fetched on first use
-from the `sd-vendor` release.
+**It's a live model switcher** — the demo of the `ai.*` model-selection surface.
+The page reads `ai.info().models`, filters to the models that can do text→image
+(the `image-generation` capability), and shows a dropdown; the chosen model id
+rides `ai.generateImage` / `ai.ensureModel`. Two models are offered:
+
+- **LCM_Dreamshaper** (the default) — a 4-step Latent Consistency Model,
+  **OpenRAIL-M / commercially usable**, ~2.0 GB fp16.
+- **SD-Turbo** — a 1–4 step model, **Stability Non-Commercial**, ~2.5 GB fp16.
+
+The picker surfaces each model's `license` and download size (from
+`AIModelInfo.availability`), so a commercial app can filter non-commercial models
+out. Behind the scenes the two backends sit in a **`MultiModelImageBackend`**
+(the shipped router), which resolves the `model` id and aggregates the catalog
+into `ai.info`.
+
+That router is the `imageGen` of the same
+[`CompositeAIBackend`](Sources/CritterFacts/CompositeAIBackend.swift):
+`ai.generateImage` is first routed by whether the request carries a source
+`image` — **present ⇒ inpaint (LaMa), absent ⇒ text→image (the switcher)** — so
+one `ai.*` surface serves facts, erase, *and* generation. `ai.ensureModel`
+routes by model id (`"inpaint"`/`"lama"` → LaMa; `"lcm-dreamshaper"`/`"sd-turbo"`
+→ the switcher). Enabled by the same **`ai.local_onnx_runtime: true`** flag; the
+fp16 weights are fetched on first use from the `sd-vendor` release. Device-verified
+on a Galaxy Tab S10+.
 
 ## Swapping the model
 

@@ -9,6 +9,12 @@ page never has to encode.
 It is an **opt-in plugin** (like `fs.*` / `dialog.*`), not auto-installed:
 an app calls `ctx.use(AIPlugin(...))` and supplies the backend.
 
+**New here?** Start with the hands-on tutorial —
+[On-device AI (text and images)](tutorials/on-device-ai.md) — which walks
+through using a packaged backend, bringing your own model, writing your own
+`AIBackend`, and baking a LoRA into an on-device image model. This document
+is the full reference behind it.
+
 > **Status (0.7).** The full JS contract, the `AIBackend` protocol, the
 > shared structured-output fallback, and `NoneBackend` all ship. The first
 > real backend — **Apple Foundation Models** (`SwiftPWAFoundationModels`) —

@@ -23,6 +23,12 @@ import SwiftPWAModelStore // ModelSpec
 #if canImport(SwiftPWAImageEdit)
     import SwiftPWAImageEdit
 #endif
+// The on-device text→image backend (StableDiffusionBackend, `ai.generateImage`
+// with a bare prompt) — same `ai.local_onnx_runtime` gate. Composed alongside
+// LaMa behind the one `ai.*` surface (see CompositeAIBackend / web/generate.html).
+#if canImport(SwiftPWAStableDiffusion)
+    import SwiftPWAStableDiffusion
+#endif
 
 #if canImport(SwiftPWALlama)
     /// The downloadable model (tiny, ~400 MB, Apache-2.0) — shared by the
@@ -143,7 +149,19 @@ func configure(_ ctx: any AppContext) throws {
         // its first `ai.generateImage`. See web/erase.html.
         let lamaDir = ctx.dataDirectory().appendingPathComponent("lama", isDirectory: true)
         let lama = LaMaBackend(cacheDirectory: lamaDir)
-        ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
+        // Text→image (Stable Diffusion) rides the same composite when the SD
+        // target is in the build — a bare prompt routes here, a prompt+image to
+        // LaMa (see CompositeAIBackend). The SD-Turbo fp16 pipeline (~2.5 GB, 5
+        // files) is fetched on first use from the `sd-vendor` release, like the
+        // other models; the page calls `ai.ensureModel({ model: "generate" })`
+        // before its first `ai.generateImage`. See web/generate.html.
+        #if canImport(SwiftPWAStableDiffusion)
+            let sdDir = ctx.dataDirectory().appendingPathComponent("sd-turbo", isDirectory: true)
+            let sd = StableDiffusionBackend(cacheDirectory: sdDir)
+            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, imageGen: sd)))
+        #else
+            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
+        #endif
     #else
         if let textBackend {
             ctx.use(AIPlugin(textBackend))

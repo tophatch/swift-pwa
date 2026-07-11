@@ -1,43 +1,57 @@
 // Only meaningful when the image-edit backend is in the graph (built with
 // ai.local_onnx_runtime). Demonstrates the "an adopter composes backends behind
 // the one ai.* surface" pattern the contract is designed for: text generation
-// from a platform/llama backend, image editing from LaMa — one AIPlugin.
+// from a platform/llama backend, image *editing* (inpaint) from LaMa, and
+// text→image from Stable Diffusion — all on one AIPlugin.
 #if canImport(SwiftPWAImageEdit)
     import Foundation
     import SwiftPWA
     import SwiftPWAImageEdit
 
-    /// Routes the `ai.*` surface across two backends by capability: text
-    /// (`generate` / `generateStream` / `generateJSON`) to `text`, image editing
-    /// (`generateImage`) to `image` (LaMa). `ai.ensureModel` routes by the
-    /// request's `model` hint — `"inpaint"` / `"lama"` drives the LaMa download,
-    /// anything else the text backend's. This is example code, not part of the
-    /// framework: `AIPlugin` takes one backend, and *this* is how you give it
-    /// more than one purpose.
+    /// Routes the `ai.*` surface across up to three backends by capability:
+    /// text (`generate` / `generateStream` / `generateJSON`) to `text`, and
+    /// `generateImage` split by whether the request carries a source `image` —
+    /// present ⇒ editing/inpaint (`image`, LaMa); absent ⇒ text→image
+    /// (`imageGen`, Stable Diffusion). `ai.ensureModel` routes by the request's
+    /// `model` hint — `"inpaint"` / `"lama"` → LaMa, `"generate"` / `"sd"` /
+    /// `"txt2img"` → SD, anything else the text backend's. This is example code,
+    /// not part of the framework: `AIPlugin` takes one backend, and *this* is
+    /// how you give it more than one purpose. `imageGen` is kept as a plain
+    /// `any AIBackend` so this file needs no Stable-Diffusion import — the caller
+    /// (see `configure`) supplies it only where the SD target is in the build.
     actor CompositeAIBackend: AIBackend {
         private let text: (any AIBackend)?
         private let image: LaMaBackend
+        private let imageGen: (any AIBackend)?
 
-        init(text: (any AIBackend)?, image: LaMaBackend) {
+        init(text: (any AIBackend)?, image: LaMaBackend, imageGen: (any AIBackend)? = nil) {
             self.text = text
             self.image = image
+            self.imageGen = imageGen
         }
 
         func info() async -> AICapabilities {
             let img = await image.info()
+            // Advertise text→image if a generator is present.
+            let gen = await imageGen?.info()
             guard let text else {
-                // Image-only: still advertise editing.
-                return AICapabilities(available: img.available, backend: img.backend, imageEditing: img.imageEditing)
+                // Image-only: still advertise editing (+ generation if present).
+                return AICapabilities(
+                    available: img.available || (gen?.available ?? false),
+                    backend: img.backend,
+                    imageGeneration: gen?.imageGeneration ?? false,
+                    imageEditing: img.imageEditing
+                )
             }
             let txt = await text.info()
             return AICapabilities(
-                available: txt.available || img.available,
+                available: txt.available || img.available || (gen?.available ?? false),
                 backend: txt.backend,
                 model: txt.model,
                 streaming: txt.streaming,
                 structuredOutput: txt.structuredOutput,
                 vision: txt.vision,
-                imageGeneration: img.imageGeneration,
+                imageGeneration: gen?.imageGeneration ?? false,
                 imageEditing: img.imageEditing,
                 audioInput: txt.audioInput,
                 audioGeneration: txt.audioGeneration,
@@ -63,16 +77,42 @@
         }
 
         func generateImage(_ request: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
-            try await image.generateImage(request)
+            // A source `image` means an edit (inpaint) → LaMa; a bare prompt
+            // means text→image → the SD generator (if this build has one).
+            if request.image == nil, let imageGen {
+                return try await imageGen.generateImage(request)
+            }
+            return try await image.generateImage(request)
         }
 
-        nonisolated func ensureModel(_ request: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error> {
-            let wantsImage = (request.model == "inpaint" || request.model == "lama")
-            if wantsImage { return image.ensureModel(request) }
-            guard let text else {
-                return AsyncThrowingStream { $0.finish(throwing: AIError.unsupportedPlatform("no text backend")) }
+        nonisolated func generateImageStream(_ request: AIGenerateImageRequest)
+            -> AsyncThrowingStream<AIImageEvent, any Error>
+        {
+            if request.image == nil, let imageGen {
+                return imageGen.generateImageStream(request) // SD reports per-step progress
             }
-            return text.ensureModel(request)
+            return image.generateImageStream(request)
+        }
+
+        nonisolated func ensureModel(_ request: AIEnsureModelRequest)
+            -> AsyncThrowingStream<AIDownloadEvent, any Error>
+        {
+            switch request.model {
+            case "inpaint", "lama":
+                return image.ensureModel(request)
+            case "generate", "sd", "txt2img":
+                guard let imageGen else {
+                    return AsyncThrowingStream {
+                        $0.finish(throwing: AIError.unsupportedPlatform("no image-generation backend in this build"))
+                    }
+                }
+                return imageGen.ensureModel(request)
+            default:
+                guard let text else {
+                    return AsyncThrowingStream { $0.finish(throwing: AIError.unsupportedPlatform("no text backend")) }
+                }
+                return text.ensureModel(request)
+            }
         }
     }
 #endif

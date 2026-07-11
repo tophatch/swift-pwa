@@ -24,11 +24,14 @@ The llama model runs **Metal-accelerated on Apple** and **Vulkan-accelerated on
 Linux and Windows** (GPU if present, CPU fallback otherwise); Gemini Nano runs
 on the device's NPU/accelerator via AICore — same page, same `ai.*` calls.
 
-It also carries two on-device vision demos: **segmentation** (`ai.vision.*`,
-`MobileSAMBackend`) and **tap-to-erase inpainting** (`ai.generateImage`,
-`LaMaBackend`) that chains the two — see
-[On-device segmentation](#on-device-segmentation-aivision) and
-[On-device erase](#on-device-erase-aigenerateimage-inpainting) below.
+It also carries three on-device image demos: **segmentation** (`ai.vision.*`,
+`MobileSAMBackend`), **tap-to-erase inpainting** (`ai.generateImage` with an
+`image` + `mask`, `LaMaBackend`) that chains the two, and **prompt-to-image**
+(`ai.generateImage` with a bare `prompt`, `StableDiffusionBackend`) — see
+[On-device segmentation](#on-device-segmentation-aivision),
+[On-device erase](#on-device-erase-aigenerateimage-inpainting), and
+[On-device image generation](#on-device-image-generation-aigenerateimage-text-image)
+below.
 
 ## Build & run
 
@@ -178,6 +181,24 @@ intended "an adopter gives one `ai.*` surface more than one purpose" pattern:
 the backends we ship are examples, not a fixed menu. Enabled by the same
 **`ai.local_onnx_runtime: true`** flag as segmentation (the big-lama ONNX,
 ~200 MB, is fetched on first use from the `lama-vendor` release).
+
+## On-device image generation (`ai.generateImage` text→image)
+
+The **"🎨 Generate an image from a prompt"** button
+([web/generate.html](Sources/CritterFacts/web/generate.html)) runs
+**Stable Diffusion** (`SwiftPWAStableDiffusion`'s `StableDiffusionBackend`)
+fully on-device: type a prompt → `ai.generateImage({ prompt })` → a PNG. The
+pipeline is **SD-Turbo** (CLIP tokenizer + text encoder + UNet + VAE decoder +
+Euler scheduler), a one-step, guidance-free model — quick on a GPU, a few
+seconds on CPU.
+
+It joins LaMa on the same [`CompositeAIBackend`](Sources/CritterFacts/CompositeAIBackend.swift):
+`ai.generateImage` is routed by whether the request carries a source `image` —
+**present ⇒ inpaint (LaMa), absent ⇒ text→image (SD)** — so one `ai.*` surface
+serves facts, erase, *and* generation. `ai.ensureModel({ model: "generate" })`
+routes the SD download. Enabled by the same **`ai.local_onnx_runtime: true`**
+flag; the fp16 SD-Turbo weights (~2.5 GB, five files) are fetched on first use
+from the `sd-vendor` release.
 
 ## Swapping the model
 

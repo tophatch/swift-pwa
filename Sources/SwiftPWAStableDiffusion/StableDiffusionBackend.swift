@@ -381,23 +381,58 @@
 
         // MARK: - Loading
 
+        /// The graph-optimization level for this backend's ONNX sessions. On
+        /// **Android** we drop to `.basic`: ONNX Runtime's default (`.all`)
+        /// includes the extended GeluFusion transformer, which rewrites the
+        /// text encoder's standard Erf-gelu pattern into `com.microsoft.Gelu` at
+        /// session creation — and the Android ONNX Runtime package has no
+        /// **float16** kernel for that fused contrib op, so an fp16 session
+        /// fails to run. `.basic` keeps the standard ops (which do have fp16
+        /// kernels there). Apple/desktop packages carry the fp16 contrib
+        /// kernels, so they keep `.all` (the fp16 pipeline is verified there).
+        private var graphOptimizationLevel: OrtGraphOptimizationLevel {
+            #if os(Android)
+                .basic
+            #else
+                .all
+            #endif
+        }
+
         private func loadedTextEncoder(_ runtime: OrtRuntime) throws -> OrtModelSession {
             if let textEncoder { return textEncoder }
-            let session = try mapOrt { try OrtModelSession(modelPath: textEncoderPath, runtime: runtime) }
+            let session = try mapOrt {
+                try OrtModelSession(
+                    modelPath: textEncoderPath,
+                    runtime: runtime,
+                    graphOptimizationLevel: graphOptimizationLevel
+                )
+            }
             textEncoder = session
             return session
         }
 
         private func loadedUnet(_ runtime: OrtRuntime) throws -> OrtModelSession {
             if let unet { return unet }
-            let session = try mapOrt { try OrtModelSession(modelPath: unetPath, runtime: runtime) }
+            let session = try mapOrt {
+                try OrtModelSession(
+                    modelPath: unetPath,
+                    runtime: runtime,
+                    graphOptimizationLevel: graphOptimizationLevel
+                )
+            }
             unet = session
             return session
         }
 
         private func loadedVAEDecoder(_ runtime: OrtRuntime) throws -> OrtModelSession {
             if let vaeDecoder { return vaeDecoder }
-            let session = try mapOrt { try OrtModelSession(modelPath: vaeDecoderPath, runtime: runtime) }
+            let session = try mapOrt {
+                try OrtModelSession(
+                    modelPath: vaeDecoderPath,
+                    runtime: runtime,
+                    graphOptimizationLevel: graphOptimizationLevel
+                )
+            }
             vaeDecoder = session
             return session
         }

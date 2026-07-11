@@ -19,9 +19,9 @@
 > 2. **Byte-level download progress on Android**, so `ai.ensureModel` for a
 >    multi-GB model reports a smooth bar instead of stepping once per file.
 
-## Context — how Sprites hit both
+## Context — how an adopter hit both
 
-Sprites (a pixel-art editor on the swift-pwa shell) added prompt→image generation
+An adopter (a pixel-art editor on the swift-pwa shell) added prompt→image generation
 backed by `StableDiffusionBackend`, composing it with `LaMaBackend` (inpaint)
 behind one `AIPlugin` via an adopter-side `CompositeImageBackend` that routes
 `generateImage` by request shape (a source `image` ⇒ inpaint/LaMa, a bare prompt
@@ -37,7 +37,7 @@ That worked. Two things did not have a clean answer:
   offline/fast/free on-device vs higher-quality/paid/online in the cloud. A pro
   tool wants to let the user pick (quality vs licence vs download size vs
   connectivity). There is no way to express "generate *this* one with LCM" (let
-  alone "with the cloud backend") at call time, so Sprites had to hard-pick one
+  alone "with the cloud backend") at call time, so the adopter had to hard-pick one
   model at build time (LCM) and drop the switcher.
 - **The LCM download is ~2 GB across 5 files**, dominated by a single 1.72 GB UNet
   (83% of the total). On the Galaxy Tab S10+ the download bar jumped `0% → 12%
@@ -177,7 +177,7 @@ Four fields earn their place beyond `id`/`label`:
 - **`offlineCapable`** lets the picker badge on-device vs cloud — the exact axis
   the user switches on ("fast/offline/free" vs "higher-quality/online/paid").
 - **`license`** an adopter shipping commercially filters non-commercial models out
-  of the picker (exactly Sprites' SD-Turbo problem).
+  of the picker (exactly the adopter's SD-Turbo problem).
 
 ### Who routes — keep it the adopter's job
 
@@ -309,8 +309,8 @@ every N bytes / ~100 ms across the boundary — no new download logic.
 ### Interim (adopter-side, no framework change)
 
 An adopter can soften the UX today by treating a long-stalled bar as busy — e.g.
-copy like "Downloading model — one-time ~2 GB, this can take a minute." Sprites
-may do this regardless; it's not a substitute for real byte progress.
+copy like "Downloading model — one-time ~2 GB, this can take a minute." The
+adopter may do this regardless; it's not a substitute for real byte progress.
 
 ### Backwards compatibility
 

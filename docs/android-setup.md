@@ -789,12 +789,22 @@ APK asset isn't a file ONNX Runtime can open" problem entirely — no
 > paths (`/etc/ssl/certs/ca-certificates.crt`, …) that don't exist on Android,
 > and neither `CURL_CA_BUNDLE` nor `SSL_CERT_FILE`/`SSL_CERT_DIR` is honored,
 > so any HTTPS download from Swift fails with "unable to get local issuer
-> certificate". `MobileSAMBackend`'s Android `ensureModel` therefore downloads
-> through a Kotlin `net.downloadFile` RPC (`HttpURLConnection`, the platform's
-> own system TLS), which mirrors `ModelDownloader`'s cache-reuse + streamed
-> SHA-256 verification + atomic rename. If you write an Android backend that
-> needs to fetch over HTTPS, route it through that RPC (or your own Kotlin
-> HTTP), not `URLSession`.
+> certificate". The on-device model backends (`MobileSAMBackend`,
+> `LaMaBackend`, `StableDiffusionBackend`) therefore download through a Kotlin
+> `net.downloadFile` RPC (`HttpURLConnection`, the platform's own system TLS),
+> which mirrors `ModelDownloader`'s cache-reuse + streamed SHA-256
+> verification + atomic rename. If you write an Android backend that needs to
+> fetch over HTTPS, route it through the shared `AndroidFileDownload.download(…)`
+> helper (or your own Kotlin HTTP), not `URLSession`.
+>
+> **Progress is byte-level, not per-file.** `net.downloadFile` takes an
+> optional host-event `channel`; when set, the Kotlin read loop pushes
+> throttled (~1 MiB) `{ bytesDone, totalBytes }` frames on it, and
+> `AndroidFileDownload` forwards them to the backend's `ensureModel` stream —
+> so a multi-GB, multi-file model (e.g. the ~2 GB LCM weights, 83% of which is
+> one 1.7 GB UNet) reports a smoothly-advancing bar rather than freezing per
+> file, matching the Apple/desktop `ModelDownloader` byte callback. An
+> absent/empty `channel` keeps the plain request/response behavior.
 
 This section documents the packaging spike this was built on plus the
 Android-specific plumbing, so anyone reproducing the toolchain locally knows

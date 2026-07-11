@@ -52,7 +52,10 @@ public struct CLIPTokenizer: Sendable {
     public let bosToken: Int32
     /// `<|endoftext|>` id (CLIP default 49407), appended to every sequence.
     public let eosToken: Int32
-    /// Padding id (CLIP pads with `<|endoftext|>`, so default 49407).
+    /// Padding id. CLIP's `pad_token` is `"!"` — vocab id **0**, *not* the
+    /// end-of-text token (confirmed against SD-Turbo's `tokenizer_config.json`;
+    /// the text encoder has no attention-mask input, so the pad value feeds the
+    /// model and must match).
     public let padToken: Int32
     /// Fixed sequence length the text encoder expects (CLIP default 77).
     public let maxLength: Int
@@ -70,7 +73,7 @@ public struct CLIPTokenizer: Sendable {
         merges: [(String, String)],
         bosToken: Int32 = 49406,
         eosToken: Int32 = 49407,
-        padToken: Int32 = 49407,
+        padToken: Int32 = 0,
         maxLength: Int = 77
     ) {
         encoder = vocab
@@ -94,7 +97,7 @@ public struct CLIPTokenizer: Sendable {
         mergesURL: URL,
         bosToken: Int32 = 49406,
         eosToken: Int32 = 49407,
-        padToken: Int32 = 49407,
+        padToken: Int32 = 0,
         maxLength: Int = 77
     ) throws {
         let vocab: [String: Int]

@@ -167,7 +167,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// shape (e.g. `[1, 3, 1024, 1024]` for an NCHW image). Outputs are
         /// always read back as float32; float inputs use this, non-float inputs
         /// use `OrtInput` (see `run`).
-        public struct Tensor {
+        public struct Tensor: Sendable {
             public var values: [Float]
             public var shape: [Int64]
 
@@ -183,7 +183,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// as **int64**. Each case carries its flat row-major values plus shape.
         /// (Outputs stay float32 — the SD graphs' embedding / noise / image
         /// outputs all are — so there is no integer output variant.)
-        public enum OrtInput {
+        public enum OrtInput: Sendable {
             case float([Float], shape: [Int64])
             case int32([Int32], shape: [Int64])
             case int64([Int64], shape: [Int64])

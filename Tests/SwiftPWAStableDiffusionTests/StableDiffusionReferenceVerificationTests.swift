@@ -1,0 +1,117 @@
+import Foundation
+import SwiftPWACore
+import SwiftPWAONNX
+@testable import SwiftPWAStableDiffusion
+import Testing
+
+/// Verifies the Swift txt2img pipeline stage-by-stage against a diffusers
+/// reference generated from the real SD-Turbo ONNX export (see
+/// `docs/proposals/stable-diffusion.md`). **Opt-in**: runs only when
+/// `SD_VERIFY_DIR` points at a directory holding `sd-turbo-onnx/` (the export)
+/// and `ref/` (the reference bundle: raw little-endian `.bin`s + `manifest.json`,
+/// produced by `Scripts`/the real-weights pass). CI has neither the ~5 GB model
+/// nor the bundle, so it no-ops there.
+///
+/// The reference's raw initial-noise latent is **injected**, so the comparison
+/// isolates the pipeline (tokenize → text-encode → Euler denoise → VAE) from
+/// RNG differences between torch and our seeded generator.
+struct StableDiffusionReferenceVerificationTests {
+    @Test func matchesDiffusersReferenceOnSDTurbo() async throws {
+        guard let dirPath = ProcessInfo.processInfo.environment["SD_VERIFY_DIR"] else { return }
+        let base = URL(fileURLWithPath: dirPath)
+        let model = base.appendingPathComponent("sd-turbo-onnx")
+        let ref = base.appendingPathComponent("ref")
+
+        let backend = StableDiffusionBackend(
+            textEncoderPath: model.appendingPathComponent("text_encoder/model.onnx").path,
+            unetPath: model.appendingPathComponent("unet/model.onnx").path,
+            vaeDecoderPath: model.appendingPathComponent("vae_decoder/model.onnx").path,
+            tokenizerVocabPath: model.appendingPathComponent("tokenizer/vocab.json").path,
+            tokenizerMergesPath: model.appendingPathComponent("tokenizer/merges.txt").path
+        )
+
+        let initLatent = try floats(ref.appendingPathComponent("init_latent.bin"))
+        let request = AIGenerateImageRequest(
+            prompt: "a photograph of an astronaut riding a horse",
+            width: 512, height: 512, steps: 1, seed: 42
+        )
+        let out = try await backend.runTxt2Img(request, injectedLatent: initLatent)
+
+        // 1. Tokenizer — exact match against the real CLIP tokenizer's ids.
+        let refIds = try int64s(ref.appendingPathComponent("input_ids.bin"))
+        #expect(out.inputIds.map(Int64.init) == refIds)
+
+        // 2. Text embedding — same ONNX graph; tiny cross-ORT-build drift only.
+        let refEmb = try floats(ref.appendingPathComponent("text_emb.bin"))
+        report("text_emb", out.textEmbedding.values, refEmb)
+        #expect(maxAbsDiff(out.textEmbedding.values, refEmb) < 0.05)
+
+        // 3. Final latent — after the UNet pass + Euler step. Cross-ORT drift
+        //    compounds a little, so gate on correlation + a loose abs bound.
+        let refLatent = try floats(ref.appendingPathComponent("final_latent.bin"))
+        report("final_latent", out.latent, refLatent)
+        #expect(correlation(out.latent, refLatent) > 0.99)
+        #expect(maxAbsDiff(out.latent, refLatent) < 0.15)
+
+        // 4. VAE image — the decoded result. Correlation confirms the image
+        //    structure matches the reference (the astronaut-on-horse).
+        let refImage = try floats(ref.appendingPathComponent("vae_image.bin"))
+        report("vae_image", out.image.values, refImage)
+        #expect(correlation(out.image.values, refImage) > 0.98)
+
+        // Dump the Swift-produced image as a PPM to eyeball against reference.png.
+        try writePPM(out.image, to: base.appendingPathComponent("swift_out.ppm"))
+    }
+
+    // MARK: - Fixture readers
+
+    private func floats(_ url: URL) throws -> [Float] {
+        let data = try Data(contentsOf: url)
+        return data.withUnsafeBytes { Array($0.bindMemory(to: Float.self)) }
+    }
+
+    private func int64s(_ url: URL) throws -> [Int64] {
+        let data = try Data(contentsOf: url)
+        return data.withUnsafeBytes { Array($0.bindMemory(to: Int64.self)) }
+    }
+
+    // MARK: - Comparison
+
+    private func maxAbsDiff(_ a: [Float], _ b: [Float]) -> Float {
+        guard a.count == b.count else { return .infinity }
+        return zip(a, b).reduce(0) { max($0, abs($1.0 - $1.1)) }
+    }
+
+    private func correlation(_ a: [Float], _ b: [Float]) -> Double {
+        guard a.count == b.count, !a.isEmpty else { return 0 }
+        let n = Double(a.count)
+        let ma = a.reduce(0.0) { $0 + Double($1) } / n
+        let mb = b.reduce(0.0) { $0 + Double($1) } / n
+        var cov = 0.0, va = 0.0, vb = 0.0
+        for i in 0 ..< a.count {
+            let da = Double(a[i]) - ma, db = Double(b[i]) - mb
+            cov += da * db; va += da * da; vb += db * db
+        }
+        return (va > 0 && vb > 0) ? cov / (va.squareRoot() * vb.squareRoot()) : 0
+    }
+
+    private func report(_ label: String, _ a: [Float], _ b: [Float]) {
+        print("[SD verify] \(label): count \(a.count) vs \(b.count), "
+            + "maxAbsDiff \(maxAbsDiff(a, b)), correlation \(correlation(a, b))")
+    }
+
+    /// Write a `[1,3,H,W]` `[-1,1]` VAE tensor as a binary PPM (P6) — a
+    /// dependency-free way to eyeball the Swift output vs the reference PNG.
+    private func writePPM(_ image: OrtModelSession.Tensor, to url: URL) throws {
+        let h = Int(image.shape[2]), w = Int(image.shape[3]), plane = h * w
+        var bytes = Array("P6\n\(w) \(h)\n255\n".utf8)
+        bytes.reserveCapacity(bytes.count + plane * 3)
+        for pixel in 0 ..< plane {
+            for channel in 0 ..< 3 {
+                let v = (image.values[channel * plane + pixel] / 2 + 0.5) * 255
+                bytes.append(UInt8(max(0, min(255, v.rounded()))))
+            }
+        }
+        try Data(bytes).write(to: url)
+    }
+}

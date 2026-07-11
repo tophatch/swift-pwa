@@ -16,15 +16,24 @@
 > tokenizes the prompt, then throws a clear "pending real-weights integration"
 > error at the denoising boundary.
 >
-> **Done since:** integer input tensors — `OrtModelSession` gained an
-> `OrtInput` enum (`.float` / `.int32` / `.int64`) so the text encoder's int32
-> `input_ids` and the UNet's int64 `timestep` can be fed (outputs stay
-> float32); verified end-to-end against a tiny real ONNX graph on CPU.
+> **Done since (real-weights pass):** the full pipeline is implemented and
+> **verified against a diffusers SD-Turbo reference**. `OrtModelSession` gained
+> integer input tensors (`OrtInput` — the text encoder's `input_ids` is int64,
+> not int32; the UNet `timestep` is a float32 scalar); an
+> `EulerDiscreteScheduler` port reproduces diffusers' SD-Turbo numbers exactly
+> (`setTimesteps(1)` → timesteps `[999]`, sigmas `[14.6146, 0]`,
+> `initNoiseSigma 14.6146`); and `runTxt2Img` (tokenize → text-encode → denoise
+> → VAE-decode) matches the reference to within float noise (text embedding /
+> latent / image correlation > 0.9999999; decoded image pixel-identical). The
+> corrections the export forced on the assumed spec: `input_ids` **int64**,
+> `timestep` **float32 scalar**, embedding dim **1024** (SD-2.1 OpenCLIP, not
+> 768), scheduler **`trailing`** spacing + `epsilon`, and — the one real bug —
+> CLIP pads with **`"!"` (id 0)**, not the end-of-text token.
 >
-> **Next (real-weights pass):** the scheduler `step()` math + confirmation of
-> the assumed tensor names / VAE scaling / scheduler constants against a real
-> checkpoint, then the real denoise loop + VAE-decode→PNG. See **Scoping
-> calls** at the bottom.
+> **Next:** encode the decoded pixels to PNG for the `ai.generateImage` result
+> (hoisting `ImageCodec` into a shared target — LaMa owns it today) + streaming
+> progress; then the **LCM (OpenRAIL-M)** commercial default + `sd-vendor`
+> packaging (see the licensing note under **Scoping calls**).
 
 ## Motivation
 

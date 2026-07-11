@@ -16,9 +16,9 @@ import Foundation
 public struct StableDiffusionModelSpec: Sendable, Equatable {
     // MARK: Text encoder (CLIP)
 
-    /// Text-encoder input tensor: token ids `[1, tokenizerMaxLength]`.
-    /// (The standard export types this **int32**; see the note on
-    /// integer-tensor support in `StableDiffusionBackend`.)
+    /// Text-encoder input tensor: token ids `[1, tokenizerMaxLength]`. The
+    /// optimum ONNX export types this **int64** (confirmed on SD-Turbo — see
+    /// `inputIdsInt64`), fed via `OrtInput.int64`.
     public var inputIdsName: String
     /// Text-encoder output used as the UNet's cross-attention context —
     /// `last_hidden_state` `[1, tokenizerMaxLength, embeddingDim]`.
@@ -28,7 +28,9 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
 
     /// UNet latent input `[1, latentChannels, h, w]` float32.
     public var unetSampleName: String
-    /// UNet timestep input `[1]` (the standard export types this **int64**).
+    /// UNet timestep input. The optimum ONNX export types this a **float32
+    /// scalar** (0-dim, confirmed on SD-Turbo — see `timestepIsFloatScalar`),
+    /// fed via `OrtInput.float` with an empty shape.
     public var unetTimestepName: String
     /// UNet cross-attention context input (the text embedding).
     public var unetEncoderHiddenStatesName: String
@@ -57,8 +59,21 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     /// Divisor applied to latents before VAE decode (`diffusers`
     /// `vae_scaling_factor`; SD-1.x/Turbo: 0.18215).
     public var vaeScalingFactor: Double
-    /// CLIP text-embedding dimension (SD-1.x/Turbo CLIP ViT-L/14: 768).
+    /// Text-embedding dimension. **1024** for SD-Turbo / SD-2.1 (OpenCLIP
+    /// ViT-H/14 — confirmed by graph introspection); SD-1.5's CLIP ViT-L/14
+    /// is 768. Informational — the graph carries its own output shape.
     public var embeddingDim: Int
+
+    // MARK: Graph dtypes
+
+    /// Feed `input_ids` as int64 (`OrtInput.int64`). The optimum SD export
+    /// types the text-encoder token-id input int64; `false` feeds int32 for an
+    /// export that differs.
+    public var inputIdsInt64: Bool
+    /// Feed the UNet `timestep` as a float32 scalar (`OrtInput.float`, empty
+    /// shape). The optimum SD export types it float32; `false` feeds it as an
+    /// int64 scalar for an export that differs.
+    public var timestepIsFloatScalar: Bool
 
     // MARK: Sampling
 
@@ -84,6 +99,10 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     public var bosTokenID: Int32
     /// `<|endoftext|>` id (CLIP: 49407).
     public var eosTokenID: Int32
+    /// Padding id. CLIP pads with `"!"` = **0**, not the end-of-text token
+    /// (the text encoder has no attention mask, so the pad value feeds the
+    /// model — confirmed on SD-Turbo).
+    public var padTokenID: Int32
 
     // MARK: Scheduler
 
@@ -92,26 +111,40 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     /// the piece most likely to need correction per checkpoint).
     public var scheduler: SchedulerConfig
 
-    /// Minimal scheduler configuration (diffusers `scheduler_config.json`
-    /// subset). The concrete `step()` math lives in the backend and is
-    /// finalized against real weights.
+    /// The `EulerDiscreteScheduler` configuration (a diffusers
+    /// `scheduler_config.json` subset). Confirmed against SD-Turbo's export;
+    /// `EulerDiscreteScheduler` (in this target) consumes it.
     public struct SchedulerConfig: Sendable, Equatable {
         public var numTrainTimesteps: Int
         public var betaStart: Double
         public var betaEnd: Double
         /// `"scaled_linear"` (SD default) or `"linear"`.
         public var betaSchedule: String
+        /// Noise-prediction parameterization. `"epsilon"` (SD-Turbo / SD-1.x)
+        /// is implemented; other types throw until added.
+        public var predictionType: String
+        /// Inference-timestep spacing: `"trailing"` (SD-Turbo), `"linspace"`,
+        /// or `"leading"`.
+        public var timestepSpacing: String
+        /// Offset added to timesteps under `"leading"` spacing.
+        public var stepsOffset: Int
 
         public init(
             numTrainTimesteps: Int = 1000,
             betaStart: Double = 0.00085,
             betaEnd: Double = 0.012,
-            betaSchedule: String = "scaled_linear"
+            betaSchedule: String = "scaled_linear",
+            predictionType: String = "epsilon",
+            timestepSpacing: String = "trailing",
+            stepsOffset: Int = 1
         ) {
             self.numTrainTimesteps = numTrainTimesteps
             self.betaStart = betaStart
             self.betaEnd = betaEnd
             self.betaSchedule = betaSchedule
+            self.predictionType = predictionType
+            self.timestepSpacing = timestepSpacing
+            self.stepsOffset = stepsOffset
         }
     }
 
@@ -129,7 +162,9 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         defaultWidth: Int = 512,
         defaultHeight: Int = 512,
         vaeScalingFactor: Double = 0.18215,
-        embeddingDim: Int = 768,
+        embeddingDim: Int = 1024,
+        inputIdsInt64: Bool = true,
+        timestepIsFloatScalar: Bool = true,
         defaultSteps: Int = 1,
         defaultGuidanceScale: Double = 0.0,
         classifierFreeGuidance: Bool = false,
@@ -138,6 +173,7 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         tokenizerMaxLength: Int = 77,
         bosTokenID: Int32 = 49406,
         eosTokenID: Int32 = 49407,
+        padTokenID: Int32 = 0,
         scheduler: SchedulerConfig = SchedulerConfig()
     ) {
         self.inputIdsName = inputIdsName
@@ -154,6 +190,8 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         self.defaultHeight = defaultHeight
         self.vaeScalingFactor = vaeScalingFactor
         self.embeddingDim = embeddingDim
+        self.inputIdsInt64 = inputIdsInt64
+        self.timestepIsFloatScalar = timestepIsFloatScalar
         self.defaultSteps = defaultSteps
         self.defaultGuidanceScale = defaultGuidanceScale
         self.classifierFreeGuidance = classifierFreeGuidance
@@ -162,11 +200,13 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         self.tokenizerMaxLength = tokenizerMaxLength
         self.bosTokenID = bosTokenID
         self.eosTokenID = eosTokenID
+        self.padTokenID = padTokenID
         self.scheduler = scheduler
     }
 
     /// The SD-Turbo contract (all defaults) — guidance-free, single-step,
-    /// CLIP ViT-L/14 text encoder, 512² output.
+    /// OpenCLIP ViT-H/14 text encoder (1024-dim), 512² output; tensor names,
+    /// dtypes, and scaling confirmed against the optimum ONNX export.
     public static let sdTurbo = StableDiffusionModelSpec()
 
     /// The latent `(width, height)` for an output `(width, height)`.

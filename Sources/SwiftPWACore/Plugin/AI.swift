@@ -220,6 +220,12 @@ public struct AICapabilities: Sendable, Codable, Equatable {
     /// route on this to expose a "clone a voice" affordance only where it
     /// works.
     public let voiceCloning: Bool
+    /// The models this backend can serve, when it hosts more than one — for a
+    /// runtime model/backend switcher (see `MultiModelImageBackend`). `nil`
+    /// (or a single entry) ⇒ single-model, no switcher needed; the scalar
+    /// `model` above stays as "the active/default." Modality-agnostic, so a
+    /// picker can present text/image/vision/audio models together.
+    public let models: [AIModelInfo]?
 
     public init(
         available: Bool,
@@ -232,7 +238,8 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         imageEditing: Bool = false,
         audioInput: Bool = false,
         audioGeneration: Bool = false,
-        voiceCloning: Bool = false
+        voiceCloning: Bool = false,
+        models: [AIModelInfo]? = nil
     ) {
         self.available = available
         self.backend = backend
@@ -245,6 +252,7 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         self.audioInput = audioInput
         self.audioGeneration = audioGeneration
         self.voiceCloning = voiceCloning
+        self.models = models
     }
 
     /// The capabilities of a host with no usable backend.
@@ -275,6 +283,11 @@ public enum AIBackendID {
     public static let appleSpeech = "apple-speech"
     public static let whisperMLX = "whisper-mlx"
     public static let ttsMLX = "tts-mlx"
+
+    /// A composite that routes among several backends by model id
+    /// (`MultiModelImageBackend`) — reported by `ai.info` when a switcher is
+    /// installed. The per-model provenance is in `AICapabilities.models`.
+    public static let multiModel = "multi-model"
 }
 
 // MARK: - Requests / results
@@ -501,6 +514,11 @@ public struct AIGenerateImageRequest: Sendable, Codable, Equatable {
     /// Classifier-free-guidance scale (a Stable-Diffusion-family knob).
     /// `nil` lets the backend choose; a prompt-free backend ignores it.
     public var guidanceScale: Double?
+    /// Which installed image model to use — an id from `AICapabilities.models`.
+    /// `nil` ⇒ the backend's default. Honored by a backend that hosts more than
+    /// one model (or an adopter composite like `MultiModelImageBackend` that
+    /// routes on it); single-model backends ignore it.
+    public var model: String?
 
     public init(
         prompt: String? = nil,
@@ -514,7 +532,8 @@ public struct AIGenerateImageRequest: Sendable, Codable, Equatable {
         image: AIImage? = nil,
         mask: AIImage? = nil,
         strength: Double? = nil,
-        guidanceScale: Double? = nil
+        guidanceScale: Double? = nil,
+        model: String? = nil
     ) {
         self.prompt = prompt
         self.negativePrompt = negativePrompt
@@ -528,6 +547,7 @@ public struct AIGenerateImageRequest: Sendable, Codable, Equatable {
         self.mask = mask
         self.strength = strength
         self.guidanceScale = guidanceScale
+        self.model = model
     }
 }
 

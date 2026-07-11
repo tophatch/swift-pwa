@@ -1,13 +1,16 @@
 # Proposal: image-generation adopter refinements — model selection & granular download progress
 
-> **Status: Part 2 implemented (Unreleased); Part 1 proposed.** Two additive,
+> **Status: both parts implemented (Unreleased).** Two additive,
 > backwards-compatible refinements to the on-device image tier
 > (`ai.generateImage` / `ai.ensureModel`), surfaced while an adopter built a
 > text→image feature on `StableDiffusionBackend` (v0.8.5 / v0.8.6). Neither is a
 > blocker — the adopter shipped around both — but each is a rough edge hit the
 > moment you offer more than one model or download a multi-GB model on Android.
 > They're unrelated in mechanism but share one origin (an adopter driving the
-> image tier hard), hence one doc.
+> image tier hard), hence one doc. Part 1 shipped as the `AIModelInfo` /
+> `AIModelCapability` / `AIModelAvailability` contract + `request.model` +
+> `AICapabilities.models` + the `MultiModelImageBackend` router; Part 2 as the
+> `net.downloadFile` progress channel.
 >
 > 1. **A model selector on `ai.generateImage`** (+ a `models` list on `ai.info`),
 >    so a *running* app can choose among several image backends — today the model
@@ -47,6 +50,16 @@ That worked. Two things did not have a clean answer:
 ---
 
 ## Part 1 — model selection for `ai.generateImage`
+
+> **✅ Implemented (Unreleased).** Shipped in `SwiftPWACore`: `AIModelCapability`
+> (kebab-string enum), `AIModelAvailability` (`kind`-tagged union), `AIModelInfo`,
+> `AICapabilities.models`, `AIGenerateImageRequest.model`, and the
+> **`MultiModelImageBackend`** router (routes the image verbs + `ensureModel` by
+> model id, delegates text/audio to the default, aggregates `models` into
+> `ai.info`). Fully additive — `model == nil` / `models == nil` reproduces
+> single-model behavior. Text/audio request-level routing is the noted follow-up.
+> The shapes below are the design sketch; the shipped Codable form of
+> `availability` is `{ kind: "ready" | "downloadable" | "needsSetup", bytes?, reason? }`.
 
 ### Problem
 
@@ -224,10 +237,10 @@ local+remote turnkey instead of boilerplate.)
 const info = await bridge.invoke('ai.info', {})
 // info.models → [{ id, label, imageGeneration, imageEditing,
 //                  availability, offlineCapable, license }]
-// availability is one of:
-//   { ready: true }
-//   { downloadable: { bytes: 1720180719 } }   // local, needs ai.ensureModel
-//   { needsSetup: { reason: "Add an API key in Settings" } }
+// availability is a { kind, … } tagged union:
+//   { kind: "ready" }
+//   { kind: "downloadable", bytes: 1720180719 }   // local, needs ai.ensureModel
+//   { kind: "needsSetup", reason: "Add an API key in Settings" }
 
 // download a local model on demand (ai.ensureModel already takes `model`)
 bridge.subscribe('ai.ensureModel', { model: 'lcm-dreamshaper' }, onProgress)

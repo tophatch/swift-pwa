@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **fp16 ONNX models now run on Android — `OrtModelSession` gained a graph-optimization-level knob, and `StableDiffusionBackend` uses `.basic` there.** The fp16 SD-Turbo pipeline failed at session creation on Android with `Failed to find kernel for com.microsoft.Gelu … the node has the following type (tensor(float16))`. Root cause: the Android ONNX Runtime package has **no float16 kernels for the `com.microsoft.*` contrib ops** (Apple/desktop packages do — same 1.27.0, a build-config difference). The exports contain *no* contrib ops; ONNX Runtime's default (`ORT_ENABLE_ALL`) **GeluFusion** — an *extended*-level optimization — rewrites the text encoder's standard Erf-gelu pattern into `com.microsoft.Gelu` **at load time**, and that fused fp16 op has no Android kernel. Fix: a new `OrtGraphOptimizationLevel` parameter on `OrtModelSession.init` (default `.all`, so existing `MobileSAMBackend` / `LaMaBackend` callers are unchanged), and `StableDiffusionBackend` passes `.basic` on `os(Android)` — BASIC skips the extended fusions, so the standard ops (which *do* have fp16 Android kernels, including fp16 `Conv`) run directly. Apple/desktop keep `.all` (their fp16 contrib kernels work; the pipeline is verified there). **Device-verified on a Galaxy Tab S10+:** fp16 SD-Turbo `ai.generateImage` produces a coherent 512² image in ~35 s on the tablet CPU — so the ~2.5 GB fp16 weights are viable on Android, no fp32 fallback needed.
+
+### Added
+
+- **`Examples/CritterFacts`: a prompt-to-image demo for the Stable-Diffusion backend.** A new "🎨 Generate an image from a prompt" page ([web/generate.html](Examples/CritterFacts/Sources/CritterFacts/web/generate.html)) runs `StableDiffusionBackend` (SD-Turbo) fully on-device — type a prompt → `ai.generateImage({ prompt })` → a PNG — so the text→image tier shipped in 0.8.5 finally has a worked example (it previously had none). It joins LaMa on the example's `CompositeAIBackend`, which now routes `ai.generateImage` by whether the request carries a source `image` (**present ⇒ inpaint/LaMa, absent ⇒ text→image/SD**) and routes `ai.ensureModel({ model: "generate" })` to the SD download — the same "one `ai.*` surface, several purposes" pattern erase already demonstrates. Enabled by the existing `ai.local_onnx_runtime: true` flag; the fp16 SD-Turbo weights (~2.5 GB) are fetched on first use from the `sd-vendor` release. Example-only — no framework change.
+
 ## [0.8.5] - 2026-07-11
 
 ### Added

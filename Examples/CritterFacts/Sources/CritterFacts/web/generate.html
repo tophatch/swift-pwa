@@ -1,0 +1,202 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Prompt-to-image · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
+            --accent-ink: #06231a; --line: #232a35; --card: #171c24;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; overflow: hidden; }
+        body {
+            background: var(--bg); color: var(--ink);
+            font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column;
+        }
+        .bar {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            border-bottom: 1px solid var(--line); background: #131820;
+            padding-top: calc(12px + env(safe-area-inset-top));
+        }
+        .back {
+            text-decoration: none; color: var(--ink); font-weight: 700;
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+        }
+        .back:active { transform: translateY(1px); }
+        .hint { color: var(--muted); font-size: 13px; flex: 1; }
+        .hint b { color: var(--accent); }
+
+        .stage {
+            position: relative; flex: 1; min-height: 0; display: flex;
+            align-items: center; justify-content: center; padding: 20px;
+        }
+        .frame {
+            width: min(512px, 90vw); aspect-ratio: 1 / 1; border-radius: 16px;
+            border: 1px solid var(--line); background: var(--card);
+            display: flex; align-items: center; justify-content: center;
+            overflow: hidden; box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        }
+        .frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
+        .frame .placeholder { color: var(--muted); font-size: 48px; }
+
+        .controls {
+            display: flex; gap: 10px; padding: 12px 16px;
+            border-top: 1px solid var(--line); background: #131820;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        }
+        input[type="text"] {
+            flex: 1; font: inherit; color: var(--ink); background: var(--bg);
+            border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+        }
+        input[type="text"]:focus { outline: none; border-color: var(--accent); }
+        button {
+            appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 700;
+            background: var(--accent); color: var(--accent-ink);
+            padding: 12px 20px; border-radius: 12px; transition: transform .06s ease, opacity .2s;
+        }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.5; cursor: progress; }
+
+        .overlay {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; padding: 24px;
+            background: rgba(14,17,22,0.78); text-align: center;
+        }
+        .overlay small { color: var(--muted); max-width: 44ch; }
+        progress { width: min(320px, 70vw); height: 8px; accent-color: var(--accent); }
+        .spinner {
+            width: 34px; height: 34px; border-radius: 50%;
+            border: 3px solid var(--line); border-top-color: var(--accent);
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .err { color: #f0c9c9; max-width: 44ch; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="back" href="index.html">← Back</a>
+        <div class="hint" id="hint">Type a <b>prompt</b> and generate an image — on-device.</div>
+    </div>
+
+    <div class="stage">
+        <div class="frame">
+            <img id="out" alt="generated image" hidden />
+            <div class="placeholder" id="placeholder">🎨</div>
+        </div>
+        <div class="overlay" id="overlay" hidden>
+            <div class="spinner" id="spinner" hidden></div>
+            <div id="status">Loading…</div>
+            <progress id="bar" max="1" value="0" hidden></progress>
+            <small id="sub"></small>
+        </div>
+    </div>
+
+    <form class="controls" id="form">
+        <input type="text" id="prompt" placeholder="a red panda astronaut, digital art"
+            value="a red panda astronaut floating in space, digital art" autocomplete="off" />
+        <button type="submit" id="go" disabled>Generate</button>
+    </form>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+        let busy = false;
+        let modelReady = false;
+
+        function showSpinner(text, sub = "") {
+            $("overlay").hidden = false; $("spinner").hidden = false;
+            $("bar").hidden = true; $("status").textContent = text; $("sub").textContent = sub;
+        }
+        function showProgress(text, sub = "") {
+            $("overlay").hidden = false; $("spinner").hidden = true;
+            $("bar").hidden = false; $("status").textContent = text; $("sub").textContent = sub;
+        }
+        function hideOverlay() { $("overlay").hidden = true; }
+        function showError(msg) {
+            $("overlay").hidden = false; $("spinner").hidden = true; $("bar").hidden = true;
+            $("status").innerHTML = '<div class="err">⚠️ ' + msg + "</div>"; $("sub").textContent = "";
+        }
+
+        const mb = (n) => (n / 1048576).toFixed(0);
+
+        // First run downloads the SD-Turbo pipeline (~2.5 GB, five files) from
+        // the sd-vendor release; the composite backend routes model:"generate"
+        // to Stable Diffusion. Later runs are a cache hit.
+        function ensureModel() {
+            if (modelReady) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                showProgress("Preparing model…", "Downloading the image model (first run only)…");
+                const unsub = bridge.subscribe("ai.ensureModel", { model: "generate" }, (e) => {
+                    if (e.type === "progress") {
+                        if (e.totalBytes) {
+                            $("bar").value = e.bytesDone / e.totalBytes;
+                            $("sub").textContent = `Downloading image model… ${mb(e.bytesDone)} / ${mb(e.totalBytes)} MB`;
+                        } else {
+                            $("sub").textContent = `Downloading image model… ${mb(e.bytesDone)} MB`;
+                        }
+                    } else if (e.type === "done") {
+                        modelReady = true; unsub(); resolve();
+                    } else if (e.type === "error") {
+                        unsub(); reject(new Error(e.message || "model download failed"));
+                    }
+                });
+            });
+        }
+
+        async function generate(prompt) {
+            if (busy) return;
+            busy = true; $("go").disabled = true;
+            try {
+                await ensureModel();
+
+                // A bare prompt (no source image) routes to Stable Diffusion.
+                // SD-Turbo is a one-step, guidance-free model — quick on a GPU,
+                // a few seconds on CPU. Unary call; the frame updates on return.
+                showSpinner("Generating…", "One-step SD-Turbo — a moment on CPU.");
+                const t0 = Date.now();
+                const { images } = await bridge.invoke("ai.generateImage", { prompt });
+                const secs = ((Date.now() - t0) / 1000).toFixed(1);
+                const out = images && images[0];
+                if (!out || !out.dataBase64) throw new Error("no image returned");
+
+                $("out").src = "data:" + (out.mimeType || "image/png") + ";base64," + out.dataBase64;
+                $("out").hidden = false; $("placeholder").hidden = true;
+                $("hint").innerHTML = `Generated in ${secs}s (seed ${out.seed ?? 0}). Edit the prompt and go again.`;
+                hideOverlay();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            } finally {
+                busy = false; $("go").disabled = false;
+            }
+        }
+
+        $("form").addEventListener("submit", (e) => {
+            e.preventDefault();
+            const p = $("prompt").value.trim();
+            if (p) generate(p);
+        });
+
+        async function start() {
+            try {
+                const info = await bridge.invoke("ai.info", {});
+                if (!info || !info.imageGeneration) {
+                    showError("On-device image generation isn't available in this build. " +
+                        "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
+                    return;
+                }
+                $("go").disabled = false;
+                hideOverlay();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            }
+        }
+
+        start();
+    </script>
+</body>
+</html>

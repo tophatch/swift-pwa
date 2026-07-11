@@ -26,6 +26,28 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         case cpu, cuda, directml
     }
 
+    /// ONNX Runtime graph-optimization level for a session. The default,
+    /// `.all`, matches ONNX Runtime's own default (all fusions). Lower it to
+    /// `.basic` to skip the **extended** fusions — the ones that rewrite
+    /// standard ops into `com.microsoft.*` contrib ops (e.g. an Erf-gelu
+    /// pattern → `com.microsoft.Gelu`). That matters on the **Android** ONNX
+    /// Runtime package, whose contrib-op kernels don't cover **float16**: a
+    /// fused fp16 `com.microsoft.Gelu` has no kernel there and the session
+    /// fails to run, while the un-fused standard ops do run. Apple/desktop
+    /// packages carry the fp16 contrib kernels, so they keep `.all`.
+    public enum OrtGraphOptimizationLevel {
+        case disableAll, basic, extended, all
+
+        fileprivate var ortValue: GraphOptimizationLevel {
+            switch self {
+            case .disableAll: ORT_DISABLE_ALL
+            case .basic: ORT_ENABLE_BASIC
+            case .extended: ORT_ENABLE_EXTENDED
+            case .all: ORT_ENABLE_ALL
+            }
+        }
+    }
+
     /// Log-once sink for the "GPU EP unavailable → CPU fallback" notice, so a
     /// machine without a usable GPU doesn't print the line for every model
     /// (encoder + two decoders) on every session.
@@ -70,20 +92,30 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// fails to create with it — no capable GPU, no driver, or (Linux) no
         /// CUDA/cuDNN runtime present — we log once and retry on CPU. Inference
         /// is never broken by the absence of a usable GPU.
-        public init(modelPath: String, runtime: OrtRuntime) throws {
+        public init(
+            modelPath: String,
+            runtime: OrtRuntime,
+            graphOptimizationLevel: OrtGraphOptimizationLevel = .all
+        ) throws {
             self.runtime = runtime
             let api = runtime.api
 
             var made: (session: OpaquePointer, provider: OrtExecutionProvider)?
             #if SWIFT_PWA_ONNXRUNTIME_GPU
                 do {
-                    made = try Self.createSession(modelPath: modelPath, runtime: runtime, gpu: true)
+                    made = try Self.createSession(
+                        modelPath: modelPath, runtime: runtime, gpu: true,
+                        optimization: graphOptimizationLevel
+                    )
                 } catch {
                     OrtGpuFallback.note(error)
                 }
             #endif
             if made == nil {
-                made = try Self.createSession(modelPath: modelPath, runtime: runtime, gpu: false)
+                made = try Self.createSession(
+                    modelPath: modelPath, runtime: runtime, gpu: false,
+                    optimization: graphOptimizationLevel
+                )
             }
             guard let made else { throw OrtError.failed("CreateSession returned no session") }
             session = made.session
@@ -101,7 +133,8 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// compiled in). Throws if session options / the GPU EP / `CreateSession`
         /// fail — the GPU attempt's throw is what drives the CPU fallback above.
         private static func createSession(
-            modelPath: String, runtime: OrtRuntime, gpu: Bool
+            modelPath: String, runtime: OrtRuntime, gpu: Bool,
+            optimization: OrtGraphOptimizationLevel
         ) throws -> (OpaquePointer, OrtExecutionProvider) {
             let api = runtime.api
 
@@ -109,6 +142,8 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             try runtime.check(api.pointee.CreateSessionOptions(&options))
             guard let options else { throw OrtError.failed("CreateSessionOptions returned no options") }
             defer { api.pointee.ReleaseSessionOptions(options) }
+
+            try runtime.check(api.pointee.SetSessionGraphOptimizationLevel(options, optimization.ortValue))
 
             var provider: OrtExecutionProvider = .cpu
             #if SWIFT_PWA_ONNXRUNTIME_GPU

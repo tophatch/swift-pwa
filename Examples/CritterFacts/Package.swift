@@ -39,6 +39,9 @@ if onnxRuntimeEnabled {
     // LaMaBackend (`ai.generateImage` inpainting) — same ONNX Runtime gate,
     // composed with the text backend behind one `ai.*` surface (tap-to-erase).
     appDependencies.append(.product(name: "SwiftPWAImageEdit", package: "swift-pwa"))
+    // StableDiffusionBackend (`ai.generateImage` text→image) — same gate,
+    // composed alongside LaMa behind the one `ai.*` surface (prompt-to-image).
+    appDependencies.append(.product(name: "SwiftPWAStableDiffusion", package: "swift-pwa"))
 }
 
 // Opt-in build flag for the headless on-device LaMa inpaint smoke (Android

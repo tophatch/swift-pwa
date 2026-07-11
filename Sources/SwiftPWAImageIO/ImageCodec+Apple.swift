@@ -60,12 +60,19 @@
             let width = image.width, height = image.height
             // CoreGraphics has no packed-RGB (24bpp) bitmap context, so widen
             // to RGBA with an opaque alpha before handing it to ImageIO. A
-            // bitmap context's memory is bottom-row-first, but `RawImage` (and
-            // `render` on decode) is top-row-first, so flip vertically here to
-            // keep encode ↔ decode exact inverses.
+            // data-backed bitmap context is **top-row-first** — `makeImage()`
+            // treats buffer row 0 as the visual top (the same orientation a
+            // no-flip `draw` reads back, see `render` and
+            // `SwiftPWASegmentation`'s ImagePreprocessing fix) — so copy the
+            // top-row-first `RawImage` straight across with **no vertical flip**.
+            // (The prior `(height-1-y)` flip inverted the output; it was masked
+            // for decode→encode round-trips like `resizeRGB` and the LaMa
+            // decode→edit→encode path by a matching flip in `render`, and only
+            // surfaced once a producer — Stable Diffusion's VAE — fed a top-down
+            // image straight to encode with no decode to cancel it.)
             var rgba = [UInt8](repeating: 255, count: width * height * 4)
             for y in 0 ..< height {
-                let dstRow = (height - 1 - y) * width
+                let dstRow = y * width
                 let srcRow = y * width
                 for x in 0 ..< width {
                     rgba[(dstRow + x) * 4] = image.pixels[(srcRow + x) * 3]
@@ -133,9 +140,12 @@
             else {
                 throw ImageCodecError.decodeFailed("could not create an RGBA bitmap context")
             }
-            // Flip so the buffer's row 0 is the visual top (CGContext is y-up).
-            context.translateBy(x: 0, y: CGFloat(height))
-            context.scaleBy(x: 1, y: -1)
+            // No vertical flip: a `CGImage` drawn into a fresh data-backed bitmap
+            // context lands **top-down** — buffer row 0 is the visual top — so a
+            // plain draw already reads back top-row-first (the SwiftPWASegmentation
+            // ImagePreprocessing fix established this; a translateBy/scaleBy(-1)
+            // here would invert it). Keeps decode top-down to match `encodePNG`
+            // and the desktop/Android codecs.
             context.interpolationQuality = .high
             context.draw(cgImage, in: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height)))
 

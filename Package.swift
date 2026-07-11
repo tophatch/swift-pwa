@@ -906,6 +906,11 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             ],
             swiftSettings: swiftSettings
         ),
+        .testTarget(
+            name: "SwiftPWAImageIOTests",
+            dependencies: ["SwiftPWAImageIO"],
+            swiftSettings: swiftSettings
+        ),
         .target(
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,

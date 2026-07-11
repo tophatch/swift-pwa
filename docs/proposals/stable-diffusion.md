@@ -48,9 +48,14 @@
 > the standard CPU EP can't run; our own plain `--dtype fp16` export uses
 > standard ops that do.
 >
-> **Next:** the **LCM (OpenRAIL-M)** commercial default (a second scheduler +
-> the guidance-embedding UNet input) + `sd-vendor` packaging with pinned
-> checksums (see the licensing note under **Scoping calls**).
+> **Update — LCM shipped.** The **LCM (OpenRAIL-M)** commercial default is
+> done: a scheduler registry (`DiffusionScheduler` + `SchedulerKind`), a
+> pure-Swift `LCMScheduler`, and the guidance-scale embedding fed on the UNet's
+> `timestep_cond` input. `LCM_Dreamshaper_v7` (SD-1.5) is exported, hosted on
+> `sd-vendor` (`StableDiffusionModelSource.lcmDreamshaperFp16`, pinned), and
+> **verified end-to-end against a diffusers reference** (correlation > 0.99999).
+> Real-weights finding: SD-1.5's CLIP pads with **eos (49407)**, not `"!"` (id 0)
+> like SD-2.1. The CritterFacts demo uses it (the commercially-usable default).
 
 ## Motivation
 

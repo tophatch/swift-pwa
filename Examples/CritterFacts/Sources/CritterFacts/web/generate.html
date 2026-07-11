@@ -124,8 +124,8 @@
 
         const mb = (n) => (n / 1048576).toFixed(0);
 
-        // First run downloads the SD-Turbo pipeline (~2.5 GB, five files) from
-        // the sd-vendor release; the composite backend routes model:"generate"
+        // First run downloads the LCM_Dreamshaper pipeline (~2.0 GB) from the
+        // sd-vendor release; the composite backend routes model:"generate"
         // to Stable Diffusion. Later runs are a cache hit.
         function ensureModel() {
             if (modelReady) return Promise.resolve();
@@ -155,9 +155,9 @@
                 await ensureModel();
 
                 // A bare prompt (no source image) routes to Stable Diffusion.
-                // SD-Turbo is a one-step, guidance-free model — quick on a GPU,
-                // a few seconds on CPU. Unary call; the frame updates on return.
-                showSpinner("Generating…", "One-step SD-Turbo — a moment on CPU.");
+                // LCM_Dreamshaper is a 4-step Latent Consistency Model — quick
+                // on a GPU, a few seconds on CPU. Unary call; frame updates on return.
+                showSpinner("Generating…", "4-step LCM — a moment on CPU.");
                 const t0 = Date.now();
                 const { images } = await bridge.invoke("ai.generateImage", { prompt });
                 const secs = ((Date.now() - t0) / 1000).toFixed(1);

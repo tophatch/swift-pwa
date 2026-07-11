@@ -58,6 +58,29 @@ public enum StableDiffusionSampling {
         return out
     }
 
+    /// The LCM **guidance-scale embedding** (`timestep_cond`) — an LCM UNet
+    /// takes the guidance scale as a conditioning input rather than running a
+    /// separate unconditional pass. This ports diffusers'
+    /// `get_guidance_scale_embedding` (the VDM sinusoidal embedding): with
+    /// `w = (guidanceScale - 1) · 1000`, the first half is `sin(w · freqᵢ)` and
+    /// the second half `cos(w · freqᵢ)`, where `freqᵢ = exp(-i · ln(10000) /
+    /// (halfDim - 1))`. `embeddingDim` is the UNet's `time_cond_proj_dim`
+    /// (256 for `LCM_Dreamshaper_v7`). Returns a flat `[embeddingDim]` vector.
+    public static func guidanceScaleEmbedding(guidanceScale: Double, embeddingDim: Int) -> [Float] {
+        let w = (guidanceScale - 1.0) * 1000.0
+        let halfDim = embeddingDim / 2
+        guard halfDim > 1 else { return [Float](repeating: 0, count: embeddingDim) }
+        let scale = Foundation.log(10000.0) / Double(halfDim - 1)
+        var out = [Float](repeating: 0, count: embeddingDim)
+        for i in 0 ..< halfDim {
+            let arg = w * Foundation.exp(Double(i) * -scale)
+            out[i] = Float(Foundation.sin(arg))
+            out[halfDim + i] = Float(Foundation.cos(arg))
+        }
+        // Odd embedding dims zero-pad the last slot (diffusers parity).
+        return out
+    }
+
     /// The descending training-timestep schedule for `steps` inference
     /// steps, evenly spaced over `[0, numTrainTimesteps)` (the diffusers
     /// convention: `round(linspace(numTrainTimesteps-1, 0, steps))`). A

@@ -12,10 +12,13 @@ import Foundation
 /// Only the `epsilon` prediction type is implemented (SD-Turbo / SD-1.x);
 /// `step` throws `.unsupported` for others. All three timestep spacings
 /// (`trailing` — SD-Turbo's default — `linspace`, `leading`) are supported.
-public struct EulerDiscreteScheduler: Sendable {
+public struct EulerDiscreteScheduler: DiffusionScheduler, Sendable {
     public enum SchedulerError: Error, Equatable {
         case unsupported(String)
     }
+
+    /// Euler is deterministic between steps — it needs no per-step noise.
+    public let usesStepNoise = false
 
     private let config: StableDiffusionModelSpec.SchedulerConfig
     /// `sigma` for each of the `numTrainTimesteps` training steps: the ONNX
@@ -111,7 +114,7 @@ public struct EulerDiscreteScheduler: Sendable {
     /// One Euler step: advance `sample` using the UNet's `modelOutput` (the
     /// predicted noise, for `epsilon`) at inference step `stepIndex`, to the
     /// next (lower) noise level. Returns the new latent.
-    public func step(modelOutput: [Float], stepIndex: Int, sample: [Float]) throws -> [Float] {
+    public func step(modelOutput: [Float], stepIndex: Int, sample: [Float], noise _: [Float]? = nil) throws -> [Float] {
         guard config.predictionType == "epsilon" else {
             throw SchedulerError.unsupported("prediction type \"\(config.predictionType)\"")
         }

@@ -307,7 +307,7 @@ optimum-cli export onnx --model sd-turbo-mystyle --dtype fp16 --device cpu sd-tu
 
 A few things worth knowing:
 
-- **Speed:** the "few-step" trick that makes on-device SD viable is itself a LoRA — **LCM-LoRA**. Merging an LCM-LoRA (plus your style LoRA) into an SD-1.5 base gives you a 4-step model that's fast on a phone. (LCM uses a different scheduler than SD-Turbo's Euler; a scheduler for it is on the roadmap — until then, SD-Turbo is the verified path.)
+- **Speed:** the "few-step" trick that makes on-device SD viable is itself a LoRA — **LCM-LoRA**. Merging an LCM-LoRA (plus your style LoRA) into an SD-1.5 base gives you a 4-step model that's fast on a phone. swift-pwa ships this path: use `StableDiffusionModelSpec.lcmDreamshaper(Fp16)` (its scheduler is `.lcm`, and the backend feeds the guidance embedding automatically) with your LCM-merged ONNX export. `LCM_Dreamshaper_v7` is the ready-made example (`StableDiffusionModelSource.lcmDreamshaperFp16`, verified end-to-end).
 - **One model per style:** because the LoRA is baked in, each merged export *is* a style. If you want several, export several and let the user pick which `StableDiffusionModelSource` to download.
 - **Licensing:** the base model's license flows through to your merged export. SD-Turbo is **non-commercial** (Stability AI Community License); for a commercial app, merge onto an **OpenRAIL-M** base (e.g. an SD-1.5 + LCM-LoRA combination) instead. Check your LoRA's license too.
 

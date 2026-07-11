@@ -237,6 +237,7 @@
         func runTxt2Img(
             _ request: AIGenerateImageRequest,
             injectedLatent: [Float]? = nil,
+            injectedStepNoise: [[Float]]? = nil,
             onStep: (@Sendable (Int, Int) -> Void)? = nil
         ) async throws -> Txt2ImgIntermediates {
             guard let runtime = OrtRuntime.shared else {
@@ -270,7 +271,9 @@
             }
 
             // 3. Initial latent: seeded (or injected) Gaussian × initNoiseSigma.
-            var scheduler = EulerDiscreteScheduler(config: spec.scheduler)
+            //    The scheduler is chosen by the spec (Euler for SD-Turbo/SD,
+            //    LCM for a Latent Consistency Model — see `makeScheduler`).
+            var scheduler = makeScheduler(spec.scheduler)
             scheduler.setTimesteps(steps)
             let noise = injectedLatent
                 ?? StableDiffusionSampling.seededLatents(count: latentCount, seed: UInt64(bitPattern: Int64(seed)))
@@ -281,28 +284,51 @@
             var latent = noise.map { $0 * sigma0 }
             let latentShape: [Int64] = [1, Int64(spec.latentChannels), Int64(latentH), Int64(latentW)]
 
-            // 4. Denoise loop (guidance-free: one UNet pass per step).
+            // LCM feeds the guidance scale as a `timestep_cond` embedding (no
+            // classifier-free-guidance branch); compute it once. `nil` for
+            // SD/SD-Turbo exports, which have no such UNet input.
+            let guidanceScale = request.guidanceScale ?? spec.defaultGuidanceScale
+            let guidanceEmbedding: [Float]? = spec.unetTimestepCondName.map { _ in
+                StableDiffusionSampling.guidanceScaleEmbedding(
+                    guidanceScale: guidanceScale, embeddingDim: spec.guidanceEmbeddingDim
+                )
+            }
+
+            // 4. Denoise loop. One UNet pass per step (guidance is baked into
+            //    the embedding for LCM, and SD-Turbo is guidance-free).
             let unet = try loadedUnet(runtime)
-            for (index, timestep) in scheduler.timesteps.enumerated() {
+            let timesteps = scheduler.timesteps
+            for (index, timestep) in timesteps.enumerated() {
                 let scaled = scheduler.scaleModelInput(latent, stepIndex: index)
                 let timestepInput: OrtModelSession.OrtInput = spec.timestepIsFloatScalar
                     ? floatInput([Float(timestep)], shape: [])
                     : .int64([Int64(timestep)], shape: [])
-                let unetOut = try mapOrt {
-                    try unet.run(
-                        inputs: [
-                            spec.unetSampleName: floatInput(scaled, shape: latentShape),
-                            spec.unetTimestepName: timestepInput,
-                            spec.unetEncoderHiddenStatesName: floatInput(embedding.values, shape: embedding.shape)
-                        ],
-                        outputNames: [spec.unetOutputName]
-                    )
+                var inputs: [String: OrtModelSession.OrtInput] = [
+                    spec.unetSampleName: floatInput(scaled, shape: latentShape),
+                    spec.unetTimestepName: timestepInput,
+                    spec.unetEncoderHiddenStatesName: floatInput(embedding.values, shape: embedding.shape)
+                ]
+                if let name = spec.unetTimestepCondName, let guidanceEmbedding {
+                    inputs[name] = floatInput(guidanceEmbedding, shape: [1, Int64(spec.guidanceEmbeddingDim)])
                 }
+                let unetOut = try mapOrt { try unet.run(inputs: inputs, outputNames: [spec.unetOutputName]) }
                 guard let noisePred = unetOut[spec.unetOutputName] else {
                     throw AIError.generationFailed("UNet produced no \"\(spec.unetOutputName)\" output")
                 }
-                latent = try scheduler.step(modelOutput: noisePred.values, stepIndex: index, sample: latent)
-                onStep?(index + 1, scheduler.timesteps.count)
+                // Schedulers that re-noise between steps (LCM) need standard-
+                // normal noise on every non-final step; injected for the
+                // verification harness, else seeded per-step (deterministic).
+                var stepNoise: [Float]?
+                if scheduler.usesStepNoise, index < timesteps.count - 1 {
+                    stepNoise = injectedStepNoise?[index]
+                        ?? StableDiffusionSampling.seededLatents(
+                            count: latentCount, seed: UInt64(bitPattern: Int64(seed)) &+ UInt64(index) &+ 1
+                        )
+                }
+                latent = try scheduler.step(
+                    modelOutput: noisePred.values, stepIndex: index, sample: latent, noise: stepNoise
+                )
+                onStep?(index + 1, timesteps.count)
             }
 
             // 5. VAE-decode (latent / scaling_factor → image in [-1, 1]).

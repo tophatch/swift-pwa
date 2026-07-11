@@ -1,52 +1,87 @@
 #!/usr/bin/env bash
 #
-# Vendor a Stable-Diffusion-Turbo ONNX pipeline for `SwiftPWAStableDiffusion`'s
+# Vendor a Stable-Diffusion-family ONNX pipeline for `SwiftPWAStableDiffusion`'s
 # `StableDiffusionBackend` (ai.generateImage text->image — see
 # docs/proposals/stable-diffusion.md). Unlike the LaMa/MobileSAM single-file
 # vendors, SD is a multi-file pipeline (text encoder + UNet + VAE decoder +
-# CLIP tokenizer), exported from `stabilityai/sd-turbo` with 🤗 optimum.
+# CLIP tokenizer), exported with 🤗 optimum.
 #
-# We publish the **fp16** export (`--dtype fp16`): ~2.5 GB (vs ~4.9 GB fp32),
-# faster on GPU/CoreML, and it still runs on the CPU EP. Every fp16 file is
-# under GitHub's 2 GB per-asset limit (the fp16 UNet is a single inline file);
-# the fp32 UNet's external-data file (~3.5 GB) exceeds that limit, so fp32 is
-# hosted elsewhere (Hugging Face) — not by this script.
+# Two models, selected by KIND:
+#   KIND=sdturbo (default) — stabilityai/sd-turbo (SD-2.1 base, 1-step, Euler).
+#                            Stability AI Non-Commercial Community License.
+#   KIND=lcm               — SimianLuo/LCM_Dreamshaper_v7 (SD-1.5 base, 4-step,
+#                            LCM scheduler + timestep_cond). OpenRAIL-M —
+#                            **commercially usable**, the default we point apps at.
 #
-# The graph contract (tensor names, dtypes, scheduler, VAE scaling) was
-# confirmed on-hardware against a diffusers reference — see the proposal and
-# `StableDiffusionModelSpec.sdTurboFp16`.
+# We publish the **fp16** export (`--dtype fp16`): ~half the size, faster on
+# GPU/CoreML, still runs on the CPU EP; every file is under GitHub's 2 GB limit.
 #
 # Usage:
-#   Scripts/vendor-sd.sh export       # export fp16 ONNX into $OUT (needs optimum)
-#   Scripts/vendor-sd.sh checksums    # print sha256 + byte size to pin
-#   Scripts/vendor-sd.sh publish      # gh release create sd-vendor + upload
+#   KIND=lcm Scripts/vendor-sd.sh export     # export fp16 ONNX into $OUT (needs optimum)
+#   KIND=lcm Scripts/vendor-sd.sh checksums  # print sha256 + byte size to pin
+#   KIND=lcm Scripts/vendor-sd.sh publish    # gh release upload to sd-vendor
 #
-# Requires: python3 with `optimum[exporters]` + `optimum-onnx` (export),
-# shasum (checksums), gh (publish). License: the exported weights are
-# `stabilityai/sd-turbo` under the Stability AI Non-Commercial Community
-# License — redistributed with attribution, non-commercial use only.
+# Requires: python3 with `optimum[exporters]` + `optimum-onnx` + `onnx` (export),
+# shasum (checksums), gh (publish).
+#
+# NB (LCM): optimum's LatentConsistencyModelPipeline fp16+CPU export can die
+# after the UNet during its post-processing. If that happens, the text_encoder +
+# unet still export fine; export the VAE decoder alone with a small
+# torch.onnx.export script and inline its weights:
+#   python3 -c 'import torch; from diffusers import AutoencoderKL; \
+#     v=AutoencoderKL.from_pretrained("SimianLuo/LCM_Dreamshaper_v7",subfolder="vae").eval().half(); \
+#     class D(torch.nn.Module):\n  def __init__(s,m):super().__init__();s.m=m\n  def forward(s,latent_sample):return s.m.decode(latent_sample).sample; \
+#     torch.onnx.export(D(v),(torch.randn(1,4,64,64).half(),),"vae_decoder/model.onnx", \
+#       input_names=["latent_sample"],output_names=["sample"],opset_version=18)'
+#   python3 -c 'import onnx; onnx.save_model(onnx.load("vae_decoder/model.onnx"), \
+#       "vae_decoder/model.onnx", save_as_external_data=False)'  # inline -> single file
+# Also: run heavy box work in a FOREGROUND shell (detached/backgrounded exports
+# were getting killed mid-run).
 set -euo pipefail
 
-MODEL="${MODEL:-stabilityai/sd-turbo}"
+KIND="${KIND:-sdturbo}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-OUT="${OUT:-$ROOT/Vendor/sd-turbo-fp16}"   # gitignored
 REPO="${REPO:-tophatch/swift-pwa}"
 TAG="${TAG:-sd-vendor}"
 
-# asset name (on the release)      <-  local file in the optimum export tree
-declare -a ASSETS=(
-  "sd-turbo-fp16-text_encoder.onnx text_encoder/model.onnx"
-  "sd-turbo-fp16-unet.onnx         unet/model.onnx"
-  "sd-turbo-fp16-vae_decoder.onnx  vae_decoder/model.onnx"
-  "sd-turbo-vocab.json             tokenizer/vocab.json"
-  "sd-turbo-merges.txt             tokenizer/merges.txt"
-)
+case "$KIND" in
+  sdturbo)
+    MODEL="${MODEL:-stabilityai/sd-turbo}"
+    OUT="${OUT:-$ROOT/Vendor/sd-turbo-fp16}"
+    PREFIX="sd-turbo-fp16"
+    NOTES="Vendored fp16 SD-Turbo ONNX weights. optimum --dtype fp16 export of stabilityai/sd-turbo; Stability AI Non-Commercial Community License (redistributed with attribution, non-commercial use only)."
+    # SD-Turbo publishes its own tokenizer files (sd-turbo-vocab.json/merges.txt).
+    declare -a ASSETS=(
+      "sd-turbo-fp16-text_encoder.onnx text_encoder/model.onnx"
+      "sd-turbo-fp16-unet.onnx         unet/model.onnx"
+      "sd-turbo-fp16-vae_decoder.onnx  vae_decoder/model.onnx"
+      "sd-turbo-vocab.json             tokenizer/vocab.json"
+      "sd-turbo-merges.txt             tokenizer/merges.txt"
+    )
+    ;;
+  lcm)
+    MODEL="${MODEL:-SimianLuo/LCM_Dreamshaper_v7}"
+    OUT="${OUT:-$ROOT/Vendor/lcm-dreamshaper-fp16}"
+    PREFIX="lcm-dreamshaper-fp16"
+    NOTES="Vendored fp16 LCM_Dreamshaper_v7 ONNX weights for the stable-diffusion-onnx backend (SD-1.5 base, 4-step LCM). openrail++ / OpenRAIL-M — commercially usable. Verified against a diffusers reference."
+    # LCM's CLIP tokenizer is byte-identical to SD-Turbo's, so we reuse the
+    # published sd-turbo-vocab.json / sd-turbo-merges.txt assets — only the
+    # three model graphs are LCM-specific.
+    declare -a ASSETS=(
+      "lcm-dreamshaper-fp16-text_encoder.onnx text_encoder/model.onnx"
+      "lcm-dreamshaper-fp16-unet.onnx         unet/model.onnx"
+      "lcm-dreamshaper-fp16-vae_decoder.onnx  vae_decoder/model.onnx"
+    )
+    ;;
+  *)
+    echo "unknown KIND '$KIND' (want sdturbo|lcm)" >&2; exit 1 ;;
+esac
 
 case "${1:-}" in
   export)
     mkdir -p "$OUT"
     optimum-cli export onnx --model "$MODEL" --dtype fp16 --device cpu "$OUT"
-    echo "Exported fp16 pipeline to $OUT"
+    echo "Exported fp16 pipeline to $OUT (KIND=$KIND)"
     ;;
   checksums)
     for entry in "${ASSETS[@]}"; do
@@ -63,14 +98,12 @@ case "${1:-}" in
       cp "$OUT/$local" "$staged"
       args+=("$staged")
     done
-    gh release create "$TAG" -R "$REPO" --prerelease \
-      --title "SD-Turbo ONNX (vendored weights)" \
-      --notes "Vendored fp16 SD-Turbo ONNX weights for the stable-diffusion-onnx backend. optimum --dtype fp16 export of stabilityai/sd-turbo; Stability AI Non-Commercial Community License (redistributed with attribution)." \
-      "${args[@]}"
-    echo "Published $TAG. Pin the checksums (Scripts/vendor-sd.sh checksums) into StableDiffusionModelSource.sdTurboFp16."
+    # The sd-vendor release already exists; upload (or --clobber) the assets.
+    gh release upload "$TAG" -R "$REPO" --clobber "${args[@]}"
+    echo "Uploaded $KIND assets to $TAG. Pin checksums (KIND=$KIND $0 checksums) into StableDiffusionModelSource.${KIND/sdturbo/sdTurbo}${KIND/lcm/lcmDreamshaper}Fp16."
     ;;
   *)
-    echo "usage: $0 {export|checksums|publish}" >&2
+    echo "usage: KIND={sdturbo|lcm} $0 {export|checksums|publish}" >&2
     exit 1
     ;;
 esac

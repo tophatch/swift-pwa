@@ -44,10 +44,12 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         }
     }
 
-    /// A loaded ONNX model, runnable against named float32 tensors. Deliberately
-    /// narrow — SAM's encoder/decoder graphs (and the other ONNX-Runtime-tier
-    /// backends the 0.8 evaluation anticipates) only need float32 in/out; a
-    /// backend that needs another element type extends this, not the contract.
+    /// A loaded ONNX model, runnable against named tensors. Inputs may be
+    /// float32, **float16** (fp16 exports), or **int32 / int64** (a
+    /// Stable-Diffusion text encoder's `input_ids`) — see `OrtInput`; outputs
+    /// are returned as float32 (`Tensor`), fp16 outputs converted up. Kept
+    /// deliberately narrow (no arbitrary element types) — this is what the
+    /// ONNX-Runtime-tier backends actually need.
     public final class OrtModelSession: @unchecked Sendable {
         private let runtime: OrtRuntime
         private let session: OpaquePointer
@@ -178,19 +180,26 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         }
 
         /// A typed graph **input**. Most graphs (SAM, LaMa) are float32-only and
-        /// use `.float`, but some declare integer inputs — a Stable-Diffusion
-        /// text encoder wants `input_ids` as **int32** and the UNet `timestep`
-        /// as **int64**. Each case carries its flat row-major values plus shape.
-        /// (Outputs stay float32 — the SD graphs' embedding / noise / image
-        /// outputs all are — so there is no integer output variant.)
+        /// use `.float`, but exports vary: a Stable-Diffusion text encoder wants
+        /// `input_ids` as **int32** or **int64**, and an **fp16** export (e.g.
+        /// the ONNX Runtime team's SD-Turbo) takes half-precision float tensors.
+        /// Each case carries its flat row-major values plus shape.
+        ///
+        /// `.float16` carries `[Float]` (float32) for a uniform caller API — the
+        /// values are converted to IEEE half at tensor creation, and fp16
+        /// outputs are read back and converted to `[Float]` (see `readTensor`),
+        /// so the rest of a pipeline stays in float32 regardless of the model's
+        /// precision.
         public enum OrtInput: Sendable {
             case float([Float], shape: [Int64])
+            case float16([Float], shape: [Int64])
             case int32([Int32], shape: [Int64])
             case int64([Int64], shape: [Int64])
 
             public var shape: [Int64] {
                 switch self {
-                case let .float(_, shape), let .int32(_, shape), let .int64(_, shape): shape
+                case let .float(_, shape), let .float16(_, shape),
+                     let .int32(_, shape), let .int64(_, shape): shape
                 }
             }
         }
@@ -222,6 +231,11 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             // pointer for the C signature) is safe and avoids a COW mutation.
             var inputValues: [OpaquePointer?] = []
             var inputNamesOwned: [UnsafeMutablePointer<CChar>?] = []
+            // `.float16` inputs are converted float32→half into fresh buffers
+            // that ORT's tensor points into; they must outlive `Run`, so they're
+            // held here (kept alive by `withExtendedLifetime` below). Inner
+            // `[Float16]` storage is stable across appends to the outer array.
+            var float16Scratch: [[Float16]] = []
             defer {
                 for value in inputValues { if let value { api.pointee.ReleaseValue(value) } }
                 for name in inputNamesOwned { if let name { free(name) } }
@@ -250,6 +264,14 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
                             try makeTensor(
                                 $0.baseAddress, byteCount: $0.count * MemoryLayout<Float>.size,
                                 type: ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                            )
+                        }
+                    case let .float16(values, _):
+                        float16Scratch.append(values.map { Float16($0) })
+                        try float16Scratch[float16Scratch.count - 1].withUnsafeBufferPointer {
+                            try makeTensor(
+                                $0.baseAddress, byteCount: $0.count * MemoryLayout<Float16>.size,
+                                type: ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16
                             )
                         }
                     case let .int32(values, _):
@@ -282,7 +304,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
                 for value in outputValues { if let value { api.pointee.ReleaseValue(value) } }
             }
 
-            try withExtendedLifetime(inputs) {
+            try withExtendedLifetime((inputs, float16Scratch)) {
                 try inputNamesC.withUnsafeBufferPointer { inNames in
                     try inputValues.withUnsafeBufferPointer { inValues in
                         try outputNamesC.withUnsafeBufferPointer { outNames in
@@ -315,15 +337,13 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             guard let typeAndShape else { throw OrtError.failed("GetTensorTypeAndShape returned nothing") }
             defer { api.pointee.ReleaseTensorTypeAndShapeInfo(typeAndShape) }
 
-            // Outputs are read back as float32 (the `values: [Float]` buffer is
-            // reinterpreted from raw bytes below). Guard the element type so a
-            // non-float output errors loudly instead of silently misreading —
-            // matters now that integer inputs are supported.
+            // Outputs are returned as float32 in `Tensor.values`. float32 is
+            // read directly; **float16** (fp16 exports) is read as half and
+            // converted up — so a pipeline stays in float32 regardless of the
+            // model's precision. Any other element type errors loudly rather
+            // than silently misreading bytes.
             var elementType = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED
             try runtime.check(api.pointee.GetTensorElementType(typeAndShape, &elementType))
-            guard elementType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT else {
-                throw OrtError.failed("output tensor is not float32 (ONNX element type \(elementType.rawValue))")
-            }
 
             var dimCount = 0
             try runtime.check(api.pointee.GetDimensionsCount(typeAndShape, &dimCount))
@@ -339,8 +359,23 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             try runtime.check(api.pointee.GetTensorMutableData(value, &dataPtr))
             guard let dataPtr else { throw OrtError.failed("GetTensorMutableData returned no pointer") }
 
-            let typed = dataPtr.assumingMemoryBound(to: Float.self)
-            let values = Array(UnsafeBufferPointer(start: typed, count: elementCount))
+            let values: [Float]
+            switch elementType {
+            case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT:
+                values = Array(UnsafeBufferPointer(
+                    start: dataPtr.assumingMemoryBound(to: Float.self),
+                    count: elementCount
+                ))
+            case ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT16:
+                let halfs = UnsafeBufferPointer(
+                    start: dataPtr.assumingMemoryBound(to: Float16.self),
+                    count: elementCount
+                )
+                values = halfs.map { Float($0) }
+            default:
+                throw OrtError
+                    .failed("output tensor is not float32/float16 (ONNX element type \(elementType.rawValue))")
+            }
             return Tensor(values: values, shape: shape)
         }
     }

@@ -29,4 +29,21 @@ struct OrtModelSessionIntTensorTests {
         #expect(sum.shape == [3])
         #expect(sum.values == [11, 22, 33]) // int32 + int64, cast to float, added
     }
+
+    @Test func runsFloat16InputAndOutput() throws {
+        // fp16 graph (y = x*x, float16 I/O) — exercises OrtInput.float16 (float32
+        // → half at the boundary) and reading a float16 output back as [Float].
+        // Needed for fp16 SD-Turbo exports (half the download).
+        let url = try #require(
+            Bundle.module.url(forResource: "fp16_square", withExtension: "onnx", subdirectory: "Fixtures")
+        )
+        let runtime = try #require(OrtRuntime.shared, "no ONNX Runtime linked")
+        let session = try OrtModelSession(modelPath: url.path, runtime: runtime)
+
+        let outputs = try session.run(inputs: ["x": .float16([1.5, 2, 3], shape: [3])], outputNames: ["y"])
+        let y = try #require(outputs["y"])
+        #expect(y.shape == [3])
+        // Exact in fp16: 1.5²=2.25, 2²=4, 3²=9 all represent exactly.
+        #expect(y.values == [2.25, 4, 9])
+    }
 }

@@ -28,6 +28,11 @@
         .back:active { transform: translateY(1px); }
         .hint { color: var(--muted); font-size: 13px; flex: 1; }
         .hint b { color: var(--accent); }
+        select.model {
+            font: inherit; font-size: 13px; color: var(--ink); background: var(--bg);
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; max-width: 52vw;
+        }
+        select.model:focus { outline: none; border-color: var(--accent); }
 
         .stage {
             position: relative; flex: 1; min-height: 0; display: flex;
@@ -80,6 +85,7 @@
 <body>
     <div class="bar">
         <a class="back" href="index.html">← Back</a>
+        <select class="model" id="model" title="Image model" hidden></select>
         <div class="hint" id="hint">Type a <b>prompt</b> and generate an image — on-device.</div>
     </div>
 
@@ -106,7 +112,11 @@
         const $ = (id) => document.getElementById(id);
         const bridge = window.__SWIFT_PWA__;
         let busy = false;
-        let modelReady = false;
+        // Which models' weights are already fetched this session, keyed by id —
+        // the switcher offers several, each downloaded on first use.
+        const ready = new Set();
+        let models = [];          // the image-generation models from ai.info
+        let current = null;       // the selected model id
 
         function showSpinner(text, sub = "") {
             $("overlay").hidden = false; $("spinner").hidden = false;
@@ -123,24 +133,36 @@
         }
 
         const mb = (n) => (n / 1048576).toFixed(0);
+        const modelByID = (id) => models.find((m) => m.id === id);
 
-        // First run downloads the LCM_Dreamshaper pipeline (~2.0 GB) from the
-        // sd-vendor release; the composite backend routes model:"generate"
-        // to Stable Diffusion. Later runs are a cache hit.
-        function ensureModel() {
-            if (modelReady) return Promise.resolve();
+        // Reflect the selected model's licence + download size under the bar,
+        // so the trade-off the user is switching on is visible.
+        function showModelMeta() {
+            const m = modelByID(current);
+            if (!m) return;
+            const size = m.availability && m.availability.kind === "downloadable" && m.availability.bytes
+                ? ` · ~${mb(m.availability.bytes)} MB` : "";
+            const lic = m.license ? ` · ${m.license}` : "";
+            $("hint").innerHTML = `Prompt → image, on-device.<span style="color:var(--muted)">${lic}${size}</span>`;
+        }
+
+        // First use of a given model downloads its weights (LCM ~2.0 GB / SD-Turbo
+        // ~2.5 GB) from the sd-vendor release; the composite routes the chosen
+        // `model` id to that Stable-Diffusion backend. Later runs are a cache hit.
+        function ensureModel(id) {
+            if (ready.has(id)) return Promise.resolve();
             return new Promise((resolve, reject) => {
                 showProgress("Preparing model…", "Downloading the image model (first run only)…");
-                const unsub = bridge.subscribe("ai.ensureModel", { model: "generate" }, (e) => {
+                const unsub = bridge.subscribe("ai.ensureModel", { model: id }, (e) => {
                     if (e.type === "progress") {
                         if (e.totalBytes) {
                             $("bar").value = e.bytesDone / e.totalBytes;
-                            $("sub").textContent = `Downloading image model… ${mb(e.bytesDone)} / ${mb(e.totalBytes)} MB`;
+                            $("sub").textContent = `Downloading ${id}… ${mb(e.bytesDone)} / ${mb(e.totalBytes)} MB`;
                         } else {
-                            $("sub").textContent = `Downloading image model… ${mb(e.bytesDone)} MB`;
+                            $("sub").textContent = `Downloading ${id}… ${mb(e.bytesDone)} MB`;
                         }
                     } else if (e.type === "done") {
-                        modelReady = true; unsub(); resolve();
+                        ready.add(id); unsub(); resolve();
                     } else if (e.type === "error") {
                         unsub(); reject(new Error(e.message || "model download failed"));
                     }
@@ -149,29 +171,30 @@
         }
 
         async function generate(prompt) {
-            if (busy) return;
-            busy = true; $("go").disabled = true;
+            if (busy || !current) return;
+            busy = true; $("go").disabled = true; $("model").disabled = true;
+            const id = current;
             try {
-                await ensureModel();
+                await ensureModel(id);
 
-                // A bare prompt (no source image) routes to Stable Diffusion.
-                // LCM_Dreamshaper is a 4-step Latent Consistency Model — quick
-                // on a GPU, a few seconds on CPU. Unary call; frame updates on return.
-                showSpinner("Generating…", "4-step LCM — a moment on CPU.");
+                // Pass the chosen model id; the composite (MultiModelImageBackend)
+                // routes it to the right Stable-Diffusion backend. Both are
+                // few-step models — quick on a GPU, a few seconds on CPU.
+                showSpinner("Generating…", `${modelByID(id)?.label || id} — a moment on CPU.`);
                 const t0 = Date.now();
-                const { images } = await bridge.invoke("ai.generateImage", { prompt });
+                const { images } = await bridge.invoke("ai.generateImage", { prompt, model: id });
                 const secs = ((Date.now() - t0) / 1000).toFixed(1);
                 const out = images && images[0];
                 if (!out || !out.dataBase64) throw new Error("no image returned");
 
                 $("out").src = "data:" + (out.mimeType || "image/png") + ";base64," + out.dataBase64;
                 $("out").hidden = false; $("placeholder").hidden = true;
-                $("hint").innerHTML = `Generated in ${secs}s (seed ${out.seed ?? 0}). Edit the prompt and go again.`;
+                $("hint").innerHTML = `Generated in ${secs}s (seed ${out.seed ?? 0}) · ${modelByID(id)?.label || id}.`;
                 hideOverlay();
             } catch (e) {
                 showError((e && e.message) || String(e));
             } finally {
-                busy = false; $("go").disabled = false;
+                busy = false; $("go").disabled = false; $("model").disabled = false;
             }
         }
 
@@ -181,6 +204,8 @@
             if (p) generate(p);
         });
 
+        $("model").addEventListener("change", () => { current = $("model").value; showModelMeta(); });
+
         async function start() {
             try {
                 const info = await bridge.invoke("ai.info", {});
@@ -189,6 +214,24 @@
                         "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
                     return;
                 }
+                // Populate the switcher from ai.info's model catalog, filtered to
+                // the models that can do text→image (the `image-generation`
+                // capability). A commercial app would also filter by `license`.
+                models = (info.models || []).filter(
+                    (m) => Array.isArray(m.capabilities) && m.capabilities.includes("image-generation")
+                );
+                const select = $("model");
+                if (models.length > 1) {
+                    for (const m of models) {
+                        const opt = document.createElement("option");
+                        opt.value = m.id; opt.textContent = m.label || m.id;
+                        select.appendChild(opt);
+                    }
+                    select.hidden = false;
+                }
+                // Default to ai.info's active model when it's in the list, else the first.
+                current = (models.find((m) => m.id === info.model) || models[0] || {}).id || null;
+                if (current) { select.value = current; showModelMeta(); }
                 $("go").disabled = false;
                 hideOverlay();
             } catch (e) {

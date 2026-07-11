@@ -408,6 +408,19 @@
 
         // MARK: - Loading
 
+        /// Release the cached inference sessions (text encoder + UNet + VAE
+        /// decoder — several GB of fp16 weights) and the tokenizer. Dropping the
+        /// `OrtModelSession` references frees the ONNX Runtime sessions via their
+        /// `deinit` (`ReleaseSession`); the next generate reloads lazily. Called
+        /// by `MultiModelImageBackend` when the switcher moves off this model, so
+        /// two pipelines aren't resident at once (which OOMs a phone).
+        public func unload() async {
+            textEncoder = nil
+            unet = nil
+            vaeDecoder = nil
+            tokenizer = nil
+        }
+
         /// The graph-optimization level for this backend's ONNX sessions. On
         /// **Android** we drop to `.basic`: ONNX Runtime's default (`.all`)
         /// includes the extended GeluFusion transformer, which rewrites the

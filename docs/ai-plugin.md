@@ -33,11 +33,14 @@ sugar.
 // Capability probe — cheap, call once at startup and route on `available`.
 const info = await __SWIFT_PWA__.invoke('ai.info', {});
 // → { available, backend, model?, streaming, structuredOutput,
-//     vision, imageGeneration, audioInput, audioGeneration, voiceCloning }
+//     vision, imageGeneration, audioInput, audioGeneration, voiceCloning,
+//     models? }
 //   backend ∈ none | apple-foundation-models | gemini-nano | phi-silica
 //           | gemma-mlx | gemma-mediapipe | gemma-onnx | gemma-llamacpp
 //           | apple-image-playground | stable-diffusion-mlx
-//           | apple-speech | whisper-mlx | tts-mlx | …
+//           | apple-speech | whisper-mlx | tts-mlx | multi-model | …
+//   models? → present when a switcher is installed; see "A runtime model /
+//             backend switcher" below.
 if (!info.available) {
     // fall back to your own (e.g. cloud) tier
 }
@@ -232,6 +235,72 @@ disk with atomic rename, reused across launches. A downloadable backend
 keeps a registry of model specs and drives it from its `ensureModel`; the
 command lights up for JS once such a backend is installed. Failures
 surface as `E_AI_MODEL` (network error or checksum mismatch).
+
+### A runtime model / backend switcher
+
+To let the user pick among several models at runtime — including a mix of
+**local and remote** backends (an on-device model vs a cloud API) — pass
+`model` on `ai.generateImage` and read the `models` catalog from `ai.info`:
+
+```js
+const { models } = await __SWIFT_PWA__.invoke('ai.info', {});
+// models: [{ id, label, capabilities, availability, offlineCapable, license }]
+//   capabilities ⊂ text-generation | image-generation | image-edit | inpaint |
+//                  vision | speech-to-text | text-to-speech | audio-generation | text-embedding
+//   availability = { kind: "ready" }
+//                | { kind: "downloadable", bytes }   // fetch with ai.ensureModel
+//                | { kind: "needsSetup", reason }     // e.g. missing API key / offline
+
+// Build a picker (filter by capability and, for a commercial app, license):
+const choices = models.filter(m => m.capabilities.includes('image-generation'));
+
+// Generate with the chosen route (may be on-device or cloud):
+await __SWIFT_PWA__.invoke('ai.generateImage', { prompt, model: 'lcm-dreamshaper' });
+```
+
+`model: null` (or omitted) uses the backend's default, so single-model apps
+need no changes. A cloud model's `availability` can flip at runtime
+(connectivity, an added API key), so re-probe `ai.info` on those events rather
+than reading it once at launch.
+
+On the Swift side, compose the models behind one `ai.*` surface with
+**`MultiModelImageBackend`** (in `SwiftPWACore`) — the shipped router that every
+multi-model adopter would otherwise hand-write:
+
+```swift
+let switcher = MultiModelImageBackend(
+    [
+        .init(AIModelInfo(id: "lcm-dreamshaper", label: "LCM Dreamshaper",
+                          capabilities: [.imageGeneration, .imageEdit],
+                          availability: .downloadable(bytes: 2_067_793_994),
+                          offlineCapable: true, license: "OpenRAIL-M"),
+              StableDiffusionBackend(cacheDirectory: dir, source: .lcmDreamshaperFp16,
+                                     spec: .lcmDreamshaperFp16)),
+        .init(AIModelInfo(id: "cloud-sdxl", label: "SDXL (cloud)",
+                          capabilities: [.imageGeneration],
+                          availability: .needsSetup(reason: "Add an API key in Settings"),
+                          offlineCapable: false, license: "commercial"),
+              MyRemoteImageBackend(apiKey: key)),   // just another AIBackend
+    ],
+    default: "lcm-dreamshaper"
+)
+ctx.use(AIPlugin(switcher))
+```
+
+It routes `generateImage` / `generateImageStream` / `ensureModel` by
+`request.model`, delegates the text/audio verbs to the default, and aggregates
+each entry's `AIModelInfo` into `ai.info`'s `models`. An unknown `model` id
+fails with `E_AI_GENERATION` rather than silently falling back.
+
+**Memory — one model resident at a time.** On-device image models are large (a
+fp16 Stable-Diffusion pipeline is ~2 GB of session weights). When a generate
+routes to a *different* model than last time, `MultiModelImageBackend` first
+calls `unload()` on the previously-active backend, freeing its sessions before
+the new one loads — otherwise loading a second ~2 GB model while the first is
+still resident OOM-kills the app on a phone. `unload()` is a new `AIBackend`
+method (default no-op; `StableDiffusionBackend` / `LaMaBackend` implement it to
+release their ONNX sessions). If you write a session-caching backend, implement
+`unload()`; a remote backend inherits the no-op.
 
 ## Swift surface — implementing a backend
 

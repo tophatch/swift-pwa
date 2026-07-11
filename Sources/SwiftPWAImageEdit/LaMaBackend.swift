@@ -43,6 +43,15 @@
         private var session: OrtModelSession?
         private var activeProvider: OrtExecutionProvider?
 
+        /// Release the cached inference session (dropping the `OrtModelSession`
+        /// frees the ONNX Runtime session via its `deinit`); the next edit
+        /// reloads lazily. Lets a host — or `MultiModelImageBackend` on a switch
+        /// — free the model's memory.
+        public func unload() async {
+            session = nil
+            activeProvider = nil
+        }
+
         /// Back a LaMa ONNX graph already present on disk (bundled, or fetched
         /// by the caller). `ensureModel` throws `.unsupportedPlatform` — there
         /// is nothing to download.

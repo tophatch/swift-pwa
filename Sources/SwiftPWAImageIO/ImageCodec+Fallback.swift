@@ -7,7 +7,7 @@
     /// over the Kotlin RPC). Kept as a safety stub so the target still compiles
     /// on an unexpected destination, throwing a clear `E_AI_GENERATION` rather
     /// than mis-decoding.
-    extension ImageCodec {
+    package extension ImageCodec {
         static func decodeRGB(
             path _: String?,
             dataBase64 _: String?,

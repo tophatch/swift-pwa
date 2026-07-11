@@ -892,6 +892,20 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         // image decoder (Linux/Windows have no CoreGraphics / BitmapFactory).
         // Compiled only where SwiftPWASegmentation depends on it (linux/windows).
         .target(name: "CStbImage", path: "Sources/CStbImage", publicHeadersPath: "include"),
+        // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
+        // internal — reused by `SwiftPWAImageEdit` (LaMa) and
+        // `SwiftPWAStableDiffusion` so both share one platform implementation
+        // (CoreGraphics on Apple, stb_image on desktop, BitmapFactory-over-RPC
+        // on Android) rather than duplicating it. No ONNX dependency; its
+        // per-platform files gate on `canImport(CoreGraphics)` etc.
+        .target(
+            name: "SwiftPWAImageIO",
+            dependencies: [
+                .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
+                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
+            ],
+            swiftSettings: swiftSettings
+        ),
         .target(
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,
@@ -926,27 +940,23 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // see docs/proposals/image-generation-editing.md). It reuses the shared
     // `SwiftPWAONNX` tier (same OrtModelSession + desktop GPU providers as
     // MobileSAM) and keeps its own ONNX-module dependencies so `LaMaBackend`'s
-    // `canImport(ONNXRuntime*)` gate stays exact. Image decode/encode
-    // (`ImageCodec`) is CoreGraphics/ImageIO on Apple and stb_image /
-    // stb_image_write (`CStbImage`, same as segmentation) on Linux/Windows; the
-    // Android codec is a documented follow-up (a clear runtime error until then).
+    // `canImport(ONNXRuntime*)` gate stays exact. Image decode/encode lives in
+    // the shared `SwiftPWAImageIO` target (CoreGraphics on Apple, stb_image on
+    // desktop, BitmapFactory-over-RPC on Android).
     package.products.append(.library(name: "SwiftPWAImageEdit", targets: ["SwiftPWAImageEdit"]))
     package.targets.append(contentsOf: [
         .target(
             name: "SwiftPWAImageEdit",
-            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore", "SwiftPWAImageIO"]
                 + onnxRuntimeModuleDependencies()
-                + [
-                    .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
-                    // Android decodes/encodes via BitmapFactory over the Kotlin RPC.
-                    .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
-                ],
+                // Android downloads route through the Kotlin net.downloadFile RPC.
+                + [.target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))],
             swiftSettings: segmentationSwiftSettings,
             linkerSettings: onnxRuntimeLinkerSettings
         ),
         .testTarget(
             name: "SwiftPWAImageEditTests",
-            dependencies: ["SwiftPWAImageEdit", "SwiftPWACore"],
+            dependencies: ["SwiftPWAImageEdit", "SwiftPWACore", "SwiftPWAImageIO"],
             swiftSettings: swiftSettings
         )
     ])
@@ -966,7 +976,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     package.targets.append(contentsOf: [
         .target(
             name: "SwiftPWAStableDiffusion",
-            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore", "SwiftPWAImageIO"]
                 + onnxRuntimeModuleDependencies()
                 // Android routes the model download through the Kotlin RPC.
                 + [.target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))],

@@ -7,7 +7,7 @@
     /// Apple `ImageCodec` — decode/resize via CoreGraphics, encode PNG via
     /// ImageIO. The desktop (stb_image) and Android (RPC) counterparts produce
     /// the same `RawImage` / PNG bytes.
-    extension ImageCodec {
+    package extension ImageCodec {
         /// Decode an image file / base64 blob to RGB (`channels == 3`),
         /// resized to `size` when given (nearest-fit exact `width × height`).
         static func decodeRGB(

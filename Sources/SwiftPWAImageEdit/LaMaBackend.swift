@@ -8,6 +8,7 @@
 #if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop) || canImport(ONNXRuntimeDirectML)
     import Foundation
     import SwiftPWACore
+    import SwiftPWAImageIO // ImageCodec / RawImage (shared image decode/encode)
     import SwiftPWAModelStore
     import SwiftPWAONNX
     #if os(Android)

@@ -8,7 +8,7 @@
     /// resample (the same convention `SwiftPWASegmentation`'s
     /// `DesktopImagePreprocessing` uses). Produces the same `RawImage` / PNG
     /// bytes as the Apple path.
-    extension ImageCodec {
+    package extension ImageCodec {
         static func decodeRGB(
             path: String?,
             dataBase64: String?,

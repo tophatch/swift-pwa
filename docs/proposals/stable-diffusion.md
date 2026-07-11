@@ -30,10 +30,16 @@
 > 768), scheduler **`trailing`** spacing + `epsilon`, and — the one real bug —
 > CLIP pads with **`"!"` (id 0)**, not the end-of-text token.
 >
-> **Next:** encode the decoded pixels to PNG for the `ai.generateImage` result
-> (hoisting `ImageCodec` into a shared target — LaMa owns it today) + streaming
-> progress; then the **LCM (OpenRAIL-M)** commercial default + `sd-vendor`
-> packaging (see the licensing note under **Scoping calls**).
+> **Also done:** `ai.generateImage` works end-to-end (prompt → PNG). Image
+> encode/decode was hoisted out of the LaMa backend into a shared
+> `SwiftPWAImageIO` target (`package`-internal `ImageCodec` / `RawImage`, reused
+> by LaMa and SD); `generateImage` encodes the VAE output to PNG (written file
+> or inline base64), `generateImageStream` reports per-step denoising progress,
+> and `count` is honored.
+>
+> **Next:** the **LCM (OpenRAIL-M)** commercial default (a second scheduler +
+> the guidance-embedding UNet input) + `sd-vendor` packaging with pinned
+> checksums (see the licensing note under **Scoping calls**).
 
 ## Motivation
 

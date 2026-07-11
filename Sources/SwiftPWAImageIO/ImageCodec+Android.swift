@@ -11,7 +11,7 @@
     /// This is why the whole `ImageCodec` surface is `async`. `path` may be a
     /// plain path or a `content://` URI (Kotlin branches on the scheme).
     extension ImageCodec {
-        static func decodeRGB(
+        package static func decodeRGB(
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
@@ -19,7 +19,7 @@
             try await decode(path: path, dataBase64: dataBase64, size: size, maxSide: nil, channels: 3)
         }
 
-        static func decodeGray(
+        package static func decodeGray(
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
@@ -27,11 +27,11 @@
             try await decode(path: path, dataBase64: dataBase64, size: size, maxSide: nil, channels: 1)
         }
 
-        static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
+        package static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
             try await decode(path: path, dataBase64: dataBase64, size: nil, maxSide: maxSide, channels: 3)
         }
 
-        static func encodePNG(_ image: RawImage) async throws -> Data {
+        package static func encodePNG(_ image: RawImage) async throws -> Data {
             guard image.channels == 3 else {
                 throw ImageCodecError.encodeFailed("encodePNG expects RGB (3 channels), got \(image.channels)")
             }
@@ -55,7 +55,7 @@
             return data
         }
 
-        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
+        package static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
             if image.width == width, image.height == height { return image }
             // Round-trip through the encode + resizing-decode RPCs (there's no
             // dedicated resize method; the decode path already resizes).

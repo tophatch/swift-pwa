@@ -61,6 +61,21 @@ struct StableDiffusionReferenceVerificationTests {
 
         // Dump the Swift-produced image as a PPM to eyeball against reference.png.
         try writePPM(out.image, to: base.appendingPathComponent("swift_out.ppm"))
+
+        // End-to-end: the full public generateImage path (seeded latent + PNG
+        // encode + write). Uses our seeded RNG, not the injected latent, so it
+        // won't match the reference pixel-for-pixel — this confirms the return
+        // path produces a valid written PNG.
+        let genRequest = AIGenerateImageRequest(
+            prompt: "a photograph of an astronaut riding a horse",
+            width: 512, height: 512, steps: 1, seed: 42, outputDirectory: base.path
+        )
+        let result = try await backend.generateImage(genRequest)
+        let path = try #require(result.images.first?.path)
+        let png = try Data(contentsOf: URL(fileURLWithPath: path))
+        #expect(png.starts(with: [0x89, 0x50, 0x4E, 0x47])) // PNG magic
+        #expect(png.count > 10000) // a real 512² image, not a blank
+        print("[SD verify] generateImage wrote \(png.count) bytes to \(path)")
     }
 
     // MARK: - Fixture readers

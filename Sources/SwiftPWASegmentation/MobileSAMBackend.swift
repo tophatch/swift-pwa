@@ -10,7 +10,7 @@
     import SwiftPWAModelStore
     import SwiftPWAONNX // OrtRuntime / OrtModelSession / OrtExecutionProvider (shared ONNX tier)
     #if os(Android)
-        import SwiftPWAAndroid // AndroidRPC — the model download routes through Kotlin's HTTP stack
+        import SwiftPWAAndroid // AndroidFileDownload — the model download routes through Kotlin's HTTP stack
     #endif
 
     /// The three ONNX files MobileSAM needs, as downloadable specs — encoder
@@ -529,18 +529,17 @@
                                 // own HTTP stack via the Kotlin `net.downloadFile`
                                 // RPC instead (system TLS, checksum-verified,
                                 // cache-reusing — see AndroidTemplates.swift).
-                                // Progress is per-file (no byte callback across
-                                // the RPC), so the bar advances in three steps.
+                                // `AndroidFileDownload` forwards byte-level
+                                // progress off a host-event channel, so the bar
+                                // sweeps smoothly rather than stepping per file.
                                 continuation.yield(.progress(bytesDone: base, totalBytes: grandTotal))
-                                _ = try await AndroidRPC.call(
-                                    "net.downloadFile",
-                                    DownloadFileArgs(
-                                        url: file.url.absoluteString,
-                                        destPath: downloader.localURL(for: file.spec).path,
-                                        sha256: file.sha256
-                                    ),
-                                    as: DownloadFileResult.self
-                                )
+                                _ = try await AndroidFileDownload.download(
+                                    url: file.url.absoluteString,
+                                    destPath: downloader.localURL(for: file.spec).path,
+                                    sha256: file.sha256
+                                ) { bytesDone, _ in
+                                    continuation.yield(.progress(bytesDone: base + bytesDone, totalBytes: grandTotal))
+                                }
                             #else
                                 _ = try await downloader.ensure(file.spec) { bytesDone, _ in
                                     continuation.yield(.progress(bytesDone: base + bytesDone, totalBytes: grandTotal))
@@ -559,20 +558,6 @@
                 continuation.onTermination = { _ in task.cancel() }
             }
         }
-
-        #if os(Android)
-            /// Args/result for the Kotlin `net.downloadFile` RPC (Android's
-            /// HTTP stack does the TLS + write; see the `ensureModel` comment).
-            private struct DownloadFileArgs: Encodable {
-                let url: String
-                let destPath: String
-                let sha256: String?
-            }
-
-            private struct DownloadFileResult: Decodable {
-                let bytesWritten: Int64
-            }
-        #endif
 
         // MARK: - Automatic mask generation internals
 

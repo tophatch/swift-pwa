@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Android model downloads now report a smooth, byte-level progress bar instead of freezing per file.** `ai.ensureModel` sums a multi-file model into one aggregate `bytesDone / totalBytes` bar; on Apple/desktop the per-file download has a byte callback so the bar advances smoothly, but on Android the download routes through the Kotlin `net.downloadFile` RPC (Swift's `URLSession` has no injectable CA store there) which was **request/response only** — so `ensureModel` could `yield` progress just once per file, at each file's *start*. For the ~2 GB LCM weights (5 files, an **1.7 GB UNet = 83% of the total**) that stair-stepped `0% → 12%` then **froze on the UNet** for the whole download — reads as a hang. Fix: `net.downloadFile` gained an optional host-event `channel`; when set, the Kotlin read loop (which already streams bytes for the incremental SHA-256) pushes throttled (~1 MiB) `{ bytesDone, totalBytes }` frames on it, and a new shared `AndroidFileDownload.download(…)` helper forwards them to the backend's `ensureModel` stream — reaching parity with the Apple/desktop byte callback. The three model backends (`StableDiffusionBackend`, `LaMaBackend`, `MobileSAMBackend`) now share that one helper (each previously hand-rolled the RPC). Reuses the same host-event side-channel `GeminiNanoBackend` streaming already relies on; an absent `channel` keeps the old request/response behavior (backward compatible). **Device-verified on a Galaxy Tab S10+:** a fresh ~2 GB LCM download emitted **1978 progress events** (1973 distinct byte counts) sweeping smoothly `0 → 2.07 GB` with no per-file freeze — vs the pre-fix **5 events** (one per file). See [docs/proposals/image-gen-adopter-refinements.md](docs/proposals/image-gen-adopter-refinements.md) Part 2.
+
 ## [0.8.6] - 2026-07-11
 
 ### Fixed

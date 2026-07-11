@@ -2236,6 +2236,9 @@ enum AndroidTemplates {
             val urlString = json.optString("url", "")
             val destPath = json.optString("destPath", "")
             val sha256 = if (json.has("sha256")) json.getString("sha256").lowercase() else null
+            // Optional host-event channel for byte-level progress. Absent/empty
+            // ⇒ no progress pushes (plain request/response, backward compatible).
+            val channel = json.optString("channel", "")
             if (urlString.isEmpty() || destPath.isEmpty()) {
                 done(null, "swift-pwa: net.downloadFile: url and destPath required")
                 return
@@ -2265,8 +2268,13 @@ enum AndroidTemplates {
                             done(null, "swift-pwa: net.downloadFile: HTTP $code for $urlString")
                             return@execute
                         }
+                        // -1 when the server omits Content-Length; forwarded as
+                        // null so the Swift side falls back to its pinned size.
+                        val total = conn.contentLengthLong
                         val digest = MessageDigest.getInstance("SHA-256")
                         var written = 0L
+                        var lastReported = 0L
+                        if (channel.isNotEmpty()) pushDownloadEvent(channel, 0L, total)
                         conn.inputStream.use { input ->
                             FileOutputStream(part).use { output ->
                                 val buffer = ByteArray(1 shl 16)
@@ -2276,6 +2284,12 @@ enum AndroidTemplates {
                                     output.write(buffer, 0, n)
                                     if (sha256 != null) digest.update(buffer, 0, n)
                                     written += n
+                                    // Throttle to ~1 MiB so a multi-GB file emits
+                                    // a smooth bar without flooding the bridge.
+                                    if (channel.isNotEmpty() && written - lastReported >= (1L shl 20)) {
+                                        pushDownloadEvent(channel, written, total)
+                                        lastReported = written
+                                    }
                                 }
                             }
                         }
@@ -2314,6 +2328,20 @@ enum AndroidTemplates {
                 }
             }
             return digest.digest().joinToString("") { "%02x".format(it) }
+        }
+
+        // Push a byte-level download-progress frame as a host event on
+        // `channel`; the Swift AndroidFileDownload forwards it to the model
+        // backend's AsyncThrowingStream. Mirrors pushInstallEvent. `totalBytes`
+        // is omitted when unknown (server sent no Content-Length).
+        private fun pushDownloadEvent(channel: String, bytesDone: Long, totalBytes: Long) {
+            val payload = JSONObject().put("channel", channel).put("bytesDone", bytesDone)
+            if (totalBytes >= 0) payload.put("totalBytes", totalBytes)
+            try {
+                bridge.nativeHostEvent(payload.toString())
+            } catch (t: Throwable) {
+                android.util.Log.e("swift-pwa", "failed to push download event: ${t.message}")
+            }
         }
         /*__SWIFT_PWA_GENAI_METHODS__*/
     }

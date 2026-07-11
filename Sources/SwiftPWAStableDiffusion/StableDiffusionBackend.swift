@@ -13,7 +13,7 @@
     import SwiftPWAModelStore
     import SwiftPWAONNX
     #if os(Android)
-        import SwiftPWAAndroid // AndroidRPC — model download routes through Kotlin's HTTP stack
+        import SwiftPWAAndroid // AndroidFileDownload — model download routes through Kotlin's HTTP stack
     #endif
 
     /// An `AIBackend` that generates images from a text prompt via a
@@ -375,17 +375,18 @@
                                 // on Android; download through Android's HTTP
                                 // stack via the Kotlin `net.downloadFile` RPC
                                 // (system TLS, checksum-verified) — same as
-                                // MobileSAM/LaMa. Progress is per-file.
+                                // MobileSAM/LaMa. `AndroidFileDownload` forwards
+                                // byte-level progress off a host-event channel,
+                                // so the bar advances smoothly through the big
+                                // UNet rather than freezing per file.
                                 continuation.yield(.progress(bytesDone: base, totalBytes: grandTotal))
-                                _ = try await AndroidRPC.call(
-                                    "net.downloadFile",
-                                    DownloadFileArgs(
-                                        url: file.url.absoluteString,
-                                        destPath: downloader.localURL(for: spec).path,
-                                        sha256: file.sha256
-                                    ),
-                                    as: DownloadFileResult.self
-                                )
+                                _ = try await AndroidFileDownload.download(
+                                    url: file.url.absoluteString,
+                                    destPath: downloader.localURL(for: spec).path,
+                                    sha256: file.sha256
+                                ) { bytesDone, _ in
+                                    continuation.yield(.progress(bytesDone: base + bytesDone, totalBytes: grandTotal))
+                                }
                             #else
                                 _ = try await downloader.ensure(spec) { bytesDone, _ in
                                     continuation.yield(.progress(bytesDone: base + bytesDone, totalBytes: grandTotal))
@@ -487,16 +488,5 @@
             }
         }
 
-        #if os(Android)
-            private struct DownloadFileArgs: Encodable {
-                let url: String
-                let destPath: String
-                let sha256: String?
-            }
-
-            private struct DownloadFileResult: Decodable {
-                let bytesWritten: Int64
-            }
-        #endif
     }
 #endif

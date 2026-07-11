@@ -1,12 +1,13 @@
 # Proposal: image-generation adopter refinements — model selection & granular download progress
 
-> **Status: proposed (not started).** Two additive, backwards-compatible
-> refinements to the on-device image tier (`ai.generateImage` / `ai.ensureModel`),
-> surfaced while building **Sprites'** text→image feature on `StableDiffusionBackend`
-> (v0.8.5 / v0.8.6). Neither is a blocker — Sprites shipped around both — but each
-> is a rough edge an adopter hits the moment they offer more than one model or
-> download a multi-GB model on Android. They're unrelated in mechanism but share
-> one origin (an adopter driving the image tier hard), hence one doc.
+> **Status: Part 2 implemented (Unreleased); Part 1 proposed.** Two additive,
+> backwards-compatible refinements to the on-device image tier
+> (`ai.generateImage` / `ai.ensureModel`), surfaced while an adopter built a
+> text→image feature on `StableDiffusionBackend` (v0.8.5 / v0.8.6). Neither is a
+> blocker — the adopter shipped around both — but each is a rough edge hit the
+> moment you offer more than one model or download a multi-GB model on Android.
+> They're unrelated in mechanism but share one origin (an adopter driving the
+> image tier hard), hence one doc.
 >
 > 1. **A model selector on `ai.generateImage`** (+ a `models` list on `ai.info`),
 >    so a *running* app can choose among several image backends — today the model
@@ -108,11 +109,32 @@ public enum AIModelAvailability: Sendable, Codable, Equatable {
     case needsSetup(reason: String)   // e.g. missing API key, offline, region-locked
 }
 
-public struct AIImageModelInfo: Sendable, Codable, Equatable {
+/// What a model can do, as a set rather than a fixed pair of bools — so one
+/// model list can carry text, image, vision, and audio backends alike, and new
+/// purposes are added without a struct change. Covers the standard multimodal
+/// capabilities the `ai.*` / `ai.vision.*` surfaces already span. Raw values are
+/// the strings JS sees (`model.capabilities.includes('inpaint')`).
+public enum AIModelCapability: String, Sendable, Codable {
+    // Text
+    case textGeneration  = "text-generation"   // chat / completion (llama, Foundation Models, Gemini Nano, Phi Silica)
+    case textEmbedding   = "text-embedding"    // vectors for RAG / semantic search
+    // Image out
+    case imageGeneration = "image-generation"  // text→image (SD-Turbo / LCM)
+    case imageEdit       = "image-edit"         // img2img / prompt+image
+    case inpaint         = "inpaint"            // image+mask (LaMa)
+    // Image in
+    case vision          = "vision"             // image understanding: segmentation (MobileSAM), detection, OCR, captioning
+    // Audio
+    case speechToText    = "speech-to-text"     // transcription / ASR
+    case textToSpeech    = "text-to-speech"     // TTS (the ai.generateAudio contract)
+    case audioGeneration = "audio-generation"   // music / sfx / general audio
+    // extensible; a model lists every purpose it serves
+}
+
+public struct AIModelInfo: Sendable, Codable, Equatable {
     public let id: String            // stable id, e.g. "lcm-dreamshaper" / "cloud-sdxl"
     public let label: String         // human-facing, e.g. "LCM Dreamshaper"
-    public let imageGeneration: Bool // text→image
-    public let imageEditing: Bool    // inpaint / img2img
+    public let capabilities: Set<AIModelCapability>
     public let availability: AIModelAvailability
     public let offlineCapable: Bool  // on-device (no network) vs cloud — badges the picker
     public let license: String?      // e.g. "OpenRAIL-M", "Stability Non-Commercial"
@@ -120,14 +142,33 @@ public struct AIImageModelInfo: Sendable, Codable, Equatable {
 
 public struct AICapabilities {
     // …existing single `model: String?` stays (the active/default)…
-    /// The image models this backend can serve, when it hosts more than one.
+    /// The models this backend can serve, when it hosts more than one.
     /// `nil` (or one entry) ⇒ single-model, no switcher needed.
-    public var models: [AIImageModelInfo]?
+    public var models: [AIModelInfo]?
 }
 ```
 
-Two fields earn their place beyond `id`/`label`:
+The info is deliberately **modality-agnostic** — an `AIModelInfo`, not an
+`AIImageModelInfo` — because the switcher the user wants is "pick a backend based
+on need," and those backends span modalities: text (Foundation Models, llama.cpp,
+Gemini Nano, Phi Silica), image (SD/LCM, LaMa), vision (MobileSAM), audio (the TTS
+contract). One model list, one picker.
 
+Four fields earn their place beyond `id`/`label`:
+
+- **`capabilities`** is a `Set<AIModelCapability>` rather than the earlier
+  `imageGeneration`/`imageEditing` bool pair. A set expresses "does both",
+  distinguishes `inpaint` (image+mask) from a free `imageEdit` (img2img) — the very
+  request shapes the tier already routes on — and covers the full standard
+  multimodal spread (`textGeneration`, `vision`, `textToSpeech`, `speechToText`, …)
+  without a struct change as new purposes land. (A *map* keyed by capability would
+  only pay off once each capability carried detail — max resolution, max context;
+  until then a set is the honest shape, and the map is a clean later extension.)
+  The enum is a **shared vocabulary**, not tied to one plugin: the `ai.vision.*`
+  surface is a separate `SegmentationBackend`/`VisionPlugin` with its own
+  `ai.vision.info`, but it can advertise `vision` from the same enum, so a
+  cross-surface picker presents on-device text/image/vision/audio models together
+  even though they sit behind different plugins.
 - **`availability`** replaces a plain `downloaded: Bool`/`sizeBytes` pair. Those
   two are local-download concepts — a remote model is never "downloaded" and has
   no size, and a cloud backend can be *present but unusable* (no API key, offline).
@@ -212,6 +253,13 @@ existing scalar `model` stays as "the active/default model."
 ---
 
 ## Part 2 — granular (byte-level) download progress on Android
+
+> **✅ Implemented (Unreleased).** Shipped via the **events-bus (host-event
+> channel)** option below: `net.downloadFile` takes an optional `channel`, the
+> Kotlin read loop pushes throttled ~1 MiB `{ bytesDone, totalBytes }` frames,
+> and a shared `AndroidFileDownload.download(…)` helper (now used by all three
+> model backends) forwards them to the `ensureModel` stream. Backward compatible
+> (absent `channel` ⇒ old per-file behavior). See CHANGELOG.
 
 ### Problem
 

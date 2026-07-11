@@ -12,7 +12,7 @@
     import SwiftPWAModelStore
     import SwiftPWAONNX
     #if os(Android)
-        import SwiftPWAAndroid // AndroidRPC — model download routes through Kotlin's HTTP stack
+        import SwiftPWAAndroid // AndroidFileDownload — model download routes through Kotlin's HTTP stack
     #endif
 
     /// An `AIBackend` that inpaints via a LaMa-family ONNX model — the first
@@ -131,18 +131,19 @@
                             // download through Android's own HTTP stack via the
                             // Kotlin `net.downloadFile` RPC (system TLS,
                             // checksum-verified, cache-reusing) — same as
-                            // MobileSAMBackend. Progress is per-file (no byte
-                            // callback across the RPC).
+                            // MobileSAMBackend. `AndroidFileDownload` forwards
+                            // byte-level progress off a host-event channel.
                             continuation.yield(.progress(bytesDone: 0, totalBytes: source.sizeBytes))
-                            _ = try await AndroidRPC.call(
-                                "net.downloadFile",
-                                DownloadFileArgs(
-                                    url: source.url.absoluteString,
-                                    destPath: downloader.localURL(for: spec).path,
-                                    sha256: source.sha256
-                                ),
-                                as: DownloadFileResult.self
-                            )
+                            _ = try await AndroidFileDownload.download(
+                                url: source.url.absoluteString,
+                                destPath: downloader.localURL(for: spec).path,
+                                sha256: source.sha256
+                            ) { bytesDone, total in
+                                continuation.yield(.progress(
+                                    bytesDone: bytesDone,
+                                    totalBytes: total ?? source.sizeBytes
+                                ))
+                            }
                         #else
                             _ = try await downloader.ensure(spec) { bytesDone, total in
                                 continuation.yield(.progress(
@@ -366,19 +367,5 @@
                 throw AIError.generationFailed("\(error)")
             }
         }
-
-        #if os(Android)
-            /// Args/result for the Kotlin `net.downloadFile` RPC (Android's HTTP
-            /// stack does the TLS + write; see `ensureModel`).
-            private struct DownloadFileArgs: Encodable {
-                let url: String
-                let destPath: String
-                let sha256: String?
-            }
-
-            private struct DownloadFileResult: Decodable {
-                let bytesWritten: Int64
-            }
-        #endif
     }
 #endif

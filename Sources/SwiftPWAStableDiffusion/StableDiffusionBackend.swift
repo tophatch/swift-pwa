@@ -487,6 +487,5 @@
                 throw AIError.generationFailed("failed to load CLIP tokenizer: \(error)")
             }
         }
-
     }
 #endif

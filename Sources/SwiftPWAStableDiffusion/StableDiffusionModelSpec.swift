@@ -36,6 +36,15 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     public var unetEncoderHiddenStatesName: String
     /// UNet predicted-noise output `[1, latentChannels, h, w]`.
     public var unetOutputName: String
+    /// UNet guidance-embedding input (`timestep_cond`), present only on an
+    /// **LCM** export — the `[1, guidanceEmbeddingDim]` guidance-scale
+    /// embedding that replaces classifier-free guidance. `nil` for a plain SD
+    /// / SD-Turbo export (no such input); when set, the loop feeds
+    /// `StableDiffusionSampling.guidanceScaleEmbedding` at every step.
+    public var unetTimestepCondName: String?
+    /// The LCM guidance-embedding width (the UNet's `time_cond_proj_dim`, 256
+    /// for `LCM_Dreamshaper_v7`). Used only when `unetTimestepCondName` is set.
+    public var guidanceEmbeddingDim: Int
 
     // MARK: VAE decoder
 
@@ -121,29 +130,47 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     /// `scheduler_config.json` subset). Confirmed against SD-Turbo's export;
     /// `EulerDiscreteScheduler` (in this target) consumes it.
     public struct SchedulerConfig: Sendable, Equatable {
+        /// Which sampler to build (the scheduler registry) — `.euler`
+        /// (SD-Turbo / plain SD) or `.lcm` (Latent Consistency Models).
+        public var kind: SchedulerKind
         public var numTrainTimesteps: Int
         public var betaStart: Double
         public var betaEnd: Double
         /// `"scaled_linear"` (SD default) or `"linear"`.
         public var betaSchedule: String
-        /// Noise-prediction parameterization. `"epsilon"` (SD-Turbo / SD-1.x)
-        /// is implemented; other types throw until added.
+        /// Noise-prediction parameterization. `"epsilon"` (SD-Turbo / SD-1.x /
+        /// LCM_Dreamshaper) is implemented; other types throw until added.
         public var predictionType: String
-        /// Inference-timestep spacing: `"trailing"` (SD-Turbo), `"linspace"`,
-        /// or `"leading"`.
+        /// Inference-timestep spacing for Euler: `"trailing"` (SD-Turbo),
+        /// `"linspace"`, or `"leading"`. Ignored by LCM (it has its own
+        /// origin-schedule selection).
         public var timestepSpacing: String
-        /// Offset added to timesteps under `"leading"` spacing.
+        /// Offset added to timesteps under `"leading"` spacing (Euler).
         public var stepsOffset: Int
 
+        /// LCM-only knobs (ignored by Euler):
+        /// The LCM distillation schedule length the inference timesteps are
+        /// sampled from (diffusers `original_inference_steps`, default 50).
+        public var originalInferenceSteps: Int
+        /// LCM boundary-condition timestep scaling (diffusers default 10).
+        public var timestepScaling: Double
+        /// LCM boundary-condition data sigma (diffusers default 0.5).
+        public var sigmaData: Double
+
         public init(
+            kind: SchedulerKind = .euler,
             numTrainTimesteps: Int = 1000,
             betaStart: Double = 0.00085,
             betaEnd: Double = 0.012,
             betaSchedule: String = "scaled_linear",
             predictionType: String = "epsilon",
             timestepSpacing: String = "trailing",
-            stepsOffset: Int = 1
+            stepsOffset: Int = 1,
+            originalInferenceSteps: Int = 50,
+            timestepScaling: Double = 10,
+            sigmaData: Double = 0.5
         ) {
+            self.kind = kind
             self.numTrainTimesteps = numTrainTimesteps
             self.betaStart = betaStart
             self.betaEnd = betaEnd
@@ -151,6 +178,9 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
             self.predictionType = predictionType
             self.timestepSpacing = timestepSpacing
             self.stepsOffset = stepsOffset
+            self.originalInferenceSteps = originalInferenceSteps
+            self.timestepScaling = timestepScaling
+            self.sigmaData = sigmaData
         }
     }
 
@@ -161,6 +191,8 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         unetTimestepName: String = "timestep",
         unetEncoderHiddenStatesName: String = "encoder_hidden_states",
         unetOutputName: String = "out_sample",
+        unetTimestepCondName: String? = nil,
+        guidanceEmbeddingDim: Int = 256,
         vaeLatentName: String = "latent_sample",
         vaeImageName: String = "sample",
         latentChannels: Int = 4,
@@ -189,6 +221,8 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
         self.unetTimestepName = unetTimestepName
         self.unetEncoderHiddenStatesName = unetEncoderHiddenStatesName
         self.unetOutputName = unetOutputName
+        self.unetTimestepCondName = unetTimestepCondName
+        self.guidanceEmbeddingDim = guidanceEmbeddingDim
         self.vaeLatentName = vaeLatentName
         self.vaeImageName = vaeImageName
         self.latentChannels = latentChannels
@@ -221,6 +255,40 @@ public struct StableDiffusionModelSpec: Sendable, Equatable {
     /// to `.sdTurbo` but half-precision float I/O (`float16IO`): ~half the
     /// download (~2.5 GB), faster on GPU/CoreML, still runs on the CPU EP.
     public static let sdTurboFp16 = StableDiffusionModelSpec(float16IO: true)
+
+    /// **LCM (`LCM_Dreamshaper_v7`)** — a Latent Consistency Model on an SD-1.5
+    /// base, the commercially-usable (**OpenRAIL-M**) few-step tier (vs
+    /// SD-Turbo's non-commercial license). Differs from `.sdTurbo` in: the CLIP
+    /// text encoder is ViT-L/14 (**768**-dim), the UNet takes a guidance
+    /// embedding on `timestep_cond` (so guidance is baked in — no CFG branch),
+    /// the scheduler is `.lcm`, and the default is **4 steps** at guidance ~8.
+    /// Contract confirmed against the real weights on the real-weights pass.
+    public static let lcmDreamshaper = StableDiffusionModelSpec(
+        unetTimestepCondName: "timestep_cond",
+        guidanceEmbeddingDim: 256,
+        embeddingDim: 768,
+        defaultSteps: 4,
+        defaultGuidanceScale: 8.0,
+        // SD-1.5's CLIP (ViT-L/14) pads with the **end-of-text** token, NOT
+        // "!" (id 0) the way SD-2.1's OpenCLIP does — confirmed on the
+        // real-weights pass (the pad value feeds the encoder, which has no
+        // attention mask, so getting this wrong corrupts the embedding).
+        padTokenID: 49407,
+        scheduler: SchedulerConfig(kind: .lcm)
+    )
+
+    /// `.lcmDreamshaper` from an **`optimum --dtype fp16`** export — identical
+    /// contract, half-precision float I/O.
+    public static let lcmDreamshaperFp16 = StableDiffusionModelSpec(
+        unetTimestepCondName: "timestep_cond",
+        guidanceEmbeddingDim: 256,
+        embeddingDim: 768,
+        float16IO: true,
+        defaultSteps: 4,
+        defaultGuidanceScale: 8.0,
+        padTokenID: 49407, // SD-1.5 CLIP pads with end-of-text (see `.lcmDreamshaper`)
+        scheduler: SchedulerConfig(kind: .lcm)
+    )
 
     /// The latent `(width, height)` for an output `(width, height)`.
     func latentSize(forWidth width: Int, height: Int) -> (width: Int, height: Int) {
@@ -342,6 +410,49 @@ public struct StableDiffusionModelSource: Sendable, Equatable {
         tokenizerMerges: File(
             url: vendorURL("sd-turbo-merges.txt"),
             sha256: nil,
+            fileName: "merges.txt",
+            sizeBytes: 524_619
+        )
+    )
+
+    /// The **fp16 `LCM_Dreamshaper_v7`** pipeline (SD-1.5 base), published on
+    /// the `sd-vendor` GitHub Release — an `optimum --dtype fp16` export of
+    /// `SimianLuo/LCM_Dreamshaper_v7`, re-hosted under its **OpenRAIL-M**
+    /// license (commercially usable, unlike SD-Turbo's non-commercial terms).
+    /// Pair with `StableDiffusionModelSpec.lcmDreamshaperFp16`. ~2.0 GB. The
+    /// tokenizer files are the same CLIP BPE vocab/merges as SD-Turbo
+    /// (byte-identical), so they reuse the `sd-turbo-*` assets. Checksums +
+    /// sizes pinned against the published assets; verified end-to-end against
+    /// a diffusers reference (see `docs/proposals/stable-diffusion.md`).
+    public static let lcmDreamshaperFp16 = StableDiffusionModelSource(
+        textEncoder: File(
+            url: vendorURL("lcm-dreamshaper-fp16-text_encoder.onnx"),
+            sha256: "d2dd4a64b8dccce74e784301b914deecf220407bfbace5c6a00de24c81e921c5",
+            fileName: "text_encoder.onnx",
+            sizeBytes: 246_343_548
+        ),
+        unet: File(
+            url: vendorURL("lcm-dreamshaper-fp16-unet.onnx"),
+            sha256: "46e5f072b67816db9018ac09e319fd6957922cb20d33190aa1074b6c66645300",
+            fileName: "unet.onnx",
+            sizeBytes: 1_720_180_719
+        ),
+        vaeDecoder: File(
+            url: vendorURL("lcm-dreamshaper-fp16-vae_decoder.onnx"),
+            sha256: "6a911c6a99625c1252d3811df6e9a8c1847ad1815dffe1f7de7c951e95ec6fb2",
+            fileName: "vae_decoder.onnx",
+            sizeBytes: 99_685_146
+        ),
+        // Same CLIP BPE tokenizer as SD-Turbo (identical bytes) — reuse the assets.
+        tokenizerVocab: File(
+            url: vendorURL("sd-turbo-vocab.json"),
+            sha256: "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+            fileName: "vocab.json",
+            sizeBytes: 1_059_962
+        ),
+        tokenizerMerges: File(
+            url: vendorURL("sd-turbo-merges.txt"),
+            sha256: "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
             fileName: "merges.txt",
             sizeBytes: 524_619
         )

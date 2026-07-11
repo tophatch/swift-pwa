@@ -151,13 +151,17 @@ func configure(_ ctx: any AppContext) throws {
         let lama = LaMaBackend(cacheDirectory: lamaDir)
         // Text→image (Stable Diffusion) rides the same composite when the SD
         // target is in the build — a bare prompt routes here, a prompt+image to
-        // LaMa (see CompositeAIBackend). The SD-Turbo fp16 pipeline (~2.5 GB, 5
-        // files) is fetched on first use from the `sd-vendor` release, like the
-        // other models; the page calls `ai.ensureModel({ model: "generate" })`
-        // before its first `ai.generateImage`. See web/generate.html.
+        // LaMa (see CompositeAIBackend). We use **LCM_Dreamshaper** (the
+        // OpenRAIL-M / commercially-usable model) rather than SD-Turbo
+        // (non-commercial): a 4-step Latent Consistency Model, ~2.0 GB fp16,
+        // fetched on first use from the `sd-vendor` release. The page calls
+        // `ai.ensureModel({ model: "generate" })` before its first
+        // `ai.generateImage`. See web/generate.html.
         #if canImport(SwiftPWAStableDiffusion)
-            let sdDir = ctx.dataDirectory().appendingPathComponent("sd-turbo", isDirectory: true)
-            let sd = StableDiffusionBackend(cacheDirectory: sdDir)
+            let sdDir = ctx.dataDirectory().appendingPathComponent("lcm-dreamshaper", isDirectory: true)
+            let sd = StableDiffusionBackend(
+                cacheDirectory: sdDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16
+            )
             ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, imageGen: sd)))
         #else
             ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))

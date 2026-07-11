@@ -88,6 +88,55 @@ struct StableDiffusionReferenceVerificationTests {
         print("[SD verify] generateImage wrote \(png.count) bytes to \(path)")
     }
 
+    /// LCM (`LCM_Dreamshaper_v7`) counterpart. **Opt-in** via `SD_VERIFY_LCM_DIR`
+    /// (holding `lcm-dreamshaper-fp16/` + `ref_lcm/`). Injects the reference's
+    /// initial latent **and** the per-step re-noise vectors, so the comparison
+    /// isolates the pipeline (LCM scheduler + guidance embedding + the four
+    /// UNet passes) from RNG. Confirms the LCM path against the same
+    /// stage-by-stage bar as SD-Turbo.
+    @Test func matchesDiffusersReferenceOnLCM() async throws {
+        guard let dirPath = ProcessInfo.processInfo.environment["SD_VERIFY_LCM_DIR"] else { return }
+        let base = URL(fileURLWithPath: dirPath)
+        let model = base.appendingPathComponent("lcm-dreamshaper-fp16")
+        let ref = base.appendingPathComponent("ref_lcm")
+
+        let backend = StableDiffusionBackend(
+            textEncoderPath: model.appendingPathComponent("text_encoder/model.onnx").path,
+            unetPath: model.appendingPathComponent("unet/model.onnx").path,
+            vaeDecoderPath: model.appendingPathComponent("vae_decoder/model.onnx").path,
+            tokenizerVocabPath: model.appendingPathComponent("tokenizer/vocab.json").path,
+            tokenizerMergesPath: model.appendingPathComponent("tokenizer/merges.txt").path,
+            spec: .lcmDreamshaperFp16
+        )
+
+        let initLatent = try floats(ref.appendingPathComponent("init_latent.bin"))
+        // Per-step noise for the non-final steps (4 steps → 3 noise vectors).
+        let stepNoise = try (0 ..< 3).map { try floats(ref.appendingPathComponent("step_noise_\($0).bin")) }
+        let request = AIGenerateImageRequest(
+            prompt: "a photograph of an astronaut riding a horse",
+            width: 512, height: 512, steps: 4, seed: 42, guidanceScale: 8.0
+        )
+        let out = try await backend.runTxt2Img(request, injectedLatent: initLatent, injectedStepNoise: stepNoise)
+
+        let refIds = try int64s(ref.appendingPathComponent("input_ids.bin"))
+        #expect(out.inputIds.map(Int64.init) == refIds)
+
+        let refEmb = try floats(ref.appendingPathComponent("text_emb.bin"))
+        report("lcm text_emb", out.textEmbedding.values, refEmb)
+        #expect(maxAbsDiff(out.textEmbedding.values, refEmb) < 0.1) // fp16
+
+        let refLatent = try floats(ref.appendingPathComponent("final_latent.bin"))
+        report("lcm final_latent", out.latent, refLatent)
+        #expect(correlation(out.latent, refLatent) > 0.99)
+
+        let refImage = try floats(ref.appendingPathComponent("vae_image.bin"))
+        report("lcm vae_image", out.image.values, refImage)
+        #expect(correlation(out.image.values, refImage) > 0.98)
+
+        try writePPM(out.image, to: base.appendingPathComponent("swift_lcm_out.ppm"))
+        print("[SD verify] LCM pipeline matched the diffusers reference")
+    }
+
     // MARK: - Fixture readers
 
     private func floats(_ url: URL) throws -> [Float] {

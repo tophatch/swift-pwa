@@ -188,16 +188,18 @@ The **"🎨 Generate an image from a prompt"** button
 ([web/generate.html](Sources/CritterFacts/web/generate.html)) runs
 **Stable Diffusion** (`SwiftPWAStableDiffusion`'s `StableDiffusionBackend`)
 fully on-device: type a prompt → `ai.generateImage({ prompt })` → a PNG. The
-pipeline is **SD-Turbo** (CLIP tokenizer + text encoder + UNet + VAE decoder +
-Euler scheduler), a one-step, guidance-free model — quick on a GPU, a few
-seconds on CPU.
+pipeline is **LCM_Dreamshaper** (CLIP tokenizer + text encoder + UNet + VAE
+decoder + LCM scheduler), a 4-step Latent Consistency Model — quick on a GPU, a
+few seconds on CPU. We use it (rather than SD-Turbo) because it's **OpenRAIL-M /
+commercially usable**; SD-Turbo is non-commercial. Both ship — swap the
+`StableDiffusionModelSpec`/`Source` to switch.
 
 It joins LaMa on the same [`CompositeAIBackend`](Sources/CritterFacts/CompositeAIBackend.swift):
 `ai.generateImage` is routed by whether the request carries a source `image` —
 **present ⇒ inpaint (LaMa), absent ⇒ text→image (SD)** — so one `ai.*` surface
 serves facts, erase, *and* generation. `ai.ensureModel({ model: "generate" })`
 routes the SD download. Enabled by the same **`ai.local_onnx_runtime: true`**
-flag; the fp16 SD-Turbo weights (~2.5 GB, five files) are fetched on first use
+flag; the fp16 LCM_Dreamshaper weights (~2.0 GB) are fetched on first use
 from the `sd-vendor` release.
 
 ## Swapping the model

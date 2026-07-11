@@ -272,33 +272,82 @@ public struct StableDiffusionModelSource: Sendable, Equatable {
         [textEncoder, unet, vaeDecoder, tokenizerVocab, tokenizerMerges]
     }
 
-    /// **PLACEHOLDER**, pending the real-weights pass. The URLs point at
-    /// this repo's future `sd-vendor` GitHub Release (not published yet, so
-    /// they 404 today) and the checksums are unpinned. This exists so the
-    /// API shape is complete for review; the canonical, checksum-pinned
-    /// source lands with the real-weights integration (the LaMa/MobileSAM
-    /// pattern: publish `Scripts/vendor-sd.sh` output, then pin here). Until
-    /// then, construct a `StableDiffusionBackend(…paths:)` against a local
-    /// export.
+    /// The canonical **fp16** SD-Turbo pipeline, published on this repo's
+    /// `sd-vendor` GitHub Release (an `optimum --dtype fp16` export of
+    /// `stabilityai/sd-turbo`, re-hosted with attribution under the Stability
+    /// AI Non-Commercial Community License). Pair with
+    /// `StableDiffusionModelSpec.sdTurboFp16`. ~2.5 GB total; the UNet is a
+    /// single inline file (no external data). Checksums + sizes are pinned
+    /// against the published assets.
+    public static let sdTurboFp16 = StableDiffusionModelSource(
+        textEncoder: File(
+            url: vendorURL("sd-turbo-fp16-text_encoder.onnx"),
+            sha256: "1efb4e6220164447b01b46b6c0d8a152bf76a9722faea30d8bb5543bf9b75b60",
+            fileName: "text_encoder.onnx",
+            sizeBytes: 681_210_842
+        ),
+        unet: File(
+            url: vendorURL("sd-turbo-fp16-unet.onnx"),
+            sha256: "49370a1a8123f522eead9bbd67006c044af13120a9d647ac78a0dfd73290a400",
+            fileName: "unet.onnx",
+            sizeBytes: 1_732_796_415
+        ),
+        vaeDecoder: File(
+            url: vendorURL("sd-turbo-fp16-vae_decoder.onnx"),
+            sha256: "8369c29a9ef0c1765efa926a70a744242fa9502eb7ef9eb75d45d0a1b559b05d",
+            fileName: "vae_decoder.onnx",
+            sizeBytes: 99_093_852
+        ),
+        tokenizerVocab: File(
+            url: vendorURL("sd-turbo-vocab.json"),
+            sha256: "e089ad92ba36837a0d31433e555c8f45fe601ab5c221d4f607ded32d9f7a4349",
+            fileName: "vocab.json",
+            sizeBytes: 1_059_962
+        ),
+        tokenizerMerges: File(
+            url: vendorURL("sd-turbo-merges.txt"),
+            sha256: "9fd691f7c8039210e0fced15865466c65820d09b63988b0174bfe25de299051a",
+            fileName: "merges.txt",
+            sizeBytes: 524_619
+        )
+    )
+
+    /// The **fp32** SD-Turbo pipeline — **not hosted on GitHub**: its UNet's
+    /// external-data file (~3.5 GB) exceeds GitHub's 2 GB per-asset limit, so
+    /// the fp32 weights will be hosted elsewhere (e.g. Hugging Face) in a
+    /// follow-up. Until then, use `StableDiffusionModelSource.sdTurboFp16`
+    /// (hosted) or construct `StableDiffusionBackend(…paths:)` against a local
+    /// fp32 export (`optimum-cli export onnx --model stabilityai/sd-turbo`,
+    /// pair with `StableDiffusionModelSpec.sdTurbo`). Checksums unpinned.
     public static let sdTurbo = StableDiffusionModelSource(
         textEncoder: File(
-            url: vendorURL("text_encoder.onnx"),
+            url: vendorURL("sd-turbo-text_encoder.onnx"),
             sha256: nil,
             fileName: "text_encoder.onnx",
             sizeBytes: 0
         ),
-        unet: File(url: vendorURL("unet.onnx"), sha256: nil, fileName: "unet.onnx", sizeBytes: 0),
+        unet: File(url: vendorURL("sd-turbo-unet.onnx"), sha256: nil, fileName: "unet.onnx", sizeBytes: 0),
         vaeDecoder: File(
-            url: vendorURL("vae_decoder.onnx"),
+            url: vendorURL("sd-turbo-vae_decoder.onnx"),
             sha256: nil,
             fileName: "vae_decoder.onnx",
             sizeBytes: 0
         ),
-        tokenizerVocab: File(url: vendorURL("vocab.json"), sha256: nil, fileName: "vocab.json", sizeBytes: 0),
-        tokenizerMerges: File(url: vendorURL("merges.txt"), sha256: nil, fileName: "merges.txt", sizeBytes: 0)
+        tokenizerVocab: File(
+            url: vendorURL("sd-turbo-vocab.json"),
+            sha256: nil,
+            fileName: "vocab.json",
+            sizeBytes: 1_059_962
+        ),
+        tokenizerMerges: File(
+            url: vendorURL("sd-turbo-merges.txt"),
+            sha256: nil,
+            fileName: "merges.txt",
+            sizeBytes: 524_619
+        )
     )
 
-    private static func vendorURL(_ file: String) -> URL {
-        URL(string: "https://github.com/tophatch/swift-pwa/releases/download/sd-vendor/\(file)")!
+    private static func vendorURL(_ asset: String) -> URL {
+        URL(string: "https://github.com/tophatch/swift-pwa/releases/download/sd-vendor/\(asset)")!
     }
 }

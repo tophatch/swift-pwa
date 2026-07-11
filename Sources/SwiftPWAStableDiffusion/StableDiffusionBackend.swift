@@ -72,14 +72,17 @@
             download = nil
         }
 
-        /// Back a downloadable pipeline: `ai.ensureModel` fetches the five
-        /// files described by `source` into `cacheDirectory` (resumable,
+        /// Back a downloadable pipeline: `ai.ensureModel` fetches the files
+        /// described by `source` into `cacheDirectory` (resumable,
         /// checksum-pinned), and generation loads them from there. Mirrors
-        /// `MobileSAMBackend(cacheDirectory:source:)`.
+        /// `MobileSAMBackend(cacheDirectory:source:)`. Defaults to the **fp16**
+        /// SD-Turbo published on `sd-vendor` (the fp32 weights aren't hosted on
+        /// GitHub — see `StableDiffusionModelSource.sdTurbo`); `source` and
+        /// `spec` must match (both fp16, or both fp32).
         public init(
             cacheDirectory: URL,
-            source: StableDiffusionModelSource = .sdTurbo,
-            spec: StableDiffusionModelSpec = .sdTurbo
+            source: StableDiffusionModelSource = .sdTurboFp16,
+            spec: StableDiffusionModelSpec = .sdTurboFp16
         ) {
             let downloader = ModelDownloader(directory: cacheDirectory)
             func path(_ file: StableDiffusionModelSource.File) -> String {

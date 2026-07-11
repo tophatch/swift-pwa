@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.6] - 2026-07-11
+
 ### Fixed
 
 - **`ai.generateImage` output was upside-down on macOS/iOS — the Apple `ImageCodec.encodePNG` flipped vertically.** A data-backed `CGContext` is **top-row-first** (buffer row 0 is the visual top), but `encodePNG` copied rows with a `(height-1-y)` flip on the mistaken assumption that bitmap memory is bottom-row-first — and the decode `render` had a *matching* flip. The two cancelled for decode→encode round-trips (`resizeRGB`, the LaMa decode→edit→encode path), so it stayed latent until a **producer fed a top-down image straight to encode with no decode to cancel it** — Stable Diffusion's VAE output, which came back inverted on Apple (desktop's stb and Android's Bitmap codecs were already top-down, so this was also an Apple-vs-others inconsistency). Fix: remove *both* Apple flips (encode + decode `render`), so the codec is uniformly top-row-first and matches the other platforms; LaMa round-trips stay correct because both sides changed together (real-weights inpaint still passes). Adds a `SwiftPWAImageIO` test target with an orientation guard that reads the encoded PNG's top row via an *independent* no-flip bitmap read — a round-trip test alone can't catch a double-flip cancellation.

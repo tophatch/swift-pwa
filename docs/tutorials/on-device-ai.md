@@ -11,7 +11,7 @@ This guide has four parts, easiest first:
 3. **[Write your own backend](#part-3--write-your-own-backend)** — conform to one Swift protocol (e.g. to proxy your own cloud, or wrap an engine we don't ship).
 4. **[Custom styles with LoRA](#part-4--custom-styles-with-lora)** — the how-and-why of getting a LoRA fine-tune running on-device.
 
-> Needs swift-pwa **0.8.5 or newer** (text has shipped since 0.7.1; on-device image generation since 0.8.5). The `ai.*` API is frozen — a page written against it lights up on whatever backend you inject, on macOS, iOS, Linux, Windows, and Android.
+> Needs swift-pwa **0.8.6 or newer** (text has shipped since 0.7.1; on-device image generation since 0.8.5; the commercially-licensed **LCM** image model since 0.8.6). The `ai.*` API is frozen — a page written against it lights up on whatever backend you inject, on macOS, iOS, Linux, Windows, and Android.
 >
 > For the complete reference behind this guide, see [the `ai.*` plugin reference](../ai-plugin.md). This tutorial is the hands-on path.
 

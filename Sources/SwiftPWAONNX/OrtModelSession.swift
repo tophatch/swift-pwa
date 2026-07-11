@@ -164,7 +164,9 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         }
 
         /// One named float32 input/output tensor: its flat row-major values plus
-        /// shape (e.g. `[1, 3, 1024, 1024]` for an NCHW image).
+        /// shape (e.g. `[1, 3, 1024, 1024]` for an NCHW image). Outputs are
+        /// always read back as float32; float inputs use this, non-float inputs
+        /// use `OrtInput` (see `run`).
         public struct Tensor {
             public var values: [Float]
             public var shape: [Int64]
@@ -175,17 +177,49 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             }
         }
 
-        /// Runs the model. `inputs` and `outputNames` must match the graph's
-        /// declared names exactly (ONNX Runtime doesn't validate name typos
-        /// beyond "not found"). Returns one `Tensor` per requested output name,
-        /// each carrying the shape ONNX Runtime reports for it.
+        /// A typed graph **input**. Most graphs (SAM, LaMa) are float32-only and
+        /// use `.float`, but some declare integer inputs — a Stable-Diffusion
+        /// text encoder wants `input_ids` as **int32** and the UNet `timestep`
+        /// as **int64**. Each case carries its flat row-major values plus shape.
+        /// (Outputs stay float32 — the SD graphs' embedding / noise / image
+        /// outputs all are — so there is no integer output variant.)
+        public enum OrtInput {
+            case float([Float], shape: [Int64])
+            case int32([Int32], shape: [Int64])
+            case int64([Int64], shape: [Int64])
+
+            public var shape: [Int64] {
+                switch self {
+                case let .float(_, shape), let .int32(_, shape), let .int64(_, shape): shape
+                }
+            }
+        }
+
+        /// Runs the model with float32 inputs — the common case (SAM, LaMa).
+        /// A thin wrapper over the typed `run` below.
         public func run(inputs: [String: Tensor], outputNames: [String]) throws -> [String: Tensor] {
+            try run(
+                inputs: inputs.mapValues { OrtInput.float($0.values, shape: $0.shape) },
+                outputNames: outputNames
+            )
+        }
+
+        /// Runs the model with typed inputs (float32 / int32 / int64), for
+        /// graphs that declare integer inputs — a Stable-Diffusion text encoder
+        /// (`input_ids` int32) / UNet (`timestep` int64). `inputs` and
+        /// `outputNames` must match the graph's declared names exactly (ONNX
+        /// Runtime doesn't validate name typos beyond "not found"). Returns one
+        /// float32 `Tensor` per requested output name, each carrying the shape
+        /// ONNX Runtime reports for it.
+        public func run(inputs: [String: OrtInput], outputNames: [String]) throws -> [String: Tensor] {
             let api = runtime.api
 
-            // Build input OrtValues. Each wraps `values`' own storage directly
-            // (CreateTensorWithDataAsOrtValue doesn't copy) — the arrays must
-            // outlive the call, which `withExtendedLifetime` below guarantees
-            // through `Run`.
+            // Build input OrtValues. Each wraps the input array's own storage
+            // directly (CreateTensorWithDataAsOrtValue doesn't copy) — the
+            // arrays must outlive the call, which `withExtendedLifetime(inputs)`
+            // below guarantees through `Run`. ORT treats input data as
+            // read-only, so an immutable buffer pointer (cast to a mutable raw
+            // pointer for the C signature) is safe and avoids a COW mutation.
             var inputValues: [OpaquePointer?] = []
             var inputNamesOwned: [UnsafeMutablePointer<CChar>?] = []
             defer {
@@ -193,20 +227,45 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
                 for name in inputNamesOwned { if let name { free(name) } }
             }
 
-            var mutableInputs = inputs
-            for (name, tensor) in mutableInputs {
+            for (name, input) in inputs {
                 var value: OpaquePointer?
-                try mutableInputs[name]!.values.withUnsafeMutableBufferPointer { buffer in
-                    try tensor.shape.withUnsafeBufferPointer { shapePtr in
+                try input.shape.withUnsafeBufferPointer { shapePtr in
+                    func makeTensor(
+                        _ base: UnsafeRawPointer?, byteCount: Int, type: ONNXTensorElementDataType
+                    ) throws {
+                        guard let base else { throw OrtError.failed("empty input tensor \"\(name)\"") }
                         try runtime.check(api.pointee.CreateTensorWithDataAsOrtValue(
                             cpuMemoryInfo,
-                            buffer.baseAddress,
-                            buffer.count * MemoryLayout<Float>.size,
+                            UnsafeMutableRawPointer(mutating: base),
+                            byteCount,
                             shapePtr.baseAddress,
                             shapePtr.count,
-                            ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT,
+                            type,
                             &value
                         ))
+                    }
+                    switch input {
+                    case let .float(values, _):
+                        try values.withUnsafeBufferPointer {
+                            try makeTensor(
+                                $0.baseAddress, byteCount: $0.count * MemoryLayout<Float>.size,
+                                type: ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT
+                            )
+                        }
+                    case let .int32(values, _):
+                        try values.withUnsafeBufferPointer {
+                            try makeTensor(
+                                $0.baseAddress, byteCount: $0.count * MemoryLayout<Int32>.size,
+                                type: ONNX_TENSOR_ELEMENT_DATA_TYPE_INT32
+                            )
+                        }
+                    case let .int64(values, _):
+                        try values.withUnsafeBufferPointer {
+                            try makeTensor(
+                                $0.baseAddress, byteCount: $0.count * MemoryLayout<Int64>.size,
+                                type: ONNX_TENSOR_ELEMENT_DATA_TYPE_INT64
+                            )
+                        }
                     }
                 }
                 guard let value else { throw OrtError.failed("CreateTensorWithDataAsOrtValue returned no value") }
@@ -223,7 +282,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
                 for value in outputValues { if let value { api.pointee.ReleaseValue(value) } }
             }
 
-            try withExtendedLifetime(mutableInputs) {
+            try withExtendedLifetime(inputs) {
                 try inputNamesC.withUnsafeBufferPointer { inNames in
                     try inputValues.withUnsafeBufferPointer { inValues in
                         try outputNamesC.withUnsafeBufferPointer { outNames in
@@ -255,6 +314,16 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             try runtime.check(api.pointee.GetTensorTypeAndShape(value, &typeAndShape))
             guard let typeAndShape else { throw OrtError.failed("GetTensorTypeAndShape returned nothing") }
             defer { api.pointee.ReleaseTensorTypeAndShapeInfo(typeAndShape) }
+
+            // Outputs are read back as float32 (the `values: [Float]` buffer is
+            // reinterpreted from raw bytes below). Guard the element type so a
+            // non-float output errors loudly instead of silently misreading —
+            // matters now that integer inputs are supported.
+            var elementType = ONNX_TENSOR_ELEMENT_DATA_TYPE_UNDEFINED
+            try runtime.check(api.pointee.GetTensorElementType(typeAndShape, &elementType))
+            guard elementType == ONNX_TENSOR_ELEMENT_DATA_TYPE_FLOAT else {
+                throw OrtError.failed("output tensor is not float32 (ONNX element type \(elementType.rawValue))")
+            }
 
             var dimCount = 0
             try runtime.check(api.pointee.GetDimensionsCount(typeAndShape, &dimCount))

@@ -27,18 +27,15 @@
     /// `CLIPTokenizer`. The denoising loop itself is **not yet run**:
     /// `generateImage` tokenizes the prompt (real) and then throws a clear
     /// "pending real-weights integration" error at the inference boundary.
-    /// Two concrete things the real-weights pass must add (tracked here so
-    /// the gap is explicit):
+    /// The integer-input support the graphs need (`input_ids` int32, UNet
+    /// `timestep` int64) has since landed in `OrtModelSession` (`OrtInput`).
+    /// What the real-weights pass still adds:
     ///
-    /// 1. **Integer input tensors.** The shared `OrtModelSession` runs
-    ///    float32 in/out only, but the standard SD export types
-    ///    `input_ids` as **int32** and the UNet `timestep` as **int64**.
-    ///    That pass extends `OrtModelSession` (or adds a typed variant) so
-    ///    these graphs can run.
-    /// 2. **Scheduler `step()` + tensor-name/scaling confirmation.** The
-    ///    `StableDiffusionModelSpec` constants (tensor names, VAE scaling,
-    ///    scheduler betas) are assumed from diffusers defaults and get
-    ///    confirmed against the real checkpoint — the SAM/LaMa pattern.
+    /// - **Scheduler `step()` + tensor-name/scaling confirmation.** The
+    ///   `StableDiffusionModelSpec` constants (tensor names, VAE scaling,
+    ///   scheduler betas) are assumed from diffusers defaults and get
+    ///   confirmed against the real checkpoint — the SAM/LaMa pattern —
+    ///   then the real denoise loop + VAE-decode→PNG are wired.
     public actor StableDiffusionBackend: AIBackend {
         private let textEncoderPath: String
         private let unetPath: String
@@ -138,8 +135,8 @@
             // doc and docs/proposals/stable-diffusion.md.
             throw AIError.unsupportedPlatform(
                 "stable-diffusion-onnx inference is pending the real-weights integration pass "
-                    + "(integer input tensors for input_ids/timestep + scheduler verification); "
-                    + "the prompt tokenizer and model download are wired"
+                    + "(scheduler step() + tensor-name/scaling confirmation against a real checkpoint); "
+                    + "the prompt tokenizer, integer input tensors, and model download are wired"
             )
         }
 

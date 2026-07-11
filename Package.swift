@@ -975,7 +975,11 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         ),
         .testTarget(
             name: "SwiftPWAStableDiffusionTests",
-            dependencies: ["SwiftPWAStableDiffusion", "SwiftPWACore"],
+            // SwiftPWAONNX for the OrtModelSession integer-input round-trip test
+            // (the SD-motivated int32/int64 support); Fixtures ships its tiny
+            // ONNX graph.
+            dependencies: ["SwiftPWAStableDiffusion", "SwiftPWACore", "SwiftPWAONNX"],
+            resources: [.copy("Fixtures")],
             swiftSettings: swiftSettings
         )
     ])

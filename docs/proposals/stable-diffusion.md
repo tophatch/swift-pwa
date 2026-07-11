@@ -16,11 +16,15 @@
 > tokenizes the prompt, then throws a clear "pending real-weights integration"
 > error at the denoising boundary.
 >
-> **Next (real-weights pass):** (1) integer input tensors — the shared
-> `OrtModelSession` is float32-only, but the standard export types `input_ids`
-> as int32 and the UNet `timestep` as int64; (2) the scheduler `step()` math +
-> confirmation of the assumed tensor names / VAE scaling / scheduler constants
-> against a real checkpoint. See **Scoping calls** at the bottom.
+> **Done since:** integer input tensors — `OrtModelSession` gained an
+> `OrtInput` enum (`.float` / `.int32` / `.int64`) so the text encoder's int32
+> `input_ids` and the UNet's int64 `timestep` can be fed (outputs stay
+> float32); verified end-to-end against a tiny real ONNX graph on CPU.
+>
+> **Next (real-weights pass):** the scheduler `step()` math + confirmation of
+> the assumed tensor names / VAE scaling / scheduler constants against a real
+> checkpoint, then the real denoise loop + VAE-decode→PNG. See **Scoping
+> calls** at the bottom.
 
 ## Motivation
 

@@ -33,6 +33,48 @@ private struct StubImageBackend: AIBackend {
     }
 }
 
+/// A reference-type backend that records how many times it was `unload()`ed,
+/// so a test can observe eviction on model switch (a value-type stub couldn't —
+/// the router holds a copy).
+private final class SpyImageBackend: AIBackend, @unchecked Sendable {
+    let id: String
+    private let lock = NSLock()
+    private var _unloadCount = 0
+    var unloadCount: Int {
+        lock.withLock { _unloadCount }
+    }
+
+    init(_ id: String) { self.id = id }
+
+    func info() async -> AICapabilities { AICapabilities(available: true, backend: id, model: id) }
+
+    func generate(_: AIGenerateRequest) async throws -> AIGenerateResult {
+        AIGenerateResult(text: "gen:\(id)", backend: id)
+    }
+
+    func generateImage(_: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
+        AIGenerateImageResult(images: [AIGeneratedImage(dataBase64: id, mimeType: "image/png")], backend: id)
+    }
+
+    func ensureModel(_: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error> {
+        AsyncThrowingStream { $0.yield(.done); $0.finish() }
+    }
+
+    func unload() async { lock.withLock { _unloadCount += 1 } }
+}
+
+private func spyEntry(_ id: String) -> (MultiModelImageBackend.Entry, SpyImageBackend) {
+    let spy = SpyImageBackend(id)
+    let entry = MultiModelImageBackend.Entry(
+        AIModelInfo(
+            id: id, label: id, capabilities: [.imageGeneration],
+            availability: .ready, offlineCapable: true
+        ),
+        spy
+    )
+    return (entry, spy)
+}
+
 private func entry(
     _ id: String,
     caps: Set<AIModelCapability> = [.imageGeneration],
@@ -102,6 +144,60 @@ struct MultiModelImageBackendTests {
         await #expect(throws: AIError.self) {
             for try await _ in backend.generateImageStream(AIGenerateImageRequest(prompt: "x", model: "zzz")) {}
         }
+    }
+
+    // MARK: - Resource release on switch (the OOM fix)
+
+    @Test func switchingModelsUnloadsThePrevious() async throws {
+        let (ea, spyA) = spyEntry("a")
+        let (eb, spyB) = spyEntry("b")
+        let backend = MultiModelImageBackend([ea, eb], default: "a")
+
+        // First generate on "a": nothing to evict yet.
+        _ = try await backend.generateImage(AIGenerateImageRequest(prompt: "x", model: "a"))
+        #expect(spyA.unloadCount == 0)
+        #expect(spyB.unloadCount == 0)
+
+        // Switch to "b": the previously-active "a" is unloaded exactly once.
+        _ = try await backend.generateImage(AIGenerateImageRequest(prompt: "x", model: "b"))
+        #expect(spyA.unloadCount == 1)
+        #expect(spyB.unloadCount == 0)
+
+        // Switch back to "a": now "b" is unloaded.
+        _ = try await backend.generateImage(AIGenerateImageRequest(prompt: "x", model: "a"))
+        #expect(spyA.unloadCount == 1)
+        #expect(spyB.unloadCount == 1)
+    }
+
+    @Test func repeatedSameModelDoesNotUnload() async throws {
+        let (ea, spyA) = spyEntry("a")
+        let (eb, spyB) = spyEntry("b")
+        let backend = MultiModelImageBackend([ea, eb], default: "a")
+        for _ in 0 ..< 3 {
+            _ = try await backend.generateImage(AIGenerateImageRequest(prompt: "x", model: "a"))
+        }
+        #expect(spyA.unloadCount == 0) // never switched away
+        #expect(spyB.unloadCount == 0)
+    }
+
+    @Test func ensureModelDoesNotEvictResidentModel() async throws {
+        let (ea, spyA) = spyEntry("a")
+        let (eb, spyB) = spyEntry("b")
+        let backend = MultiModelImageBackend([ea, eb], default: "a")
+        _ = try await backend.generateImage(AIGenerateImageRequest(prompt: "x", model: "a")) // load "a"
+        // Downloading "b" must NOT unload the resident "a" (a download loads no sessions).
+        for try await _ in backend.ensureModel(AIEnsureModelRequest(model: "b")) {}
+        #expect(spyA.unloadCount == 0)
+        #expect(spyB.unloadCount == 0)
+    }
+
+    @Test func unloadReleasesAllBackends() async {
+        let (ea, spyA) = spyEntry("a")
+        let (eb, spyB) = spyEntry("b")
+        let backend = MultiModelImageBackend([ea, eb], default: "a")
+        await backend.unload()
+        #expect(spyA.unloadCount == 1)
+        #expect(spyB.unloadCount == 1)
     }
 
     @Test func textVerbDelegatesToDefault() async throws {

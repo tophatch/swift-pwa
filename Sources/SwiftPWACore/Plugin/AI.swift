@@ -76,6 +76,15 @@ public protocol AIBackend: Sendable {
     /// wraps `generateAudio` in a single `done`; a backend that synthesizes
     /// incrementally overrides it.
     func generateAudioStream(_ request: AIGenerateAudioRequest) -> AsyncThrowingStream<AIAudioChunk, any Error>
+
+    /// Release any heavy cached resources (loaded model weights / inference
+    /// sessions), returning the backend to its just-constructed state; the next
+    /// generate reloads lazily. Has a default no-op — a backend that caches
+    /// multi-GB sessions (Stable Diffusion, LaMa) overrides it so a host can
+    /// free memory. **`MultiModelImageBackend` calls it on the previously-active
+    /// model when the switcher moves to a different one, so two large models
+    /// aren't resident at once** (which OOMs on-device).
+    func unload() async
 }
 
 public extension AIBackend {
@@ -167,6 +176,10 @@ public extension AIBackend {
             continuation.onTermination = { _ in task.cancel() }
         }
     }
+
+    /// Default: nothing cached to release. A backend that caches inference
+    /// sessions overrides this.
+    func unload() async {}
 }
 
 // MARK: - Capabilities

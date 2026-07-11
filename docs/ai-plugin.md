@@ -292,6 +292,16 @@ It routes `generateImage` / `generateImageStream` / `ensureModel` by
 each entry's `AIModelInfo` into `ai.info`'s `models`. An unknown `model` id
 fails with `E_AI_GENERATION` rather than silently falling back.
 
+**Memory — one model resident at a time.** On-device image models are large (a
+fp16 Stable-Diffusion pipeline is ~2 GB of session weights). When a generate
+routes to a *different* model than last time, `MultiModelImageBackend` first
+calls `unload()` on the previously-active backend, freeing its sessions before
+the new one loads — otherwise loading a second ~2 GB model while the first is
+still resident OOM-kills the app on a phone. `unload()` is a new `AIBackend`
+method (default no-op; `StableDiffusionBackend` / `LaMaBackend` implement it to
+release their ONNX sessions). If you write a session-caching backend, implement
+`unload()`; a remote backend inherits the no-op.
+
 ## Swift surface — implementing a backend
 
 A backend conforms to `AIBackend` (in `SwiftPWACore`, dependency-free).

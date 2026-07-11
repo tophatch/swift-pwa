@@ -56,8 +56,10 @@ That worked. Two things did not have a clean answer:
 > `AICapabilities.models`, `AIGenerateImageRequest.model`, and the
 > **`MultiModelImageBackend`** router (routes the image verbs + `ensureModel` by
 > model id, delegates text/audio to the default, aggregates `models` into
-> `ai.info`). Fully additive — `model == nil` / `models == nil` reproduces
-> single-model behavior. Text/audio request-level routing is the noted follow-up.
+> `ai.info`, and **unloads the previously-active model on switch** — via a new
+> no-op-by-default `AIBackend.unload()` — so two multi-GB pipelines aren't
+> resident at once, which OOM-killed the app on a phone). Fully additive —
+> `model == nil` / `models == nil` reproduces single-model behavior. Text/audio request-level routing is the noted follow-up.
 > The shapes below are the design sketch; the shipped Codable form of
 > `availability` is `{ kind: "ready" | "downloadable" | "needsSetup", bytes?, reason? }`.
 

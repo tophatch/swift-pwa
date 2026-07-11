@@ -16,12 +16,22 @@ import Foundation
 /// not merely a weights file. Each model's `AIModelInfo` carries the metadata a
 /// picker needs — capabilities, `availability`, `offlineCapable`, `license`.
 ///
-/// **What routes vs. what delegates.** The image verbs and `ensureModel` route
-/// by model id (`request.model` / the ensure request's `model`, `nil` ⇒ the
-/// default). The text/audio verbs carry no model id, so they delegate to the
+/// **Memory: one model resident at a time.** On-device image models are large
+/// (a fp16 Stable-Diffusion pipeline is ~2 GB of session weights, held until
+/// released). Loading a second while the first is still resident OOMs a phone —
+/// which is why a naive switcher crashes on the *second* model. So when a
+/// generate routes to a **different** model than last time, this first calls
+/// `unload()` on the previously-active backend (freeing its sessions) before the
+/// new one loads lazily. A backend with nothing to free inherits the no-op
+/// `unload()`, so remote backends cost nothing here.
+///
+/// **What routes vs. what delegates.** The image verbs route by model id
+/// (`request.model`, `nil` ⇒ the default). `ensureModel` routes by id too but
+/// does *not* trigger an unload — a download streams to disk and loads no
+/// sessions. The text/audio verbs carry no model id, so they delegate to the
 /// **default** backend. (Add a `model` field to those requests later to route
 /// them too.)
-public struct MultiModelImageBackend: AIBackend {
+public final class MultiModelImageBackend: AIBackend, @unchecked Sendable {
     /// One routable model: the adopter-declared `AIModelInfo` (the id JS routes
     /// on, plus label / capabilities / availability / licence for the picker)
     /// paired with the backend that serves it.
@@ -40,6 +50,11 @@ public struct MultiModelImageBackend: AIBackend {
     private let defaultID: String
     private let defaultBackend: any AIBackend
 
+    /// The model whose sessions are (or are being) loaded — so a switch to a
+    /// different model can free the old one first. Guarded by `lock`.
+    private let lock = NSLock()
+    private var activeID: String?
+
     /// - Parameters:
     ///   - entries: the models to serve, in the order a picker should show
     ///     them. Ids should be unique; a later duplicate wins the routing map.
@@ -57,15 +72,110 @@ public struct MultiModelImageBackend: AIBackend {
 
     // MARK: - Routing
 
-    /// Resolve a model id to its backend: `nil`/empty ⇒ the default; a known id
-    /// ⇒ that backend; an unknown id ⇒ a clear `E_AI_GENERATION` error rather
-    /// than a silent fall-through to the default (which would mask a typo).
-    private func resolve(_ id: String?) throws -> any AIBackend {
-        guard let id, !id.isEmpty else { return defaultBackend }
+    /// Resolve a model id to its concrete id + backend: `nil`/empty ⇒ the
+    /// default; a known id ⇒ that backend; an unknown id ⇒ a clear
+    /// `E_AI_GENERATION` error rather than a silent fall-through to the default
+    /// (which would mask a typo).
+    private func resolve(_ model: String?) throws -> (id: String, backend: any AIBackend) {
+        let id = (model.map { !$0.isEmpty } == true) ? model! : defaultID
         guard let backend = byID[id] else {
             throw AIError.generationFailed("unknown model id \"\(id)\" — not one of AICapabilities.models")
         }
-        return backend
+        return (id, backend)
+    }
+
+    /// Make `id` the active model, releasing the previously-active one's cached
+    /// sessions first (only when actually switching). Awaited before the new
+    /// model loads, so peak memory is one model, not two.
+    private func makeActive(_ id: String) async {
+        var toUnload: (any AIBackend)?
+        lock.withLock {
+            if activeID != id {
+                if let previous = activeID { toUnload = byID[previous] }
+                activeID = id
+            }
+        }
+        await toUnload?.unload()
+    }
+
+    // MARK: - Image verbs (routed by request.model)
+
+    public func generateImage(_ request: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
+        let (id, backend) = try resolve(request.model)
+        await makeActive(id)
+        return try await backend.generateImage(request)
+    }
+
+    public func generateImageStream(
+        _ request: AIGenerateImageRequest
+    ) -> AsyncThrowingStream<AIImageEvent, any Error> {
+        let resolved: (id: String, backend: any AIBackend)
+        do {
+            resolved = try resolve(request.model)
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+        return AsyncThrowingStream { continuation in
+            let task = Task {
+                await makeActive(resolved.id) // free the previous model before this one loads
+                do {
+                    for try await event in resolved.backend.generateImageStream(request) {
+                        continuation.yield(event)
+                    }
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    // MARK: - Model download (routed by the ensure request's model)
+
+    public func ensureModel(_ request: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error> {
+        let backend: any AIBackend
+        do {
+            backend = try resolve(request.model).backend
+        } catch {
+            return AsyncThrowingStream { $0.finish(throwing: error) }
+        }
+        // No makeActive here: a download streams to disk and loads no sessions,
+        // so it needn't evict the resident model.
+        return backend.ensureModel(request)
+    }
+
+    // MARK: - Resource release
+
+    /// Unload *every* routed backend (e.g. on a memory-pressure signal). The
+    /// per-switch eviction keeps one model resident; this frees that one too.
+    public func unload() async {
+        lock.withLock { activeID = nil }
+        for entry in entries { await entry.backend.unload() }
+    }
+
+    // MARK: - Text / audio verbs (delegate to the default backend)
+
+    public func generate(_ request: AIGenerateRequest) async throws -> AIGenerateResult {
+        try await defaultBackend.generate(request)
+    }
+
+    public func generateStream(_ request: AIGenerateRequest) -> AsyncThrowingStream<AIChunk, any Error> {
+        defaultBackend.generateStream(request)
+    }
+
+    public func generateJSON(_ request: AIGenerateJSONRequest) async throws -> JSONValue {
+        try await defaultBackend.generateJSON(request)
+    }
+
+    public func generateAudio(_ request: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+        try await defaultBackend.generateAudio(request)
+    }
+
+    public func generateAudioStream(
+        _ request: AIGenerateAudioRequest
+    ) -> AsyncThrowingStream<AIAudioChunk, any Error> {
+        defaultBackend.generateAudioStream(request)
     }
 
     // MARK: - Info (aggregate)
@@ -92,59 +202,5 @@ public struct MultiModelImageBackend: AIBackend {
             voiceCloning: base.voiceCloning,
             models: entries.map(\.info)
         )
-    }
-
-    // MARK: - Image verbs (routed by request.model)
-
-    public func generateImage(_ request: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
-        try await resolve(request.model).generateImage(request)
-    }
-
-    public func generateImageStream(
-        _ request: AIGenerateImageRequest
-    ) -> AsyncThrowingStream<AIImageEvent, any Error> {
-        let backend: any AIBackend
-        do {
-            backend = try resolve(request.model)
-        } catch {
-            return AsyncThrowingStream { $0.finish(throwing: error) }
-        }
-        return backend.generateImageStream(request)
-    }
-
-    // MARK: - Model download (routed by the ensure request's model)
-
-    public func ensureModel(_ request: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error> {
-        let backend: any AIBackend
-        do {
-            backend = try resolve(request.model)
-        } catch {
-            return AsyncThrowingStream { $0.finish(throwing: error) }
-        }
-        return backend.ensureModel(request)
-    }
-
-    // MARK: - Text / audio verbs (delegate to the default backend)
-
-    public func generate(_ request: AIGenerateRequest) async throws -> AIGenerateResult {
-        try await defaultBackend.generate(request)
-    }
-
-    public func generateStream(_ request: AIGenerateRequest) -> AsyncThrowingStream<AIChunk, any Error> {
-        defaultBackend.generateStream(request)
-    }
-
-    public func generateJSON(_ request: AIGenerateJSONRequest) async throws -> JSONValue {
-        try await defaultBackend.generateJSON(request)
-    }
-
-    public func generateAudio(_ request: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
-        try await defaultBackend.generateAudio(request)
-    }
-
-    public func generateAudioStream(
-        _ request: AIGenerateAudioRequest
-    ) -> AsyncThrowingStream<AIAudioChunk, any Error> {
-        defaultBackend.generateAudioStream(request)
     }
 }

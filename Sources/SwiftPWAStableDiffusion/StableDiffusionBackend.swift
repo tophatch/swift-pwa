@@ -151,10 +151,17 @@
             let count = max(1, request.count ?? 1)
             let steps = max(1, request.steps ?? spec.defaultSteps)
             let total = count * steps
+            // An explicit seed reproduces the same image(s); a nil seed draws a
+            // fresh random base per call, so the same prompt varies run-to-run
+            // (and `count > 1` yields distinct images via `base + index`) rather
+            // than always regenerating the fixed seed-0 output. Bounded to the
+            // 32-bit range so the echoed seed stays friendly and `+ index`
+            // (and the per-step `&+ index &+ 1` offset) can't overflow.
+            let baseSeed = request.seed ?? Int.random(in: 0 ... Int(UInt32.max))
             var images: [AIGeneratedImage] = []
             for index in 0 ..< count {
                 var perImage = request
-                perImage.seed = (request.seed ?? 0) + index
+                perImage.seed = baseSeed + index
                 let base = index * steps
                 let out = try await runTxt2Img(perImage) { step, _ in onStep?(base + step, total) }
                 try await images.append(encode(out.image, outputDirectory: request.outputDirectory, seed: out.seedUsed))

@@ -27,6 +27,11 @@ jobs:
         uses: swift-actions/setup-swift@v2
         with:
           swift-version: "6.0"
+      - name: Install libsecret (Linux only)
+        # Building the CLI compiles SwiftPWACore, which pulls the
+        # CSecretShim/CLibSecret libsecret dep on Linux (secrets.* store).
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
       - name: Build CLI
         run: swift build -c release --product swift-pwa
       - name: Stage binary

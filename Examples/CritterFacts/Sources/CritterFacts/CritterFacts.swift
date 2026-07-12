@@ -1,6 +1,27 @@
 import Foundation
 import SwiftPWA
 import SwiftPWAModelStore // ModelSpec
+import SwiftPWARemoteAI // RemoteImageBackend + ComfyUIProvider (local + remote switcher)
+
+/// The platform HTTP transport for the `net.*` plugin + the remote image
+/// backends. On Android it must route through the Kotlin RPC bridge (swift
+/// `URLSession` has no CA store there); everywhere else it's `URLSession`.
+/// File-scope + **nonisolated** for the same Android reason as `sdSourceSize`
+/// (no local funcs in the `@MainActor` `configure`).
+private func makeNetworkClient() -> any NetworkClient {
+    #if os(Android)
+        AndroidNetworkClient()
+    #else
+        URLSessionNetworkClient()
+    #endif
+}
+
+/// The ComfyUI instance the demo's "remote" switcher arm points at. **Adopters:
+/// change this to your own instance** (or make it user-configurable). A LAN
+/// appliance on plain `http://` also needs the host allow-listed via
+/// `android.network.cleartext_domains` in `pwa.json` (already set for this host).
+private let demoComfyURL = URL(string: "http://comfyui.local:8188")!
+private let demoComfyCheckpoint = "sd_xl_base_1.0.safetensors"
 
 // The llama backend is an env-gated product (see Package.swift). When the app
 // is built with `ai.local_llama` (so SWIFT_PWA_LLAMA is set), the module is in
@@ -173,34 +194,58 @@ func configure(_ ctx: any AppContext) throws {
         #if canImport(SwiftPWAStableDiffusion)
             let lcmDir = ctx.dataDirectory().appendingPathComponent("lcm-dreamshaper", isDirectory: true)
             let sdTurboDir = ctx.dataDirectory().appendingPathComponent("sd-turbo", isDirectory: true)
-            let imageModels = MultiModelImageBackend(
-                [
-                    .init(
-                        AIModelInfo(
-                            id: "lcm-dreamshaper", label: "LCM Dreamshaper (commercial)",
-                            capabilities: [.imageGeneration],
-                            availability: .downloadable(bytes: sdSourceSize(.lcmDreamshaperFp16)),
-                            offlineCapable: true, license: "OpenRAIL-M"
-                        ),
-                        StableDiffusionBackend(
-                            cacheDirectory: lcmDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16
-                        )
+            var imageEntries: [MultiModelImageBackend.Entry] = [
+                .init(
+                    AIModelInfo(
+                        id: "lcm-dreamshaper", label: "LCM Dreamshaper (commercial)",
+                        capabilities: [.imageGeneration],
+                        availability: .downloadable(bytes: sdSourceSize(.lcmDreamshaperFp16)),
+                        offlineCapable: true, license: "OpenRAIL-M"
                     ),
-                    .init(
-                        AIModelInfo(
-                            id: "sd-turbo", label: "SD-Turbo (non-commercial)",
-                            capabilities: [.imageGeneration],
-                            availability: .downloadable(bytes: sdSourceSize(.sdTurboFp16)),
-                            offlineCapable: true, license: "Stability Non-Commercial"
-                        ),
-                        StableDiffusionBackend(
-                            cacheDirectory: sdTurboDir, source: .sdTurboFp16, spec: .sdTurboFp16
-                        )
+                    StableDiffusionBackend(
+                        cacheDirectory: lcmDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16
+                    )
+                ),
+                .init(
+                    AIModelInfo(
+                        id: "sd-turbo", label: "SD-Turbo (non-commercial)",
+                        capabilities: [.imageGeneration],
+                        availability: .downloadable(bytes: sdSourceSize(.sdTurboFp16)),
+                        offlineCapable: true, license: "Stability Non-Commercial"
                     ),
-                ],
-                default: "lcm-dreamshaper"
+                    StableDiffusionBackend(
+                        cacheDirectory: sdTurboDir, source: .sdTurboFp16, spec: .sdTurboFp16
+                    )
+                ),
+            ]
+            // A **remote** arm: the same switcher now also offers a cloud/LAN
+            // generator — here a local-network ComfyUI instance — proving "local
+            // + remote in one dropdown." It's just another `AIBackend`
+            // (`RemoteImageBackend` over `ComfyUIProvider`), routed by
+            // `request.model`, offline:false so the picker can badge the
+            // trade-off. Uses the platform `NetworkClient` (the Kotlin RPC on
+            // Android). See docs/remote-ai.md.
+            let comfyInfo = AIModelInfo(
+                id: "comfy-lan", label: "ComfyUI (local network)",
+                capabilities: [.imageGeneration],
+                availability: .ready, offlineCapable: false, license: nil
             )
+            let comfy = RemoteImageBackend(
+                provider: ComfyUIProvider(
+                    baseURL: demoComfyURL,
+                    workflow: .txt2imgSDXL(checkpoint: demoComfyCheckpoint),
+                    models: [comfyInfo]
+                ),
+                client: makeNetworkClient()
+            )
+            imageEntries.append(.init(comfyInfo, comfy))
+
+            let imageModels = MultiModelImageBackend(imageEntries, default: "lcm-dreamshaper")
             ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, imageGen: imageModels)))
+            // Also expose the raw `net.*` plugin so the page can make native,
+            // CORS-free HTTP calls (and so the remote arm's transport is
+            // exercisable directly). Opt-in, so registered explicitly here.
+            ctx.use(NetPlugin(makeNetworkClient()))
         #else
             ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
         #endif

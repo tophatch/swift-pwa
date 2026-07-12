@@ -27,6 +27,11 @@ var appDependencies: [Target.Dependency] = [
     .product(name: "SwiftPWA", package: "swift-pwa"),
     // ModelSpec (the downloadable-model descriptor) lives here. Not env-gated.
     .product(name: "SwiftPWAModelStore", package: "swift-pwa"),
+    // Remote image generators (cloud Imagen / local-network ComfyUI). Not
+    // env-gated — it's Core + Foundation only. The demo adds a ComfyUI arm to
+    // the image switcher (see CritterFacts.swift) to show local + remote in one
+    // dropdown.
+    .product(name: "SwiftPWARemoteAI", package: "swift-pwa"),
 ]
 if llamaEnabled {
     appDependencies.append(.product(name: "SwiftPWALlama", package: "swift-pwa"))

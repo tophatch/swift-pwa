@@ -39,6 +39,9 @@
     "min_sdk": 28,
     "target_sdk": 34,
     "abis": ["arm64-v8a"],
-    "version_code": 1
+    "version_code": 1,
+    "network": {
+      "cleartext_domains": ["*.local", "comfyui.local"]
+    }
   }
 }

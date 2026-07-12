@@ -7,6 +7,7 @@
     import Foundation
     import SwiftPWA
     import SwiftPWAImageEdit
+    import SwiftPWARemoteAI // the ComfyUI (remote) arm + its dynamic catalog
 
     /// Routes the `ai.*` surface across up to three backends by capability:
     /// text (`generate` / `generateStream` / `generateJSON`) to `text`, and
@@ -27,43 +28,75 @@
         private let text: (any AIBackend)?
         private let image: LaMaBackend
         private let imageGen: (any AIBackend)?
+        /// A remote ComfyUI arm whose catalog is *discovered* (its installed
+        /// checkpoints), not static — so the picker lists the models the
+        /// instance actually offers. Routed by a `comfy:<checkpoint>` model id.
+        private let comfy: RemoteImageBackend?
+        /// Discovered-once cache of the ComfyUI catalog (a network probe), so
+        /// repeated `info()` calls don't re-hit the instance.
+        private var comfyCatalogCache: [AIModelInfo]?
 
-        init(text: (any AIBackend)?, image: LaMaBackend, imageGen: (any AIBackend)? = nil) {
+        init(
+            text: (any AIBackend)?,
+            image: LaMaBackend,
+            imageGen: (any AIBackend)? = nil,
+            comfy: RemoteImageBackend? = nil
+        ) {
             self.text = text
             self.image = image
             self.imageGen = imageGen
+            self.comfy = comfy
+        }
+
+        private func isComfy(_ model: String?) -> Bool {
+            model?.hasPrefix(ComfyUIProvider.modelIDPrefix) == true
+        }
+
+        /// The ComfyUI catalog, discovered once and cached. Bounded so a slow /
+        /// unreachable instance doesn't stall `info()` (and thus the page's
+        /// dropdown) — on timeout or error the on-device models still show.
+        private func comfyCatalog() async -> [AIModelInfo] {
+            if let comfyCatalogCache { return comfyCatalogCache }
+            guard let comfy else { comfyCatalogCache = []; return [] }
+            let discovered = (try? await withTimeout(seconds: 4) { try await comfy.discoverModels() }) ?? []
+            comfyCatalogCache = discovered
+            return discovered
         }
 
         func info() async -> AICapabilities {
             let img = await image.info()
             // Advertise text→image if a generator is present.
             let gen = await imageGen?.info()
+            // The on-device switcher's catalog (LCM / SD-Turbo) plus the ComfyUI
+            // instance's discovered checkpoints — local + remote in one picker.
+            let discovered = await comfyCatalog()
+            let catalog = (gen?.models ?? []) + discovered
+            let models = catalog.isEmpty ? nil : catalog
+            let hasImageGen = (gen?.imageGeneration ?? false) || (comfy != nil)
             guard let text else {
                 // Image-only: still advertise editing (+ generation if present).
                 return AICapabilities(
-                    available: img.available || (gen?.available ?? false),
+                    available: img.available || (gen?.available ?? false) || (comfy != nil),
                     backend: img.backend,
-                    imageGeneration: gen?.imageGeneration ?? false,
+                    imageGeneration: hasImageGen,
                     imageEditing: img.imageEditing,
-                    models: gen?.models
+                    models: models
                 )
             }
             let txt = await text.info()
             return AICapabilities(
-                available: txt.available || img.available || (gen?.available ?? false),
+                available: txt.available || img.available || (gen?.available ?? false) || (comfy != nil),
                 backend: txt.backend,
                 model: txt.model,
                 streaming: txt.streaming,
                 structuredOutput: txt.structuredOutput,
                 vision: txt.vision,
-                imageGeneration: gen?.imageGeneration ?? false,
+                imageGeneration: hasImageGen,
                 imageEditing: img.imageEditing,
                 audioInput: txt.audioInput,
                 audioGeneration: txt.audioGeneration,
                 voiceCloning: txt.voiceCloning,
-                // The switcher's model catalog (LCM / SD-Turbo), so the page can
-                // build a picker; nil when this build has no image generator.
-                models: gen?.models
+                models: models
             )
         }
 
@@ -85,6 +118,10 @@
         }
 
         func generateImage(_ request: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
+            // A `comfy:<ckpt>` model id → the remote ComfyUI arm (text→image).
+            if isComfy(request.model), let comfy {
+                return try await comfy.generateImage(request)
+            }
             // A source `image` means an edit (inpaint) → LaMa; a bare prompt
             // means text→image → the SD generator (if this build has one).
             if request.image == nil, let imageGen {
@@ -96,6 +133,9 @@
         nonisolated func generateImageStream(_ request: AIGenerateImageRequest)
             -> AsyncThrowingStream<AIImageEvent, any Error>
         {
+            if request.model?.hasPrefix(ComfyUIProvider.modelIDPrefix) == true, let comfy {
+                return comfy.generateImageStream(request)
+            }
             if request.image == nil, let imageGen {
                 return imageGen.generateImageStream(request) // SD reports per-step progress
             }
@@ -108,6 +148,12 @@
             switch request.model {
             case "inpaint", "lama":
                 return image.ensureModel(request)
+            case let .some(id) where id.hasPrefix(ComfyUIProvider.modelIDPrefix):
+                // A remote ComfyUI model — nothing to download (ready).
+                guard let comfy else {
+                    return AsyncThrowingStream { $0.finish(throwing: AIError.unsupportedPlatform("no ComfyUI arm")) }
+                }
+                return comfy.ensureModel(request)
             case let .some(id) where !id.isEmpty:
                 // Any other non-empty id is an image-generation model
                 // ("lcm-dreamshaper" / "sd-turbo") — hand it to the switcher,
@@ -125,6 +171,24 @@
                 }
                 return text.ensureModel(request)
             }
+        }
+    }
+
+    /// Run `operation`, throwing `CancellationError` if it takes longer than
+    /// `seconds` — so a slow/unreachable remote probe (ComfyUI discovery) can't
+    /// stall `info()`. The loser task is cancelled.
+    private func withTimeout<T: Sendable>(
+        seconds: Double,
+        _ operation: @escaping @Sendable () async throws -> T
+    ) async throws -> T {
+        try await withThrowingTaskGroup(of: T.self) { group in
+            group.addTask { try await operation() }
+            group.addTask {
+                try await Task.sleep(for: .seconds(seconds))
+                throw CancellationError()
+            }
+            defer { group.cancelAll() }
+            return try await group.next()!
         }
     }
 #endif

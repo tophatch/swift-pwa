@@ -407,6 +407,32 @@ read grant scoped to the launching activity, so no extra permission step is
 needed. Both cold launch (the file starts the app) and warm delivery (the app
 is already running) are handled; device-verified on a Galaxy Tab S10+.
 
+### Cleartext HTTP to LAN endpoints (`android.network.cleartext_domains`)
+
+Android blocks plain-`http://` (cleartext) traffic by default
+(`usesCleartextTraffic="false"`), enforced by the OS's Network Security Config
+regardless of which HTTP client makes the call. So an app can't reach a
+local-network appliance such as a ComfyUI instance on
+`http://192.168.x.x:8188` — or any plain-http dev server — until you opt the
+specific host back in. HTTPS endpoints are unaffected and need nothing here.
+
+```json
+"android": {
+  "network": { "cleartext_domains": ["nas.local", "192.168.1.50", "*.local"] }
+}
+```
+
+The bundler generates `res/xml/network_security_config.xml` whose global
+`base-config` keeps cleartext **off** and a scoped `domain-config` permits it
+**only** for the listed hosts, and references it from the manifest. This is the
+least-broad fix and the shape least likely to draw Play Store scrutiny — a
+blanket `usesCleartextTraffic="true"` is deliberately not offered. Entries are
+network-security-config *domains*: a concrete hostname or an mDNS-style
+`"*.local"` suffix (→ `local` with `includeSubdomains`); bare CIDR ranges aren't
+expressible, so list the concrete host(s). Omitting the key leaves the manifest
+unchanged. This governs both the `net.*` plugin and any remote `AIBackend`
+talking to a plain-http endpoint. See [net-plugin.md](net-plugin.md).
+
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important

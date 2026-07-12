@@ -133,6 +133,42 @@ struct AndroidBundlerUnitTests {
         #expect(withTypes.components(separatedBy: "android:mimeType=\"image/png\"").count - 1 == 2)
     }
 
+    @Test("cleartext_domains: scoped network_security_config + manifest reference only when set")
+    func cleartextNetworkConfig() throws {
+        // Absent → no config, manifest has no networkSecurityConfig attribute
+        // and cleartext stays off.
+        #expect(AndroidTemplates.networkSecurityConfigXml(domains: []) == nil)
+        let plain = AndroidTemplates.androidManifestXml(packageId: "com.example.hi", label: "Hi", hasIcon: false)
+        #expect(!plain.contains("networkSecurityConfig"))
+        #expect(plain.contains("android:usesCleartextTraffic=\"false\""))
+
+        // Set → base-config keeps cleartext OFF, a scoped domain-config turns it
+        // ON only for the listed hosts; "*.local" becomes an includeSubdomains
+        // domain, a literal host does not; dups collapse.
+        let xml = try #require(AndroidTemplates.networkSecurityConfigXml(
+            domains: ["*.local", "192.168.1.50", "192.168.1.50"]
+        ))
+        #expect(xml.contains("<base-config cleartextTrafficPermitted=\"false\"/>"))
+        #expect(xml.contains("<domain-config cleartextTrafficPermitted=\"true\">"))
+        #expect(xml.contains("<domain includeSubdomains=\"true\">local</domain>"))
+        #expect(xml.contains("<domain includeSubdomains=\"false\">192.168.1.50</domain>"))
+        // 192.168.1.50 de-duped to a single entry.
+        #expect(xml.components(separatedBy: ">192.168.1.50<").count - 1 == 1)
+
+        // Manifest references it when staged.
+        let staged = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.hi", label: "Hi", hasIcon: false, networkConfigStaged: true
+        )
+        #expect(staged.contains("android:networkSecurityConfig=\"@xml/network_security_config\""))
+    }
+
+    @Test("net.request is wired into the Android RPC dispatch table")
+    func netRequestDispatch() {
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(kt.contains("\"net.request\" -> netRequest(json, done)"))
+        #expect(kt.contains("private fun netRequest("))
+    }
+
     @Test("swiftVersion(fromSDKBundleID:) parses the SDK's Swift major.minor")
     func androidSDKVersionParse() {
         // The cross-compile wraps the inner build in `swiftly run +<ver>` using

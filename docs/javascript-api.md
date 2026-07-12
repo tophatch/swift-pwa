@@ -657,6 +657,41 @@ Windows); on iOS / Android the sandbox forbids spawning and `process.stream`
 fails with `E_UNIMPLEMENTED`. Full reference and security notes:
 [docs/process-plugin.md](process-plugin.md).
 
+### `net.*` — native HTTP (all platforms)
+
+A native, **CORS-free** HTTP client — the counterpart to `fetch`, but on the
+Swift side, so it isn't bound by the WebView's same-origin/CORS policy, can set
+headers a page can't (`Authorization`, custom `User-Agent`), and reaches LAN
+appliances and non-CORS APIs. Register it Swift-side with the platform client:
+`ctx.use(NetPlugin(URLSessionNetworkClient()))` (desktop/Apple) or
+`ctx.use(NetPlugin(AndroidNetworkClient()))` (Android).
+
+```js
+// Unary request. Body rides as base64 both ways. A non-2xx is a `status`, not
+// an error — only a transport failure rejects (E_NET).
+const res = await __SWIFT_PWA__.invoke('net.request', {
+    method: 'POST',                       // default 'GET'
+    url: 'https://api.example.com/v1/thing',
+    headers: { Authorization: 'Bearer …' },
+    bodyBase64: btoa(JSON.stringify({ hello: 'world' })),
+    timeoutMs: 30000,                     // default 60000
+});
+if (res.status === 200) console.log(atob(res.bodyBase64));
+
+// Stream a download to a native path (big payloads skip the base64 bridge).
+const off = __SWIFT_PWA__.subscribe('net.download',
+    { url: 'https://example.com/big.bin', destPath: '/path/big.bin', sha256: 'abcd…' },
+    (frame) => {
+        if (frame.type === 'progress') updateBar(frame.bytesDownloaded, frame.totalBytes);
+        else if (frame.type === 'done') console.log('wrote', frame.path);
+    });
+```
+
+**Opt-in** (arbitrary outbound requests from native are powerful). On **Android**,
+plain `http://` to a LAN host also needs the host allow-listed via
+`android.network.cleartext_domains` in `pwa.json` (HTTPS needs nothing). Full
+reference: [docs/net-plugin.md](net-plugin.md).
+
 ## Custom commands
 
 The Swift side can register arbitrary commands; JS calls them through

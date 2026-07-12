@@ -151,6 +151,14 @@
         // `model` id to that Stable-Diffusion backend. Later runs are a cache hit.
         function ensureModel(id) {
             if (ready.has(id)) return Promise.resolve();
+            // A "ready" model (a remote/cloud or LAN backend) has nothing to
+            // download — skip the prepare step entirely. Only "downloadable"
+            // models (the on-device weights) run the fetch below.
+            const model = modelByID(id);
+            if (model && model.availability && model.availability.kind === "ready") {
+                ready.add(id);
+                return Promise.resolve();
+            }
             return new Promise((resolve, reject) => {
                 showProgress("Preparing model…", "Downloading the image model (first run only)…");
                 const unsub = bridge.subscribe("ai.ensureModel", { model: id }, (e) => {

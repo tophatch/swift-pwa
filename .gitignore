@@ -48,3 +48,6 @@ Vendor/onnxruntime-desktop-gpu/
 # Scripts/vendor-lama.sh; adopters get the checksummed lama-vendor release
 # asset, fetched at runtime by LaMaBackend's ModelDownloader).
 Vendor/lama/
+
+# Local secrets (API keys for live tests) — never commit
+.env

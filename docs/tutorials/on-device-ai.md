@@ -2,7 +2,7 @@
 
 **Who this is for:** you're wrapping a web app with [swift-pwa](https://github.com/tophatch/swift-pwa) and you want it to *think* — generate text, answer questions, produce structured JSON, or make images — **on the user's device**, with no server, no API key, and no per-token bill. This is the thing that's a DIY sidecar in Electron/Tauri and a first-class, cross-platform feature here.
 
-Your page talks to one small JS API — `ai.*` — and *where* the work runs (a model the OS ships, a small model we bundle, a model you bring, or your own cloud as a fallback) is a Swift-side decision your web code never has to encode. Swap the engine underneath; the page doesn't change.
+Your page talks to one small JS API — `ai.*` — and *where* the work runs (a model the OS ships, a small model we bundle, a model you bring, or a **remote** generator — a cloud API or a box on your LAN, including [providers we ship](#add-a-remote-generator--cloud-imagen-or-local-network-comfyui)) is a Swift-side decision your web code never has to encode. Swap the engine underneath — or let the user pick from a dropdown of several — and the page doesn't change.
 
 This guide has four parts, easiest first:
 
@@ -223,6 +223,61 @@ The `spec` (a `StableDiffusionModelSpec`) describes the graph contract — tenso
 ### Serving more than one purpose from one `ai.*`
 
 `AIPlugin` takes **one** backend — but "one" can compose several. If you want text *and* image editing *and* text→image all on the same `ai.*` surface, write a tiny router that forwards each call to the right engine. The [`CompositeAIBackend` in `CritterFacts`](../../Examples/CritterFacts/Sources/CritterFacts/CompositeAIBackend.swift) is a worked example: it sends `ai.generate*` to a text backend, and routes `ai.generateImage` by whether the request carries a source `image` (present → inpaint/LaMa, absent → text→image/SD). That "the adopter composes purposes" pattern is exactly what the contract is designed for.
+
+### Add a remote generator — cloud Imagen or local-network ComfyUI
+
+Not everything has to run on-device. The same `ai.generateImage` can run **remotely** — a cloud API or a box on your LAN — and because a remote backend is *just another `AIBackend`*, it drops into a switcher right next to your on-device models: one dropdown, local + remote, and the user picks based on need (offline/free vs. quality/paid). We ship this tier in **`SwiftPWARemoteAI`** (add it as a product dependency) with two providers and a small protocol, so a third API is a conformance, not a fork.
+
+You inject the platform HTTP transport — the same `NetworkClient` the [`net.*` plugin](../net-plugin.md) uses. On Android it must route through a Kotlin RPC (swift's `URLSession` has no CA store there); everywhere else it's `URLSession`:
+
+```swift
+import SwiftPWARemoteAI
+#if os(Android)
+    import SwiftPWAAndroid
+#endif
+
+func makeNetClient() -> any NetworkClient {
+    #if os(Android)
+        AndroidNetworkClient()
+    #else
+        URLSessionNetworkClient()
+    #endif
+}
+
+// Google Imagen (v3/v4). The API key is read from a closure per request and
+// NEVER stored by swift-pwa — you own storage / rotation / the settings UI.
+let imagen = RemoteImageBackend(
+    provider: ImagenProvider(apiKey: { await myKeyStore.googleAIKey() }),
+    client: makeNetClient()
+)
+
+// A local-network ComfyUI instance (a *source of many models* — see below).
+let comfy = RemoteImageBackend(
+    provider: ComfyUIProvider(baseURL: URL(string: "http://nas.local:8188")!),
+    client: makeNetClient()
+)
+```
+
+Compose the remote arm into the switcher beside your on-device entries (Part 2b). `request.model` routes the call; `ai.info().models` advertises everyone — each with `capabilities` / `availability` / `offlineCapable` / `license`, so the page builds its picker straight from that list:
+
+```swift
+let switcher = MultiModelImageBackend([
+    // …your on-device entries (LCM, SD-Turbo)…
+    .init(imagen.models.first!, imagen),   // cloud, availability: .ready
+], default: "imagen-4.0-generate-001")
+ctx.use(AIPlugin(switcher))
+```
+
+A remote model reports `availability: ready`, so the page **skips the download step** the on-device weights need — nothing to fetch.
+
+**A ComfyUI is a source of *many* models, so discover them, don't hard-code one.** `RemoteImageBackend.discoverModels()` queries the instance and returns one entry per installed checkpoint (id `comfy:<checkpoint>`); passing that id as `request.model` runs that exact model. `CritterFacts`' `CompositeAIBackend` does this — discovering the catalog lazily at `info()` time (bounded + cached, so a slow or unreachable box never stalls the dropdown) and merging it in, so local and remote checkpoints appear together. That info()-time discovery is deliberate: a platform entry point can be synchronous (Android's is), so you can't block on an async network probe at startup — but `info()` is async and runs once the bridge is up.
+
+**Two things to get right:**
+
+- **Android + a plain-`http://` LAN box:** Android blocks cleartext traffic by default, so allow-list the host in `pwa.json` — `"android": { "network": { "cleartext_domains": ["*.local"] } }`. HTTPS (Imagen) and every desktop platform need nothing; on iOS add an ATS exception via the `ios.info_plist` passthrough.
+- **Keys and endpoints stay yours:** swift-pwa never persists the `apiKey` closure's value or a user-entered URL — build your own storage/UI for those.
+
+Full contract, both providers, and how to add a new API: **[docs/remote-ai.md](../remote-ai.md)**.
 
 ---
 

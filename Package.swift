@@ -132,6 +132,7 @@ let package = Package(
         // and inject `FoundationModelsBackend()` into `AIPlugin`; everyone
         // else links neither it nor the FoundationModels framework.
         .library(name: "SwiftPWAFoundationModels", targets: ["SwiftPWAFoundationModels"]),
+        .library(name: "SwiftPWARemoteAI", targets: ["SwiftPWARemoteAI"]),
         // Reusable downloadable-model store powering `ai.ensureModel` —
         // resumable, checksum-pinned model downloads cached on disk. Used by
         // backends that ship a downloadable model (llama.cpp / the Gemma
@@ -219,6 +220,19 @@ let package = Package(
         // depend on it.
         .target(
             name: "SwiftPWAFoundationModels",
+            dependencies: ["SwiftPWACore"],
+            swiftSettings: swiftSettings
+        ),
+
+        // MARK: - Remote AI backends (cloud / local-network image generators)
+
+        // A generalized *remote* image `AIBackend` (Google Imagen, local-network
+        // ComfyUI, and any API an adopter conforms) built on the `net.*`
+        // plugin's `NetworkClient`. Core-only + Foundation — usable on all five
+        // platforms; the adopter injects the platform `NetworkClient` (so no
+        // backend-target dependency here). The umbrella does NOT depend on it.
+        .target(
+            name: "SwiftPWARemoteAI",
             dependencies: ["SwiftPWACore"],
             swiftSettings: swiftSettings
         ),
@@ -469,6 +483,14 @@ let package = Package(
             name: "SwiftPWAFoundationModelsTests",
             dependencies: [
                 "SwiftPWAFoundationModels",
+                "SwiftPWACore"
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWARemoteAITests",
+            dependencies: [
+                "SwiftPWARemoteAI",
                 "SwiftPWACore"
             ],
             swiftSettings: swiftSettings

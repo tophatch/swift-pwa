@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **`ai.generateImage` with no `seed` is now actually random.** The contract has always documented `seed: nil` as "random" (the used seed is echoed back per image), but `StableDiffusionBackend` fell back to a fixed `0` — so the same prompt regenerated the *identical* image every run, and `count > 1` produced near-identical images (seed `0, 1, 2, …`). It now draws a fresh random base seed per call when none is given (bounded to the 32-bit range; `base + index` keeps a multi-image batch distinct), while an explicit `seed` stays fully reproducible. **Device-verified on a Galaxy Tab S10+**: two prompt-only generations returned distinct, non-zero seeds and different images.
+
 ## [0.8.7] - 2026-07-11
 
 ### Added

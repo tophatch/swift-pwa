@@ -411,7 +411,9 @@ jobs:
         # `ubuntu-24.04` images don't preinstall libcurl4-openssl-dev,
         # and swiftly's post-install dependency check exits non-zero
         # without it — even though the toolchain itself extracts fine.
-        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
+        # libsecret-1-dev: building the host CLI compiles SwiftPWACore, which
+        # pulls the CSecretShim/CLibSecret libsecret dep on Linux.
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev libsecret-1-dev
       - name: Install Swiftly
         # Swiftly is the canonical way to install pinned Swift
         # toolchains on Linux — `swift-actions/setup-swift` doesn't

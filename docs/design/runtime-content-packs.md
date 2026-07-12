@@ -406,10 +406,10 @@ The everyday authoring case (a small pack) is built **in the browser** as an in-
 - WebKitGTK reads the response stream to **EOF** (`stream_length` is only a hint) → `finish_file` hybrid: ranges-to-EOF use the lazy seekable `GFileInputStream` (GB-safe, cancellable); **bounded** sub-ranges must read exactly their bytes (capped memory buffer) or the 206 body won't match `Content-Range`.
 - glib `gint64` imports as Swift `Int` on Linux x86_64 → wrap call args in `gint64(...)`.
 
-**Linux GTK build/verify box** (see also the saved project memory): host `bminisaix1p.local` (passwordless ssh; headless; no sudo; no appindicator → **build the GTK4 backend**). Repo clone at `~/swift-pwa`.
+**Linux GTK build/verify box** (see also the saved project memory): a headless SSH host (passwordless ssh; no sudo; no appindicator → **build the GTK4 backend**). Repo clone at `~/swift-pwa`.
 ```bash
 # Local → box sync (no git noise):
-rsync -az --exclude=.build --exclude=.git ~/Code/swift-pwa/ bminisaix1p.local:~/swift-pwa/
+rsync -az --exclude=.build --exclude=.git ~/Code/swift-pwa/ linux-gtk-box:~/swift-pwa/
 # On box (GTK4 path; appindicator absent):
 export PATH="$HOME/.local/share/swiftly/bin:$PATH"; export SWIFT_PWA_GTK4=1
 cd ~/swift-pwa && swift build

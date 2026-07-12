@@ -172,7 +172,12 @@ let package = Package(
             resources: [
                 .copy("Resources/bridge.js")
             ],
-            swiftSettings: swiftSettings
+            swiftSettings: swiftSettings,
+            linkerSettings: [
+                // DPAPI (CryptProtectData/CryptUnprotectData) for
+                // WindowsSecretStore — the secrets.* plugin's Windows backing.
+                .linkedLibrary("Crypt32", .when(platforms: [.windows]))
+            ]
         ),
 
         .target(

@@ -2462,11 +2462,11 @@ enum AndroidTemplates {
         private fun secretPrefs(): android.content.SharedPreferences {
             synchronized(secretPrefsLock) {
                 secretPrefsInstance?.let { return it }
-                val masterKey = MasterKey.Builder(applicationContext)
+                val masterKey = MasterKey.Builder(activity.applicationContext)
                     .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
                     .build()
                 val prefs = EncryptedSharedPreferences.create(
-                    applicationContext,
+                    activity.applicationContext,
                     "swift_pwa_secrets",
                     masterKey,
                     EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,

@@ -25,9 +25,11 @@ private func makeSecretStore() -> any SecretStore {
         AndroidSecretStore()
     #elseif canImport(Security)
         KeychainSecretStore()
+    #elseif os(Windows)
+        WindowsSecretStore()
+    #elseif os(Linux)
+        LinuxSecretStore() // Secret Service (libsecret); needs a running keyring
     #else
-        // Windows / Linux desktop stores are a planned follow-up; until then the
-        // key can't be stored securely there (secrets.* returns E_SECRETS).
         NoneSecretStore()
     #endif
 }

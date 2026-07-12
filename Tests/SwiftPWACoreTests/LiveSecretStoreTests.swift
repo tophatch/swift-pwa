@@ -19,7 +19,7 @@ struct LiveSecretStoreTests {
             KeychainSecretStore(service: "com.swift-pwa.tests.secrets-live")
         #elseif os(Windows)
             WindowsSecretStore(service: "swift-pwa-tests-secrets-live")
-        #elseif canImport(CLibSecret)
+        #elseif os(Linux)
             LinuxSecretStore(service: "com.swift-pwa.tests.secrets-live")
         #else
             nil

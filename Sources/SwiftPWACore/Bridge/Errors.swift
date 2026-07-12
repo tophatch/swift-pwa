@@ -21,4 +21,9 @@ public struct BridgeError: Error, Sendable, Codable, Equatable {
     /// A `net.*` request failed — transport error, non-2xx response the caller
     /// asked to treat as fatal, or a checksum mismatch on `net.download`.
     public static let net = "E_NET"
+
+    /// Secure-storage failure (`secrets.*`): the platform store is unavailable,
+    /// access was denied, or a read/write failed. A *missing* key is not an
+    /// error — `secrets.get` returns `{ value: null }`.
+    public static let secrets = "E_SECRETS"
 }

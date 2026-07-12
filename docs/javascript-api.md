@@ -692,6 +692,34 @@ plain `http://` to a LAN host also needs the host allow-listed via
 `android.network.cleartext_domains` in `pwa.json` (HTTPS needs nothing). Full
 reference: [docs/net-plugin.md](net-plugin.md).
 
+### `secrets.*` — secure secret storage
+
+Store small secrets — an API token, a sync credential, a license key — in the
+**operating system's secure store** (Keychain on Apple, Keystore-backed
+`EncryptedSharedPreferences` on Android, DPAPI on Windows, the Secret Service on
+Linux) instead of `localStorage` or a plaintext file. Register it Swift-side
+with the platform store:
+`ctx.use(SecretsPlugin(KeychainSecretStore()))` (Apple),
+`ctx.use(SecretsPlugin(AndroidSecretStore()))` (Android).
+
+```js
+// Store / read / delete. Values are strings (base64 for binary).
+await __SWIFT_PWA__.invoke('secrets.set',    { key: 'google-ai', value: 'sk-…' });
+
+const { value } = await __SWIFT_PWA__.invoke('secrets.get', { key: 'google-ai' });
+// value: string | null — a missing key is `null`, NOT an error.
+
+await __SWIFT_PWA__.invoke('secrets.delete', { key: 'google-ai' }); // idempotent
+```
+
+A missing key returns `{ value: null }`; a store failure (unavailable, access
+denied) rejects with `E_SECRETS`. **Opt-in** — reaching the OS keychain is a
+capability an app enables explicitly. The framework never persists a secret for
+you; this is a thin, audited bridge to the OS store. Common pairing: a remote
+`AIBackend`'s API-key closure reads straight through it —
+`ImagenProvider(apiKey: { try? await store.get("google-ai") })`. Full reference
+and the per-platform store table: [docs/secrets.md](secrets.md).
+
 ## Custom commands
 
 The Swift side can register arbitrary commands; JS calls them through

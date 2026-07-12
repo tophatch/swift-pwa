@@ -205,6 +205,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `ProcessPlugin` (subprocess)  | Yes                     | —¹²                          | Yes                        | Yes                     | Yes                      | —¹²                      |
 | `NetPlugin` (`net.*` HTTP)    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
+| `SecretsPlugin` (`secrets.*`) | Keychain                | Keychain                     | Planned¹³                  | Planned¹³               | Planned¹³                | Keystore                 |
 | `TrayPlugin`                  | Yes                     | —                            | Yes                        | —                       | Yes                      | —                        |
 | `NotificationsPlugin`         | Yes⁵                    | Yes⁵                         | Yes                        | Yes                     | Yes                      | Yes                      |
 | `BiometricAuthPlugin`         | Touch / Face ID         | Touch / Face / Optic ID      | —                          | —                       | Windows Hello            | Fingerprint / Face¹¹     |
@@ -225,6 +226,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 10. Android `dialog.openFile` / `saveFile` / `openDirectory` use the Storage Access Framework and return `content://` URIs rather than filesystem paths; `Fs` routes those URIs through `ContentResolver` transparently. Detail: [docs/android-setup.md](docs/android-setup.md) §6.1.
 11. Android's `BiometricManager` doesn't distinguish fingerprint / face / iris — `BiometricKind` is `.unknown` when available. Gate JS on `available`, not `kind`.
 12. `ProcessPlugin` needs to spawn OS processes; the iOS / Android sandboxes forbid it, so `process.*` reports `E_UNIMPLEMENTED` there. Desktop only.
+13. `SecretsPlugin` ships the Apple (Keychain) and Android (Keystore-backed `EncryptedSharedPreferences`) stores; the Windows (DPAPI) and Linux (Secret Service / libsecret) stores are a planned follow-up. Registered without a store — or on a platform whose store isn't wired — the command set is present but every call returns `E_SECRETS` (`NoneSecretStore`). Detail: [docs/secrets.md](docs/secrets.md).
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 

@@ -169,6 +169,31 @@ struct AndroidBundlerUnitTests {
         #expect(kt.contains("private fun netRequest("))
     }
 
+    @Test("secrets.* is wired into the RPC dispatch + EncryptedSharedPreferences store")
+    func secretsDispatch() {
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(kt.contains("\"secrets.get\" -> secretsGet(json, done)"))
+        #expect(kt.contains("\"secrets.set\" -> secretsSet(json, done)"))
+        #expect(kt.contains("\"secrets.delete\" -> secretsDelete(json, done)"))
+        #expect(kt.contains("EncryptedSharedPreferences.create("))
+        #expect(kt.contains("import androidx.security.crypto.MasterKey"))
+    }
+
+    @Test("security-crypto is on the Gradle classpath for the secrets store")
+    func secretsGradleDep() {
+        let gradle = AndroidTemplates.appBuildGradleKts(
+            packageId: "com.example.hi",
+            versionCode: 1,
+            versionName: "1.0.0",
+            minSdk: 28,
+            targetSdk: 34,
+            abis: ["arm64-v8a", "x86_64"],
+            soBaseName: "Hi",
+            signing: nil
+        )
+        #expect(gradle.contains("androidx.security:security-crypto"))
+    }
+
     @Test("swiftVersion(fromSDKBundleID:) parses the SDK's Swift major.minor")
     func androidSDKVersionParse() {
         // The cross-compile wraps the inner build in `swiftly run +<ver>` using

@@ -70,8 +70,8 @@
             return directory.appendingPathComponent(hex).appendingPathExtension("bin")
         }
 
-        // DPAPI wrappers. `CRYPTPROTECT_UI_FORBIDDEN` (0x1) keeps it silent —
-        // never a UI prompt (this runs on a background bridge task).
+        /// DPAPI wrappers. `CRYPTPROTECT_UI_FORBIDDEN` (0x1) keeps it silent —
+        /// never a UI prompt (this runs on a background bridge task).
         private static let uiForbidden: DWORD = 0x1
 
         private static func protect(_ plain: [UInt8]) -> [UInt8]? {

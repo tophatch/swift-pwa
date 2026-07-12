@@ -19,9 +19,10 @@ private func makeNetworkClient() -> any NetworkClient {
 /// The ComfyUI instance the demo's "remote" switcher arm points at. **Adopters:
 /// change this to your own instance** (or make it user-configurable). A LAN
 /// appliance on plain `http://` also needs the host allow-listed via
-/// `android.network.cleartext_domains` in `pwa.json` (already set for this host).
+/// `android.network.cleartext_domains` in `pwa.json` (already set for `*.local`).
+/// The checkpoint isn't hard-coded — the provider auto-selects one the instance
+/// actually has (`autoSelectCheckpoint`), so the demo works against any box.
 private let demoComfyURL = URL(string: "http://comfyui.local:8188")!
-private let demoComfyCheckpoint = "sd_xl_base_1.0.safetensors"
 
 // The llama backend is an env-gated product (see Package.swift). When the app
 // is built with `ai.local_llama` (so SWIFT_PWA_LLAMA is set), the module is in
@@ -233,8 +234,8 @@ func configure(_ ctx: any AppContext) throws {
             let comfy = RemoteImageBackend(
                 provider: ComfyUIProvider(
                     baseURL: demoComfyURL,
-                    workflow: .txt2imgSDXL(checkpoint: demoComfyCheckpoint),
-                    models: [comfyInfo]
+                    models: [comfyInfo],
+                    autoSelectCheckpoint: true
                 ),
                 client: makeNetworkClient()
             )

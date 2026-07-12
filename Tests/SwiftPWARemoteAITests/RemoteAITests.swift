@@ -142,6 +142,16 @@ struct ImagenProviderTests {
         #expect(caps.imageGeneration)
         #expect(caps.models?.contains { $0.id == "imagen-4.0-generate-001" } == true)
     }
+
+    @Test("ensureModel completes immediately for a ready remote model (no download)")
+    func ensureModelNoOp() async throws {
+        let backend = backend(ScriptedNetworkClient { _ in NetResponse(status: 200) })
+        var events: [AIDownloadEvent] = []
+        for try await event in backend.ensureModel(AIEnsureModelRequest(model: "imagen-4.0-generate-001")) {
+            events.append(event)
+        }
+        #expect(events.contains { $0.type == "done" }) // done, not a thrown/unsupported error
+    }
 }
 
 // MARK: - ComfyUI
@@ -201,6 +211,44 @@ struct ComfyUIProviderTests {
         #expect(result.backend == "comfyui")
         #expect(Data(base64Encoded: result.images.first?.dataBase64 ?? "") == imageBytes)
         #expect(result.images.first?.seed == 7)
+    }
+
+    @Test("autoSelectCheckpoint discovers the instance's checkpoint and patches the graph")
+    func autoSelectCheckpoint() async throws {
+        let client = ScriptedNetworkClient { request in
+            let path = request.url.path
+            if path.contains("/object_info") {
+                return NetResponse(status: 200, headers: [:], body: json([
+                    "CheckpointLoaderSimple": ["input": ["required": [
+                        "ckpt_name": [["modelA.safetensors", "modelB.safetensors"], [String: Any]()]
+                    ]]]
+                ]))
+            } else if path.hasSuffix("/prompt") {
+                return NetResponse(status: 200, headers: [:], body: json(["prompt_id": "p1"]))
+            } else if path.contains("/history") {
+                return NetResponse(status: 200, headers: [:], body: json([
+                    "p1": ["outputs": ["9": ["images": [["filename": "o.png", "subfolder": "", "type": "output"]]]]]
+                ]))
+            } else if path.hasSuffix("/view") {
+                return NetResponse(status: 200, headers: ["Content-Type": "image/png"], body: Data("IMG".utf8))
+            }
+            return NetResponse(status: 404)
+        }
+        let backend = RemoteImageBackend(
+            provider: ComfyUIProvider(
+                baseURL: base, autoSelectCheckpoint: true,
+                pollInterval: .milliseconds(5), timeout: .milliseconds(300)
+            ),
+            client: client
+        )
+        _ = try await backend.generateImage(AIGenerateImageRequest(prompt: "x"))
+
+        let promptReq = try #require(client.requests.first { $0.url.path.hasSuffix("/prompt") })
+        let promptBody = try #require(promptReq.body)
+        let body = try #require(try JSONSerialization.jsonObject(with: promptBody) as? [String: Any])
+        let graph = try #require(body["prompt"] as? [String: Any])
+        let loader = try #require((graph["4"] as? [String: Any])?["inputs"] as? [String: Any])
+        #expect(loader["ckpt_name"] as? String == "modelA.safetensors") // first discovered
     }
 
     @Test("a /prompt validation error fails the generate")

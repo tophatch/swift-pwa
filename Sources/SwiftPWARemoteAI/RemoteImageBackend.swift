@@ -122,4 +122,16 @@ public final class RemoteImageBackend: AIBackend, @unchecked Sendable {
     ) -> AsyncThrowingStream<AIImageEvent, any Error> {
         provider.generateImageStream(request, client: client)
     }
+
+    /// A remote model has nothing to download — it's "ready" as soon as its
+    /// service is reachable. Report `done` immediately so a UI that runs an
+    /// `ai.ensureModel` "prepare" step before generating (as the switcher demo
+    /// does for the downloadable on-device models) completes at once instead of
+    /// hanging on the inherited default (which throws `.unsupportedPlatform`).
+    public func ensureModel(_: AIEnsureModelRequest) -> AsyncThrowingStream<AIDownloadEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            continuation.yield(.done)
+            continuation.finish()
+        }
+    }
 }

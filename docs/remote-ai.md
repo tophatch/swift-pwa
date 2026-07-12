@@ -72,8 +72,13 @@ let comfy = RemoteImageBackend(
 - Choreography: `POST /prompt` (the patched graph + a `client_id`) → poll
   `GET /history/{prompt_id}` until the outputs appear → `GET /view` per image.
   (v1 polls for completion; live per-step `/ws` progress is a follow-up.)
-- **The one field that must match your instance is the checkpoint filename**
-  (as it appears in ComfyUI's checkpoint list). For any non-default workflow,
+- **Don't want to hard-code a checkpoint?** Pass `autoSelectCheckpoint: true` and
+  the provider queries the instance (`/object_info`) and runs the first checkpoint
+  it has — so the demo/turnkey case works against *any* box with no baked-in model
+  name. (`ComfyUIProvider.discoverCheckpoints(baseURL:client:)` is exposed if you
+  want to build a picker of the instance's actual models.) Otherwise, the checkpoint
+  filename in the workflow must match the instance's checkpoint list.
+- For any non-default workflow,
   build your own `ComfyWorkflowTemplate(graphJSON:patches:)` from a "Save (API
   Format)" export and map the fields you want driven:
 

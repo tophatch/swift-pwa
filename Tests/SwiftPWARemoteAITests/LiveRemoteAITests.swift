@@ -23,10 +23,10 @@ struct LiveRemoteAITests {
     func comfyLive() async throws {
         let comfyURL = try #require(Self.comfyURL)
         let base = try #require(URL(string: comfyURL))
-        let checkpoint = ProcessInfo.processInfo.environment["SWIFT_PWA_LIVE_COMFY_CKPT"]
-            ?? "sd_xl_base_1.0.safetensors"
+        // Auto-select whatever checkpoint the instance has — exercises the
+        // /object_info discovery path, no hard-coded model name needed.
         let backend = RemoteImageBackend(
-            provider: ComfyUIProvider(baseURL: base, workflow: .txt2imgSDXL(checkpoint: checkpoint)),
+            provider: ComfyUIProvider(baseURL: base, autoSelectCheckpoint: true),
             client: URLSessionNetworkClient()
         )
         let result = try await backend.generateImage(AIGenerateImageRequest(

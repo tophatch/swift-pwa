@@ -42,11 +42,21 @@ public struct ComfyUIProvider: RemoteImageProvider {
     ///     single "ComfyUI (SDXL)" image-generation entry.
     ///   - clientID: the ComfyUI `client_id`; defaults to a fresh UUID.
     ///   - pollInterval / timeout: how often / how long to poll `/history`.
+    private let autoSelectCheckpoint: Bool
+
+    /// - Parameters:
+    ///   - autoSelectCheckpoint: when `true`, the provider queries the instance
+    ///     for its installed checkpoints (`/object_info`) and runs the first
+    ///     one — so the workflow needn't hard-code a `.safetensors` filename
+    ///     that must match the target server (the turnkey "just point me at a
+    ///     ComfyUI" case). When `false` (default), the workflow's own checkpoint
+    ///     is used. Patches the `.checkpoint` field of the workflow.
     public init(
         baseURL: URL,
         workflow: ComfyWorkflowTemplate = .txt2imgSDXL(),
         models: [AIModelInfo] = ComfyUIProvider.defaultModels,
         clientID: String = UUID().uuidString,
+        autoSelectCheckpoint: Bool = false,
         pollInterval: Duration = .milliseconds(600),
         timeout: Duration = .seconds(300)
     ) {
@@ -54,6 +64,7 @@ public struct ComfyUIProvider: RemoteImageProvider {
         self.workflow = workflow
         self.models = models
         self.clientID = clientID
+        self.autoSelectCheckpoint = autoSelectCheckpoint
         self.pollInterval = pollInterval
         self.timeout = timeout
     }
@@ -73,7 +84,8 @@ public struct ComfyUIProvider: RemoteImageProvider {
         client: any NetworkClient
     ) async throws -> [AIGeneratedImage] {
         let seed = request.seed ?? Int.random(in: 0 ... Int(UInt32.max))
-        let graph = try workflow.build(request: request, seed: seed)
+        let checkpoint = autoSelectCheckpoint ? try await firstCheckpoint(client: client) : nil
+        let graph = try workflow.build(request: request, seed: seed, checkpoint: checkpoint)
 
         // 1. Queue the prompt.
         let promptBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": clientID])
@@ -166,6 +178,37 @@ public struct ComfyUIProvider: RemoteImageProvider {
         }
         return refs.isEmpty ? nil : refs
     }
+
+    // MARK: - Checkpoint discovery
+
+    /// The checkpoints (`.safetensors` names) the instance has installed, from
+    /// `GET /object_info/CheckpointLoaderSimple`. Useful for building a picker
+    /// of the models a ComfyUI instance actually offers, rather than hard-coding
+    /// filenames. Returns them in the server's order.
+    public static func discoverCheckpoints(baseURL: URL, client: any NetworkClient) async throws -> [String] {
+        let url = baseURL.appendingPathComponent("object_info").appendingPathComponent("CheckpointLoaderSimple")
+        let response = try await client.send(NetRequest(url: url, timeout: 30))
+        guard response.isSuccess,
+              let json = try? JSONSerialization.jsonObject(with: response.body) as? [String: Any],
+              let node = json["CheckpointLoaderSimple"] as? [String: Any],
+              let input = node["input"] as? [String: Any],
+              let required = input["required"] as? [String: Any],
+              // `ckpt_name` is `[[<names>], {…}]` — the first element is the list.
+              let ckpt = required["ckpt_name"] as? [Any],
+              let names = ckpt.first as? [String]
+        else {
+            throw AIError.generationFailed("ComfyUI /object_info returned no checkpoint list")
+        }
+        return names
+    }
+
+    /// The first installed checkpoint, for `autoSelectCheckpoint`.
+    private func firstCheckpoint(client: any NetworkClient) async throws -> String {
+        guard let first = try await Self.discoverCheckpoints(baseURL: baseURL, client: client).first else {
+            throw AIError.generationFailed("ComfyUI has no checkpoints installed")
+        }
+        return first
+    }
 }
 
 // MARK: - Workflow template
@@ -200,17 +243,19 @@ public struct ComfyWorkflowTemplate: Sendable {
     }
 
     public enum Field: Sendable {
-        case prompt, negativePrompt, seed, steps, width, height, count, guidanceScale
+        case prompt, negativePrompt, seed, steps, width, height, count, guidanceScale, checkpoint
     }
 
-    /// Apply the patches to the graph for `request` + `seed`, returning the
-    /// mutated graph ready to POST under `{ "prompt": … }`.
-    func build(request: AIGenerateImageRequest, seed: Int) throws -> [String: Any] {
+    /// Apply the patches to the graph for `request` + `seed` (and an optional
+    /// resolved `checkpoint`, from `autoSelectCheckpoint`), returning the mutated
+    /// graph ready to POST under `{ "prompt": … }`.
+    func build(request: AIGenerateImageRequest, seed: Int, checkpoint: String? = nil) throws -> [String: Any] {
         guard var graph = try JSONSerialization.jsonObject(with: graphJSON) as? [String: Any] else {
             throw AIError.generationFailed("ComfyUI workflow template is not a JSON object")
         }
         for patch in patches {
-            guard let value = value(for: patch.field, request: request, seed: seed) else { continue }
+            guard let value = value(for: patch.field, request: request, seed: seed, checkpoint: checkpoint)
+            else { continue }
             guard var node = graph[patch.nodeID] as? [String: Any],
                   var inputs = node["inputs"] as? [String: Any]
             else { continue }
@@ -221,7 +266,7 @@ public struct ComfyWorkflowTemplate: Sendable {
         return graph
     }
 
-    private func value(for field: Field, request: AIGenerateImageRequest, seed: Int) -> Any? {
+    private func value(for field: Field, request: AIGenerateImageRequest, seed: Int, checkpoint: String?) -> Any? {
         switch field {
         case .prompt: request.prompt
         case .negativePrompt: request.negativePrompt
@@ -231,6 +276,7 @@ public struct ComfyWorkflowTemplate: Sendable {
         case .height: request.height
         case .count: request.count
         case .guidanceScale: request.guidanceScale
+        case .checkpoint: checkpoint // nil ⇒ patch skipped, template's baked checkpoint kept
         }
     }
 
@@ -263,7 +309,10 @@ public struct ComfyWorkflowTemplate: Sendable {
                 Patch(nodeID: "3", input: "cfg", field: .guidanceScale),
                 Patch(nodeID: "5", input: "width", field: .width),
                 Patch(nodeID: "5", input: "height", field: .height),
-                Patch(nodeID: "5", input: "batch_size", field: .count)
+                Patch(nodeID: "5", input: "batch_size", field: .count),
+                // Only applied when a checkpoint is resolved (autoSelectCheckpoint);
+                // otherwise the baked `ckpt_name` above is kept.
+                Patch(nodeID: "4", input: "ckpt_name", field: .checkpoint)
             ]
         )
     }

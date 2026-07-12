@@ -72,12 +72,16 @@ let comfy = RemoteImageBackend(
 - Choreography: `POST /prompt` (the patched graph + a `client_id`) → poll
   `GET /history/{prompt_id}` until the outputs appear → `GET /view` per image.
   (v1 polls for completion; live per-step `/ws` progress is a follow-up.)
-- **Don't want to hard-code a checkpoint?** Pass `autoSelectCheckpoint: true` and
-  the provider queries the instance (`/object_info`) and runs the first checkpoint
-  it has — so the demo/turnkey case works against *any* box with no baked-in model
-  name. (`ComfyUIProvider.discoverCheckpoints(baseURL:client:)` is exposed if you
-  want to build a picker of the instance's actual models.) Otherwise, the checkpoint
-  filename in the workflow must match the instance's checkpoint list.
+- **A ComfyUI is a *source of many models*, not one.** Rather than hard-code a
+  checkpoint, discover the instance's catalog and list each as its own picker
+  entry: `RemoteImageBackend.discoverModels()` (→ `discoverModels(client:)` on the
+  provider) returns one `AIModelInfo` per installed checkpoint with id
+  `comfy:<checkpoint>`. Pass such an id as `request.model` and the provider runs
+  that exact checkpoint. `Examples/CritterFacts` does this in its
+  `CompositeAIBackend` — discovered lazily at `info()` time (bounded + cached) so
+  local and remote models share one dropdown. (For a turnkey single entry,
+  `autoSelectCheckpoint: true` just runs the first installed checkpoint.)
+  Otherwise, the checkpoint baked into the workflow must match the instance.
 - For any non-default workflow,
   build your own `ComfyWorkflowTemplate(graphJSON:patches:)` from a "Save (API
   Format)" export and map the fields you want driven:

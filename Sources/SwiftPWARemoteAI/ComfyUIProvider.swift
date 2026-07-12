@@ -84,7 +84,7 @@ public struct ComfyUIProvider: RemoteImageProvider {
         client: any NetworkClient
     ) async throws -> [AIGeneratedImage] {
         let seed = request.seed ?? Int.random(in: 0 ... Int(UInt32.max))
-        let checkpoint = autoSelectCheckpoint ? try await firstCheckpoint(client: client) : nil
+        let checkpoint = try await resolveCheckpoint(request.model, client: client)
         let graph = try workflow.build(request: request, seed: seed, checkpoint: checkpoint)
 
         // 1. Queue the prompt.
@@ -200,6 +200,37 @@ public struct ComfyUIProvider: RemoteImageProvider {
             throw AIError.generationFailed("ComfyUI /object_info returned no checkpoint list")
         }
         return names
+    }
+
+    /// The model-id prefix that names a specific ComfyUI checkpoint:
+    /// `comfy:<checkpoint>.safetensors`. `discoverModels` mints these, and a
+    /// `request.model` carrying one selects that checkpoint.
+    public static let modelIDPrefix = "comfy:"
+
+    /// Dynamic catalog: one `AIModelInfo` per installed checkpoint (id
+    /// `comfy:<checkpoint>`), so a picker can list the models the instance
+    /// actually offers rather than a single opaque "ComfyUI" entry. A
+    /// `request.model` of that form routes to the named checkpoint.
+    public func discoverModels(client: any NetworkClient) async throws -> [AIModelInfo] {
+        try await Self.discoverCheckpoints(baseURL: baseURL, client: client).map { checkpoint in
+            AIModelInfo(
+                id: "\(Self.modelIDPrefix)\(checkpoint)",
+                label: "ComfyUI · \(checkpoint.replacingOccurrences(of: ".safetensors", with: ""))",
+                capabilities: [.imageGeneration],
+                availability: .ready,
+                offlineCapable: false
+            )
+        }
+    }
+
+    /// Resolve the checkpoint to run: a `comfy:<ckpt>` model id names it
+    /// explicitly; else `autoSelectCheckpoint` picks the first installed; else
+    /// `nil` keeps the workflow's baked checkpoint.
+    private func resolveCheckpoint(_ model: String?, client: any NetworkClient) async throws -> String? {
+        if let model, model.hasPrefix(Self.modelIDPrefix) {
+            return String(model.dropFirst(Self.modelIDPrefix.count))
+        }
+        return autoSelectCheckpoint ? try await firstCheckpoint(client: client) : nil
     }
 
     /// The first installed checkpoint, for `autoSelectCheckpoint`.

@@ -251,6 +251,40 @@ struct ComfyUIProviderTests {
         #expect(loader["ckpt_name"] as? String == "modelA.safetensors") // first discovered
     }
 
+    @Test("discoverModels lists one comfy:<ckpt> model per installed checkpoint")
+    func discoverModels() async throws {
+        let client = ScriptedNetworkClient { _ in
+            NetResponse(status: 200, headers: [:], body: json([
+                "CheckpointLoaderSimple": ["input": ["required": [
+                    "ckpt_name": [["modelA.safetensors", "modelB.safetensors"], [String: Any]()]
+                ]]]
+            ]))
+        }
+        let provider = ComfyUIProvider(baseURL: base)
+        let models = try await provider.discoverModels(client: client)
+        #expect(models.map(\.id) == ["comfy:modelA.safetensors", "comfy:modelB.safetensors"])
+        #expect(models.allSatisfy { $0.availability == .ready && !$0.offlineCapable })
+        #expect(models[0].capabilities.contains(.imageGeneration))
+    }
+
+    @Test("a comfy:<ckpt> request.model patches that exact checkpoint")
+    func checkpointRouting() async throws {
+        let client = ScriptedNetworkClient(choreography(imageBytes: Data("IMG".utf8)))
+        let backend = RemoteImageBackend(
+            provider: ComfyUIProvider(baseURL: base, pollInterval: .milliseconds(5), timeout: .milliseconds(300)),
+            client: client
+        )
+        _ = try await backend.generateImage(
+            AIGenerateImageRequest(prompt: "x", model: "comfy:modelB.safetensors")
+        )
+        let promptReq = try #require(client.requests.first { $0.url.path.hasSuffix("/prompt") })
+        let promptBody = try #require(promptReq.body)
+        let body = try #require(try JSONSerialization.jsonObject(with: promptBody) as? [String: Any])
+        let graph = try #require(body["prompt"] as? [String: Any])
+        let loader = try #require((graph["4"] as? [String: Any])?["inputs"] as? [String: Any])
+        #expect(loader["ckpt_name"] as? String == "modelB.safetensors")
+    }
+
     @Test("a /prompt validation error fails the generate")
     func promptError() async {
         let client = ScriptedNetworkClient { request in

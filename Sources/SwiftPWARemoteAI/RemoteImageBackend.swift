@@ -42,9 +42,18 @@ public protocol RemoteImageProvider: Sendable {
         _ request: AIGenerateImageRequest,
         client: any NetworkClient
     ) -> AsyncThrowingStream<AIImageEvent, any Error>
+
+    /// Discover the models this provider serves *live* (a network probe), for a
+    /// picker that lists what a remote source actually offers. Defaults to the
+    /// static ``models``; a provider with a dynamic catalog (e.g. ComfyUI
+    /// listing its installed checkpoints) overrides it. Called lazily by an
+    /// adopter when building the catalog, not on the hot path.
+    func discoverModels(client: any NetworkClient) async throws -> [AIModelInfo]
 }
 
 public extension RemoteImageProvider {
+    func discoverModels(client _: any NetworkClient) async throws -> [AIModelInfo] { models }
+
     func generateImageStream(
         _ request: AIGenerateImageRequest,
         client: any NetworkClient
@@ -91,6 +100,14 @@ public final class RemoteImageBackend: AIBackend, @unchecked Sendable {
     /// `MultiModelImageBackend` (`.init(backend.modelInfo, backend)` per model).
     public var models: [AIModelInfo] {
         provider.models
+    }
+
+    /// Live-discover the models the backing service offers (a network probe),
+    /// for building a picker of a remote source's actual catalog — e.g. a
+    /// ComfyUI instance's installed checkpoints. Falls back to the static
+    /// ``models`` for providers without a dynamic catalog.
+    public func discoverModels() async throws -> [AIModelInfo] {
+        try await provider.discoverModels(client: client)
     }
 
     public func info() async -> AICapabilities {

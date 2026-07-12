@@ -20,8 +20,9 @@ private func makeNetworkClient() -> any NetworkClient {
 /// change this to your own instance** (or make it user-configurable). A LAN
 /// appliance on plain `http://` also needs the host allow-listed via
 /// `android.network.cleartext_domains` in `pwa.json` (already set for `*.local`).
-/// The checkpoint isn't hard-coded — the provider auto-selects one the instance
-/// actually has (`autoSelectCheckpoint`), so the demo works against any box.
+/// No checkpoint is hard-coded — `CompositeAIBackend` discovers the instance's
+/// installed checkpoints and lists each as its own `comfy:<ckpt>` model, so the
+/// demo works against any box and the picker shows what's actually there.
 private let demoComfyURL = URL(string: "http://comfyui.local:8188")!
 
 // The llama backend is an env-gated product (see Package.swift). When the app
@@ -195,7 +196,7 @@ func configure(_ ctx: any AppContext) throws {
         #if canImport(SwiftPWAStableDiffusion)
             let lcmDir = ctx.dataDirectory().appendingPathComponent("lcm-dreamshaper", isDirectory: true)
             let sdTurboDir = ctx.dataDirectory().appendingPathComponent("sd-turbo", isDirectory: true)
-            var imageEntries: [MultiModelImageBackend.Entry] = [
+            let imageEntries: [MultiModelImageBackend.Entry] = [
                 .init(
                     AIModelInfo(
                         id: "lcm-dreamshaper", label: "LCM Dreamshaper (commercial)",
@@ -219,30 +220,21 @@ func configure(_ ctx: any AppContext) throws {
                     )
                 ),
             ]
-            // A **remote** arm: the same switcher now also offers a cloud/LAN
-            // generator — here a local-network ComfyUI instance — proving "local
-            // + remote in one dropdown." It's just another `AIBackend`
-            // (`RemoteImageBackend` over `ComfyUIProvider`), routed by
-            // `request.model`, offline:false so the picker can badge the
-            // trade-off. Uses the platform `NetworkClient` (the Kotlin RPC on
-            // Android). See docs/remote-ai.md.
-            let comfyInfo = AIModelInfo(
-                id: "comfy-lan", label: "ComfyUI (local network)",
-                capabilities: [.imageGeneration],
-                availability: .ready, offlineCapable: false, license: nil
-            )
+            let imageModels = MultiModelImageBackend(imageEntries, default: "lcm-dreamshaper")
+
+            // A **remote** arm: a local-network ComfyUI instance, proving "local
+            // + remote in one dropdown." Its catalog isn't hard-coded — the
+            // composite discovers the instance's installed checkpoints and lists
+            // each as its own `comfy:<ckpt>` model (a ComfyUI is a *source* of
+            // many models, not one). Uses the platform `NetworkClient` (the
+            // Kotlin RPC on Android). See docs/remote-ai.md.
             let comfy = RemoteImageBackend(
-                provider: ComfyUIProvider(
-                    baseURL: demoComfyURL,
-                    models: [comfyInfo],
-                    autoSelectCheckpoint: true
-                ),
+                provider: ComfyUIProvider(baseURL: demoComfyURL),
                 client: makeNetworkClient()
             )
-            imageEntries.append(.init(comfyInfo, comfy))
-
-            let imageModels = MultiModelImageBackend(imageEntries, default: "lcm-dreamshaper")
-            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, imageGen: imageModels)))
+            ctx.use(AIPlugin(CompositeAIBackend(
+                text: textBackend, image: lama, imageGen: imageModels, comfy: comfy
+            )))
             // Also expose the raw `net.*` plugin so the page can make native,
             // CORS-free HTTP calls (and so the remote arm's transport is
             // exercisable directly). Opt-in, so registered explicitly here.

@@ -90,13 +90,13 @@
         /// output blob out (freeing the DPAPI-allocated buffer with `LocalFree`).
         private static func crypt(
             _ input: [UInt8],
-            _ op: (_ inBlob: PDATA_BLOB, _ outBlob: PDATA_BLOB) -> WindowsBool
+            _ op: (_ inBlob: PDATA_BLOB, _ outBlob: PDATA_BLOB) -> Bool
         ) -> [UInt8]? {
             var mutableInput = input
             return mutableInput.withUnsafeMutableBufferPointer { buf -> [UInt8]? in
                 var inBlob = DATA_BLOB(cbData: DWORD(buf.count), pbData: buf.baseAddress)
                 var outBlob = DATA_BLOB()
-                guard op(&inBlob, &outBlob).boolValue else { return nil }
+                guard op(&inBlob, &outBlob) else { return nil }
                 defer { LocalFree(outBlob.pbData) }
                 return Array(UnsafeBufferPointer(start: outBlob.pbData, count: Int(outBlob.cbData)))
             }

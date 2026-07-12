@@ -35,6 +35,7 @@
             url: String,
             destPath: String,
             sha256: String?,
+            headers: [String: String] = [:],
             onProgress: @escaping @Sendable (Int64, Int64?) -> Void
         ) async throws -> Int64 {
             let channel = nextChannel()
@@ -48,7 +49,13 @@
 
             let result = try await AndroidRPC.call(
                 "net.downloadFile",
-                DownloadFileArgs(url: url, destPath: destPath, sha256: sha256, channel: channel),
+                DownloadFileArgs(
+                    url: url,
+                    destPath: destPath,
+                    sha256: sha256,
+                    channel: channel,
+                    headers: headers.isEmpty ? nil : headers
+                ),
                 as: DownloadFileResult.self
             )
             return result.bytesWritten
@@ -64,6 +71,8 @@
             /// Optional on the Kotlin side — an absent/empty channel disables
             /// progress (the plain request/response behavior).
             let channel: String
+            /// Optional request headers (auth, etc.); nil ⇒ none sent.
+            let headers: [String: String]?
         }
 
         private struct DownloadFileResult: Decodable {

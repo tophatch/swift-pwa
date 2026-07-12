@@ -140,9 +140,26 @@ struct AndroidBundler {
         IconOutcome.report(iconOutcome)
         let iconStaged = if case .bundled = iconOutcome { true } else { false }
 
+        // res/xml/network_security_config.xml — the scoped cleartext allow-list
+        // for `android.network.cleartext_domains` (e.g. a LAN ComfyUI on plain
+        // http). Cleartext stays off globally; only the listed hosts are
+        // permitted. Written (and referenced from the manifest) only when
+        // configured — the manifest is byte-for-byte unchanged otherwise.
+        let networkSecurityConfig = (manifest.android?.network?.cleartextDomains)
+            .flatMap { AndroidTemplates.networkSecurityConfigXml(domains: $0) }
+        if let networkSecurityConfig {
+            let xmlDir = main.appendingPathComponent("res/xml")
+            try FileManager.default.createDirectory(at: xmlDir, withIntermediateDirectories: true)
+            try networkSecurityConfig.write(
+                to: xmlDir.appendingPathComponent("network_security_config.xml"),
+                atomically: true, encoding: .utf8
+            )
+        }
+
         try AndroidTemplates.androidManifestXml(
             packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil,
-            documentTypes: manifest.android?.documentTypes ?? []
+            documentTypes: manifest.android?.documentTypes ?? [],
+            networkConfigStaged: networkSecurityConfig != nil
         ).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
             atomically: true, encoding: .utf8

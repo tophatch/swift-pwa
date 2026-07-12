@@ -379,6 +379,11 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "android": { "document_types": [{ "mime_types": ["image/png", "image/jpeg"] }] }
         /// ```
         public var documentTypes: [DocumentType]?
+        /// Network policy for the generated app. Currently just an opt-in
+        /// cleartext (plain-`http://`) allow-list for talking to LAN
+        /// appliances / dev servers (e.g. a local ComfyUI). See
+        /// ``NetworkSection``.
+        public var network: NetworkSection?
         public init(
             packageId: String? = nil,
             minSdk: Int? = nil,
@@ -386,7 +391,8 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             abis: [String]? = nil,
             versionCode: Int? = nil,
             signing: AndroidSigningSection? = nil,
-            documentTypes: [DocumentType]? = nil
+            documentTypes: [DocumentType]? = nil,
+            network: NetworkSection? = nil
         ) {
             self.packageId = packageId
             self.minSdk = minSdk
@@ -395,6 +401,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.versionCode = versionCode
             self.signing = signing
             self.documentTypes = documentTypes
+            self.network = network
         }
 
         /// One `android.document_types` entry: a set of MIME types the app
@@ -404,6 +411,33 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public struct DocumentType: Codable, Sendable, Equatable {
             public var mimeTypes: [String]
             public init(mimeTypes: [String]) { self.mimeTypes = mimeTypes }
+        }
+
+        /// `android.network` — network policy knobs.
+        ///
+        /// Android blocks plain-`http://` (cleartext) traffic by default
+        /// (`usesCleartextTraffic="false"`), which stops an app from reaching a
+        /// local-network appliance such as a ComfyUI instance on
+        /// `http://192.168.x.x:8188`. `cleartextDomains` opts specific hosts back
+        /// in via a generated `res/xml/network_security_config.xml` whose
+        /// `base-config` keeps cleartext **off** globally and permits it only for
+        /// the listed hosts — the least-broad fix, and the shape least likely to
+        /// draw app-store scrutiny (a blanket `usesCleartextTraffic="true"` is a
+        /// known review flag, so it's deliberately not offered). Unset / empty ⇒
+        /// the manifest is byte-for-byte unchanged (cleartext stays off).
+        ///
+        /// Entries are Android network-security-config **domains**: a concrete
+        /// hostname (`"nas.local"`, `"192.168.1.50"`) or an mDNS-style suffix
+        /// (`"*.local"` → the base domain `local` with `includeSubdomains`).
+        /// Bare CIDR ranges aren't expressible in the config — list the concrete
+        /// host(s) instead.
+        ///
+        /// ```json
+        /// "android": { "network": { "cleartext_domains": ["nas.local", "192.168.1.50"] } }
+        /// ```
+        public struct NetworkSection: Codable, Sendable, Equatable {
+            public var cleartextDomains: [String]?
+            public init(cleartextDomains: [String]? = nil) { self.cleartextDomains = cleartextDomains }
         }
 
         /// Release signing configuration. When set, the generated

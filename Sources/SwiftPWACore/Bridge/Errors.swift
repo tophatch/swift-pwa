@@ -18,4 +18,7 @@ public struct BridgeError: Error, Sendable, Codable, Equatable {
     public static let invalidEnvelope = "E_ENVELOPE"
     public static let cancelled = "E_CANCELLED"
     public static let unimplemented = "E_UNIMPLEMENTED"
+    /// A `net.*` request failed — transport error, non-2xx response the caller
+    /// asked to treat as fatal, or a checksum mismatch on `net.download`.
+    public static let net = "E_NET"
 }

@@ -35,21 +35,62 @@
         /// Discovered-once cache of the ComfyUI catalog (a network probe), so
         /// repeated `info()` calls don't re-hit the instance.
         private var comfyCatalogCache: [AIModelInfo]?
+        /// A remote **cloud** arm: Google Imagen. Unlike the others its API key
+        /// isn't baked in — it's read at runtime from the OS secure store (the
+        /// `secrets.*` plugin). So its models advertise **`needsSetup`** until a
+        /// key exists and flip to **`ready`** once one is stored: the composite
+        /// (which owns the store) computes that availability at `info()` time,
+        /// since only the app knows the store / key name. Routed by the plain
+        /// Imagen model ids (`imagen-4.0-generate-001`, …).
+        private let imagen: RemoteImageBackend?
+        /// Whether an Imagen API key is currently stored — drives the `needsSetup`
+        /// vs `ready` availability of the Imagen models. Injected (not a direct
+        /// `SecretStore` dep) so this example file stays store-agnostic.
+        private let imagenKeyPresent: (@Sendable () async -> Bool)?
+        /// The Imagen model ids, for routing `generateImage` / `ensureModel`.
+        private let imagenModelIDs: Set<String>
 
         init(
             text: (any AIBackend)?,
             image: LaMaBackend,
             imageGen: (any AIBackend)? = nil,
-            comfy: RemoteImageBackend? = nil
+            comfy: RemoteImageBackend? = nil,
+            imagen: RemoteImageBackend? = nil,
+            imagenKeyPresent: (@Sendable () async -> Bool)? = nil
         ) {
             self.text = text
             self.image = image
             self.imageGen = imageGen
             self.comfy = comfy
+            self.imagen = imagen
+            self.imagenKeyPresent = imagenKeyPresent
+            imagenModelIDs = Set((imagen?.models ?? []).map(\.id))
         }
 
         private func isComfy(_ model: String?) -> Bool {
             model?.hasPrefix(ComfyUIProvider.modelIDPrefix) == true
+        }
+
+        private func isImagen(_ model: String?) -> Bool {
+            guard let model else { return false }
+            return imagenModelIDs.contains(model)
+        }
+
+        /// The Imagen catalog with availability computed from the stored key:
+        /// `ready` when a key exists, else `needsSetup` (the page then shows a
+        /// key field instead of the generate button — see web/generate.html).
+        private func imagenCatalog() async -> [AIModelInfo] {
+            guard let imagen else { return [] }
+            let present = await imagenKeyPresent?() ?? true
+            let availability: AIModelAvailability = present
+                ? .ready
+                : .needsSetup(reason: "Add a Google AI API key to use Imagen")
+            return imagen.models.map {
+                AIModelInfo(
+                    id: $0.id, label: $0.label, capabilities: $0.capabilities,
+                    availability: availability, offlineCapable: $0.offlineCapable, license: $0.license
+                )
+            }
         }
 
         /// The ComfyUI catalog, discovered once and cached. Bounded so a slow /
@@ -70,13 +111,15 @@
             // The on-device switcher's catalog (LCM / SD-Turbo) plus the ComfyUI
             // instance's discovered checkpoints — local + remote in one picker.
             let discovered = await comfyCatalog()
-            let catalog = (gen?.models ?? []) + discovered
+            // On-device switcher (LCM / SD-Turbo) + discovered ComfyUI checkpoints
+            // + the cloud Imagen models (needsSetup/ready per the stored key).
+            let catalog = (gen?.models ?? []) + discovered + (await imagenCatalog())
             let models = catalog.isEmpty ? nil : catalog
-            let hasImageGen = (gen?.imageGeneration ?? false) || (comfy != nil)
+            let hasImageGen = (gen?.imageGeneration ?? false) || (comfy != nil) || (imagen != nil)
             guard let text else {
                 // Image-only: still advertise editing (+ generation if present).
                 return AICapabilities(
-                    available: img.available || (gen?.available ?? false) || (comfy != nil),
+                    available: img.available || (gen?.available ?? false) || (comfy != nil) || (imagen != nil),
                     backend: img.backend,
                     imageGeneration: hasImageGen,
                     imageEditing: img.imageEditing,
@@ -85,7 +128,8 @@
             }
             let txt = await text.info()
             return AICapabilities(
-                available: txt.available || img.available || (gen?.available ?? false) || (comfy != nil),
+                available: txt.available || img.available || (gen?.available ?? false)
+                    || (comfy != nil) || (imagen != nil),
                 backend: txt.backend,
                 model: txt.model,
                 streaming: txt.streaming,
@@ -118,6 +162,10 @@
         }
 
         func generateImage(_ request: AIGenerateImageRequest) async throws -> AIGenerateImageResult {
+            // An Imagen model id → the remote cloud arm (text→image).
+            if isImagen(request.model), let imagen {
+                return try await imagen.generateImage(request)
+            }
             // A `comfy:<ckpt>` model id → the remote ComfyUI arm (text→image).
             if isComfy(request.model), let comfy {
                 return try await comfy.generateImage(request)
@@ -133,6 +181,9 @@
         nonisolated func generateImageStream(_ request: AIGenerateImageRequest)
             -> AsyncThrowingStream<AIImageEvent, any Error>
         {
+            if imagenModelIDs.contains(request.model ?? ""), let imagen {
+                return imagen.generateImageStream(request)
+            }
             if request.model?.hasPrefix(ComfyUIProvider.modelIDPrefix) == true, let comfy {
                 return comfy.generateImageStream(request)
             }
@@ -148,6 +199,13 @@
             switch request.model {
             case "inpaint", "lama":
                 return image.ensureModel(request)
+            case let .some(id) where imagenModelIDs.contains(id):
+                // A remote cloud model — nothing to download (ready once a key
+                // is set; the page only reaches here for a `ready` model).
+                guard let imagen else {
+                    return AsyncThrowingStream { $0.finish(throwing: AIError.unsupportedPlatform("no Imagen arm")) }
+                }
+                return imagen.ensureModel(request)
             case let .some(id) where id.hasPrefix(ComfyUIProvider.modelIDPrefix):
                 // A remote ComfyUI model — nothing to download (ready).
                 guard let comfy else {

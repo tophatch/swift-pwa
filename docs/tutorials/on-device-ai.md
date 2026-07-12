@@ -245,9 +245,12 @@ func makeNetClient() -> any NetworkClient {
 }
 
 // Google Imagen (v3/v4). The API key is read from a closure per request and
-// NEVER stored by swift-pwa — you own storage / rotation / the settings UI.
+// NEVER stored by swift-pwa — keep it in the OS secure store via the secrets.*
+// plugin (Keychain on Apple, Keystore on Android). See "Secure key storage".
+let store = makeSecretStore()                 // KeychainSecretStore / AndroidSecretStore
+ctx.use(SecretsPlugin(store))
 let imagen = RemoteImageBackend(
-    provider: ImagenProvider(apiKey: { await myKeyStore.googleAIKey() }),
+    provider: ImagenProvider(apiKey: { try? await store.get("google-ai") }),
     client: makeNetClient()
 )
 
@@ -268,14 +271,28 @@ let switcher = MultiModelImageBackend([
 ctx.use(AIPlugin(switcher))
 ```
 
-A remote model reports `availability: ready`, so the page **skips the download step** the on-device weights need — nothing to fetch.
+A remote model reports `availability: ready`, so the page **skips the download step** the on-device weights need — nothing to fetch. (A cloud model with *no key yet* should instead report `needsSetup` — see [Secure key storage](#secure-key-storage) below.)
 
 **A ComfyUI is a source of *many* models, so discover them, don't hard-code one.** `RemoteImageBackend.discoverModels()` queries the instance and returns one entry per installed checkpoint (id `comfy:<checkpoint>`); passing that id as `request.model` runs that exact model. `CritterFacts`' `CompositeAIBackend` does this — discovering the catalog lazily at `info()` time (bounded + cached, so a slow or unreachable box never stalls the dropdown) and merging it in, so local and remote checkpoints appear together. That info()-time discovery is deliberate: a platform entry point can be synchronous (Android's is), so you can't block on an async network probe at startup — but `info()` is async and runs once the bridge is up.
 
 **Two things to get right:**
 
 - **Android + a plain-`http://` LAN box:** Android blocks cleartext traffic by default, so allow-list the host in `pwa.json` — `"android": { "network": { "cleartext_domains": ["*.local"] } }`. HTTPS (Imagen) and every desktop platform need nothing; on iOS add an ATS exception via the `ios.info_plist` passthrough.
-- **Keys and endpoints stay yours:** swift-pwa never persists the `apiKey` closure's value or a user-entered URL — build your own storage/UI for those.
+- **Keys and endpoints stay yours:** swift-pwa never persists the `apiKey` closure's value or a user-entered URL — you decide where they live (see next).
+
+### Secure key storage
+
+The `apiKey` closure is a *seam*, not a store — swift-pwa deliberately never keeps your key. So where does it go? Not `localStorage`, not a file, not `pwa.json`: the OS secure store. The [`secrets.*` plugin](../secrets.md) gives you Keychain (Apple) / Keystore-backed `EncryptedSharedPreferences` (Android) / DPAPI (Windows) / Secret Service (Linux) behind one JS + Swift API, and the closure reads straight through it: `ImagenProvider(apiKey: { try? await store.get("google-ai") })`.
+
+That unlocks the honest **no-key** experience. Instead of failing at generate time, advertise the model as `needsSetup` until a key exists, then flip to `ready`:
+
+```swift
+let hasKey = (try? await store.get("google-ai")) != nil
+let availability: AIModelAvailability =
+    hasKey ? .ready : .needsSetup(reason: "Add a Google AI API key")
+```
+
+The page renders it — a `needsSetup` model shows a password field instead of the generate button; **Save** calls `secrets.set`, re-fetches `ai.info()` (now `ready`), and generates; a "clear key" affordance calls `secrets.delete`. `CritterFacts` wires exactly this (its `CompositeAIBackend` + `web/generate.html`). Keys are per-device, not synced. Full detail: **[docs/secrets.md](../secrets.md)**.
 
 Full contract, both providers, and how to add a new API: **[docs/remote-ai.md](../remote-ai.md)**.
 

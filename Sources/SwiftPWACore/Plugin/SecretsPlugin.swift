@@ -85,4 +85,19 @@ public struct SecretValueResult: Sendable, Codable, Equatable {
     public init(value: String?) {
         self.value = value
     }
+
+    private enum CodingKeys: String, CodingKey { case value }
+
+    /// Encode `value` **explicitly as `null`** when nil, rather than omitting the
+    /// key. `JSONEncoder` drops a nil `Optional` property by default, which would
+    /// send `{}` for a missing key — but the JS contract is `{ value: null }`, so
+    /// a page can destructure `const { value }` and test `value === null`.
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        if let value {
+            try container.encode(value, forKey: .value)
+        } else {
+            try container.encodeNil(forKey: .value)
+        }
+    }
 }

@@ -88,6 +88,22 @@ struct SecretsPluginTests {
         #expect(value.value == nil)
     }
 
+    @Test("a missing key serializes as { value: null }, not {} — the JS contract")
+    func missingKeyWireIsExplicitNull() async throws {
+        // JSONEncoder omits a nil Optional by default, which would send `{}` and
+        // make `value === null` false in JS. The result must emit an explicit
+        // null. Assert on the raw bytes the bridge delivers.
+        let app = makeApp(MockSecretStore())
+        let result = await dispatch("secrets.get", ["key": "absent"], on: app)
+        guard case let .ok(data) = result else {
+            Issue.record("expected .ok")
+            return
+        }
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json.keys.contains("value"))
+        #expect(json["value"] is NSNull)
+    }
+
     @Test("secrets.set overwrites an existing value")
     func setOverwrites() async {
         let store = MockSecretStore()

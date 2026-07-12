@@ -37,7 +37,11 @@ public struct NetPlugin: Plugin {
         let client = client
 
         registry.register("net.request", typed: { (args: NetRequestArgs, _) async throws -> NetResponseResult in
-            guard let url = URL(string: args.url) else {
+            // Require an absolute URL with a scheme. `URL(string:)` is lenient on
+            // swift-corelibs (an empty / scheme-less string yields a non-nil URL
+            // there, unlike Darwin), so check the scheme explicitly for
+            // cross-platform-consistent rejection.
+            guard let url = URL(string: args.url), url.scheme?.isEmpty == false else {
                 throw BridgeError(code: BridgeError.net, message: "invalid url: \(args.url)")
             }
             var body: Data?
@@ -65,7 +69,7 @@ public struct NetPlugin: Plugin {
         registry.registerStream(
             "net.download",
             typed: { (args: NetDownloadArgs, _) -> AsyncThrowingStream<NetDownloadChunk, any Error> in
-                guard let url = URL(string: args.url) else {
+                guard let url = URL(string: args.url), url.scheme?.isEmpty == false else {
                     return AsyncThrowingStream {
                         $0.finish(throwing: BridgeError(code: BridgeError.net, message: "invalid url: \(args.url)"))
                     }

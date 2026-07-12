@@ -9,12 +9,18 @@ plaintext file, or `pwa.json`.
 |---|---|
 | **macOS / iOS** | **Keychain** (`kSecClassGenericPassword`, `kSecAttrAccessibleAfterFirstUnlock`, service = bundle id) |
 | **Android** | **`EncryptedSharedPreferences`** (Jetpack Security — AES-256 values, master key in the Android Keystore, hardware-backed where available) |
-| **Windows** | **DPAPI** — *planned follow-up* |
+| **Windows** | **DPAPI** (`CryptProtectData`, user scope) → encrypted blob under `%LOCALAPPDATA%\<service>\secrets\` |
 | **Linux** | **Secret Service** (libsecret / GNOME Keyring / KWallet) — *planned follow-up* |
 
-Until the Windows / Linux stores land, registering `SecretsPlugin` there falls
-back to `NoneSecretStore`: the command set exists but every call returns
-`E_SECRETS`. Inject your own `SecretStore` to fill the gap.
+On Linux, registering `SecretsPlugin` without your own store falls back to
+`NoneSecretStore`: the command set exists but every call returns `E_SECRETS`.
+Inject your own `SecretStore` to fill the gap.
+
+> **Windows DPAPI needs an interactive user session.** The user-scope master key
+> is unlocked by the interactive logon — a real desktop user has it, but a *network
+> logon* (e.g. an SSH session, or some service contexts) does not, and
+> `CryptProtectData` returns `ERROR_ACCESS_DENIED` there. This is expected: run the
+> app in a normal desktop session.
 
 > **swift-pwa never persists a secret for you.** This plugin is a thin, audited
 > bridge to the OS store — where a value lives is the store's business. Never
@@ -30,8 +36,10 @@ store:
     ctx.use(SecretsPlugin(AndroidSecretStore()))
 #elseif canImport(Security)
     ctx.use(SecretsPlugin(KeychainSecretStore()))
+#elseif os(Windows)
+    ctx.use(SecretsPlugin(WindowsSecretStore()))
 #else
-    ctx.use(SecretsPlugin()) // NoneSecretStore — Windows/Linux until those land
+    ctx.use(SecretsPlugin()) // NoneSecretStore — Linux (libsecret) not yet shipped
 #endif
 ```
 

@@ -169,6 +169,12 @@ let package = Package(
 
         .target(
             name: "SwiftPWACore",
+            dependencies: [
+                // libsecret (Secret Service) shim for LinuxSecretStore — the
+                // secrets.* plugin's Linux backing. Linux-only; on other
+                // platforms the edge is absent so the C targets aren't built.
+                .target(name: "CSecretShim", condition: .when(platforms: [.linux]))
+            ],
             resources: [
                 .copy("Resources/bridge.js")
             ],
@@ -178,6 +184,24 @@ let package = Package(
                 // WindowsSecretStore — the secrets.* plugin's Windows backing.
                 .linkedLibrary("Crypt32", .when(platforms: [.windows]))
             ]
+        ),
+
+        // MARK: - Linux libsecret (Secret Service) for the secrets.* plugin
+
+        // A C shim over libsecret's variadic `secret_password_*_sync` + the
+        // fixed-size `SecretSchema` (both awkward from Swift), exposing plain
+        // functions LinuxSecretStore calls. Depends on the `CLibSecret`
+        // systemLibrary for the pkg-config build flags. Linux-only (pulled in
+        // only via SwiftPWACore's `.when(.linux)` edge above).
+        .target(
+            name: "CSecretShim",
+            dependencies: ["CLibSecret"]
+        ),
+        .systemLibrary(
+            name: "CLibSecret",
+            path: "Sources/CLibSecret",
+            pkgConfig: "libsecret-1",
+            providers: [.apt(["libsecret-1-dev"])]
         ),
 
         .target(

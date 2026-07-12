@@ -1,0 +1,8 @@
+// System module over libsecret's headers. Build flags (-I / -l) come from
+// pkgConfig "libsecret-1" on the systemLibrary target in Package.swift; this
+// only needs to name the header. Linux-only (the target is depended on only
+// `.when(.linux)`), so it never has to resolve on Apple/Windows.
+module CLibSecret [system] {
+    header "shim.h"
+    export *
+}

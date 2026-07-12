@@ -42,7 +42,10 @@
 
         public func set(_ key: String, _ value: String) async throws {
             guard let cipher = Self.protect([UInt8](value.utf8)) else {
-                throw BridgeError(code: BridgeError.secrets, message: "DPAPI encrypt failed for \"\(key)\"")
+                throw BridgeError(
+                    code: BridgeError.secrets,
+                    message: "DPAPI encrypt failed for \"\(key)\" (GetLastError \(GetLastError()))"
+                )
             }
             do {
                 try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)

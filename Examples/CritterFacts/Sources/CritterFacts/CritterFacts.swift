@@ -16,6 +16,28 @@ private func makeNetworkClient() -> any NetworkClient {
     #endif
 }
 
+/// The OS secure store for the `secrets.*` plugin — Keychain on Apple,
+/// Keystore-backed `EncryptedSharedPreferences` on Android. The Imagen arm
+/// reads its API key from here at runtime. File-scope + nonisolated for the
+/// same Android reason as `makeNetworkClient`.
+private func makeSecretStore() -> any SecretStore {
+    #if os(Android)
+        AndroidSecretStore()
+    #elseif canImport(Security)
+        KeychainSecretStore()
+    #elseif os(Windows)
+        WindowsSecretStore()
+    #elseif os(Linux)
+        LinuxSecretStore() // Secret Service (libsecret); needs a running keyring
+    #else
+        NoneSecretStore()
+    #endif
+}
+
+/// The key name the Imagen API key is stored under in the secure store. Shared
+/// by the provider's `apiKey` closure and the availability check.
+private let imagenAPIKeyName = "google-ai"
+
 /// The ComfyUI instance the demo's "remote" switcher arm points at. **Adopters:
 /// change this to your own instance** (or make it user-configurable). A LAN
 /// appliance on plain `http://` also needs the host allow-listed via
@@ -232,8 +254,24 @@ func configure(_ ctx: any AppContext) throws {
                 provider: ComfyUIProvider(baseURL: demoComfyURL),
                 client: makeNetworkClient()
             )
+
+            // A remote **cloud** arm: Google Imagen. The API key is NOT baked in
+            // — it's read at runtime from the OS secure store via the `secrets.*`
+            // plugin (Keychain on Apple, Keystore-backed EncryptedSharedPreferences
+            // on Android). So Imagen advertises `needsSetup` until the user enters
+            // a key (web/generate.html reveals a password field for it), then
+            // flips to `ready`. This is the "require a key at runtime, store it
+            // securely" pattern real cloud-backed apps need — see docs/secrets.md.
+            let secretStore = makeSecretStore()
+            ctx.use(SecretsPlugin(secretStore))
+            let imagen = RemoteImageBackend(
+                provider: ImagenProvider(apiKey: { try? await secretStore.get(imagenAPIKeyName) }),
+                client: makeNetworkClient()
+            )
             ctx.use(AIPlugin(CompositeAIBackend(
-                text: textBackend, image: lama, imageGen: imageModels, comfy: comfy
+                text: textBackend, image: lama, imageGen: imageModels, comfy: comfy,
+                imagen: imagen,
+                imagenKeyPresent: { (try? await secretStore.get(imagenAPIKeyName)) != nil }
             )))
             // Also expose the raw `net.*` plugin so the page can make native,
             // CORS-free HTTP calls (and so the remote arm's transport is

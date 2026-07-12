@@ -169,6 +169,11 @@ enum AndroidTemplates {
             // a future appcompat change can't accidentally remove it.
             implementation("androidx.biometric:biometric:1.1.0")
             implementation("androidx.activity:activity-ktx:1.9.0")
+            // EncryptedSharedPreferences (Keystore-backed AES) for the
+            // secrets.* plugin — the secure store the SecretsPlugin RPC writes
+            // to. Present unconditionally, like the net.* / biometric wiring;
+            // the capability is opt-in on the Swift side (SecretsPlugin).
+            implementation("androidx.security:security-crypto:1.1.0-alpha06")
         \(enableGeminiNano ? Self.geminiNanoGradleDeps : "")}
         """
         return head + signingBlockText + buildTypesOpen + releaseExtras + buildTypesTail + "\n"
@@ -1086,6 +1091,8 @@ enum AndroidTemplates {
     import androidx.core.app.NotificationCompat
     import androidx.core.app.NotificationManagerCompat
     import androidx.core.content.ContextCompat
+    import androidx.security.crypto.EncryptedSharedPreferences
+    import androidx.security.crypto.MasterKey
     import org.json.JSONArray
     import org.json.JSONObject
     import java.io.ByteArrayOutputStream
@@ -1253,6 +1260,9 @@ enum AndroidTemplates {
                 "image.encodePng" -> imageEncodePng(json, done)
                 "net.downloadFile" -> netDownloadFile(json, done)
                 "net.request" -> netRequest(json, done)
+                "secrets.get" -> secretsGet(json, done)
+                "secrets.set" -> secretsSet(json, done)
+                "secrets.delete" -> secretsDelete(json, done)
                 "system.memory" -> systemMemory(done)
                 /*__SWIFT_PWA_GENAI_DISPATCH__*/
                 else -> done(null, "swift-pwa: unknown rpc method $method")
@@ -2434,6 +2444,79 @@ enum AndroidTemplates {
                     }
                 } catch (t: Throwable) {
                     done(null, "swift-pwa: net.request failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        // MARK: secrets.* — Keystore-backed EncryptedSharedPreferences.
+        // The Swift SecretsPlugin (opt-in) drives these over the RPC bridge; the
+        // Swift side can't reach the Android Keystore directly. The prefs file
+        // is encrypted at rest (AES-256-GCM values, AES-256-SIV keys) with a
+        // master key held in the Keystore (hardware-backed where available).
+        // Lazily built so an app that never uses secrets pays nothing, and so a
+        // Keystore failure surfaces as an E_SECRETS on the first call rather
+        // than at activity startup.
+        private val secretPrefsLock = Any()
+        private var secretPrefsInstance: android.content.SharedPreferences? = null
+
+        private fun secretPrefs(): android.content.SharedPreferences {
+            synchronized(secretPrefsLock) {
+                secretPrefsInstance?.let { return it }
+                val masterKey = MasterKey.Builder(activity.applicationContext)
+                    .setKeyScheme(MasterKey.KeyScheme.AES256_GCM)
+                    .build()
+                val prefs = EncryptedSharedPreferences.create(
+                    activity.applicationContext,
+                    "swift_pwa_secrets",
+                    masterKey,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                )
+                secretPrefsInstance = prefs
+                return prefs
+            }
+        }
+
+        private fun secretsGet(json: JSONObject, done: (String?, String?) -> Unit) {
+            val key = json.optString("key", "")
+            if (key.isEmpty()) { done(null, "swift-pwa: secrets.get: key required"); return }
+            backgroundExecutor.execute {
+                try {
+                    val value = secretPrefs().getString(key, null)
+                    // Absent key -> { value: null } (not an error), matching the
+                    // SecretStore contract.
+                    val result = JSONObject()
+                    if (value != null) result.put("value", value) else result.put("value", JSONObject.NULL)
+                    done(result.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: secrets.get failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun secretsSet(json: JSONObject, done: (String?, String?) -> Unit) {
+            val key = json.optString("key", "")
+            if (key.isEmpty()) { done(null, "swift-pwa: secrets.set: key required"); return }
+            val value = json.optString("value", "")
+            backgroundExecutor.execute {
+                try {
+                    secretPrefs().edit().putString(key, value).commit()
+                    done(null, null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: secrets.set failed: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun secretsDelete(json: JSONObject, done: (String?, String?) -> Unit) {
+            val key = json.optString("key", "")
+            if (key.isEmpty()) { done(null, "swift-pwa: secrets.delete: key required"); return }
+            backgroundExecutor.execute {
+                try {
+                    secretPrefs().edit().remove(key).commit()
+                    done(null, null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: secrets.delete failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
         }

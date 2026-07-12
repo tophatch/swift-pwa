@@ -108,6 +108,14 @@
         <button type="submit" id="go" disabled>Generate</button>
     </form>
 
+    <!-- Shown only when the selected model needs setup (a cloud model with no
+         API key yet). Save stores the key in the OS secure store via secrets.set,
+         then the model flips to `ready` and the prompt controls return. -->
+    <form class="controls" id="keyform" hidden>
+        <input type="password" id="apikey" placeholder="Paste your Google AI API key" autocomplete="off" />
+        <button type="submit" id="savekey">Save key</button>
+    </form>
+
     <script>
         const $ = (id) => document.getElementById(id);
         const bridge = window.__SWIFT_PWA__;
@@ -134,16 +142,45 @@
 
         const mb = (n) => (n / 1048576).toFixed(0);
         const modelByID = (id) => models.find((m) => m.id === id);
+        const availabilityOf = (id) => (modelByID(id) || {}).availability || {};
+        // Must match the Swift side's `imagenAPIKeyName` (CritterFacts.swift).
+        const SECRET_KEY_NAME = "google-ai";
 
         // Reflect the selected model's licence + download size under the bar,
         // so the trade-off the user is switching on is visible.
         function showModelMeta() {
             const m = modelByID(current);
             if (!m) return;
-            const size = m.availability && m.availability.kind === "downloadable" && m.availability.bytes
-                ? ` · ~${mb(m.availability.bytes)} MB` : "";
+            const av = m.availability || {};
+            if (av.kind === "needsSetup") {
+                $("hint").innerHTML = `🔑 ${av.reason || "This model needs setup"}.`;
+                return;
+            }
+            const size = av.kind === "downloadable" && av.bytes ? ` · ~${mb(av.bytes)} MB` : "";
             const lic = m.license ? ` · ${m.license}` : "";
-            $("hint").innerHTML = `Prompt → image, on-device.<span style="color:var(--muted)">${lic}${size}</span>`;
+            const where = m.offlineCapable ? "on-device" : "cloud";
+            let extra = "";
+            // A cloud model that's `ready` has a stored key — offer to clear it.
+            if (!m.offlineCapable && av.kind === "ready") {
+                extra = ' · <a href="#" id="clearkey" style="color:var(--muted)">clear key</a>';
+            }
+            $("hint").innerHTML =
+                `Prompt → image, ${where}.<span style="color:var(--muted)">${lic}${size}${extra}</span>`;
+            const clear = $("clearkey");
+            if (clear) clear.addEventListener("click", (e) => { e.preventDefault(); clearKey(); });
+        }
+
+        // Show the prompt controls or the key-entry form depending on whether the
+        // selected model is usable now (`ready` / `downloadable`) or needs a key
+        // (`needsSetup`). This is the whole point of the demo: a cloud model
+        // advertises `needsSetup` until a key is stored, then flips to `ready`.
+        function applyModelState() {
+            showModelMeta();
+            const needsKey = availabilityOf(current).kind === "needsSetup";
+            $("form").hidden = needsKey;
+            $("keyform").hidden = !needsKey;
+            $("go").disabled = needsKey || busy;
+            if (needsKey) $("apikey").focus();
         }
 
         // First use of a given model downloads its weights (LCM ~2.0 GB / SD-Turbo
@@ -212,36 +249,81 @@
             if (p) generate(p);
         });
 
-        $("model").addEventListener("change", () => { current = $("model").value; showModelMeta(); });
+        $("model").addEventListener("change", () => { current = $("model").value; applyModelState(); });
+
+        // Save the entered API key to the OS secure store, then re-fetch ai.info
+        // — the model the app was advertising as `needsSetup` now reports `ready`
+        // (its `apiKey` closure reads straight from the store), so the prompt
+        // controls return and the user can generate. The key never touches the
+        // page beyond this call; it lives in Keychain / Keystore.
+        async function saveKey() {
+            const key = $("apikey").value.trim();
+            if (!key) return;
+            $("savekey").disabled = true;
+            try {
+                await bridge.invoke("secrets.set", { key: SECRET_KEY_NAME, value: key });
+                $("apikey").value = "";
+                await refreshInfo();       // Imagen flips needsSetup → ready.
+                applyModelState();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            } finally {
+                $("savekey").disabled = false;
+            }
+        }
+
+        // Remove the stored key — the cloud model returns to `needsSetup`.
+        async function clearKey() {
+            try {
+                await bridge.invoke("secrets.delete", { key: SECRET_KEY_NAME });
+                await refreshInfo();
+                applyModelState();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            }
+        }
+
+        $("keyform").addEventListener("submit", (e) => { e.preventDefault(); saveKey(); });
+
+        // Fetch ai.info and (re)populate the switcher. Preserves the current
+        // selection across refreshes (e.g. after saving a key). Returns true if
+        // image generation is available at all.
+        async function refreshInfo() {
+            const info = await bridge.invoke("ai.info", {});
+            if (!info || !info.imageGeneration) {
+                showError("On-device image generation isn't available in this build. " +
+                    "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
+                return false;
+            }
+            // Filter to models that can do text→image (`image-generation`).
+            // A commercial app would also filter by `license`.
+            models = (info.models || []).filter(
+                (m) => Array.isArray(m.capabilities) && m.capabilities.includes("image-generation")
+            );
+            const select = $("model");
+            select.innerHTML = "";
+            if (models.length > 1) {
+                for (const m of models) {
+                    const opt = document.createElement("option");
+                    opt.value = m.id; opt.textContent = m.label || m.id;
+                    select.appendChild(opt);
+                }
+                select.hidden = false;
+            }
+            // Keep the current selection if still present; else ai.info's active
+            // model; else the first.
+            const keep = models.find((m) => m.id === current);
+            current = (keep || models.find((m) => m.id === info.model) || models[0] || {}).id || null;
+            if (current) select.value = current;
+            return true;
+        }
 
         async function start() {
             try {
-                const info = await bridge.invoke("ai.info", {});
-                if (!info || !info.imageGeneration) {
-                    showError("On-device image generation isn't available in this build. " +
-                        "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
-                    return;
+                if (await refreshInfo()) {
+                    applyModelState();
+                    hideOverlay();
                 }
-                // Populate the switcher from ai.info's model catalog, filtered to
-                // the models that can do text→image (the `image-generation`
-                // capability). A commercial app would also filter by `license`.
-                models = (info.models || []).filter(
-                    (m) => Array.isArray(m.capabilities) && m.capabilities.includes("image-generation")
-                );
-                const select = $("model");
-                if (models.length > 1) {
-                    for (const m of models) {
-                        const opt = document.createElement("option");
-                        opt.value = m.id; opt.textContent = m.label || m.id;
-                        select.appendChild(opt);
-                    }
-                    select.hidden = false;
-                }
-                // Default to ai.info's active model when it's in the list, else the first.
-                current = (models.find((m) => m.id === info.model) || models[0] || {}).id || null;
-                if (current) { select.value = current; showModelMeta(); }
-                $("go").disabled = false;
-                hideOverlay();
             } catch (e) {
                 showError((e && e.message) || String(e));
             }

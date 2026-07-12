@@ -32,8 +32,9 @@ one you give `NetPlugin`): `URLSessionNetworkClient()` on desktop/Apple,
 ```swift
 import SwiftPWARemoteAI
 
+let store = KeychainSecretStore()            // the secrets.* plugin's store
 let imagen = RemoteImageBackend(
-    provider: ImagenProvider(apiKey: { await myKeyStore.googleAIKey() }),
+    provider: ImagenProvider(apiKey: { try? await store.get("google-ai") }),
     client: URLSessionNetworkClient()
 )
 ```
@@ -41,7 +42,8 @@ let imagen = RemoteImageBackend(
 - Gemini-API REST (`POST {base}/models/{model}:predict`, `x-goog-api-key`).
 - **The key is injected via a closure and never stored by swift-pwa** — you own
   storage, rotation, and the settings UI. A `nil` key fails at generate time
-  with `E_AI_GENERATION`.
+  with `E_AI_GENERATION`. See [Secure key storage](#secure-key-storage) for the
+  keychain-backed `secrets.*` path (and the `needsSetup → enter → ready` flow).
 - Default catalog: `imagen-4.0-generate-001` (Imagen 4) and
   `imagen-3.0-generate-002` (Imagen 3); pass your own `models:` to change it.
   `request.model` routes among them.
@@ -120,6 +122,48 @@ ctx.use(AIPlugin(switcher))
 `availability`, `offlineCapable`, `license`), the JS picker filters to
 `image-generation`, and the switcher frees the previous model on switch (remote
 backends inherit the no-op `unload()`, so they cost nothing there).
+
+## Secure key storage
+
+A cloud provider needs a secret the app doesn't have at build time. swift-pwa
+deliberately **never persists your key** — `ImagenProvider(apiKey:)` is a closure
+seam, and the key lives wherever *you* put it. Two rules follow:
+
+1. **Never bake a key into `pwa.json`, source, or a commit** — environment
+   secrets don't belong in the repo (use `.gitignore`'d local config for dev).
+2. **Use the OS secure store, not `localStorage` or a file.** The [`secrets.*`
+   plugin](secrets.md) gives you Keychain / Keystore / DPAPI / Secret Service
+   behind one API; the `apiKey` closure reads straight through it:
+
+   ```swift
+   let store = KeychainSecretStore()            // Apple; AndroidSecretStore on Android
+   ctx.use(SecretsPlugin(store))
+   let imagen = RemoteImageBackend(
+       provider: ImagenProvider(apiKey: { try? await store.get("google-ai") }),
+       client: URLSessionNetworkClient()
+   )
+   ```
+
+### The `needsSetup → enter → ready` flow
+
+Don't fail only at generate time when there's no key — advertise the model as
+**`needsSetup`** until one exists, so the picker can prompt for it. The key check
+is app-owned (only the app knows the store / key name), so compute the
+availability where you assemble `ai.info().models`:
+
+```swift
+let hasKey = (try? await store.get("google-ai")) != nil
+let availability: AIModelAvailability =
+    hasKey ? .ready : .needsSetup(reason: "Add a Google AI API key")
+```
+
+The page renders it: a `needsSetup` model reveals a password field instead of the
+generate button; **Save** calls `secrets.set`, re-fetches `ai.info()` (now
+`ready`), and generates. `Examples/CritterFacts` is the worked example —
+`CompositeAIBackend` computes Imagen's availability from the store, and
+`web/generate.html` swaps in the key field. A "clear key" affordance calls
+`secrets.delete` to return to `needsSetup` (rotation / revocation). Keys are
+per-device — not synced.
 
 ## Writing your own provider (the drop-in)
 

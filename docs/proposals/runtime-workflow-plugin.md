@@ -214,6 +214,21 @@ of the `ai.*` contract, not ComfyUI-private.
   `executing` (current node), `executed` (node output), `execution_error`. Falls
   back to `/history` polling if the socket can't open. *(Exact frame shapes to be
   confirmed against the box during impl — we have it.)*
+  - **Transport dependency (new, not in the original spec):** per-step progress
+    is *only* on `/ws`; ComfyUI has no HTTP progress endpoint (`/history` is
+    done/not-done, `/prompt` queue is coarse counts). But `NetworkClient` today
+    is `send` + `download` — **no WebSocket** — and that seam exists because
+    Android can't use `URLSession` directly (it routes through a Kotlin RPC). So
+    real progress needs a **cross-platform WebSocket added to `NetworkClient`**:
+    `URLSessionWebSocketTask` on Apple/Linux/Windows + a new Kotlin `net.ws` RPC
+    on Android. This is its own sub-project. Scoping options:
+    - **1a (HTTP-only, ship first):** `ai.run` + `ai.describeInputs` +
+      connection-per-call + `/interrupt` cancel, with **coarse** progress polled
+      from `/history`+`/prompt` (queued → running → done, no step %). Fully
+      useful; unblocks the runtime door on every platform with no new transport.
+    - **1b (add the WebSocket transport):** extend `NetworkClient` with a
+      `connectWebSocket` (+ Android `net.ws` RPC), then per-step `/ws` progress.
+      Bigger, cross-platform, verified per platform.
 - **Cancellation:** the `subscribe` stream's `onTermination` (unsubscribe / window
   close) issues `POST /interrupt` for the in-flight `prompt_id` (and a `/queue`
   delete if still queued), mirroring how `process.stream` binds a child's lifetime

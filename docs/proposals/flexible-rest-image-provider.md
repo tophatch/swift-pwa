@@ -1,8 +1,18 @@
-# Flexible, config-driven remote image provider — spike + findings
+# Flexible, config-driven remote image provider — findings + design
 
-**Status:** prototype built + validated live (branch `explore/rest-image-provider`).
-Not merged. This doc records what we built, what we proved against real APIs, the
-friction we hit, and a recommendation.
+**Status:** **shipped** as `RESTImageProvider` (v0.8.12). Started as a spike; this
+doc records what we built, what we proved against real APIs, the friction we hit,
+and the productized shape.
+
+**Productized beyond the spike:** async submit→poll (`.qwen`) and multipart edits
+(`.openAIEdit`) flows; a `RemoteImageProvider` conformance (so it also serves
+`ai.generateImage` in the switcher, not just `ai.run`); preset descriptors as
+data; a `CritterFacts` "nano banana" picker arm. Live-verified additions: **Qwen /
+DashScope async** (`wan2.2-t2i-flash`, international endpoint — submit → poll →
+URL, ~8 s). OpenAI generations + edits build/send correctly and surface the API's
+own errors, but a full live image was blocked by account billing on the test key
+(the multipart body structure is unit-tested; the real API accepted the request up
+to its billing gate).
 
 ## The question
 
@@ -136,11 +146,18 @@ Effort: the engine is ~250 lines + presets are ~15 lines each, vs ~120 lines per
 hand-written provider — break-even ~3 APIs, plus the runtime-pluggability payoff
 that hand-written providers can't offer.
 
-## Files (spike)
+## Files (shipped)
 
-- `Sources/SwiftPWARemoteAI/RESTImageWorkflowProvider.swift` — provider +
-  `RESTImageAPISpec` descriptor.
-- `Tests/SwiftPWARemoteAITests/RESTImageWorkflowProviderTests.swift` — 8 unit
-  tests (Imagen/OpenAI/Gemini shapes, URL output, binding, errors, round-trip).
+- `Sources/SwiftPWARemoteAI/RESTImageProvider.swift` — the provider (both
+  surfaces) + the engine (binding, multipart, async-poll, JSONPath).
+- `Sources/SwiftPWARemoteAI/RESTImageAPISpec.swift` — the `Codable` descriptor +
+  preset factories (`.imagen` / `.openAICompatible` / `.geminiImage` /
+  `.openAIEdit` / `.qwen`).
+- `Tests/SwiftPWARemoteAITests/RESTImageProviderTests.swift` — 11 unit tests
+  (Imagen/OpenAI/Gemini shapes, URL output, multipart, async submit→poll,
+  binding, errors, round-trip).
 - `Tests/SwiftPWARemoteAITests/LiveRemoteAITests.swift` — `restImagenLive` /
-  `restGeminiLive` (opt-in on `GEMINI_API_KEY`).
+  `restGeminiLive` / `restOpenAILive` / `restOpenAIEditLive` / `restQwenLive`
+  (opt-in on `GEMINI_API_KEY` / `OPENAI_API_KEY` / `DASHSCOPE_API_KEY`).
+- `Examples/CritterFacts/.../web/workflow.html` + `CritterFacts.swift` — the
+  "Gemini image (nano banana)" picker arm (device-verified on a Tab S10+).

@@ -197,8 +197,15 @@ func configure(_ ctx: any AppContext) throws {
     // Providers for the runtime workflow surface (`ai.run` / `ai.describeInputs`).
     // ComfyUI (a graph provider) is always present; the branches below add the
     // fixed-schema providers — Imagen (cloud) and the on-device image models —
-    // so the *same* JS page (web/workflow.html) drives all three from a picker.
-    var workflowProviders: [any AIWorkflowProvider] = [ComfyUIWorkflowProvider()]
+    // so the *same* JS page (web/workflow.html) drives all of them from a picker.
+    // Also register **Gemini image ("nano banana")** via the config-driven
+    // `RESTImageProvider` + a preset descriptor: no per-API Swift code, and the
+    // key never enters JS — the page sends `connection.secretRef: "google-ai"`
+    // and the plugin resolves it server-side into the `x-goog-api-key` header.
+    var workflowProviders: [any AIWorkflowProvider] = [
+        ComfyUIWorkflowProvider(),
+        RESTImageProvider(providerID: "gemini-image", spec: .geminiImage())
+    ]
 
     #if canImport(SwiftPWAImageEdit)
         // Image editing is on (`ai.local_onnx_runtime`): compose the text

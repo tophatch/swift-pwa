@@ -110,11 +110,11 @@ private extension RESTImageAPISpec {
     func encoded() throws -> Data { try JSONEncoder().encode(self) }
 }
 
-struct RESTImageWorkflowProviderTests {
+struct RESTImageProviderTests {
     // MARK: describeInputs
 
     @Test func describeInputsReturnsDescriptorFields() async throws {
-        let provider = RESTImageWorkflowProvider()
+        let provider = RESTImageProvider()
         let schema = try await provider.describeInputs(
             config: config(imagenSpec(), inputs: [:]),
             client: ScriptedClient { _ in NetResponse(status: 200) }
@@ -131,7 +131,7 @@ struct RESTImageWorkflowProviderTests {
                 "predictions": [["bytesBase64Encoded": onePixelPNGBase64, "mimeType": "image/png"]]
             ]))
         }
-        let events = try await collect(RESTImageWorkflowProvider().runWorkflow(
+        let events = try await collect(RESTImageProvider().runWorkflow(
             config: config(imagenSpec(), inputs: ["prompt": .string("a cat"), "count": .number(2)]),
             client: client
         ))
@@ -156,7 +156,7 @@ struct RESTImageWorkflowProviderTests {
         let client = ScriptedClient { _ in
             NetResponse(status: 200, body: j(["data": [["b64_json": onePixelPNGBase64]]]))
         }
-        let events = try await collect(RESTImageWorkflowProvider().runWorkflow(
+        let events = try await collect(RESTImageProvider().runWorkflow(
             config: config(openAISpec(), inputs: ["prompt": .string("a dog")]),
             client: client
         ))
@@ -175,7 +175,7 @@ struct RESTImageWorkflowProviderTests {
                 ]]]]
             ]))
         }
-        let events = try await collect(RESTImageWorkflowProvider().runWorkflow(
+        let events = try await collect(RESTImageProvider().runWorkflow(
             config: config(geminiSpec(), inputs: ["prompt": .string("a fox")]),
             client: client
         ))
@@ -194,7 +194,7 @@ struct RESTImageWorkflowProviderTests {
         }
         var spec = openAISpec()
         spec.output = .init(kind: .url, imagesPath: "data[*]", dataField: "url")
-        let events = try await collect(RESTImageWorkflowProvider().runWorkflow(
+        let events = try await collect(RESTImageProvider().runWorkflow(
             config: config(spec, inputs: ["prompt": .string("x")]),
             client: client
         ))
@@ -212,7 +212,7 @@ struct RESTImageWorkflowProviderTests {
         let client = ScriptedClient { _ in
             NetResponse(status: 200, body: j(["data": [["b64_json": onePixelPNGBase64]]]))
         }
-        let events = try await collect(RESTImageWorkflowProvider().runWorkflow(
+        let events = try await collect(RESTImageProvider().runWorkflow(
             config: config(spec, inputs: ["prompt": .string("x"), "seed": .null]),
             client: client
         ))
@@ -229,7 +229,7 @@ struct RESTImageWorkflowProviderTests {
             NetResponse(status: 400, body: j(["error": ["message": "quota exceeded"]]))
         }
         await #expect(throws: (any Error).self) {
-            _ = try await collect(RESTImageWorkflowProvider().runWorkflow(
+            _ = try await collect(RESTImageProvider().runWorkflow(
                 config: config(imagenSpec(), inputs: ["prompt": .string("x")]),
                 client: client
             ))
@@ -242,4 +242,103 @@ struct RESTImageWorkflowProviderTests {
         let decoded = try JSONDecoder().decode(RESTImageAPISpec.self, from: data)
         #expect(decoded == imagenSpec())
     }
+
+    // MARK: multipart (edits)
+
+    @Test func multipartEditBuildsFileAndTextParts() async throws {
+        let client = ScriptedClient { _ in
+            NetResponse(status: 200, body: j(["data": [["b64_json": onePixelPNGBase64]]]))
+        }
+        let config = try AIWorkflowConfig(
+            connection: AIConnection(baseURL: #require(URL(string: "https://api.openai.test/v1"))),
+            graph: RESTImageAPISpec.openAIEdit().encoded(),
+            inputs: [
+                "prompt": .string("make it snowy"),
+                "image": .object(["dataBase64": .string(onePixelPNGBase64)])
+                // no mask → that file part is omitted
+            ]
+        )
+        let events = try await collect(RESTImageProvider().runWorkflow(config: config, client: client))
+        #expect(events.count(where: { $0.type == .image }) == 1)
+
+        let request = try #require(client.requests.first)
+        #expect(request.url.absoluteString == "https://api.openai.test/v1/images/edits")
+        let contentType = try #require(request.headers["Content-Type"])
+        #expect(contentType.hasPrefix("multipart/form-data; boundary=----swiftpwa-"))
+        // RFC 2046: boundary ≤ 70 chars.
+        let boundary = String(contentType.split(separator: "=", maxSplits: 1)[1])
+        #expect(boundary.count <= 70)
+        let bodyText = try String(decoding: #require(request.body), as: UTF8.self)
+        #expect(bodyText.contains("name=\"image\"; filename=\"image.png\""))
+        #expect(bodyText.contains("name=\"prompt\""))
+        #expect(bodyText.contains("make it snowy"))
+        #expect(!bodyText.contains("name=\"mask\"")) // omitted (no mask supplied)
+    }
+
+    // MARK: async submit → poll (job APIs)
+
+    @Test func asyncPollSubmitsThenPollsUntilSucceeded() async throws {
+        let pngBytes = try #require(Data(base64Encoded: onePixelPNGBase64))
+        let pollCount = Counter()
+        let client = ScriptedClient { request in
+            let path = request.url.path
+            if path.contains("image-synthesis") { // submit
+                return NetResponse(status: 200, body: j(["output": ["task_id": "task-1", "task_status": "PENDING"]]))
+            }
+            if path.contains("/tasks/task-1") { // poll — PENDING once, then SUCCEEDED
+                let n = pollCount.next()
+                if n < 2 {
+                    return NetResponse(status: 200, body: j(["output": ["task_status": "RUNNING"]]))
+                }
+                return NetResponse(status: 200, body: j([
+                    "output": ["task_status": "SUCCEEDED", "results": [["url": "https://oss.test/out.png"]]]
+                ]))
+            }
+            if request.url.absoluteString.contains("oss.test") { return NetResponse(status: 200, body: pngBytes) }
+            return NetResponse(status: 404)
+        }
+        // A fast poll interval so the test doesn't dawdle.
+        var spec = RESTImageAPISpec.qwen()
+        spec.flow.pollIntervalMs = 5
+        let config = try AIWorkflowConfig(
+            connection: AIConnection(baseURL: #require(URL(string: "https://dashscope.test/api/v1"))),
+            graph: spec.encoded(),
+            inputs: ["prompt": .string("a red fox")]
+        )
+        let events = try await collect(RESTImageProvider().runWorkflow(config: config, client: client))
+        // The submit carried X-DashScope-Async, and the status changes surfaced as progress.
+        let submit = try #require(client.requests.first)
+        #expect(submit.headers["X-DashScope-Async"] == "enable")
+        let stages = events.filter { $0.type == .progress }.compactMap(\.stage)
+        #expect(stages.contains("running"))
+        #expect(stages.contains("succeeded"))
+        #expect(events.count(where: { $0.type == .image }) == 1)
+        #expect(events.last?.type == .done)
+    }
+
+    @Test func asyncPollFailsFastOnFailureStatus() async throws {
+        let client = ScriptedClient { request in
+            if request.url.path.contains("image-synthesis") {
+                return NetResponse(status: 200, body: j(["output": ["task_id": "t", "task_status": "PENDING"]]))
+            }
+            return NetResponse(status: 200, body: j(["output": ["task_status": "FAILED"]]))
+        }
+        var spec = RESTImageAPISpec.qwen()
+        spec.flow.pollIntervalMs = 5
+        let config = try AIWorkflowConfig(
+            connection: AIConnection(baseURL: #require(URL(string: "https://dashscope.test/api/v1"))),
+            graph: spec.encoded(),
+            inputs: ["prompt": .string("x")]
+        )
+        await #expect(throws: (any Error).self) {
+            _ = try await collect(RESTImageProvider().runWorkflow(config: config, client: client))
+        }
+    }
+}
+
+/// A tiny thread-safe counter for the scripted poll sequence.
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+    func next() -> Int { lock.withLock { defer { value += 1 }; return value } }
 }

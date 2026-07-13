@@ -149,7 +149,8 @@ struct ComfyUIWorkflowProviderTests {
         for try await event in provider().runWorkflow(config: config, client: client) where event.type == .image {
             seeds.append(event.image?.seed)
         }
-        let seed = try #require(seeds.first ?? nil)
+        let firstSeed: Int? = seeds.first ?? nil
+        let seed = try #require(firstSeed)
         let promptReq = try #require(client.requests.first { $0.url.path.hasSuffix("/prompt") })
         let promptBody = try #require(promptReq.body)
         let posted = try #require(try JSONSerialization.jsonObject(with: promptBody) as? [String: Any])

@@ -197,6 +197,40 @@ inputs a request can't model (two images, a control image, exotic params), call
 
 See [`docs/sample-workflows/`](sample-workflows/) for sanitized example exports.
 
+## Running an imported workflow from JS (runtime)
+
+Everything above is a *Swift* API wired at build time — one graph per
+`ComfyWorkflowProvider`, one endpoint per `ComfyUIProvider(baseURL:)`. To let the
+**running web app** import a graph, point at a box, and run it — no rebuild —
+install `AIWorkflowPlugin`, which exposes `ai.run` / `ai.describeInputs` on the
+`ai.*` namespace. Both the **graph and the connection travel in each call**, so
+one registered provider serves any number of user-entered workflows and boxes:
+
+```swift
+ctx.use(AIWorkflowPlugin(
+    providers: [ComfyUIWorkflowProvider()],   // stateless w.r.t. the endpoint
+    client: net,                              // your platform NetworkClient
+    secrets: KeychainSecretStore()))          // optional — for secretRef headers
+```
+
+The web app then does: `ai.describeInputs` (graph × the box's `/object_info` →
+a typed input schema, each field keyed `"<nodeID>/<inputName>"`) → render
+controls → `ai.run` with the values (a reference/control image rides in as
+`{ dataBase64 }` / `{ path }`, uploaded by the provider) → stream `progress`
+(coarse `queued`→`running`, plus per-step `value`/`max` over ComfyUI's `/ws`) →
+`image`(s) → `done`; `unsubscribe()` cancels via `POST /interrupt`. A
+`connection.secretRef` is resolved against [`secrets.*`](secrets.md) **on the
+Swift side**, so a key-protected endpoint's key never enters the page.
+
+- **JS reference:** [`docs/javascript-api.md`](javascript-api.md#airun--aidescribeinputs--run-an-imported-workflow-at-runtime).
+- **Worked example:** `Examples/CritterFacts/…/web/workflow.html` — paste a
+  graph, introspect, set inputs (including a reference image), run with a live
+  progress bar, cancel.
+
+Additive: `ai.generateImage` and the Swift `runWorkflow`/`inspectWorkflow`
+primitives are unchanged — this is a *runtime* door alongside the *build-time*
+one.
+
 ## Composing into the switcher
 
 A remote backend is *just another `AIBackend`*, so it drops into the shipped

@@ -288,15 +288,30 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
     ) async throws -> [OutputRef] {
         let deadline = ContinuousClock.now + timeout
         var announcedRunning = false
+        // Tolerate a run of transient poll failures rather than aborting the run
+        // on the first one — the job keeps running on the box, and a brief network
+        // blip (e.g. the app backgrounded, so a `.local` mDNS lookup fails, or Wi-Fi
+        // hiccups) shouldn't lose an otherwise-fine generation. Bounded so a
+        // genuinely-dead connection still surfaces well before the overall timeout.
+        var consecutiveFailures = 0
+        let maxConsecutiveFailures = 100 // ~60s at the 600 ms default interval
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
-            // Coarse "running" signal: the prompt left the pending queue.
-            if !announcedRunning, try await isRunning(promptID, connection: connection, client: client) {
-                announcedRunning = true
-                emit(.progress(stage: "running"))
-            }
-            if let refs = try await historyOutputs(promptID, connection: connection, client: client) {
-                return refs
+            do {
+                // Coarse "running" signal: the prompt left the pending queue.
+                if !announcedRunning, try await isRunning(promptID, connection: connection, client: client) {
+                    announcedRunning = true
+                    emit(.progress(stage: "running"))
+                }
+                if let refs = try await historyOutputs(promptID, connection: connection, client: client) {
+                    return refs
+                }
+                consecutiveFailures = 0
+            } catch {
+                // A cancellation is handled by `checkCancellation` at the loop top;
+                // any other error is treated as transient until the run runs out.
+                consecutiveFailures += 1
+                if consecutiveFailures >= maxConsecutiveFailures { throw error }
             }
             try await Task.sleep(for: pollInterval)
         }

@@ -1,0 +1,384 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Run a workflow · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
+            --accent-ink: #06231a; --line: #232a35; --card: #171c24;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
+        body {
+            background: var(--bg); color: var(--ink);
+            font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column; height: 100%;
+        }
+        .bar {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            border-bottom: 1px solid var(--line); background: #131820; flex: 0 0 auto;
+            padding-top: calc(12px + env(safe-area-inset-top));
+        }
+        .back {
+            text-decoration: none; color: var(--ink); font-weight: 700;
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+        }
+        .back:active { transform: translateY(1px); }
+        .hint { color: var(--muted); font-size: 13px; flex: 1; }
+        .hint b { color: var(--accent); }
+
+        .scroll { flex: 1 1 auto; overflow-y: auto; padding: 16px; display: flex;
+            flex-direction: column; gap: 16px; padding-bottom: calc(16px + env(safe-area-inset-bottom)); }
+        .panel {
+            background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+            padding: 16px; display: flex; flex-direction: column; gap: 12px;
+        }
+        .panel h2 { margin: 0; font-size: 14px; font-weight: 700; color: var(--muted);
+            text-transform: uppercase; letter-spacing: 0.04em; }
+        label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 4px; }
+        input[type="text"], input[type="number"], textarea, select {
+            width: 100%; font: inherit; color: var(--ink); background: var(--bg);
+            border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px;
+        }
+        input:focus, textarea:focus, select:focus { outline: none; border-color: var(--accent); }
+        textarea { min-height: 96px; resize: vertical; font-family: ui-monospace, Menlo, monospace; font-size: 12px; }
+        input[type="file"] { font-size: 13px; color: var(--muted); }
+        input[type="range"] { width: 100%; accent-color: var(--accent); }
+        .field { display: flex; flex-direction: column; }
+        .field .row { display: flex; align-items: center; gap: 10px; }
+        .field .row input[type="number"] { max-width: 120px; }
+        .field .val { font-size: 12px; color: var(--muted); min-width: 44px; text-align: right; }
+        .group-head { font-size: 12px; color: var(--accent); font-weight: 700; margin-top: 6px; }
+        .seed-row { display: flex; align-items: center; gap: 10px; }
+        .seed-row label.inline { margin: 0; color: var(--ink); font-size: 13px; display: flex;
+            align-items: center; gap: 6px; }
+
+        button {
+            appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 700;
+            background: var(--accent); color: var(--accent-ink);
+            padding: 12px 18px; border-radius: 12px; transition: transform .06s ease, opacity .2s;
+        }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.5; cursor: progress; }
+        button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+        .run-row { display: flex; gap: 10px; }
+        .run-row button { flex: 1; }
+
+        progress { width: 100%; height: 10px; accent-color: var(--accent); }
+        .status { font-size: 13px; color: var(--muted); }
+        .thumb { width: 100%; border-radius: 12px; border: 1px solid var(--line); display: block; margin-top: 8px; }
+        .meta { font-size: 12px; color: var(--muted); }
+        .note { font-size: 12px; color: #e8d5a3; }
+        .err { background: #2a1d1d; border: 1px solid #5a2e2e; color: #f0c9c9;
+            border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="back" href="index.html">← Back</a>
+        <div class="hint">Import a ComfyUI <b>workflow</b>, set its inputs, and run it — on your own box.</div>
+    </div>
+
+    <div class="scroll">
+        <!-- 1. Point at a box + paste an API-format graph. Both the endpoint and
+             the graph travel in the ai.run/ai.describeInputs call, so nothing is
+             baked into the app — a new workflow or box needs no rebuild. -->
+        <section class="panel">
+            <h2>Connection + workflow</h2>
+            <div>
+                <label for="endpoint">ComfyUI endpoint</label>
+                <input type="text" id="endpoint" value="http://comfyui.local:8188" autocomplete="off" />
+            </div>
+            <div>
+                <label for="graph">Workflow graph — ComfyUI's "Save (API Format)" export</label>
+                <textarea id="graph" placeholder='{ "3": { "class_type": "KSampler", "inputs": { … } }, … }'></textarea>
+            </div>
+            <div>
+                <input type="file" id="graphfile" accept=".json,application/json" />
+            </div>
+            <button id="describe">Introspect inputs →</button>
+            <div class="err" id="describe-err" hidden></div>
+        </section>
+
+        <!-- 2. Controls built from ai.describeInputs. Each field carries a `key`
+             ("<nodeID>/<inputName>" for ComfyUI) the run values are keyed by, so
+             the page never needs to know node ids. -->
+        <section class="panel" id="inputs-panel" hidden>
+            <h2>Inputs</h2>
+            <div class="note" id="degraded-note" hidden>
+                ⚠️ The box was unreachable, so this is a graph-only schema — no
+                ranges or model-file dropdowns. Values still run.
+            </div>
+            <div id="inputs"></div>
+            <div class="run-row">
+                <button id="run">Run</button>
+                <button id="cancel" class="ghost" hidden>Cancel</button>
+            </div>
+        </section>
+
+        <!-- 3. Live progress (queued → running → per-step value/max over /ws) + results. -->
+        <section class="panel" id="progress-panel" hidden>
+            <h2>Progress</h2>
+            <progress id="bar" max="1" value="0"></progress>
+            <div class="status" id="status">Queued…</div>
+            <div class="err" id="run-err" hidden></div>
+        </section>
+
+        <section class="panel" id="results-panel" hidden>
+            <h2>Results</h2>
+            <div id="results"></div>
+        </section>
+    </div>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+
+        let schema = null;           // last AIInputSchema
+        let controls = [];           // [{ field, read: () => value|undefined }]
+        let currentGraph = null;     // parsed graph object (sent per call)
+        let sub = null;              // active ai.run subscription
+        let busy = false;
+
+        // ---- helpers ---------------------------------------------------------
+
+        function parseGraph() {
+            const raw = $("graph").value.trim();
+            if (!raw) throw new Error("Paste an API-format graph (or load a .json file).");
+            let g;
+            try { g = JSON.parse(raw); } catch (e) { throw new Error("Graph isn't valid JSON: " + e.message); }
+            // ComfyUI's UI export wraps the graph under { prompt: … }; the
+            // API-format export is the bare node map. Accept either.
+            if (g && g.prompt && typeof g.prompt === "object") g = g.prompt;
+            return g;
+        }
+
+        // Read a picked image file as bare base64 (no data: prefix) for an
+        // image/mask input — the reference/control image rides in the call.
+        function readFileBase64(file) {
+            return new Promise((resolve, reject) => {
+                const r = new FileReader();
+                r.onload = () => resolve(String(r.result).split(",")[1] || "");
+                r.onerror = () => reject(new Error("couldn't read " + file.name));
+                r.readAsDataURL(file);
+            });
+        }
+
+        // ---- render controls from the schema --------------------------------
+
+        function render(sch) {
+            const host = $("inputs");
+            host.innerHTML = "";
+            controls = [];
+            let lastGroup = null;
+            for (const f of sch.inputs) {
+                if (f.group && f.group !== lastGroup) {
+                    lastGroup = f.group;
+                    const h = document.createElement("div");
+                    h.className = "group-head";
+                    h.textContent = f.group;
+                    host.appendChild(h);
+                }
+                const wrap = document.createElement("div");
+                wrap.className = "field";
+                const label = document.createElement("label");
+                label.textContent = f.label || f.key;
+                wrap.appendChild(label);
+                controls.push(makeControl(f, wrap));
+                host.appendChild(wrap);
+            }
+        }
+
+        // Build the right control for a field type and return a reader for its
+        // value at run time (undefined ⇒ omit from the run's inputs).
+        function makeControl(f, wrap) {
+            const v = f.value;
+            switch (f.type) {
+                case "bool": {
+                    const cb = document.createElement("input");
+                    cb.type = "checkbox"; cb.checked = v === true;
+                    wrap.appendChild(cb);
+                    return { field: f, read: () => cb.checked };
+                }
+                case "enum": {
+                    const sel = document.createElement("select");
+                    for (const opt of f.options || []) {
+                        const o = document.createElement("option");
+                        o.value = o.textContent = opt; sel.appendChild(o);
+                    }
+                    if (v != null) sel.value = String(v);
+                    wrap.appendChild(sel);
+                    return { field: f, read: () => sel.value };
+                }
+                case "int": case "float": {
+                    // A slider when the box gave a range, else a plain number box.
+                    const row = document.createElement("div"); row.className = "row";
+                    const num = document.createElement("input"); num.type = "number";
+                    if (f.step != null) num.step = String(f.step);
+                    else num.step = f.type === "int" ? "1" : "any";
+                    if (f.min != null) num.min = String(f.min);
+                    if (f.max != null) num.max = String(f.max);
+                    if (v != null) num.value = String(v);
+                    row.appendChild(num);
+                    if (f.min != null && f.max != null) {
+                        const rng = document.createElement("input"); rng.type = "range";
+                        rng.min = num.min; rng.max = num.max; rng.step = num.step; rng.value = num.value;
+                        rng.addEventListener("input", () => { num.value = rng.value; });
+                        num.addEventListener("input", () => { rng.value = num.value; });
+                        row.appendChild(rng);
+                    }
+                    wrap.appendChild(row);
+                    return { field: f, read: () => {
+                        if (num.value === "") return undefined;
+                        return f.type === "int" ? parseInt(num.value, 10) : parseFloat(num.value);
+                    } };
+                }
+                case "seed": {
+                    const row = document.createElement("div"); row.className = "seed-row";
+                    const num = document.createElement("input"); num.type = "number"; num.step = "1";
+                    if (v != null) num.value = String(v);
+                    const lbl = document.createElement("label"); lbl.className = "inline";
+                    const cb = document.createElement("input"); cb.type = "checkbox"; cb.checked = true;
+                    lbl.appendChild(cb); lbl.appendChild(document.createTextNode("randomize"));
+                    const sync = () => { num.disabled = cb.checked; };
+                    cb.addEventListener("change", sync); sync();
+                    row.appendChild(num); row.appendChild(lbl);
+                    wrap.appendChild(row);
+                    // null ⇒ the backend randomizes per run and echoes the seed.
+                    return { field: f, read: () => (cb.checked || num.value === "" ? null : parseInt(num.value, 10)) };
+                }
+                case "image": case "mask": {
+                    const file = document.createElement("input");
+                    file.type = "file"; file.accept = "image/*";
+                    let b64 = null;
+                    file.addEventListener("change", async () => {
+                        b64 = file.files && file.files[0] ? await readFileBase64(file.files[0]) : null;
+                    });
+                    wrap.appendChild(file);
+                    // Only send when the user picked one; the provider uploads it
+                    // (ComfyUI /upload/image) and binds the returned filename.
+                    return { field: f, read: () => (b64 ? { dataBase64: b64 } : undefined) };
+                }
+                default: { // text
+                    const inp = document.createElement("input");
+                    inp.type = "text"; if (v != null) inp.value = String(v);
+                    wrap.appendChild(inp);
+                    return { field: f, read: () => inp.value };
+                }
+            }
+        }
+
+        // ---- describeInputs --------------------------------------------------
+
+        async function describe() {
+            $("describe-err").hidden = true;
+            $("describe").disabled = true;
+            try {
+                currentGraph = parseGraph();
+                schema = await bridge.invoke("ai.describeInputs", {
+                    provider: "comfyui",
+                    connection: { baseURL: $("endpoint").value.trim() },
+                    graph: currentGraph,
+                });
+                render(schema);
+                $("degraded-note").hidden = !schema.degraded;
+                $("inputs-panel").hidden = false;
+                $("inputs-panel").scrollIntoView({ behavior: "smooth" });
+            } catch (e) {
+                $("describe-err").textContent = "⚠️ " + ((e && e.message) || e);
+                $("describe-err").hidden = false;
+            } finally {
+                $("describe").disabled = false;
+            }
+        }
+
+        // ---- run (streaming) -------------------------------------------------
+
+        async function run() {
+            if (busy) return;
+            busy = true;
+            $("run").disabled = true; $("cancel").hidden = false;
+            $("run-err").hidden = true; $("results").innerHTML = "";
+            $("progress-panel").hidden = false; $("results-panel").hidden = true;
+            $("bar").value = 0; $("bar").max = 1; $("status").textContent = "Queued…";
+
+            // Gather inputs keyed by schema field. Image reads are async, so
+            // resolve them first, then assemble the plain map.
+            const inputs = {};
+            for (const c of controls) {
+                const val = c.read instanceof Function ? c.read() : undefined;
+                const resolved = val instanceof Promise ? await val : val;
+                if (resolved !== undefined) inputs[c.field.key] = resolved;
+            }
+
+            sub = bridge.subscribe("ai.run", {
+                provider: "comfyui",
+                connection: { baseURL: $("endpoint").value.trim() },
+                graph: currentGraph,
+                inputs,
+            },
+            (e) => {                                   // onChunk
+                if (e.type === "progress") {
+                    if (e.value != null && e.max) {
+                        $("bar").max = e.max; $("bar").value = e.value;
+                        $("status").textContent = `Running… step ${Math.round(e.value)}/${Math.round(e.max)}`;
+                    } else {
+                        $("bar").removeAttribute("value"); // indeterminate
+                        $("status").textContent = (e.stage === "running" ? "Running…" : "Queued…");
+                    }
+                } else if (e.type === "image") {
+                    showImage(e);
+                } else if (e.type === "done") {
+                    $("status").textContent = "Done.";
+                }
+            },
+            (err) => {                                 // onError
+                $("run-err").textContent = "⚠️ " + ((err && (err.message || err.code)) || "run failed");
+                $("run-err").hidden = false;
+                finish();
+            },
+            () => finish());                           // onEnd
+        }
+
+        function showImage(e) {
+            $("results-panel").hidden = false;
+            const img = e.image || {};
+            const meta = document.createElement("div");
+            meta.className = "meta";
+            meta.textContent = `seed ${img.seed ?? "?"} · ${e.width || "?"}×${e.height || "?"}`;
+            // We omit `outputDirectory`, so images come back inline as base64. (If
+            // a caller sets it, the provider returns a `path` instead; shown here
+            // as text since the WebView can't load an arbitrary file path.)
+            if (img.dataBase64) {
+                const el = document.createElement("img");
+                el.className = "thumb";
+                el.src = "data:" + (img.mimeType || "image/png") + ";base64," + img.dataBase64;
+                $("results").appendChild(el);
+            } else if (img.path) {
+                meta.textContent += ` · saved to ${img.path}`;
+            }
+            $("results").appendChild(meta);
+        }
+
+        function cancel() { if (sub) { sub(); sub = null; $("status").textContent = "Cancelled."; finish(); } }
+
+        function finish() {
+            busy = false; sub = null;
+            $("run").disabled = false; $("cancel").hidden = true;
+            $("bar").value = $("bar").max;
+        }
+
+        // Load a .json file into the textarea.
+        $("graphfile").addEventListener("change", async () => {
+            const f = $("graphfile").files && $("graphfile").files[0];
+            if (f) $("graph").value = await f.text();
+        });
+        $("describe").addEventListener("click", describe);
+        $("run").addEventListener("click", run);
+        $("cancel").addEventListener("click", cancel);
+    </script>
+</body>
+</html>

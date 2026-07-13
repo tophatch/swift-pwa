@@ -838,11 +838,12 @@ APK asset isn't a file ONNX Runtime can open" problem entirely — no
 > through a `net.ws.open` / `net.ws.close` Kotlin RPC backed by OkHttp, pushing
 > each inbound frame to Swift as a host-event on a per-socket `channel` (the
 > same side-channel shape as `net.downloadFile`). HTTPS/WSS trust is the
-> system's. Note that some mobile radios/networks aggressively reap **idle** LAN
-> sockets (seconds), aborting a long-lived progress socket that a desktop on the
-> same network holds open; the provider treats `/ws` progress as best-effort and
-> reconnects, falling back to coarse `queued`→`running` polling if the socket
-> can't be kept up.
+> system's. A live run streams fine (frames every sampling step keep the socket
+> busy — device-verified, a 15-step run reported `1/15`…`15/15`), but note that
+> some mobile radios reap a fully **idle** LAN socket within seconds, so a
+> fast/cached run that never sustains traffic can lose it between events; the
+> provider treats `/ws` progress as best-effort and reconnects, with coarse
+> `queued`→`running` polling as the floor.
 
 This section documents the packaging spike this was built on plus the
 Android-specific plumbing, so anyone reproducing the toolchain locally knows

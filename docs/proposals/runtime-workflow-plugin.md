@@ -1,18 +1,21 @@
 # Proposal: a runtime, JS-reachable AI workflow plugin (`ai.run` / `ai.describeInputs`)
 
-> **Status: Phases 1a + 1b implemented** (follow-up to the ComfyUI workflow
+> **Status: Phases 1a + 1b + 3 implemented** (follow-up to the ComfyUI workflow
 > runner, v0.8.9). `AIWorkflowPlugin` + `ai.run` / `ai.describeInputs`,
 > connection-per-call, `/interrupt` cancel, graph-only `describeInputs` fallback,
 > server-side `secretRef`, and (1b) **per-step `/ws` progress** over a new
 > `NetworkClient.openWebSocket` transport — `URLSessionWebSocketTask` on
 > Apple/Linux/Windows, and on Android an OkHttp-backed `net.ws.*` Kotlin RPC
 > (`HttpURLConnection` has no WebSocket) that forwards frames to Swift as
-> host-events. All live-verified against a real ComfyUI (the Android RPC
-> round-trips real progress frames on-device; see the CHANGELOG for an
-> environment-level idle-socket caveat observed on one test network).
-> **Deferred:** the
-> cross-provider schema generalization (Phase 2) and the example/JS-API docs
-> (Phase 3). Depends on `SwiftPWARemoteAI` + the `ai.*` plugin + the shipped
+> host-events. All live-verified against a real ComfyUI (device-verified on a
+> Galaxy Tab S10+: a 15-step run streamed `1/15`…`15/15` live; some mobile radios
+> reap a fully *idle* socket, which the reconnect covers — see the CHANGELOG).
+> Phase 3 (example + JS-API docs) landed too: `Examples/CritterFacts`'
+> `web/workflow.html` (import a graph → `describeInputs` → controls → `ai.run`
+> with a reference image → progress → cancel) + `docs/javascript-api.md` +
+> `docs/remote-ai.md`. **Deferred:** the cross-provider schema generalization
+> (Phase 2 — `ImagenProvider`/on-device `describeInputs`). Depends on
+> `SwiftPWARemoteAI` + the `ai.*` plugin + the shipped
 > `runWorkflow` / `inspectWorkflow` Swift primitives.
 
 ## The problem

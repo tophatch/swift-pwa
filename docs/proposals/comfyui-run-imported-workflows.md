@@ -133,6 +133,49 @@ the UI exposes as a control** (size, steps, cfg, seed, prompts, images):
 They compose: bindings apply *on top of* whatever graph you pass, so an app can
 pre-bake structural choices in the graph and still bind the live UI controls.
 
+## Introspection — list a workflow's overridable inputs
+
+Given an imported graph, return what's parameterizable so a UI can build controls
+(and bindings) automatically, instead of the adopter hand-declaring them:
+
+```swift
+let inputs = try await comfy.inspectWorkflow(graph: importedGraphJSON)
+// [WorkflowInput { nodeId, nodeClass, title, inputName, type, currentValue,
+//                  min?, max?, step?, options?[], isImage }]
+```
+
+Two sources combine:
+
+- **The graph** distinguishes *literal* inputs (a widget value — overridable)
+  from *connection* inputs (`[nodeId, outputIndex]` — wired, excluded). The
+  literals, with their current values + node `_meta.title`, are the candidate set.
+- **`GET /object_info`** (fetched once, cached) enriches each literal by its
+  node's `class_type` + input name: real type (`INT`/`FLOAT`/`STRING`/`BOOLEAN`/
+  combo), default, **min / max / step**, and **combo options** — including
+  per-instance model file lists (`ckpt_name`, `unet_name`), sampler names, etc. An
+  `IMAGE`-typed input (e.g. `LoadImage.image`) is flagged `isImage` so the UI
+  offers a file picker and the runner knows to upload it.
+
+**Introspection auto-produces bindings.** Each `WorkflowInput` already carries its
+`(nodeId, inputName)` — a binding location — so the app turns a user-chosen input
+straight into a binding + value; no manual binding map for the common case.
+
+Two honesty caveats, handled in the API shape:
+
+- **Candidate ≠ should-surface.** A graph has many literals a UI shouldn't show
+  (internal constants, a VAE name that must match). `inspectWorkflow` returns
+  *all* candidates; the app filters. A convenience flag returns only
+  title-tagged inputs (author-intended), and titles become the friendly labels.
+- **No semantic intent.** We can't tell "prompt" from "negative prompt" (both
+  `CLIPTextEncode.text`); the UI shows `title ?? "\(nodeClass) #\(nodeId) · \(inputName)"`
+  and the human labels/curates. Titling the nodes in ComfyUI is the fix, and ties
+  straight into the title-convention binding.
+
+This is worth doing in the framework (not each app): the graph-walk + the
+`/object_info` cross-reference (types, ranges, per-box enum/model lists) is
+non-trivial and identical for everyone; the provider is already positioned to
+fetch `/object_info`.
+
 ## How it's exposed (and where the app's responsibility starts)
 
 **The app owns import, storage, and selection of workflows** — the framework does
@@ -166,9 +209,10 @@ it's no longer how pipelines get into the app — importing a workflow is.
 
 ## Open questions
 
-1. **Binding ergonomics.** Is title-convention enough for the common case, or do
-   most real workflows need explicit bindings? Lean: ship both; make the sample
-   use titles to show the turnkey path.
+1. **Binding ergonomics.** Largely answered by introspection (above): the app
+   discovers overridable inputs + their locations and derives bindings, so
+   hand-written binding maps are the exception. Title-convention + explicit
+   bindings remain for curation/labels and disambiguation.
 2. **Input value types.** v1 set: `text`, `int`, `float`, `bool`, `image`,
    `mask`, `raw(JSONValue)`. Covers prompt/seed/steps/cfg/size/denoise + image
    inputs + an escape hatch; arbitrary *named* inputs and one-to-many fan-out are
@@ -190,10 +234,13 @@ it's no longer how pipelines get into the app — importing a workflow is.
 
 ## Phasing
 
-- **Phase A — the runner core:** `runWorkflow(graph:inputs:bindings:)` — submit
-  an API-format graph, bind scalar/string inputs (title-convention + explicit),
-  seed policy, poll + extract images. Refactor the shipped `txt2imgSDXL` template
-  to run through it. Verify a real imported txt2img workflow (Qwen / Flux) runs
+- **Phase A — the runner core + introspection:** `runWorkflow(graph:inputs:bindings:)`
+  — submit an API-format graph, bind scalar/string inputs (title-convention +
+  explicit), seed policy, poll + extract images — plus `inspectWorkflow(graph:)`
+  (graph literals × `/object_info` → the overridable-input list with types /
+  ranges / options, each carrying its binding location). Refactor the shipped
+  `txt2imgSDXL` template to run through the runner. Verify a real imported
+  txt2img workflow (Qwen / Flux): introspect → override a param → generate,
   end-to-end against the box.
 - **Phase B — image input:** `/upload/image` choreography + `.image` / `.mask`
   input types; verify a real img2img / edit workflow (source image → edited

@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.11] - 2026-07-13
+
+### Added
+
+- **Runtime workflow surface is now provider-agnostic — `ai.run` / `ai.describeInputs` work beyond ComfyUI (Phase 2).** v0.8.10 shipped the runtime door with a single conformance (`ComfyUIWorkflowProvider`); the Core contract was already generic, so this adds the other providers so the *same* JS page drives all of them from a picker:
+  - **`ImagenProvider` now conforms to `AIWorkflowProvider`** (`providerID: "imagen"`) — a **fixed-schema** cloud provider. `ai.describeInputs` returns a static control set (`prompt`, a `model` enum when more than one is configured, an `aspectRatio` enum, `count` 1–4, `seed`) with no graph and no network probe; `ai.run` maps the inputs onto its `:predict` call and streams a coarse `running` → `image`(s) → `done` (one-shot — no per-step progress). Auth for this path prefers a key carried on the **connection** (a header resolved from `secretRef` server-side — the fully-runtime route) and falls back to the key injected at construction, so an app can drive Imagen either way; no connection is required.
+  - **`AIBackendWorkflowProvider` (Core) adapts *any* `AIBackend`** into a fixed-schema `AIWorkflowProvider`, so on-device image models (Stable Diffusion, LaMa) answer the runtime surface through the same UI. One generic adapter covers every current and future backend (they stay unaware of the workflow surface); the schema is derived from the backend's `AICapabilities` — a text→image backend advertises `prompt`/`negativePrompt`/`steps`/`guidanceScale`/`seed`/`count` (+ a `model` enum when it hosts several), a pure inpainter (`imageEditing` only, e.g. LaMa) advertises just `image`/`mask` — and `runWorkflow` bridges the backend's `generateImageStream` (per-step `progress` → `.progress`, terminal images → `.image`, then `.done`). No `jobId`/recovery (on-device runs aren't re-attachable).
+  - **`AIWorkflowPlugin` no longer requires a `connection`** in `ai.run` / `ai.describeInputs` — it's optional now (fixed-schema and on-device providers ignore it; the plugin supplies an `about:blank` placeholder). ComfyUI still needs a real one to reach the box.
+  - **`Examples/CritterFacts` `web/workflow.html` gained a provider picker** (ComfyUI / Imagen / on-device); the endpoint + graph fields show only for ComfyUI, and the same schema→controls renderer builds each provider's inputs. CritterFacts registers all three providers in one `AIWorkflowPlugin`. Docs in [docs/remote-ai.md](docs/remote-ai.md) and [docs/javascript-api.md](docs/javascript-api.md).
+
+  **Resolves open question Q3** (schema for non-image modalities): `AIInputField.Kind` (`text`/`int`/`float`/`bool`/`enum`/`seed` + the image-specific `image`/`mask`) already generalizes to text/audio provider inputs — no new kinds were needed for Phase 2; a future audio/video *output* verb reuses the same field kinds and only adds a binary input kind if a provider needs one. Phase 2 of [docs/proposals/runtime-workflow-plugin.md](docs/proposals/runtime-workflow-plugin.md).
+
 ## [0.8.10] - 2026-07-13
 
 ### Added

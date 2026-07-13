@@ -293,9 +293,16 @@ bridge payload.
   build-time endpoint would collapse the "runtime" claim. Verified live: enter an
   endpoint + paste a graph → describe → render → run a reference-image workflow →
   progress bar → cancel mid-run.
-- **Phase 2 — generalize the schema across providers.** Lift `AIInputField` /
-  `AIInputSchema` into the shared contract; `ImagenProvider.describeInputs`
-  (fixed) and on-device providers; one JS UI renders any provider's controls.
+- **Phase 2 — generalize the schema across providers. ✅ Shipped.**
+  `AIInputField` / `AIInputSchema` were already in the shared Core contract, so
+  Phase 2 added the other conformances: **`ImagenProvider`** conforms to
+  `AIWorkflowProvider` (fixed schema, one-shot `:predict`), and a generic
+  **`AIBackendWorkflowProvider`** (Core) adapts *any* `AIBackend` — so on-device
+  Stable Diffusion / LaMa answer the runtime surface, schema derived from
+  `AICapabilities`. `ai.run` / `ai.describeInputs` no longer require a
+  `connection` (fixed / on-device providers ignore it; a placeholder is
+  supplied). One JS UI (`web/workflow.html`) renders any provider's controls
+  behind a picker. Q3 (non-image modalities) resolved — see below.
 - **Phase 3 — example + docs.** A `CritterFacts` page that imports a workflow,
   builds controls from `describeInputs`, runs with a reference image, shows
   progress, and cancels; `docs/remote-ai.md` + `docs/javascript-api.md`.
@@ -313,8 +320,14 @@ bridge payload.
    registered": once the connection travels in the call there's no pre-registered
    per-endpoint provider to detect, so the gate is capability-present, not
    model-present.
-3. **Schema for non-image modalities.** `AIInputField` is drawn for image gen;
-   does it generalize to text/audio provider inputs later, or stay image-scoped?
+3. **Schema for non-image modalities — resolved (Phase 2).** `AIInputField.Kind`
+   is already modality-neutral except for the image-specific `image` / `mask`
+   (+ `isImage`): `text` / `int` / `float` / `bool` / `enum` / `seed` describe a
+   text or audio provider's inputs just as well. So the field type generalizes
+   as-is — Phase 2 added no new kinds. A future audio/video **output** verb
+   (`ai.generateAudio`-style) reuses these field kinds for its inputs and only
+   adds a new binary-input kind (e.g. `audio`) if a provider needs to *accept*
+   one. Kept additive.
 4. **Graph size / cache handle — defer (resolved).** A big graph as a JSON string
    per call is fine. The network-expensive call is `describeInputs`
    (`/object_info`), which the app caches in its stored plugin definition;

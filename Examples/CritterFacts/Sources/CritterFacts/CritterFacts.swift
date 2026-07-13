@@ -194,6 +194,12 @@ func configure(_ ctx: any AppContext) throws {
     // Build the text backend for this platform (nil if none is in the build).
     let textBackend = makeTextBackend(ctx)
 
+    // Providers for the runtime workflow surface (`ai.run` / `ai.describeInputs`).
+    // ComfyUI (a graph provider) is always present; the branches below add the
+    // fixed-schema providers — Imagen (cloud) and the on-device image models —
+    // so the *same* JS page (web/workflow.html) drives all three from a picker.
+    var workflowProviders: [any AIWorkflowProvider] = [ComfyUIWorkflowProvider()]
+
     #if canImport(SwiftPWAImageEdit)
         // Image editing is on (`ai.local_onnx_runtime`): compose the text
         // backend and LaMa inpainting behind the one `ai.*` surface — the demo
@@ -264,21 +270,30 @@ func configure(_ ctx: any AppContext) throws {
             // securely" pattern real cloud-backed apps need — see docs/secrets.md.
             let secretStore = makeSecretStore()
             ctx.use(SecretsPlugin(secretStore))
-            let imagen = RemoteImageBackend(
-                provider: ImagenProvider(apiKey: { try? await secretStore.get(imagenAPIKeyName) }),
-                client: makeNetworkClient()
-            )
+            let imagenProvider = ImagenProvider(apiKey: { try? await secretStore.get(imagenAPIKeyName) })
+            let imagen = RemoteImageBackend(provider: imagenProvider, client: makeNetworkClient())
             ctx.use(AIPlugin(CompositeAIBackend(
                 text: textBackend, image: lama, imageGen: imageModels, comfy: comfy,
                 imagen: imagen,
                 imagenKeyPresent: { (try? await secretStore.get(imagenAPIKeyName)) != nil }
             )))
+            // Phase 2: expose the same backends through the runtime workflow
+            // surface. Imagen conforms to `AIWorkflowProvider` directly (a
+            // fixed-schema cloud provider); the on-device SD models ride the
+            // generic `AIBackendWorkflowProvider` adapter (any `AIBackend` → a
+            // fixed-schema provider). No graph, no rebuild — `ai.describeInputs`
+            // returns their controls and `ai.run` streams progress → image.
+            workflowProviders.append(imagenProvider)
+            workflowProviders.append(AIBackendWorkflowProvider(providerID: "on-device", backend: imageModels))
             // Also expose the raw `net.*` plugin so the page can make native,
             // CORS-free HTTP calls (and so the remote arm's transport is
             // exercisable directly). Opt-in, so registered explicitly here.
             ctx.use(NetPlugin(makeNetworkClient()))
         #else
             ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
+            // No SD in this build, but LaMa (pure inpaint, `imageEditing` only)
+            // still demonstrates a fixed-schema on-device workflow provider.
+            workflowProviders.append(AIBackendWorkflowProvider(providerID: "on-device", backend: lama))
         #endif
     #else
         if let textBackend {
@@ -292,18 +307,19 @@ func configure(_ ctx: any AppContext) throws {
         }
     #endif
 
-    // Runtime, JS-reachable workflow door (`ai.run` / `ai.describeInputs`). The
-    // web app imports an API-format ComfyUI graph, introspects its overridable
-    // inputs, and runs it with per-step progress — the endpoint and graph both
-    // travel in each call, so there's no rebuild per workflow or per box. Opt-in
-    // + additive (separate from `AIPlugin`, shares the `ai.*` namespace like
-    // `VisionPlugin`); it only needs a `NetworkClient`, so it's wired
-    // unconditionally here. The optional secret store lets a call carry a
-    // `secretRef` (resolved server-side into `${secret}` headers) for a
-    // key-protected endpoint — unused by the plain LAN demo. See web/workflow.html
+    // Runtime, JS-reachable workflow door (`ai.run` / `ai.describeInputs`), now
+    // provider-agnostic (Phase 2): the picker on web/workflow.html chooses among
+    // ComfyUI (import an API-format graph, introspect it, run with per-step
+    // progress — endpoint + graph travel in each call, no rebuild per box),
+    // Imagen (a fixed-schema cloud provider), and the on-device image models (via
+    // the generic `AIBackendWorkflowProvider` adapter). Opt-in + additive
+    // (separate from `AIPlugin`, shares the `ai.*` namespace like `VisionPlugin`);
+    // needs only a `NetworkClient`, so it's wired unconditionally here. The
+    // optional secret store lets a call carry a `secretRef` (resolved server-side
+    // into `${secret}` headers) for a key-protected endpoint. See web/workflow.html
     // and docs/remote-ai.md ("Running an imported workflow from JS").
     ctx.use(AIWorkflowPlugin(
-        providers: [ComfyUIWorkflowProvider()],
+        providers: workflowProviders,
         client: makeNetworkClient(),
         secrets: makeSecretStore()
     ))

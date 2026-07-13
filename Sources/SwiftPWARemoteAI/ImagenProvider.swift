@@ -59,17 +59,42 @@ public struct ImagenProvider: RemoteImageProvider {
         guard let key = await apiKey(), !key.isEmpty else {
             throw AIError.generationFailed("no Google AI API key — set one to use Imagen")
         }
-        let modelID = resolveModel(request.model)
-
-        // Imagen's `seed` requires `addWatermark: false` and a single sample, so
-        // an explicit seed forces sampleCount = 1; without one, no seed is sent
-        // (the result is non-deterministic and its echoed seed is nil).
-        let hasSeed = request.seed != nil
-        let sampleCount = hasSeed ? 1 : min(max(request.count ?? 1, 1), 4)
-        let parameters = Parameters(
-            sampleCount: sampleCount,
+        return try await predict(
+            prompt: prompt,
+            modelID: resolveModel(request.model),
             aspectRatio: aspectRatio(width: request.width, height: request.height),
             seed: request.seed,
+            count: request.count,
+            key: key,
+            baseURL: baseURL,
+            outputDirectory: request.outputDirectory,
+            client: client
+        )
+    }
+
+    /// The shared `:predict` choreography, parameterized on everything both entry
+    /// surfaces vary — the `ai.generateImage` path (key/base injected at
+    /// construction) and the runtime `ai.run` workflow path (key/base from the
+    /// per-call connection). Applies Imagen's seed policy: an explicit seed forces
+    /// `sampleCount = 1` + `addWatermark: false`; without one, no seed is sent (the
+    /// result is non-deterministic and its echoed seed is nil).
+    private func predict(
+        prompt: String,
+        modelID: String,
+        aspectRatio: String?,
+        seed: Int?,
+        count: Int?,
+        key: String,
+        baseURL: String,
+        outputDirectory: String?,
+        client: any NetworkClient
+    ) async throws -> [AIGeneratedImage] {
+        let hasSeed = seed != nil
+        let sampleCount = hasSeed ? 1 : min(max(count ?? 1, 1), 4)
+        let parameters = Parameters(
+            sampleCount: sampleCount,
+            aspectRatio: aspectRatio,
+            seed: seed,
             addWatermark: hasSeed ? false : nil
         )
         let body = try JSONEncoder().encode(Body(instances: [Instance(prompt: prompt)], parameters: parameters))
@@ -101,8 +126,8 @@ public struct ImagenProvider: RemoteImageProvider {
             return try RemoteImageOutput.make(
                 bytes: bytes,
                 mimeType: prediction.mimeType ?? "image/png",
-                seed: request.seed,
-                outputDirectory: request.outputDirectory,
+                seed: seed,
+                outputDirectory: outputDirectory,
                 index: index
             )
         }
@@ -168,5 +193,134 @@ public struct ImagenProvider: RemoteImageProvider {
     private struct APIError: Decodable {
         let code: Int?
         let message: String?
+    }
+}
+
+// MARK: - Runtime workflow surface (ai.run / ai.describeInputs)
+
+/// Imagen as a **fixed-schema** ``AIWorkflowProvider`` — the runtime, JS-reachable
+/// counterpart to its `ai.generateImage` role. It answers `ai.describeInputs`
+/// with a static control set (no graph, no network probe) and `ai.run` with a
+/// one-shot `:predict` (no per-step progress — a coarse `running` then the
+/// `image`(s) then `done`), so a JS app renders Imagen controls through the *same*
+/// UI it uses for a ComfyUI graph. This is what makes the runtime surface genuinely
+/// provider-agnostic rather than ComfyUI-only.
+///
+/// Auth for this path prefers a key carried on the **connection** (a header
+/// resolved from `secretRef` server-side — the fully-runtime route) and falls back
+/// to the key injected at construction; the endpoint is `connection.baseURL` when
+/// it's a real `http(s)` origin, else the injected `baseURL`. So an app can drive
+/// Imagen either by supplying everything in the call or by relying on what it wired
+/// in — no connection is required (the plugin passes a placeholder).
+extension ImagenProvider: AIWorkflowProvider {
+    public var providerID: String {
+        "imagen"
+    }
+
+    /// Imagen's supported aspect ratios (the `aspectRatio` enum's options).
+    static let aspectRatios = ["1:1", "3:4", "4:3", "9:16", "16:9"]
+
+    public func describeInputs(
+        config _: AIWorkflowConfig,
+        client _: any NetworkClient
+    ) async throws -> AIInputSchema {
+        var fields: [AIInputField] = [
+            AIInputField(key: "prompt", label: "Prompt", type: .text)
+        ]
+        // Advertise the model choice only when there's more than one.
+        if models.count > 1 {
+            fields.append(AIInputField(
+                key: "model", label: "Model", type: .enum,
+                value: .string(models.first?.id ?? ""), options: models.map(\.id)
+            ))
+        }
+        fields.append(contentsOf: [
+            AIInputField(
+                key: "aspectRatio", label: "Aspect ratio", type: .enum,
+                value: .string("1:1"), options: Self.aspectRatios
+            ),
+            AIInputField(
+                key: "count", label: "Number of images", type: .int,
+                value: .number(1), min: 1, max: 4, step: 1
+            ),
+            AIInputField(key: "seed", label: "Seed", type: .seed)
+        ])
+        // Fixed schema, always live (no /object_info to cross), so never degraded.
+        return AIInputSchema(inputs: fields, degraded: false)
+    }
+
+    public func runWorkflow(
+        config: AIWorkflowConfig,
+        client: any NetworkClient
+    ) -> AsyncThrowingStream<AIRunEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                do {
+                    let inputs = config.inputs
+                    guard let prompt = Self.string(inputs["prompt"]), !prompt.isEmpty else {
+                        throw AIError.generationFailed("Imagen requires a prompt")
+                    }
+                    let key = try await resolvedKey(config.connection)
+                    let base = Self.endpointBaseURL(config.connection) ?? baseURL
+                    let modelID = resolveModel(Self.string(inputs["model"]))
+
+                    // Coarse `running` — Imagen is one-shot (no progressive tier).
+                    continuation.yield(.progress(stage: "running"))
+                    let images = try await predict(
+                        prompt: prompt,
+                        modelID: modelID,
+                        aspectRatio: Self.string(inputs["aspectRatio"]),
+                        seed: Self.int(inputs["seed"]),
+                        count: Self.int(inputs["count"]),
+                        key: key,
+                        baseURL: base,
+                        outputDirectory: config.outputDirectory,
+                        client: client
+                    )
+                    for image in images {
+                        try Task.checkCancellation()
+                        continuation.yield(.image(image))
+                    }
+                    continuation.yield(.done)
+                    continuation.finish()
+                } catch {
+                    continuation.finish(throwing: error)
+                }
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+
+    /// Prefer a key carried on the connection (a `secretRef`-resolved header),
+    /// falling back to the injected closure. A left-behind `${secret}` placeholder
+    /// (no store to resolve it) is treated as absent.
+    private func resolvedKey(_ connection: AIConnection) async throws -> String {
+        if let header = connection.headers["x-goog-api-key"],
+           !header.isEmpty, !header.contains("${secret}")
+        {
+            return header
+        }
+        if let key = await apiKey(), !key.isEmpty { return key }
+        throw AIError.generationFailed("no Google AI API key — set one to use Imagen")
+    }
+
+    /// The connection's `baseURL` when it's a real `http(s)` origin; `nil` for the
+    /// plugin's `about:blank` placeholder (so the injected base is used instead).
+    private static func endpointBaseURL(_ connection: AIConnection) -> String? {
+        guard let scheme = connection.baseURL.scheme, scheme == "http" || scheme == "https" else { return nil }
+        return connection.baseURL.absoluteString
+    }
+
+    private static func string(_ value: JSONValue?) -> String? {
+        if case let .string(string)? = value { return string }
+        return nil
+    }
+
+    private static func int(_ value: JSONValue?) -> Int? {
+        switch value {
+        case let .number(number)?: Int(number)
+        case let .string(string)?: Int(string)
+        default: nil
+        }
     }
 }

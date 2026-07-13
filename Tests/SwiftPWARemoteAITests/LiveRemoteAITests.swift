@@ -188,6 +188,9 @@ struct LiveRemoteAITests {
         let seed = try #require(imageEvent?.image?.seed)
         let bytes = try #require(image.dataBase64.flatMap { Data(base64Encoded: $0) })
         #expect(bytes.count > 1000)
+        // Persist so the runtime-path output can be eyeballed (the older
+        // provider tests write remote-comfy*.png; this writes remote-runtime-run.png).
+        try assertImage(AIGenerateImageResult(images: [image], backend: "comfyui-runtime"), label: "runtime-run")
         print("[runtime.run] seed=\(seed) dims=\(imageEvent?.width ?? 0)x\(imageEvent?.height ?? 0) "
             +
             "fineProgress=\(fineProgress)/\(lastMax.map { Int($0) } ?? 0) stages=\(stages.count) bytes=\(bytes.count)")

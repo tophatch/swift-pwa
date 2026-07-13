@@ -539,6 +539,71 @@ place but no on-device backend is wired yet, so `ai.info` reports
 `available: false` until one lands. Full reference, backend protocol, and
 roadmap: [docs/ai-plugin.md](ai-plugin.md).
 
+### `ai.run` / `ai.describeInputs` — run an imported workflow at runtime
+
+`ai.generateImage` above has a *fixed* field set. `ai.run` is the open door:
+the web app hands a provider **a graph and a connection per call** and runs it —
+no rebuild per workflow or per endpoint. Today's provider is ComfyUI (any
+"Save (API Format)" graph the app imported); the surface is provider-agnostic.
+Opt-in on the Swift side: `ctx.use(AIWorkflowPlugin(providers: [ComfyUIWorkflowProvider()], client: …, secrets: …))`.
+
+```js
+// 1. Ask the provider what the graph's overridable inputs are. For ComfyUI this
+//    crosses the graph's literal (widget) inputs with the box's /object_info, so
+//    each field gets a real type / range / combo options — no hand-written map.
+const schema = await __SWIFT_PWA__.invoke('ai.describeInputs', {
+    provider: 'comfyui',
+    connection: { baseURL: 'http://my-nas.local:8188' },
+    graph: importedGraphJSON,        // object or string; omit for fixed providers
+    // titledOnly: true              // graph providers: only author-titled inputs
+});
+// schema.inputs: [{ key, label, type, value, min?, max?, step?, options?, group?, isImage }]
+//   type: 'text' | 'int' | 'float' | 'bool' | 'enum' | 'image' | 'mask' | 'seed'
+//   key:  an opaque handle you send run values under — "<nodeID>/<inputName>" for ComfyUI.
+// schema.degraded === true ⇒ the box was unreachable, so it's a graph-only
+//   schema (widget-derived types, no ranges/options); values still run.
+
+// 2. Run it, streaming progress → image(s) → done. `inputs` is keyed by the
+//    schema's `key`; an image/mask value is { dataBase64 } or { path }, uploaded
+//    by the provider before the run. A `seed` of null randomizes per run.
+const stop = __SWIFT_PWA__.subscribe('ai.run', {
+    provider: 'comfyui',
+    connection: {
+        baseURL: 'http://my-nas.local:8188',
+        headers: {},                 // open bag — reverse-proxy tokens, custom auth
+        // secretRef: 'my-api-key',   // resolved server-side against secrets.* into ${secret} headers
+    },
+    graph: importedGraphJSON,
+    inputs: {
+        '6/text': 'a red panda astronaut',
+        '10/image': { dataBase64: '…' },   // a reference / control image
+        '3/seed': null,                     // randomized per run, echoed back
+    },
+    // outputDirectory: dataDir + '/runs',  // omit ⇒ images come back as dataBase64
+}, (e) => {                          // onChunk
+    if (e.jobId) lastJobId = e.jobId;                                // remember for recovery (below)
+    if (e.type === 'progress') updateBar(e.value, e.max, e.stage);   // value/max fine when available
+    if (e.type === 'image')    show(e.image, e.width, e.height);     // image: { dataBase64|path, mimeType, seed }
+    if (e.type === 'done')     markDone();
+}, (err) => showError(err),          // onError
+   () => finish());                  // onEnd
+// cancel: stop()  → the provider interrupts the running job (ComfyUI POST /interrupt).
+
+// Recovery: every event carries a `jobId` once the job is submitted. If the
+// stream is torn down (e.g. the app was backgrounded and a poll failed),
+// re-issue ai.run with that id — no graph/inputs — to re-attach: the provider
+// checks the box's /history + /queue and resumes streaming, or returns the
+// finished outputs, or errors fast if the id is gone.
+__SWIFT_PWA__.subscribe('ai.run', { provider: 'comfyui', connection, jobId: lastJobId }, onChunk, onError, onEnd);
+```
+
+Progress is coarse (`stage: 'queued' → 'running'`) plus per-step `value`/`max`
+when the provider can stream it (ComfyUI over `/ws`). `secretRef` is resolved
+against [`secrets.*`](#secrets--secure-secret-storage) **on the Swift side**, so
+key material never enters the page. A unary `invoke('ai.run', …)` form also works
+for callers that don't need progress. Deep dive + the Swift `runWorkflow` /
+`inspectWorkflow` primitives: [docs/remote-ai.md](remote-ai.md).
+
 ### `ai.vision.*` — promptable on-device image segmentation
 
 Unrelated to `ai.info`'s `vision` flag above (that's *generative* backends

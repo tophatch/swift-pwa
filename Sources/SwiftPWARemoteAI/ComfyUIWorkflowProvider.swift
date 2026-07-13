@@ -125,58 +125,28 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         promptBox: PromptBox,
         emit: @escaping @Sendable (AIRunEvent) -> Void
     ) async throws {
-        guard let graphData = config.graph,
-              var graph = try JSONSerialization.jsonObject(with: graphData) as? [String: Any]
-        else {
-            throw AIError.generationFailed("ComfyUI run needs an API-format graph")
-        }
-
-        // Pass 1 (async): upload any image/mask inputs → filenames. Keeps the
-        // non-Sendable graph dict out of the await that follows.
-        var uploaded: [String: String] = [:]
-        for (key, value) in config.inputs where Self.imageBytes(value) != nil {
-            let bytes = Self.imageBytes(value)!
-            uploaded[key] = try await uploadImage(bytes, config.connection, client: client)
-        }
-
-        // Pass 2 (sync): bind every input into the graph by its "<node>/<input>"
-        // key; track the resolved seed to echo on results.
-        let runSeed = Int.random(in: 0 ... Int(UInt32.max))
+        let promptID: String
         var echoSeed: Int?
-        for (key, value) in config.inputs {
-            guard let location = Self.location(for: key) else { continue }
-            let bound: Any
-            if let filename = uploaded[key] {
-                bound = filename
-            } else if Self.isSeed(key), case .null = value {
-                bound = runSeed; echoSeed = runSeed
-            } else if Self.isSeed(key), case let .number(n) = value {
-                bound = Int(n); echoSeed = Int(n)
-            } else if let coerced = Self.coerce(value) {
-                bound = coerced
-            } else {
-                continue
+
+        if let jobId = config.jobId, !jobId.isEmpty {
+            // Recovery: re-attach to an existing job instead of submitting. Verify
+            // it exists first so an unknown / already-collected id fails fast
+            // rather than polling to the timeout. The seed isn't recoverable from
+            // the id alone, so results echo a nil seed on this path.
+            guard try await jobExists(jobId, connection: config.connection, client: client) else {
+                throw AIError.generationFailed(
+                    "ComfyUI job \(jobId) not found — it already finished and left history, or never existed"
+                )
             }
-            WorkflowGraph.setInput(&graph, at: location, value: bound)
+            promptID = jobId
+            promptBox.value = promptID
+            emit(.progress(stage: "running", jobId: promptID))
+        } else {
+            promptID = try await submit(config: config, client: client, echoSeed: &echoSeed)
+            promptBox.value = promptID
+            // Carry the id to JS so a torn-down stream can be recovered with it.
+            emit(.progress(stage: "queued", jobId: promptID))
         }
-
-        let promptBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": clientID])
-
-        // Submit.
-        emit(.progress(stage: "queued"))
-        let queued = try await send(
-            "prompt", method: "POST",
-            body: promptBody, contentType: "application/json",
-            connection: config.connection, client: client
-        )
-        guard queued.isSuccess,
-              let promptID = (try? JSONSerialization.jsonObject(with: queued.body) as? [String: Any])?["prompt_id"]
-              as? String
-        else {
-            let message = String(decoding: queued.body.prefix(500), as: UTF8.self)
-            throw AIError.generationFailed("ComfyUI /prompt HTTP \(queued.status): \(message)")
-        }
-        promptBox.value = promptID
 
         // Per-step progress via /ws (best-effort). A client without a WebSocket
         // transport (e.g. AndroidNetworkClient) inherits the throwing default and
@@ -204,11 +174,101 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         emit(.done)
     }
 
+    /// Upload image/mask inputs, bind every input into the graph, and `POST
+    /// /prompt`. Returns the new `prompt_id`; reports the resolved seed via
+    /// `echoSeed`.
+    private func submit(
+        config: AIWorkflowConfig, client: any NetworkClient, echoSeed: inout Int?
+    ) async throws -> String {
+        guard let graphData = config.graph,
+              var graph = try JSONSerialization.jsonObject(with: graphData) as? [String: Any]
+        else {
+            throw AIError.generationFailed("ComfyUI run needs an API-format graph")
+        }
+
+        // Pass 1 (async): upload any image/mask inputs → filenames. Keeps the
+        // non-Sendable graph dict out of the await that follows.
+        var uploaded: [String: String] = [:]
+        for (key, value) in config.inputs where Self.imageBytes(value) != nil {
+            let bytes = Self.imageBytes(value)!
+            uploaded[key] = try await uploadImage(bytes, config.connection, client: client)
+        }
+
+        // Pass 2 (sync): bind every input into the graph by its "<node>/<input>"
+        // key; track the resolved seed to echo on results.
+        let runSeed = Int.random(in: 0 ... Int(UInt32.max))
+        for (key, value) in config.inputs {
+            guard let location = Self.location(for: key) else { continue }
+            let bound: Any
+            if let filename = uploaded[key] {
+                bound = filename
+            } else if Self.isSeed(key), case .null = value {
+                bound = runSeed; echoSeed = runSeed
+            } else if Self.isSeed(key), case let .number(n) = value {
+                bound = Int(n); echoSeed = Int(n)
+            } else if let coerced = Self.coerce(value) {
+                bound = coerced
+            } else {
+                continue
+            }
+            WorkflowGraph.setInput(&graph, at: location, value: bound)
+        }
+
+        let promptBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": clientID])
+        let queued = try await send(
+            "prompt", method: "POST",
+            body: promptBody, contentType: "application/json",
+            connection: config.connection, client: client
+        )
+        guard queued.isSuccess,
+              let promptID = (try? JSONSerialization.jsonObject(with: queued.body) as? [String: Any])?["prompt_id"]
+              as? String
+        else {
+            let message = String(decoding: queued.body.prefix(500), as: UTF8.self)
+            throw AIError.generationFailed("ComfyUI /prompt HTTP \(queued.status): \(message)")
+        }
+        return promptID
+    }
+
+    /// Whether a `prompt_id` is known to the box — present in `/history` (done,
+    /// success or error) or sitting in `/queue` (running or pending). Used to
+    /// fail a recovery re-attach fast when the id is gone.
+    private func jobExists(
+        _ id: String, connection: AIConnection, client: any NetworkClient
+    ) async throws -> Bool {
+        let history = try await send("history/\(id)", connection: connection, client: client)
+        if history.isSuccess,
+           let json = try? JSONSerialization.jsonObject(with: history.body) as? [String: Any],
+           json[id] != nil
+        {
+            return true
+        }
+        let queue = try await send("queue", connection: connection, client: client)
+        guard queue.isSuccess,
+              let json = try? JSONSerialization.jsonObject(with: queue.body) as? [String: Any]
+        else { return false }
+        for key in ["queue_running", "queue_pending"] {
+            if let entries = json[key] as? [[Any]],
+               entries.contains(where: { $0.count > 1 && ($0[1] as? String) == id })
+            {
+                return true
+            }
+        }
+        return false
+    }
+
     // MARK: - Per-step progress (/ws)
 
-    /// Open ComfyUI's `/ws` and translate `progress` frames (`value`/`max`) into
-    /// fine `.progress` events for our prompt. Best-effort: any failure (no
-    /// WebSocket transport, socket drop) is swallowed — coarse polling covers it.
+    /// Open ComfyUI's `/ws` and translate its progress frames into fine
+    /// `.progress` events for our prompt. Best-effort: any failure (no WebSocket
+    /// transport, socket drop) is swallowed — coarse polling remains the floor.
+    ///
+    /// **Reconnects** until the caller cancels this task (which `run` does once
+    /// the job's outputs are in hand): a dropped socket mid-run resumes rather
+    /// than silently going coarse. Harmless on a stable connection (the loop
+    /// only re-enters after a drop), and it recovers on networks that reap idle
+    /// sockets — some mobile radios abort an idle LAN socket within seconds even
+    /// though a desktop on the same network holds it open indefinitely.
     private func streamProgress(
         promptID: String,
         connection: AIConnection,
@@ -216,25 +276,58 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         emit: @Sendable (AIRunEvent) -> Void
     ) async {
         guard let url = Self.webSocketURL(connection.baseURL, clientID: clientID) else { return }
-        do {
-            for try await frame in client.openWebSocket(NetWebSocketRequest(url: url, headers: connection.headers)) {
-                guard case let .text(text) = frame,
-                      let data = text.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      json["type"] as? String == "progress",
-                      let payload = json["data"] as? [String: Any]
-                else { continue }
-                // Frames may omit prompt_id on older servers; when present, filter.
-                if let pid = payload["prompt_id"] as? String, pid != promptID { continue }
-                emit(.progress(
-                    stage: "running",
-                    value: (payload["value"] as? NSNumber)?.doubleValue,
-                    max: (payload["max"] as? NSNumber)?.doubleValue
-                ))
+        // A current ComfyUI emits *both* the legacy `progress` and the newer
+        // `progress_state` for each sampling step, which would double every
+        // `.progress`. Prefer `progress_state` once we've seen it, and drop a
+        // repeat of the same (value,max) — so each step yields one event. These
+        // persist across reconnects (one `streamProgress` call spans them).
+        var sawProgressState = false
+        var lastValue: Double?
+        var lastMax: Double?
+        while !Task.isCancelled {
+            do {
+                let request = NetWebSocketRequest(url: url, headers: connection.headers)
+                for try await frame in client.openWebSocket(request) {
+                    guard case let .text(text) = frame,
+                          let data = text.data(using: .utf8),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let payload = json["data"] as? [String: Any]
+                    else { continue }
+                    // Frames may omit prompt_id on older servers; when present, filter.
+                    if let pid = payload["prompt_id"] as? String, pid != promptID { continue }
+                    let value: Double?
+                    let max: Double?
+                    switch json["type"] as? String {
+                    case "progress": // legacy: flat value/max on the sampling node
+                        if sawProgressState { continue } // superseded by progress_state
+                        value = (payload["value"] as? NSNumber)?.doubleValue
+                        max = (payload["max"] as? NSNumber)?.doubleValue
+                    case "progress_state": // current: per-node {value,max,state}
+                        sawProgressState = true
+                        guard let node = Self.activeNode(payload["nodes"]) else { continue }
+                        value = (node["value"] as? NSNumber)?.doubleValue
+                        max = (node["max"] as? NSNumber)?.doubleValue
+                    default:
+                        continue
+                    }
+                    if value == lastValue, max == lastMax { continue } // drop repeats
+                    lastValue = value
+                    lastMax = max
+                    emit(.progress(stage: "running", value: value, max: max))
+                }
+            } catch {
+                // Best-effort — fall through to reconnect (or exit if cancelled).
             }
-        } catch {
-            // Best-effort — coarse /queue polling remains the floor.
+            if Task.isCancelled { break }
+            try? await Task.sleep(for: .milliseconds(300))
         }
+    }
+
+    /// From a `progress_state` frame's `nodes` map, the node to report — the one
+    /// currently `running` (the sampler mid-run), else any entry.
+    private static func activeNode(_ nodes: Any?) -> [String: Any]? {
+        guard let nodes = nodes as? [String: [String: Any]] else { return nil }
+        return nodes.values.first { ($0["state"] as? String) == "running" } ?? nodes.values.first
     }
 
     /// The `/ws?clientId=…` URL for a connection (http→ws, https→wss).
@@ -258,15 +351,30 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
     ) async throws -> [OutputRef] {
         let deadline = ContinuousClock.now + timeout
         var announcedRunning = false
+        // Tolerate a run of transient poll failures rather than aborting the run
+        // on the first one — the job keeps running on the box, and a brief network
+        // blip (e.g. the app backgrounded, so a `.local` mDNS lookup fails, or Wi-Fi
+        // hiccups) shouldn't lose an otherwise-fine generation. Bounded so a
+        // genuinely-dead connection still surfaces well before the overall timeout.
+        var consecutiveFailures = 0
+        let maxConsecutiveFailures = 100 // ~60s at the 600 ms default interval
         while ContinuousClock.now < deadline {
             try Task.checkCancellation()
-            // Coarse "running" signal: the prompt left the pending queue.
-            if !announcedRunning, try await isRunning(promptID, connection: connection, client: client) {
-                announcedRunning = true
-                emit(.progress(stage: "running"))
-            }
-            if let refs = try await historyOutputs(promptID, connection: connection, client: client) {
-                return refs
+            do {
+                // Coarse "running" signal: the prompt left the pending queue.
+                if !announcedRunning, try await isRunning(promptID, connection: connection, client: client) {
+                    announcedRunning = true
+                    emit(.progress(stage: "running"))
+                }
+                if let refs = try await historyOutputs(promptID, connection: connection, client: client) {
+                    return refs
+                }
+                consecutiveFailures = 0
+            } catch {
+                // A cancellation is handled by `checkCancellation` at the loop top;
+                // any other error is treated as transient until the run runs out.
+                consecutiveFailures += 1
+                if consecutiveFailures >= maxConsecutiveFailures { throw error }
             }
             try await Task.sleep(for: pollInterval)
         }

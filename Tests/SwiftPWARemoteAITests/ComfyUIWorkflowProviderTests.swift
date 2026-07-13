@@ -184,6 +184,37 @@ struct ComfyUIWorkflowProviderTests {
         #expect(inputs("3")?["seed"] as? Int == 77)
         #expect(inputs("10")?["image"] as? String == "uploaded.png") // uploaded, filename bound
         #expect(client.requests.contains { $0.url.path.hasSuffix("/upload/image") })
+        // The submitted job's id is surfaced so a torn-down run can be recovered.
+        #expect(events.contains { $0.jobId != nil })
+    }
+
+    @Test("recovery: a jobId re-attaches to an existing job — no re-submit, outputs returned")
+    func recover() async throws {
+        let client = ScriptedWSClient(choreography()) // /history/<id> resolves to p1's outputs
+        // No graph/inputs — just the id to re-attach to.
+        let config = AIWorkflowConfig(connection: base, jobId: "p1")
+        var events: [AIRunEvent] = []
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            events.append(event)
+        }
+        #expect(events.contains { $0.type == .image }) // the finished job's output came back
+        #expect(events.last?.type == .done)
+        #expect(!client.requests.contains { $0.url.path.hasSuffix("/prompt") }) // did NOT submit a new job
+    }
+
+    @Test("recovery: an unknown jobId fails fast rather than polling to the timeout")
+    func recoverUnknown() async throws {
+        // Every /history + /queue lookup comes back empty ⇒ the id is gone.
+        let client = ScriptedWSClient { req in
+            req.url.path.contains("/queue")
+                ? NetResponse(status: 200, body: j(["queue_running": [[Any]](), "queue_pending": [[Any]]()]))
+                : NetResponse(status: 200, body: j([String: Any]()))
+        }
+        let config = AIWorkflowConfig(connection: base, jobId: "gone")
+        await #expect(throws: (any Error).self) {
+            for try await _ in provider().runWorkflow(config: config, client: client) {}
+        }
+        #expect(!client.requests.contains { $0.url.path.hasSuffix("/prompt") })
     }
 
     @Test("per-step /ws progress frames become .progress events with value/max")
@@ -209,6 +240,49 @@ struct ComfyUIWorkflowProviderTests {
         // The fine (value/max) frames arrived, not just the coarse queued/running.
         #expect(progresses.contains { $0.0 == 1 && $0.1 == 4 })
         #expect(progresses.contains { $0.0 == 4 && $0.1 == 4 })
+    }
+
+    @Test("current-protocol progress_state frames become .progress events (running node's value/max)")
+    func websocketProgressState() async throws {
+        // Current ComfyUI emits `progress_state` (per-node {value,max,state})
+        // rather than the legacy flat `progress`. The running node's value/max
+        // is what drives the bar; a finished node in the same frame is ignored.
+        let client = WSProgressClient(
+            frames: [
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":2,"max":8,"state":"running"},"9":{"value":1,"max":1,"state":"finished"}}}}"#,
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":8,"max":8,"state":"running"}}}}"#
+            ],
+            historyReadyAfterPolls: 4
+        )
+        let config = AIWorkflowConfig(connection: base, graph: graph, inputs: ["6/text": .string("x")])
+        var progresses: [(Double?, Double?)] = []
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            if event.type == .progress, event.value != nil { progresses.append((event.value, event.max)) }
+        }
+        #expect(progresses.contains { $0.0 == 2 && $0.1 == 8 }) // the running node, not the finished one
+        #expect(progresses.contains { $0.0 == 8 && $0.1 == 8 })
+    }
+
+    @Test("duplicate progress (legacy + progress_state for the same step) collapses to one event")
+    func websocketProgressDedup() async throws {
+        // A current box sends both a legacy `progress` and a `progress_state` per
+        // step — the provider prefers progress_state and drops the repeat, so a
+        // step reports once, not twice.
+        let client = WSProgressClient(
+            frames: [
+                #"{"type":"progress","data":{"value":3,"max":10,"prompt_id":"p1"}}"#,
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":3,"max":10,"state":"running"}}}}"#,
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":10,"max":10,"state":"running"}}}}"#
+            ],
+            historyReadyAfterPolls: 4
+        )
+        let config = AIWorkflowConfig(connection: base, graph: graph, inputs: ["6/text": .string("x")])
+        var progresses: [(Double?, Double?)] = []
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            if event.type == .progress, event.value != nil { progresses.append((event.value, event.max)) }
+        }
+        #expect(progresses.count(where: { $0.0 == 3 && $0.1 == 10 }) == 1) // once, not twice
+        #expect(progresses.contains { $0.0 == 10 && $0.1 == 10 })
     }
 
     @Test("a nil seed randomizes and is echoed on the image")

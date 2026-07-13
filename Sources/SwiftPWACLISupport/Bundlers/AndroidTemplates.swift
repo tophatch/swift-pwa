@@ -174,6 +174,12 @@ enum AndroidTemplates {
             // to. Present unconditionally, like the net.* / biometric wiring;
             // the capability is opt-in on the Swift side (SecretsPlugin).
             implementation("androidx.security:security-crypto:1.1.0-alpha06")
+            // OkHttp for the net.ws.* WebSocket RPC — Android's HttpURLConnection
+            // (which backs net.request / net.downloadFile) has no WebSocket, and
+            // java.net.http isn't on Android. Present unconditionally like the rest
+            // of the net.* wiring; the capability is opt-in on the Swift side
+            // (AndroidNetworkClient.openWebSocket, driven by the remote-AI tier).
+            implementation("com.squareup.okhttp3:okhttp:4.12.0")
         \(enableGeminiNano ? Self.geminiNanoGradleDeps : "")}
         """
         return head + signingBlockText + buildTypesOpen + releaseExtras + buildTypesTail + "\n"
@@ -1102,7 +1108,14 @@ enum AndroidTemplates {
     import java.net.URL
     import java.security.MessageDigest
     import java.util.UUID
+    import java.util.concurrent.ConcurrentHashMap
     import java.util.concurrent.Executors
+    import okhttp3.OkHttpClient
+    import okhttp3.Request
+    import okhttp3.Response
+    import okhttp3.WebSocket
+    import okhttp3.WebSocketListener
+    import okio.ByteString
     /*__SWIFT_PWA_GENAI_IMPORTS__*/
 
     /// Backing implementation for the System* plugin RPC the Swift
@@ -1260,6 +1273,8 @@ enum AndroidTemplates {
                 "image.encodePng" -> imageEncodePng(json, done)
                 "net.downloadFile" -> netDownloadFile(json, done)
                 "net.request" -> netRequest(json, done)
+                "net.ws.open" -> netWebSocketOpen(json, done)
+                "net.ws.close" -> netWebSocketClose(json, done)
                 "secrets.get" -> secretsGet(json, done)
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
@@ -2445,6 +2460,100 @@ enum AndroidTemplates {
                 } catch (t: Throwable) {
                     done(null, "swift-pwa: net.request failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
+            }
+        }
+
+        // -----------------------------------------------------------
+        // net.ws.* — receive-only WebSocket over OkHttp.
+        //
+        // HttpURLConnection (net.request / net.downloadFile) has no WebSocket and
+        // java.net.http isn't on Android, so this uses OkHttp. Mirrors the
+        // net.downloadFile side-channel pattern: `net.ws.open` starts the socket
+        // and returns immediately (OkHttp connects on its own dispatcher), then
+        // every inbound frame is pushed to Swift as a host-event on the caller's
+        // `channel`; a socket close / failure pushes a terminal `close` / `error`
+        // frame. `net.ws.close` tears the socket down when Swift unsubscribes.
+        // HTTPS/WSS trust is the system's (OkHttp uses the platform CA store) —
+        // same reason downloads route through Kotlin. Used by the remote-AI tier
+        // for per-step ComfyUI /ws progress; the Swift side is receive-only, so
+        // there's no send path.
+        // -----------------------------------------------------------
+
+        private val webSockets = ConcurrentHashMap<String, WebSocket>()
+        // No read timeout (a receive-only progress socket is idle while the box
+        // computes) + a periodic ping so idle intervals keep the connection live
+        // (and NAT/proxy hops don't reap it). ComfyUI runs can pause many seconds
+        // between frames during sampling.
+        private val wsClient by lazy {
+            OkHttpClient.Builder()
+                .readTimeout(0, java.util.concurrent.TimeUnit.MILLISECONDS)
+                .pingInterval(20, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+        }
+
+        private fun netWebSocketOpen(json: JSONObject, done: (String?, String?) -> Unit) {
+            val urlString = json.optString("url", "")
+            val channel = json.optString("channel", "")
+            if (urlString.isEmpty() || channel.isEmpty()) {
+                done(null, "swift-pwa: net.ws.open: url and channel required")
+                return
+            }
+            try {
+                val builder = Request.Builder().url(urlString)
+                json.optJSONObject("headers")?.let { hdrs ->
+                    val keys = hdrs.keys()
+                    while (keys.hasNext()) {
+                        val k = keys.next()
+                        builder.addHeader(k, hdrs.getString(k))
+                    }
+                }
+                val listener = object : WebSocketListener() {
+                    override fun onMessage(webSocket: WebSocket, text: String) {
+                        pushWsEvent(channel, JSONObject().put("type", "text").put("text", text))
+                    }
+
+                    override fun onMessage(webSocket: WebSocket, bytes: ByteString) {
+                        pushWsEvent(
+                            channel,
+                            JSONObject().put("type", "binary")
+                                .put("dataBase64", Base64.encodeToString(bytes.toByteArray(), Base64.NO_WRAP))
+                        )
+                    }
+
+                    override fun onClosing(webSocket: WebSocket, code: Int, reason: String) {
+                        webSockets.remove(channel)
+                        pushWsEvent(channel, JSONObject().put("type", "close").put("code", code))
+                    }
+
+                    override fun onFailure(webSocket: WebSocket, t: Throwable, response: Response?) {
+                        webSockets.remove(channel)
+                        pushWsEvent(
+                            channel,
+                            JSONObject().put("type", "error")
+                                .put("message", "${t.javaClass.simpleName}: ${t.message}")
+                        )
+                    }
+                }
+                val ws = wsClient.newWebSocket(builder.build(), listener)
+                webSockets[channel] = ws
+                done(JSONObject().put("ok", true).toString(), null)
+            } catch (t: Throwable) {
+                done(null, "swift-pwa: net.ws.open failed: ${t.javaClass.simpleName}: ${t.message}")
+            }
+        }
+
+        private fun netWebSocketClose(json: JSONObject, done: (String?, String?) -> Unit) {
+            val channel = json.optString("channel", "")
+            webSockets.remove(channel)?.close(1000, "client closed")
+            done(JSONObject().put("ok", true).toString(), null)
+        }
+
+        private fun pushWsEvent(channel: String, payload: JSONObject) {
+            payload.put("channel", channel)
+            try {
+                bridge.nativeHostEvent(payload.toString())
+            } catch (t: Throwable) {
+                android.util.Log.e("swift-pwa", "failed to push ws event: ${t.message}")
             }
         }
 

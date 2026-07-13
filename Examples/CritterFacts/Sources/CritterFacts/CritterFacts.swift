@@ -292,6 +292,22 @@ func configure(_ ctx: any AppContext) throws {
         }
     #endif
 
+    // Runtime, JS-reachable workflow door (`ai.run` / `ai.describeInputs`). The
+    // web app imports an API-format ComfyUI graph, introspects its overridable
+    // inputs, and runs it with per-step progress — the endpoint and graph both
+    // travel in each call, so there's no rebuild per workflow or per box. Opt-in
+    // + additive (separate from `AIPlugin`, shares the `ai.*` namespace like
+    // `VisionPlugin`); it only needs a `NetworkClient`, so it's wired
+    // unconditionally here. The optional secret store lets a call carry a
+    // `secretRef` (resolved server-side into `${secret}` headers) for a
+    // key-protected endpoint — unused by the plain LAN demo. See web/workflow.html
+    // and docs/remote-ai.md ("Running an imported workflow from JS").
+    ctx.use(AIWorkflowPlugin(
+        providers: [ComfyUIWorkflowProvider()],
+        client: makeNetworkClient(),
+        secrets: makeSecretStore()
+    ))
+
     // On-device segmentation demo (`ai.vision.*`) — MobileSAMBackend, a
     // *separate* plugin/namespace from the `ai.*` generative backend picked
     // above, so it's wired unconditionally rather than as another `#elseif`

@@ -112,9 +112,16 @@ public struct AIRunEvent: Sendable, Encodable, Equatable {
     public var image: AIGeneratedImage?
     public var width: Int?
     public var height: Int?
+    /// A provider job handle (ComfyUI's `prompt_id`), emitted once the job is
+    /// submitted so the app can **recover** — re-issue `ai.run` with this id
+    /// (via ``AIWorkflowConfig/jobId``) to re-attach to a run whose stream was
+    /// torn down (e.g. the app was backgrounded) instead of starting over.
+    public var jobId: String?
 
-    public static func progress(stage: String, value: Double? = nil, max: Double? = nil) -> AIRunEvent {
-        AIRunEvent(type: .progress, stage: stage, value: value, max: max)
+    public static func progress(
+        stage: String, value: Double? = nil, max: Double? = nil, jobId: String? = nil
+    ) -> AIRunEvent {
+        AIRunEvent(type: .progress, stage: stage, value: value, max: max, jobId: jobId)
     }
 
     public static func image(_ image: AIGeneratedImage, width: Int? = nil, height: Int? = nil) -> AIRunEvent {
@@ -125,7 +132,7 @@ public struct AIRunEvent: Sendable, Encodable, Equatable {
 
     private init(
         type: Kind, stage: String? = nil, value: Double? = nil, max: Double? = nil,
-        image: AIGeneratedImage? = nil, width: Int? = nil, height: Int? = nil
+        image: AIGeneratedImage? = nil, width: Int? = nil, height: Int? = nil, jobId: String? = nil
     ) {
         self.type = type
         self.stage = stage
@@ -134,6 +141,7 @@ public struct AIRunEvent: Sendable, Encodable, Equatable {
         self.image = image
         self.width = width
         self.height = height
+        self.jobId = jobId
     }
 }
 
@@ -146,17 +154,24 @@ public struct AIWorkflowConfig: Sendable {
     public var inputs: [String: JSONValue]
     public var titledOnly: Bool
     public var outputDirectory: String?
+    /// **Recovery:** an existing provider job handle to re-attach to instead of
+    /// submitting a new job. When set, a provider skips submission and resumes
+    /// the identified job — streaming its remaining progress if still running,
+    /// or returning its outputs if already finished (see ``AIRunEvent/jobId``).
+    /// `graph`/`inputs` are unused in this case.
+    public var jobId: String?
 
     public init(
         connection: AIConnection, graph: Data? = nil,
         inputs: [String: JSONValue] = [:], titledOnly: Bool = false,
-        outputDirectory: String? = nil
+        outputDirectory: String? = nil, jobId: String? = nil
     ) {
         self.connection = connection
         self.graph = graph
         self.inputs = inputs
         self.titledOnly = titledOnly
         self.outputDirectory = outputDirectory
+        self.jobId = jobId
     }
 }
 

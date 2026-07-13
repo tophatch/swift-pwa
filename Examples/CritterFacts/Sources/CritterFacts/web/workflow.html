@@ -115,6 +115,7 @@
             <div id="inputs"></div>
             <div class="run-row">
                 <button id="run">Run</button>
+                <button id="resume" class="ghost" hidden>Resume last run</button>
                 <button id="cancel" class="ghost" hidden>Cancel</button>
             </div>
         </section>
@@ -142,6 +143,8 @@
         let currentGraph = null;     // parsed graph object (sent per call)
         let sub = null;              // active ai.run subscription
         let busy = false;
+        let lastJobId = null;        // the running job's id, for recovery
+        const endpoint = () => $("endpoint").value.trim();
 
         // ---- helpers ---------------------------------------------------------
 
@@ -297,30 +300,37 @@
 
         // ---- run (streaming) -------------------------------------------------
 
-        async function run() {
+        // `resumeJobId` set ⇒ recovery: re-attach to an existing job (no
+        // re-submit, no graph/inputs) — the backend checks /history + /queue and
+        // picks up where the torn-down stream (e.g. after backgrounding) left off.
+        async function run(resumeJobId) {
             if (busy) return;
             busy = true;
-            $("run").disabled = true; $("cancel").hidden = false;
-            $("run-err").hidden = true; $("results").innerHTML = "";
-            $("progress-panel").hidden = false; $("results-panel").hidden = true;
-            $("bar").value = 0; $("bar").max = 1; $("status").textContent = "Queued…";
+            $("run").disabled = true; $("resume").hidden = true; $("cancel").hidden = false;
+            $("run-err").hidden = true;
+            if (!resumeJobId) { $("results").innerHTML = ""; $("results-panel").hidden = true; lastJobId = null; }
+            $("progress-panel").hidden = false;
+            $("bar").value = 0; $("bar").max = 1;
+            $("status").textContent = resumeJobId ? "Reconnecting…" : "Queued…";
 
-            // Gather inputs keyed by schema field. Image reads are async, so
-            // resolve them first, then assemble the plain map.
-            const inputs = {};
-            for (const c of controls) {
-                const val = c.read instanceof Function ? c.read() : undefined;
-                const resolved = val instanceof Promise ? await val : val;
-                if (resolved !== undefined) inputs[c.field.key] = resolved;
+            let args;
+            if (resumeJobId) {
+                args = { provider: "comfyui", connection: { baseURL: endpoint() }, jobId: resumeJobId };
+            } else {
+                // Gather inputs keyed by schema field. Image reads are async, so
+                // resolve them first, then assemble the plain map.
+                const inputs = {};
+                for (const c of controls) {
+                    const val = c.read instanceof Function ? c.read() : undefined;
+                    const resolved = val instanceof Promise ? await val : val;
+                    if (resolved !== undefined) inputs[c.field.key] = resolved;
+                }
+                args = { provider: "comfyui", connection: { baseURL: endpoint() }, graph: currentGraph, inputs };
             }
 
-            sub = bridge.subscribe("ai.run", {
-                provider: "comfyui",
-                connection: { baseURL: $("endpoint").value.trim() },
-                graph: currentGraph,
-                inputs,
-            },
+            sub = bridge.subscribe("ai.run", args,
             (e) => {                                   // onChunk
+                if (e.jobId) lastJobId = e.jobId;      // remember it for recovery
                 if (e.type === "progress") {
                     if (e.value != null && e.max) {
                         $("bar").max = e.max; $("bar").value = e.value;
@@ -332,12 +342,14 @@
                 } else if (e.type === "image") {
                     showImage(e);
                 } else if (e.type === "done") {
-                    $("status").textContent = "Done.";
+                    $("status").textContent = "Done."; lastJobId = null; // collected
                 }
             },
             (err) => {                                 // onError
                 $("run-err").textContent = "⚠️ " + ((err && (err.message || err.code)) || "run failed");
                 $("run-err").hidden = false;
+                // Offer to re-attach if the job might still be alive on the box.
+                if (lastJobId) $("resume").hidden = false;
                 finish();
             },
             () => finish());                           // onEnd
@@ -377,7 +389,8 @@
             if (f) $("graph").value = await f.text();
         });
         $("describe").addEventListener("click", describe);
-        $("run").addEventListener("click", run);
+        $("run").addEventListener("click", () => run());               // no arg ⇒ fresh submit
+        $("resume").addEventListener("click", () => run(lastJobId));   // re-attach to the last job
         $("cancel").addEventListener("click", cancel);
     </script>
 </body>

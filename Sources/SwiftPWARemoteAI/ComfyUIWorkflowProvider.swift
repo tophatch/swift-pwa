@@ -125,58 +125,28 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         promptBox: PromptBox,
         emit: @escaping @Sendable (AIRunEvent) -> Void
     ) async throws {
-        guard let graphData = config.graph,
-              var graph = try JSONSerialization.jsonObject(with: graphData) as? [String: Any]
-        else {
-            throw AIError.generationFailed("ComfyUI run needs an API-format graph")
-        }
-
-        // Pass 1 (async): upload any image/mask inputs → filenames. Keeps the
-        // non-Sendable graph dict out of the await that follows.
-        var uploaded: [String: String] = [:]
-        for (key, value) in config.inputs where Self.imageBytes(value) != nil {
-            let bytes = Self.imageBytes(value)!
-            uploaded[key] = try await uploadImage(bytes, config.connection, client: client)
-        }
-
-        // Pass 2 (sync): bind every input into the graph by its "<node>/<input>"
-        // key; track the resolved seed to echo on results.
-        let runSeed = Int.random(in: 0 ... Int(UInt32.max))
+        let promptID: String
         var echoSeed: Int?
-        for (key, value) in config.inputs {
-            guard let location = Self.location(for: key) else { continue }
-            let bound: Any
-            if let filename = uploaded[key] {
-                bound = filename
-            } else if Self.isSeed(key), case .null = value {
-                bound = runSeed; echoSeed = runSeed
-            } else if Self.isSeed(key), case let .number(n) = value {
-                bound = Int(n); echoSeed = Int(n)
-            } else if let coerced = Self.coerce(value) {
-                bound = coerced
-            } else {
-                continue
+
+        if let jobId = config.jobId, !jobId.isEmpty {
+            // Recovery: re-attach to an existing job instead of submitting. Verify
+            // it exists first so an unknown / already-collected id fails fast
+            // rather than polling to the timeout. The seed isn't recoverable from
+            // the id alone, so results echo a nil seed on this path.
+            guard try await jobExists(jobId, connection: config.connection, client: client) else {
+                throw AIError.generationFailed(
+                    "ComfyUI job \(jobId) not found — it already finished and left history, or never existed"
+                )
             }
-            WorkflowGraph.setInput(&graph, at: location, value: bound)
+            promptID = jobId
+            promptBox.value = promptID
+            emit(.progress(stage: "running", jobId: promptID))
+        } else {
+            promptID = try await submit(config: config, client: client, echoSeed: &echoSeed)
+            promptBox.value = promptID
+            // Carry the id to JS so a torn-down stream can be recovered with it.
+            emit(.progress(stage: "queued", jobId: promptID))
         }
-
-        let promptBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": clientID])
-
-        // Submit.
-        emit(.progress(stage: "queued"))
-        let queued = try await send(
-            "prompt", method: "POST",
-            body: promptBody, contentType: "application/json",
-            connection: config.connection, client: client
-        )
-        guard queued.isSuccess,
-              let promptID = (try? JSONSerialization.jsonObject(with: queued.body) as? [String: Any])?["prompt_id"]
-              as? String
-        else {
-            let message = String(decoding: queued.body.prefix(500), as: UTF8.self)
-            throw AIError.generationFailed("ComfyUI /prompt HTTP \(queued.status): \(message)")
-        }
-        promptBox.value = promptID
 
         // Per-step progress via /ws (best-effort). A client without a WebSocket
         // transport (e.g. AndroidNetworkClient) inherits the throwing default and
@@ -202,6 +172,89 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
             emit(.image(image, width: dims?.width, height: dims?.height))
         }
         emit(.done)
+    }
+
+    /// Upload image/mask inputs, bind every input into the graph, and `POST
+    /// /prompt`. Returns the new `prompt_id`; reports the resolved seed via
+    /// `echoSeed`.
+    private func submit(
+        config: AIWorkflowConfig, client: any NetworkClient, echoSeed: inout Int?
+    ) async throws -> String {
+        guard let graphData = config.graph,
+              var graph = try JSONSerialization.jsonObject(with: graphData) as? [String: Any]
+        else {
+            throw AIError.generationFailed("ComfyUI run needs an API-format graph")
+        }
+
+        // Pass 1 (async): upload any image/mask inputs → filenames. Keeps the
+        // non-Sendable graph dict out of the await that follows.
+        var uploaded: [String: String] = [:]
+        for (key, value) in config.inputs where Self.imageBytes(value) != nil {
+            let bytes = Self.imageBytes(value)!
+            uploaded[key] = try await uploadImage(bytes, config.connection, client: client)
+        }
+
+        // Pass 2 (sync): bind every input into the graph by its "<node>/<input>"
+        // key; track the resolved seed to echo on results.
+        let runSeed = Int.random(in: 0 ... Int(UInt32.max))
+        for (key, value) in config.inputs {
+            guard let location = Self.location(for: key) else { continue }
+            let bound: Any
+            if let filename = uploaded[key] {
+                bound = filename
+            } else if Self.isSeed(key), case .null = value {
+                bound = runSeed; echoSeed = runSeed
+            } else if Self.isSeed(key), case let .number(n) = value {
+                bound = Int(n); echoSeed = Int(n)
+            } else if let coerced = Self.coerce(value) {
+                bound = coerced
+            } else {
+                continue
+            }
+            WorkflowGraph.setInput(&graph, at: location, value: bound)
+        }
+
+        let promptBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": clientID])
+        let queued = try await send(
+            "prompt", method: "POST",
+            body: promptBody, contentType: "application/json",
+            connection: config.connection, client: client
+        )
+        guard queued.isSuccess,
+              let promptID = (try? JSONSerialization.jsonObject(with: queued.body) as? [String: Any])?["prompt_id"]
+              as? String
+        else {
+            let message = String(decoding: queued.body.prefix(500), as: UTF8.self)
+            throw AIError.generationFailed("ComfyUI /prompt HTTP \(queued.status): \(message)")
+        }
+        return promptID
+    }
+
+    /// Whether a `prompt_id` is known to the box — present in `/history` (done,
+    /// success or error) or sitting in `/queue` (running or pending). Used to
+    /// fail a recovery re-attach fast when the id is gone.
+    private func jobExists(
+        _ id: String, connection: AIConnection, client: any NetworkClient
+    ) async throws -> Bool {
+        let history = try await send("history/\(id)", connection: connection, client: client)
+        if history.isSuccess,
+           let json = try? JSONSerialization.jsonObject(with: history.body) as? [String: Any],
+           json[id] != nil
+        {
+            return true
+        }
+        let queue = try await send("queue", connection: connection, client: client)
+        guard queue.isSuccess,
+              let json = try? JSONSerialization.jsonObject(with: queue.body) as? [String: Any]
+        else { return false }
+        for key in ["queue_running", "queue_pending"] {
+            if let entries = json[key] as? [[Any]],
+               entries.contains(where: { $0.count > 1 && ($0[1] as? String) == id })
+            {
+                return true
+            }
+        }
+        return false
     }
 
     // MARK: - Per-step progress (/ws)

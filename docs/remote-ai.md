@@ -222,6 +222,14 @@ controls → `ai.run` with the values (a reference/control image rides in as
 `connection.secretRef` is resolved against [`secrets.*`](secrets.md) **on the
 Swift side**, so a key-protected endpoint's key never enters the page.
 
+**Recovery.** Every `ai.run` event carries a `jobId` once submitted. If the
+stream drops mid-run — the app was backgrounded, say, and a poll's `.local`
+lookup failed — re-issue `ai.run` with `{ jobId }` (no graph/inputs) to
+re-attach: the provider checks the box's `/history` + `/queue` and resumes
+streaming, returns the finished outputs, or errors fast if the id is gone. (The
+poll loop also tolerates a bounded run of transient failures on its own, so a
+brief blip recovers without any app action.)
+
 - **JS reference:** [`docs/javascript-api.md`](javascript-api.md#airun--aidescribeinputs--run-an-imported-workflow-at-runtime).
 - **Worked example:** `Examples/CritterFacts/…/web/workflow.html` — paste a
   graph, introspect, set inputs (including a reference image), run with a live

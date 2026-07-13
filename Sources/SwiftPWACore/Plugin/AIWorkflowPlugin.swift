@@ -56,6 +56,7 @@ public struct AIWorkflowPlugin: Plugin {
         var graph: JSONValue?
         var inputs: [String: JSONValue]?
         var outputDirectory: String?
+        var jobId: String?
     }
 
     public func register(into registry: CommandRegistry, app _: any AppContext) {
@@ -83,7 +84,7 @@ public struct AIWorkflowPlugin: Plugin {
                         let config = try await Self.makeConfig(
                             connection: args.connection, graph: args.graph,
                             inputs: args.inputs ?? [:], titledOnly: false,
-                            outputDirectory: args.outputDirectory, secrets: secrets
+                            outputDirectory: args.outputDirectory, jobId: args.jobId, secrets: secrets
                         )
                         for try await event in provider.runWorkflow(config: config, client: client) {
                             try Task.checkCancellation()
@@ -119,7 +120,7 @@ public struct AIWorkflowPlugin: Plugin {
     private static func makeConfig(
         connection: AIConnection, graph: JSONValue?,
         inputs: [String: JSONValue]?, titledOnly: Bool,
-        outputDirectory: String?, secrets: (any SecretStore)?
+        outputDirectory: String?, jobId: String? = nil, secrets: (any SecretStore)?
     ) async throws -> AIWorkflowConfig {
         var resolved = connection
         if let ref = connection.secretRef, let value = try await secrets?.get(ref) {
@@ -130,7 +131,8 @@ public struct AIWorkflowPlugin: Plugin {
             graph: graphData(graph),
             inputs: inputs ?? [:],
             titledOnly: titledOnly,
-            outputDirectory: outputDirectory
+            outputDirectory: outputDirectory,
+            jobId: jobId
         )
     }
 

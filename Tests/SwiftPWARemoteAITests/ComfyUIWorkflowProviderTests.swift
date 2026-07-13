@@ -184,6 +184,37 @@ struct ComfyUIWorkflowProviderTests {
         #expect(inputs("3")?["seed"] as? Int == 77)
         #expect(inputs("10")?["image"] as? String == "uploaded.png") // uploaded, filename bound
         #expect(client.requests.contains { $0.url.path.hasSuffix("/upload/image") })
+        // The submitted job's id is surfaced so a torn-down run can be recovered.
+        #expect(events.contains { $0.jobId != nil })
+    }
+
+    @Test("recovery: a jobId re-attaches to an existing job — no re-submit, outputs returned")
+    func recover() async throws {
+        let client = ScriptedWSClient(choreography()) // /history/<id> resolves to p1's outputs
+        // No graph/inputs — just the id to re-attach to.
+        let config = AIWorkflowConfig(connection: base, jobId: "p1")
+        var events: [AIRunEvent] = []
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            events.append(event)
+        }
+        #expect(events.contains { $0.type == .image }) // the finished job's output came back
+        #expect(events.last?.type == .done)
+        #expect(!client.requests.contains { $0.url.path.hasSuffix("/prompt") }) // did NOT submit a new job
+    }
+
+    @Test("recovery: an unknown jobId fails fast rather than polling to the timeout")
+    func recoverUnknown() async throws {
+        // Every /history + /queue lookup comes back empty ⇒ the id is gone.
+        let client = ScriptedWSClient { req in
+            req.url.path.contains("/queue")
+                ? NetResponse(status: 200, body: j(["queue_running": [[Any]](), "queue_pending": [[Any]]()]))
+                : NetResponse(status: 200, body: j([String: Any]()))
+        }
+        let config = AIWorkflowConfig(connection: base, jobId: "gone")
+        await #expect(throws: (any Error).self) {
+            for try await _ in provider().runWorkflow(config: config, client: client) {}
+        }
+        #expect(!client.requests.contains { $0.url.path.hasSuffix("/prompt") })
     }
 
     @Test("per-step /ws progress frames become .progress events with value/max")

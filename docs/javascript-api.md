@@ -581,12 +581,20 @@ const stop = __SWIFT_PWA__.subscribe('ai.run', {
     },
     // outputDirectory: dataDir + '/runs',  // omit ⇒ images come back as dataBase64
 }, (e) => {                          // onChunk
+    if (e.jobId) lastJobId = e.jobId;                                // remember for recovery (below)
     if (e.type === 'progress') updateBar(e.value, e.max, e.stage);   // value/max fine when available
     if (e.type === 'image')    show(e.image, e.width, e.height);     // image: { dataBase64|path, mimeType, seed }
     if (e.type === 'done')     markDone();
 }, (err) => showError(err),          // onError
    () => finish());                  // onEnd
 // cancel: stop()  → the provider interrupts the running job (ComfyUI POST /interrupt).
+
+// Recovery: every event carries a `jobId` once the job is submitted. If the
+// stream is torn down (e.g. the app was backgrounded and a poll failed),
+// re-issue ai.run with that id — no graph/inputs — to re-attach: the provider
+// checks the box's /history + /queue and resumes streaming, or returns the
+// finished outputs, or errors fast if the id is gone.
+__SWIFT_PWA__.subscribe('ai.run', { provider: 'comfyui', connection, jobId: lastJobId }, onChunk, onError, onEnd);
 ```
 
 Progress is coarse (`stage: 'queued' → 'running'`) plus per-step `value`/`max`

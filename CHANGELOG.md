@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **No more spurious `pkg-config` / `libsecret-1` warnings on non-Linux hosts.** Building on macOS (or Windows) printed `failed to retrieve search paths with pkg-config` and two `couldn't find pc file for libsecret-1` warnings, even though the libsecret-backed `LinuxSecretStore` never compiles or links off Linux. Cause: `CSecretShim` depended on the `CLibSecret` `.systemLibrary` **unconditionally**, so SwiftPM kept `CLibSecret` reachable and probed its `libsecret-1.pc` on every host — unlike the GTK/WebKit shims, whose edges are gated `.when(platforms: [.linux])` and are therefore pruned (and silent) off Linux. The `CSecretShim → CLibSecret` edge is now gated the same way, matching the GTK pattern; the Linux `secrets.*` backend is unaffected (the edge is still present on Linux). Purely a build-graph fix — no runtime change.
+
 ## [0.8.12] - 2026-07-13
 
 ### Added

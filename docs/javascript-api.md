@@ -543,9 +543,12 @@ roadmap: [docs/ai-plugin.md](ai-plugin.md).
 
 `ai.generateImage` above has a *fixed* field set. `ai.run` is the open door:
 the web app hands a provider **a graph and a connection per call** and runs it —
-no rebuild per workflow or per endpoint. Today's provider is ComfyUI (any
-"Save (API Format)" graph the app imported); the surface is provider-agnostic.
-Opt-in on the Swift side: `ctx.use(AIWorkflowPlugin(providers: [ComfyUIWorkflowProvider()], client: …, secrets: …))`.
+no rebuild per workflow or per endpoint. The surface is **provider-agnostic**,
+routed on a `provider` id: a *graph* provider (**ComfyUI** — any "Save (API
+Format)" graph the app imported, endpoint + graph in the call) and *fixed-schema*
+providers (**Imagen** cloud, **on-device** Stable Diffusion / LaMa) answer the
+same `describeInputs` → controls → `run` loop. Opt-in on the Swift side with a
+list of providers: `ctx.use(AIWorkflowPlugin(providers: [ComfyUIWorkflowProvider(), imagenProvider, AIBackendWorkflowProvider(providerID: "on-device", backend: sd)], client: …, secrets: …))`.
 
 ```js
 // 1. Ask the provider what the graph's overridable inputs are. For ComfyUI this
@@ -598,11 +601,29 @@ __SWIFT_PWA__.subscribe('ai.run', { provider: 'comfyui', connection, jobId: last
 ```
 
 Progress is coarse (`stage: 'queued' → 'running'`) plus per-step `value`/`max`
-when the provider can stream it (ComfyUI over `/ws`). `secretRef` is resolved
-against [`secrets.*`](#secrets--secure-secret-storage) **on the Swift side**, so
-key material never enters the page. A unary `invoke('ai.run', …)` form also works
-for callers that don't need progress. Deep dive + the Swift `runWorkflow` /
-`inspectWorkflow` primitives: [docs/remote-ai.md](remote-ai.md).
+when the provider can stream it (ComfyUI over `/ws`; a fixed provider emits a
+single `running` then the image). `secretRef` is resolved against
+[`secrets.*`](#secrets--secure-secret-storage) **on the Swift side**, so key
+material never enters the page. A unary `invoke('ai.run', …)` form also works
+for callers that don't need progress.
+
+**Fixed-schema providers (Imagen, on-device).** These have no graph and don't
+reach a per-call endpoint, so `connection` is **optional** — omit it. Same
+schema shape, same event stream; there's just less to send:
+
+```js
+const schema = await __SWIFT_PWA__.invoke('ai.describeInputs', { provider: 'imagen' });
+//   → [{ key: 'prompt', type: 'text' }, { key: 'aspectRatio', type: 'enum', options: [...] },
+//      { key: 'count', type: 'int', min: 1, max: 4 }, { key: 'seed', type: 'seed' }, …]
+const stop = __SWIFT_PWA__.subscribe('ai.run', {
+    provider: 'imagen',                     // or 'on-device'
+    inputs: { prompt: 'a red panda astronaut', aspectRatio: '16:9', count: 1, seed: null },
+}, onChunk, onError, onEnd);
+// `jobId` / recovery is a graph-provider (ComfyUI) affordance only.
+```
+
+Deep dive + the Swift `runWorkflow` / `inspectWorkflow` primitives:
+[docs/remote-ai.md](remote-ai.md).
 
 ### `ai.vision.*` — promptable on-device image segmentation
 

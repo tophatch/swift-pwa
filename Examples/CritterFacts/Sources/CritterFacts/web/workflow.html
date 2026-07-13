@@ -79,27 +79,39 @@
 <body>
     <div class="bar">
         <a class="back" href="index.html">← Back</a>
-        <div class="hint">Import a ComfyUI <b>workflow</b>, set its inputs, and run it — on your own box.</div>
+        <div class="hint">Pick a <b>provider</b>, set its inputs, and run it — the same page drives ComfyUI, a cloud API, or on-device.</div>
     </div>
 
     <div class="scroll">
-        <!-- 1. Point at a box + paste an API-format graph. Both the endpoint and
-             the graph travel in the ai.run/ai.describeInputs call, so nothing is
-             baked into the app — a new workflow or box needs no rebuild. -->
+        <!-- 1. Choose a provider. ai.run / ai.describeInputs route on `provider`.
+             A *graph* provider (ComfyUI) needs an endpoint + an API-format graph,
+             both of which travel in the call (no rebuild per box/workflow); a
+             *fixed-schema* provider (Imagen, on-device) needs neither. -->
         <section class="panel">
-            <h2>Connection + workflow</h2>
+            <h2>Provider</h2>
             <div>
-                <label for="endpoint">ComfyUI endpoint</label>
-                <input type="text" id="endpoint" value="http://comfyui.local:8188" autocomplete="off" />
+                <label for="provider">Run against</label>
+                <select id="provider">
+                    <option value="comfyui">ComfyUI — import a workflow graph</option>
+                    <option value="imagen">Imagen — cloud (Google)</option>
+                    <option value="on-device">On-device — Stable Diffusion / LaMa</option>
+                </select>
             </div>
-            <div>
-                <label for="graph">Workflow graph — ComfyUI's "Save (API Format)" export</label>
-                <textarea id="graph" placeholder='{ "3": { "class_type": "KSampler", "inputs": { … } }, … }'></textarea>
+            <!-- Only a graph provider surfaces these. -->
+            <div id="comfy-fields">
+                <div>
+                    <label for="endpoint">ComfyUI endpoint</label>
+                    <input type="text" id="endpoint" value="http://comfyui.local:8188" autocomplete="off" />
+                </div>
+                <div>
+                    <label for="graph">Workflow graph — ComfyUI's "Save (API Format)" export</label>
+                    <textarea id="graph" placeholder='{ "3": { "class_type": "KSampler", "inputs": { … } }, … }'></textarea>
+                </div>
+                <div>
+                    <input type="file" id="graphfile" accept=".json,application/json" />
+                </div>
             </div>
-            <div>
-                <input type="file" id="graphfile" accept=".json,application/json" />
-            </div>
-            <button id="describe">Introspect inputs →</button>
+            <button id="describe">Describe inputs →</button>
             <div class="err" id="describe-err" hidden></div>
         </section>
 
@@ -145,6 +157,12 @@
         let busy = false;
         let lastJobId = null;        // the running job's id, for recovery
         const endpoint = () => $("endpoint").value.trim();
+        const provider = () => $("provider").value;
+        // Only a graph provider (ComfyUI) carries an endpoint + graph and supports
+        // job recovery; fixed-schema providers (Imagen, on-device) need neither.
+        const isGraphProvider = () => provider() === "comfyui";
+        // The endpoint connection object, for graph providers only.
+        const connection = () => ({ baseURL: endpoint() });
 
         // ---- helpers ---------------------------------------------------------
 
@@ -280,12 +298,18 @@
             $("describe-err").hidden = true;
             $("describe").disabled = true;
             try {
-                currentGraph = parseGraph();
-                schema = await bridge.invoke("ai.describeInputs", {
-                    provider: "comfyui",
-                    connection: { baseURL: $("endpoint").value.trim() },
-                    graph: currentGraph,
-                });
+                // Graph providers cross the (endpoint, graph) with the box's live
+                // catalog; fixed providers answer from a static schema — omit the
+                // connection entirely (the plugin supplies a placeholder).
+                let args;
+                if (isGraphProvider()) {
+                    currentGraph = parseGraph();
+                    args = { provider: provider(), connection: connection(), graph: currentGraph };
+                } else {
+                    currentGraph = null;
+                    args = { provider: provider() };
+                }
+                schema = await bridge.invoke("ai.describeInputs", args);
                 render(schema);
                 $("degraded-note").hidden = !schema.degraded;
                 $("inputs-panel").hidden = false;
@@ -315,7 +339,8 @@
 
             let args;
             if (resumeJobId) {
-                args = { provider: "comfyui", connection: { baseURL: endpoint() }, jobId: resumeJobId };
+                // Recovery is a graph-provider (ComfyUI) affordance only.
+                args = { provider: provider(), connection: connection(), jobId: resumeJobId };
             } else {
                 // Gather inputs keyed by schema field. Image reads are async, so
                 // resolve them first, then assemble the plain map.
@@ -325,7 +350,9 @@
                     const resolved = val instanceof Promise ? await val : val;
                     if (resolved !== undefined) inputs[c.field.key] = resolved;
                 }
-                args = { provider: "comfyui", connection: { baseURL: endpoint() }, graph: currentGraph, inputs };
+                args = { provider: provider(), inputs };
+                // A graph provider also carries the endpoint + the graph itself.
+                if (isGraphProvider()) { args.connection = connection(); args.graph = currentGraph; }
             }
 
             sub = bridge.subscribe("ai.run", args,
@@ -388,6 +415,21 @@
             const f = $("graphfile").files && $("graphfile").files[0];
             if (f) $("graph").value = await f.text();
         });
+        // Switching provider hides the graph fields for a fixed provider and
+        // clears any schema/results from the previous one (its controls no longer
+        // apply). Re-describe to populate the new provider's inputs.
+        function onProviderChange() {
+            $("comfy-fields").hidden = !isGraphProvider();
+            schema = null; controls = []; currentGraph = null; lastJobId = null;
+            $("inputs").innerHTML = "";
+            $("inputs-panel").hidden = true;
+            $("progress-panel").hidden = true;
+            $("results-panel").hidden = true;
+            $("describe-err").hidden = true;
+        }
+        $("provider").addEventListener("change", onProviderChange);
+        onProviderChange(); // apply the initial provider's field visibility
+
         $("describe").addEventListener("click", describe);
         $("run").addEventListener("click", () => run());               // no arg ⇒ fresh submit
         $("resume").addEventListener("click", () => run(lastJobId));   // re-attach to the last job

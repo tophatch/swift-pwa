@@ -239,6 +239,43 @@ Additive: `ai.generateImage` and the Swift `runWorkflow`/`inspectWorkflow`
 primitives are unchanged — this is a *runtime* door alongside the *build-time*
 one.
 
+### More than one provider (Imagen, on-device)
+
+`ai.run` / `ai.describeInputs` route on a `provider` id, and `AIWorkflowPlugin`
+takes a **list** — so the same JS page can drive a cloud API or an on-device
+model through the exact same `describeInputs` → controls → `run` loop, no graph:
+
+```swift
+ctx.use(AIWorkflowPlugin(
+    providers: [
+        ComfyUIWorkflowProvider(),                          // graph, endpoint-per-call
+        imagenProvider,                                     // fixed schema, cloud
+        AIBackendWorkflowProvider(providerID: "on-device",  // wraps ANY AIBackend
+                                  backend: stableDiffusion),
+    ],
+    client: net,
+    secrets: KeychainSecretStore()))
+```
+
+- **`ImagenProvider`** conforms to `AIWorkflowProvider` directly — a **fixed
+  schema** (`prompt`, a `model` enum when several are configured, an
+  `aspectRatio` enum, `count`, `seed`), no graph, one-shot (`running` → `image`
+  → `done`, no per-step progress). Its key comes from the connection (a
+  `secretRef`-resolved header — fully runtime) or falls back to the key you
+  injected at construction; **no connection is required** in the call.
+- **`AIBackendWorkflowProvider`** (in Core) adapts *any* `AIBackend` — Stable
+  Diffusion, LaMa, a future one — into a fixed-schema provider. The schema is
+  derived from the backend's `AICapabilities`: a text→image backend advertises
+  `prompt`/`steps`/`guidanceScale`/`seed`/`count`, a pure inpainter (`imageEditing`
+  only) advertises `image`/`mask`. It bridges the backend's `generateImageStream`,
+  so per-step progress flows through unchanged. No `jobId`/recovery (on-device
+  runs aren't re-attachable).
+
+A fixed-schema provider ignores the `connection`, so the JS omits it entirely —
+`ai.describeInputs({ provider: "imagen" })`, `ai.run({ provider: "on-device",
+inputs })`. The schema→controls renderer is identical for every provider; only a
+graph provider (ComfyUI) needs the endpoint + graph in the call.
+
 ## Composing into the switcher
 
 A remote backend is *just another `AIBackend`*, so it drops into the shipped

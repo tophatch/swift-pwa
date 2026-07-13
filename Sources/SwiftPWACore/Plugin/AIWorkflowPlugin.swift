@@ -45,19 +45,27 @@ public struct AIWorkflowPlugin: Plugin {
 
     private struct DescribeArgs: Decodable {
         var provider: String
-        var connection: AIConnection
+        /// Optional: graph-based providers (ComfyUI) need the endpoint here, but a
+        /// fixed-schema provider (Imagen, on-device) ignores it, so JS may omit it.
+        var connection: AIConnection?
         var graph: JSONValue?
         var titledOnly: Bool?
     }
 
     private struct RunArgs: Decodable {
         var provider: String
-        var connection: AIConnection
+        /// Optional — see ``DescribeArgs/connection``.
+        var connection: AIConnection?
         var graph: JSONValue?
         var inputs: [String: JSONValue]?
         var outputDirectory: String?
         var jobId: String?
     }
+
+    /// A stand-in connection for providers that don't reach a network endpoint
+    /// (fixed-schema cloud with an injected key, on-device). `AIWorkflowConfig`
+    /// requires a connection; these providers ignore its fields.
+    private static let placeholderConnection = AIConnection(baseURL: URL(string: "about:blank")!)
 
     public func register(into registry: CommandRegistry, app _: any AppContext) {
         let providers = providers
@@ -68,7 +76,7 @@ public struct AIWorkflowPlugin: Plugin {
             (args: DescribeArgs, _) async throws -> AIInputSchema in
             let provider = try Self.lookup(args.provider, in: providers)
             let config = try await Self.makeConfig(
-                connection: args.connection, graph: args.graph,
+                connection: args.connection ?? Self.placeholderConnection, graph: args.graph,
                 inputs: nil, titledOnly: args.titledOnly ?? false,
                 outputDirectory: nil, secrets: secrets
             )
@@ -82,7 +90,7 @@ public struct AIWorkflowPlugin: Plugin {
                     do {
                         let provider = try Self.lookup(args.provider, in: providers)
                         let config = try await Self.makeConfig(
-                            connection: args.connection, graph: args.graph,
+                            connection: args.connection ?? Self.placeholderConnection, graph: args.graph,
                             inputs: args.inputs ?? [:], titledOnly: false,
                             outputDirectory: args.outputDirectory, jobId: args.jobId, secrets: secrets
                         )

@@ -123,7 +123,7 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         config: AIWorkflowConfig,
         client: any NetworkClient,
         promptBox: PromptBox,
-        emit: @Sendable (AIRunEvent) -> Void
+        emit: @escaping @Sendable (AIRunEvent) -> Void
     ) async throws {
         guard let graphData = config.graph,
               var graph = try JSONSerialization.jsonObject(with: graphData) as? [String: Any]
@@ -178,8 +178,17 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         }
         promptBox.value = promptID
 
+        // Per-step progress via /ws (best-effort). A client without a WebSocket
+        // transport (e.g. AndroidNetworkClient) inherits the throwing default and
+        // this task exits quietly — the coarse /queue "running" signal still fires.
+        let progressTask = Task {
+            await streamProgress(promptID: promptID, connection: config.connection, client: client, emit: emit)
+        }
+        defer { progressTask.cancel() }
+
         // Poll /history (coarse progress via /prompt queue), then fetch outputs.
         let refs = try await poll(promptID: promptID, connection: config.connection, client: client, emit: emit)
+        progressTask.cancel()
 
         for (index, ref) in refs.enumerated() {
             try Task.checkCancellation()
@@ -193,6 +202,48 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
             emit(.image(image, width: dims?.width, height: dims?.height))
         }
         emit(.done)
+    }
+
+    // MARK: - Per-step progress (/ws)
+
+    /// Open ComfyUI's `/ws` and translate `progress` frames (`value`/`max`) into
+    /// fine `.progress` events for our prompt. Best-effort: any failure (no
+    /// WebSocket transport, socket drop) is swallowed — coarse polling covers it.
+    private func streamProgress(
+        promptID: String,
+        connection: AIConnection,
+        client: any NetworkClient,
+        emit: @Sendable (AIRunEvent) -> Void
+    ) async {
+        guard let url = Self.webSocketURL(connection.baseURL, clientID: clientID) else { return }
+        do {
+            for try await frame in client.openWebSocket(NetWebSocketRequest(url: url, headers: connection.headers)) {
+                guard case let .text(text) = frame,
+                      let data = text.data(using: .utf8),
+                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      json["type"] as? String == "progress",
+                      let payload = json["data"] as? [String: Any]
+                else { continue }
+                // Frames may omit prompt_id on older servers; when present, filter.
+                if let pid = payload["prompt_id"] as? String, pid != promptID { continue }
+                emit(.progress(
+                    stage: "running",
+                    value: (payload["value"] as? NSNumber)?.doubleValue,
+                    max: (payload["max"] as? NSNumber)?.doubleValue
+                ))
+            }
+        } catch {
+            // Best-effort — coarse /queue polling remains the floor.
+        }
+    }
+
+    /// The `/ws?clientId=…` URL for a connection (http→ws, https→wss).
+    private static func webSocketURL(_ base: URL, clientID: String) -> URL? {
+        var components = URLComponents(url: base.appendingPathComponent("ws"), resolvingAgainstBaseURL: false)
+        let secure = components?.scheme == "https"
+        components?.scheme = secure ? "wss" : "ws"
+        components?.queryItems = [URLQueryItem(name: "clientId", value: clientID)]
+        return components?.url
     }
 
     // MARK: - Polling (coarse progress)

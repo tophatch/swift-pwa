@@ -89,6 +89,43 @@ public struct URLSessionNetworkClient: NetworkClient {
         }
     }
 
+    // MARK: - WebSocket (receive-only)
+
+    public func openWebSocket(_ request: NetWebSocketRequest) -> AsyncThrowingStream<NetWebSocketEvent, any Error> {
+        AsyncThrowingStream { continuation in
+            var urlRequest = URLRequest(url: request.url)
+            for (field, value) in request.headers { urlRequest.setValue(value, forHTTPHeaderField: field) }
+
+            let session = URLSession(configuration: configuration)
+            let task = session.webSocketTask(with: urlRequest)
+
+            // Async receive loop — the completion-handler `receive` overload isn't
+            // on swift-corelibs Foundation (Linux/Windows); the `async` form is.
+            let pump = Task {
+                do {
+                    while true {
+                        try Task.checkCancellation()
+                        switch try await task.receive() {
+                        case let .string(text): continuation.yield(.text(text))
+                        case let .data(data): continuation.yield(.binary(data))
+                        @unknown default: break
+                        }
+                    }
+                } catch {
+                    continuation.finish(throwing: BridgeError(
+                        code: BridgeError.net, message: "websocket closed: \(error.localizedDescription)"
+                    ))
+                }
+            }
+            continuation.onTermination = { _ in
+                pump.cancel()
+                task.cancel(with: .goingAway, reason: nil)
+                session.finishTasksAndInvalidate()
+            }
+            task.resume()
+        }
+    }
+
     /// Flatten `HTTPURLResponse.allHeaderFields` (an `[AnyHashable: Any]`) to a
     /// `[String: String]`, dropping any non-string pairs.
     private static func headerMap(_ http: HTTPURLResponse) -> [String: String] {

@@ -26,6 +26,21 @@ public protocol NetworkClient: Sendable {
     /// `send`, for large payloads that shouldn't cross the bridge as base64
     /// (mirrors `fs`'s stance and reuses the existing model-download plumbing).
     func download(_ request: NetDownloadRequest) -> AsyncThrowingStream<NetDownloadEvent, any Error>
+
+    /// Open a **receive-only** WebSocket and stream inbound frames until the
+    /// socket closes (or the returned stream is torn down). Used for server-push
+    /// progress such as ComfyUI's `/ws`. Default: throws `E_NET` "unsupported" —
+    /// a client that has no WebSocket transport (e.g. `AndroidNetworkClient`
+    /// until its RPC lands) inherits it, and a consumer degrades gracefully.
+    func openWebSocket(_ request: NetWebSocketRequest) -> AsyncThrowingStream<NetWebSocketEvent, any Error>
+}
+
+public extension NetworkClient {
+    func openWebSocket(_: NetWebSocketRequest) -> AsyncThrowingStream<NetWebSocketEvent, any Error> {
+        AsyncThrowingStream { $0.finish(throwing: BridgeError(
+            code: BridgeError.net, message: "WebSocket is not supported by this NetworkClient"
+        )) }
+    }
 }
 
 // MARK: - Value types (Swift-facing)
@@ -119,4 +134,22 @@ public struct NetDownloadEvent: Sendable, Equatable {
     public static func done(path: String) -> NetDownloadEvent {
         NetDownloadEvent(type: "done", path: path)
     }
+}
+
+/// A receive-only WebSocket connection request. `url` is a `ws://` / `wss://`
+/// origin; `headers` ride the opening handshake (auth, etc.).
+public struct NetWebSocketRequest: Sendable, Equatable {
+    public var url: URL
+    public var headers: [String: String]
+
+    public init(url: URL, headers: [String: String] = [:]) {
+        self.url = url
+        self.headers = headers
+    }
+}
+
+/// An inbound WebSocket frame.
+public enum NetWebSocketEvent: Sendable, Equatable {
+    case text(String)
+    case binary(Data)
 }

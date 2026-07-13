@@ -46,6 +46,51 @@ private func provider() -> ComfyUIWorkflowProvider {
     ComfyUIWorkflowProvider(pollInterval: .milliseconds(4), timeout: .milliseconds(500))
 }
 
+/// Serves the HTTP choreography, streams caller-supplied `/ws` frames, and holds
+/// `/history` empty for the first `historyReadyAfterPolls` polls so the socket's
+/// progress frames land before the outputs do.
+private final class WSProgressClient: NetworkClient, @unchecked Sendable {
+    private let frames: [String]
+    private let historyReadyAfterPolls: Int
+    private let lock = NSLock()
+    private var historyPolls = 0
+    init(frames: [String], historyReadyAfterPolls: Int) {
+        self.frames = frames
+        self.historyReadyAfterPolls = historyReadyAfterPolls
+    }
+
+    func send(_ request: NetRequest) async throws -> NetResponse {
+        let path = request.url.path
+        if path.hasSuffix("/prompt"), request.method == "POST" {
+            return NetResponse(status: 200, body: j(["prompt_id": "p1"]))
+        } else if path.hasSuffix("/queue") || path.hasSuffix("/prompt") {
+            return NetResponse(status: 200, body: j(["queue_running": [[0, "p1"]]]))
+        } else if path.contains("/history") {
+            let ready = lock.withLock { () -> Bool in historyPolls += 1; return historyPolls >= historyReadyAfterPolls }
+            guard ready else { return NetResponse(status: 200, body: j(["p1": ["outputs": [String: Any]()]])) }
+            return NetResponse(status: 200, body: j([
+                "p1": ["outputs": ["9": ["images": [["filename": "o.png", "subfolder": "", "type": "output"]]]]]
+            ]))
+        } else if path.hasSuffix("/view") {
+            return NetResponse(status: 200, headers: ["Content-Type": "image/png"], body: onePixelPNG)
+        }
+        return NetResponse(status: 404)
+    }
+
+    func download(_: NetDownloadRequest) -> AsyncThrowingStream<NetDownloadEvent, any Error> {
+        AsyncThrowingStream { $0.finish() }
+    }
+
+    func openWebSocket(_: NetWebSocketRequest) -> AsyncThrowingStream<NetWebSocketEvent, any Error> {
+        let frames = frames
+        return AsyncThrowingStream { continuation in
+            for frame in frames { continuation.yield(.text(frame)) }
+            // Stay open until the run tears it down (mirrors a real socket).
+            continuation.onTermination = { _ in }
+        }
+    }
+}
+
 private func choreography() -> @Sendable (NetRequest) -> NetResponse {
     { request in
         let path = request.url.path
@@ -139,6 +184,31 @@ struct ComfyUIWorkflowProviderTests {
         #expect(inputs("3")?["seed"] as? Int == 77)
         #expect(inputs("10")?["image"] as? String == "uploaded.png") // uploaded, filename bound
         #expect(client.requests.contains { $0.url.path.hasSuffix("/upload/image") })
+    }
+
+    @Test("per-step /ws progress frames become .progress events with value/max")
+    func websocketProgress() async throws {
+        // A client that serves the HTTP choreography but gates /history behind a
+        // few polls, and streams two ComfyUI `progress` frames over the socket —
+        // so the fine progress lands before outputs appear.
+        let client = WSProgressClient(
+            frames: [
+                #"{"type":"progress","data":{"value":1,"max":4,"prompt_id":"p1"}}"#,
+                #"{"type":"progress","data":{"value":4,"max":4,"prompt_id":"p1"}}"#
+            ],
+            historyReadyAfterPolls: 4
+        )
+        let config = AIWorkflowConfig(connection: base, graph: graph, inputs: ["6/text": .string("x")])
+        var progresses: [(Double?, Double?)] = []
+        var sawImage = false
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            if event.type == .progress, event.value != nil { progresses.append((event.value, event.max)) }
+            if event.type == .image { sawImage = true }
+        }
+        #expect(sawImage)
+        // The fine (value/max) frames arrived, not just the coarse queued/running.
+        #expect(progresses.contains { $0.0 == 1 && $0.1 == 4 })
+        #expect(progresses.contains { $0.0 == 4 && $0.1 == 4 })
     }
 
     @Test("a nil seed randomizes and is echoed on the image")

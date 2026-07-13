@@ -298,8 +298,10 @@ actually differ on:
   `${secret}` server-side). No key material in the descriptor.
 
 Presets ship as data — `.imagen`, `.openAICompatible`, `.geminiImage`
-("nano banana"), `.openAIEdit` (multipart), `.qwen` (async). Register one on the
-runtime surface (pinned preset, endpoint/key from the call):
+("nano banana"), `.openAIEdit` (multipart edits), `.qwen` (async `qwen-image` /
+`wan*`), `.qwenImageMax` (the flagship model on DashScope's synchronous multimodal
+endpoint). Register one on the runtime surface (pinned preset, endpoint/key from
+the call):
 
 ```swift
 ctx.use(AIWorkflowPlugin(providers: [

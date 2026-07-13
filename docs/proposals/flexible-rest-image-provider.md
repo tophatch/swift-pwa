@@ -5,14 +5,16 @@ doc records what we built, what we proved against real APIs, the friction we hit
 and the productized shape.
 
 **Productized beyond the spike:** async submit→poll (`.qwen`) and multipart edits
-(`.openAIEdit`) flows; a `RemoteImageProvider` conformance (so it also serves
-`ai.generateImage` in the switcher, not just `ai.run`); preset descriptors as
-data; a `CritterFacts` "nano banana" picker arm. Live-verified additions: **Qwen /
-DashScope async** (`wan2.2-t2i-flash`, international endpoint — submit → poll →
-URL, ~8 s). OpenAI generations + edits build/send correctly and surface the API's
-own errors, but a full live image was blocked by account billing on the test key
-(the multipart body structure is unit-tested; the real API accepted the request up
-to its billing gate).
+(`.openAIEdit`) flows; a synchronous multimodal preset (`.qwenImageMax`); a
+`RemoteImageProvider` conformance (so it also serves `ai.generateImage` in the
+switcher, not just `ai.run`); preset descriptors as data; a `CritterFacts` "nano
+banana" picker arm. **All five providers live-verified end-to-end** through the
+provider: Gemini, Imagen, OpenAI `gpt-image-1` generations **and multipart edits**
+(2.2 MB), Qwen `qwen-image` async submit→poll (~8 s), and `qwen-image-max` on
+DashScope's synchronous multimodal endpoint (2.6 MB). DashScope needs the region
+base + model to match the account (an international key uses
+`dashscope-intl.aliyuncs.com/api/v1`; `qwen-image-max` is served on a *different*
+endpoint from the async `wan*`/`qwen-image` family — hence the separate preset).
 
 ## The question
 

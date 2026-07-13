@@ -259,14 +259,16 @@ public extension RESTImageAPISpec {
         )
     }
 
-    /// **Qwen / DashScope** native async text→image (`X-DashScope-Async: enable`,
-    /// base `…/api/v1`, `Authorization: Bearer …`). Submit returns a task id;
-    /// poll `/tasks/{id}` until `SUCCEEDED`; images come back as URLs. The `model`
-    /// and the connection's region base must match the account — e.g.
-    /// `wan2.2-t2i-flash` on the international base
+    /// **Qwen / DashScope** native **async** text→image (`X-DashScope-Async:
+    /// enable`, base `…/api/v1`, `Authorization: Bearer …`). Submit returns a task
+    /// id; poll `/tasks/{id}` until `SUCCEEDED`; images come back as URLs. Covers
+    /// the `qwen-image` / `qwen-image-plus` (Qwen-Image 2.x) and `wan*-t2i-*`
+    /// families. The `model` and the connection's region base must match the
+    /// account — e.g. `qwen-image` on the international base
     /// (`dashscope-intl.aliyuncs.com/api/v1`), or a Beijing-region model on
-    /// `dashscope.aliyuncs.com/api/v1`.
-    static func qwen(model: String = "wan2.2-t2i-flash", size: String = "1024*1024") -> RESTImageAPISpec {
+    /// `dashscope.aliyuncs.com/api/v1`. (`qwen-image-max` is *not* on this
+    /// endpoint — use ``qwenImageMax(model:)``.)
+    static func qwen(model: String = "qwen-image", size: String = "1024*1024") -> RESTImageAPISpec {
         RESTImageAPISpec(
             endpoint: "/services/aigc/text2image/image-synthesis",
             headers: ["X-DashScope-Async": "enable"],
@@ -294,6 +296,32 @@ public extension RESTImageAPISpec {
                     value: .string(size),
                     options: ["1024*1024", "1280*720", "720*1280"]
                 )
+            ]
+        )
+    }
+
+    /// **Qwen `qwen-image-max`** — the flagship image model, served on DashScope's
+    /// **synchronous multimodal-generation** endpoint (chat-shaped `messages` in,
+    /// an image URL at `output.choices[*].message.content[*].image` out), *not* the
+    /// async `image-synthesis` endpoint ``qwen(model:size:)`` uses. Same region /
+    /// auth rules (an international key needs `dashscope-intl.aliyuncs.com/api/v1`).
+    static func qwenImageMax(model: String = "qwen-image-max") -> RESTImageAPISpec {
+        RESTImageAPISpec(
+            endpoint: "/services/aigc/multimodal-generation/generation",
+            body: .object([
+                "model": .string("${model}"),
+                "input": .object([
+                    "messages": .array([.object([
+                        "role": .string("user"),
+                        "content": .array([.object(["text": .string("${prompt}")])])
+                    ])])
+                ])
+            ]),
+            output: .init(kind: .url, imagesPath: "output.choices[*].message.content[*]", dataField: "image"),
+            errorPath: "message",
+            fields: [
+                AIInputField(key: "model", label: "Model", type: .enum, value: .string(model)),
+                AIInputField(key: "prompt", label: "Prompt", type: .text)
             ]
         )
     }

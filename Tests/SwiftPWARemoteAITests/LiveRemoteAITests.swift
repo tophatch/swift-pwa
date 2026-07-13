@@ -319,11 +319,24 @@ struct LiveRemoteAITests {
     @Test("RESTImageProvider: Qwen async submit→poll", .enabled(if: dashscopeKey != nil))
     func restQwenLive() async throws {
         let key = try #require(Self.dashscopeKey)
-        let model = Self.env["QWEN_IMAGE_MODEL"] ?? "wanx2.1-t2i-turbo"
+        let model = Self.env["QWEN_IMAGE_MODEL"] ?? "qwen-image"
         _ = try await runRESTLive(
             .qwen(model: model), base: Self.qwenBase, headers: ["Authorization": "Bearer \(key)"],
             inputs: ["prompt": .string("a red fox in a snowy forest, highly detailed")],
             label: "rest-qwen"
+        )
+    }
+
+    /// `qwen-image-max` on the synchronous multimodal-generation endpoint (a
+    /// different shape from the async `.qwen` preset — chat messages in, image URL
+    /// under `output.choices[*].message.content[*].image` out).
+    @Test("RESTImageProvider: Qwen qwen-image-max (multimodal, sync)", .enabled(if: dashscopeKey != nil))
+    func restQwenImageMaxLive() async throws {
+        let key = try #require(Self.dashscopeKey)
+        _ = try await runRESTLive(
+            .qwenImageMax(), base: Self.qwenBase, headers: ["Authorization": "Bearer \(key)"],
+            inputs: ["prompt": .string("a red fox in a snowy forest, highly detailed")],
+            label: "rest-qwen-image-max"
         )
     }
 

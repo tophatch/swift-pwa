@@ -1,13 +1,15 @@
 # Proposal: a runtime, JS-reachable AI workflow plugin (`ai.run` / `ai.describeInputs`)
 
-> **Status: Phase 1a implemented** (follow-up to the ComfyUI workflow runner,
-> v0.8.9). `AIWorkflowPlugin` + `ai.run` / `ai.describeInputs`, connection-per-call,
-> coarse (`queued`→`running`→`done`) progress, `/interrupt` cancel, graph-only
-> `describeInputs` fallback, server-side `secretRef` — live-verified against a real
-> ComfyUI. **Deferred:** per-step `/ws` progress (needs a WebSocket transport,
-> Phase 1b), the cross-provider schema generalization (Phase 2), and the
-> example/docs (Phase 3). Depends on `SwiftPWARemoteAI` + the `ai.*` plugin + the
-> shipped `runWorkflow` / `inspectWorkflow` Swift primitives.
+> **Status: Phases 1a + 1b implemented** (follow-up to the ComfyUI workflow
+> runner, v0.8.9). `AIWorkflowPlugin` + `ai.run` / `ai.describeInputs`,
+> connection-per-call, `/interrupt` cancel, graph-only `describeInputs` fallback,
+> server-side `secretRef`, and (1b) **per-step `/ws` progress** over a new
+> `NetworkClient.openWebSocket` transport (`URLSessionWebSocketTask` on
+> Apple/Linux/Windows; Android inherits the throwing default → coarse polling,
+> a follow-up) — all live-verified against a real ComfyUI. **Deferred:** the
+> cross-provider schema generalization (Phase 2) and the example/JS-API docs
+> (Phase 3). Depends on `SwiftPWARemoteAI` + the `ai.*` plugin + the shipped
+> `runWorkflow` / `inspectWorkflow` Swift primitives.
 
 ## The problem
 

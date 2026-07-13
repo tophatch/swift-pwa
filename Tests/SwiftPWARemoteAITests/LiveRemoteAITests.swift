@@ -165,6 +165,8 @@ struct LiveRemoteAITests {
             inputs["\(stepsNode)/steps"] = .number(8)
         }
         var stages: [String] = []
+        var fineProgress = 0 // per-step /ws frames carry value/max
+        var lastMax: Double?
         var imageEvent: AIRunEvent?
         var sawDone = false
         for try await event in ComfyUIWorkflowProvider(timeout: .seconds(600)).runWorkflow(
@@ -172,19 +174,23 @@ struct LiveRemoteAITests {
             client: URLSessionNetworkClient()
         ) {
             switch event.type {
-            case .progress: stages.append(event.stage ?? "?")
+            case .progress:
+                stages.append(event.stage ?? "?")
+                if event.value != nil { fineProgress += 1; lastMax = event.max }
             case .image: imageEvent = event
             case .done: sawDone = true
             }
         }
         #expect(stages.contains("queued"))
         #expect(sawDone)
+        #expect(fineProgress > 0) // /ws per-step progress reached us (1b)
         let image = try #require(imageEvent?.image)
         let seed = try #require(imageEvent?.image?.seed)
         let bytes = try #require(image.dataBase64.flatMap { Data(base64Encoded: $0) })
         #expect(bytes.count > 1000)
         print("[runtime.run] seed=\(seed) dims=\(imageEvent?.width ?? 0)x\(imageEvent?.height ?? 0) "
-            + "stages=\(stages) bytes=\(bytes.count)")
+            +
+            "fineProgress=\(fineProgress)/\(lastMax.map { Int($0) } ?? 0) stages=\(stages.count) bytes=\(bytes.count)")
     }
 
     @Test(

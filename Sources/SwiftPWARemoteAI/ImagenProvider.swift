@@ -102,7 +102,7 @@ public struct ImagenProvider: RemoteImageProvider {
                 bytes: bytes,
                 mimeType: prediction.mimeType ?? "image/png",
                 seed: request.seed,
-                request: request,
+                outputDirectory: request.outputDirectory,
                 index: index
             )
         }

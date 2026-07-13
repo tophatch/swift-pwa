@@ -240,6 +240,95 @@ struct LiveRemoteAITests {
         try assertImage(result, label: "imagen")
     }
 
+    // MARK: - Config-driven REST provider (prototype) — real Imagen + Gemini
+
+    /// One descriptor-driven provider hits the Imagen `:predict` shape.
+    @Test("RESTImageWorkflowProvider: Imagen :predict via a descriptor", .enabled(if: geminiKey != nil))
+    func restImagenLive() async throws {
+        let key = try #require(Self.geminiKey)
+        let spec = RESTImageAPISpec(
+            endpoint: "/models/${model}:predict",
+            body: .object([
+                "instances": .array([.object(["prompt": .string("${prompt}")])]),
+                "parameters": .object(["sampleCount": .string("${count}"), "aspectRatio": .string("${aspectRatio}")])
+            ]),
+            output: .init(
+                kind: .base64,
+                imagesPath: "predictions[*]",
+                dataField: "bytesBase64Encoded",
+                mimeField: "mimeType"
+            ),
+            errorPath: "error.message",
+            fields: [
+                AIInputField(key: "model", type: .enum, value: .string("imagen-4.0-generate-001")),
+                AIInputField(key: "prompt", type: .text),
+                AIInputField(key: "aspectRatio", type: .enum, value: .string("16:9")),
+                AIInputField(key: "count", type: .int, value: .number(1))
+            ]
+        )
+        try await runRESTLive(spec, key: key, inputs: [
+            "prompt": .string("a red fox in a snowy forest, highly detailed")
+        ], label: "rest-imagen")
+    }
+
+    /// The same provider adapts to Gemini's structurally-different
+    /// `:generateContent` (contents/parts in, candidates/parts/inlineData out —
+    /// "nano banana"). Model overridable via `GEMINI_IMAGE_MODEL`.
+    @Test("RESTImageWorkflowProvider: Gemini :generateContent via a descriptor", .enabled(if: geminiKey != nil))
+    func restGeminiLive() async throws {
+        let key = try #require(Self.geminiKey)
+        let model = Self.env["GEMINI_IMAGE_MODEL"] ?? "gemini-2.5-flash-image"
+        let spec = RESTImageAPISpec(
+            endpoint: "/models/${model}:generateContent",
+            body: .object([
+                "contents": .array([.object(["parts": .array([.object(["text": .string("${prompt}")])])])])
+            ]),
+            output: .init(
+                kind: .base64,
+                imagesPath: "candidates[*].content.parts[*]",
+                dataField: "inlineData.data",
+                mimeField: "inlineData.mimeType"
+            ),
+            errorPath: "error.message",
+            fields: [
+                AIInputField(key: "model", type: .enum, value: .string(model)),
+                AIInputField(key: "prompt", type: .text)
+            ]
+        )
+        try await runRESTLive(spec, key: key, inputs: [
+            "prompt": .string("a red fox in a snowy forest, studio photo")
+        ], label: "rest-gemini")
+    }
+
+    private func runRESTLive(
+        _ spec: RESTImageAPISpec, key: String, inputs: [String: JSONValue], label: String
+    ) async throws {
+        let base = try #require(URL(string: "https://generativelanguage.googleapis.com/v1beta"))
+        let config = try AIWorkflowConfig(
+            connection: AIConnection(baseURL: base, headers: ["x-goog-api-key": key]),
+            graph: JSONEncoder().encode(spec),
+            inputs: inputs
+        )
+        var image: AIGeneratedImage?
+        var stages: [String] = []
+        for try await event in RESTImageWorkflowProvider().runWorkflow(
+            config: config,
+            client: URLSessionNetworkClient()
+        ) {
+            switch event.type {
+            case .progress: stages.append(event.stage ?? "?")
+            case .image: image = event.image
+            case .done: break
+            }
+        }
+        let img = try #require(image, "no image event")
+        let bytes = try #require(img.dataBase64.flatMap { Data(base64Encoded: $0) })
+        #expect(bytes.count > 1000)
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("\(label).png")
+        try bytes.write(to: out)
+        print("[\(label)] stages=\(stages) \(bytes.count) bytes, mime \(img.mimeType ?? "?") → \(out.path)")
+    }
+
     private func assertImage(_ result: AIGenerateImageResult, label: String) throws {
         let image = try #require(result.images.first)
         let bytes = try #require(image.dataBase64.flatMap { Data(base64Encoded: $0) })

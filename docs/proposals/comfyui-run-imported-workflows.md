@@ -96,6 +96,43 @@ Ship title-convention as the default with explicit bindings as the override.
 Unbound/unknown inputs are ignored (a workflow can expose only the inputs it
 wants driven).
 
+**Inputs are arbitrary, not a fixed set.** `prompt` / `image` / `seed` aren't
+special — any named input works: `width`, `height`, `steps`, `cfg`, `denoise`, a
+model filename for a picker node, whatever the workflow exposes. The bound set
+*is* the "what's overridable from the UI" whitelist, so a UI can render a control
+per binding generically (label = the input name, widget = its type).
+
+**One input → many locations (fan-out).** A binding target is a **list** of
+node-input locations, so a single logical input updates every place it appears —
+your exact case: a `width` referenced in an `EmptyLatentImage` *and* an upscale
+node moves together from one control:
+`["width": .at([("5","width"), ("12","width")])]`. With the title convention this
+is automatic — titling *every* size-bearing node `width` sets them all (the
+runner matches all nodes whose `_meta.title` equals the input name, not just the
+first).
+
+Value types (v1): `text`, `int`, `float`, `bool`, `image`, `mask`, plus a
+`.raw(JSONValue)` catch-all for anything exotic a node input wants.
+
+### Runner binding vs. editing the graph client-side
+
+Since the runner takes the graph as **data**, the app *can* pre-edit the JSON
+(set any node input in JS) before passing it — that's the ultimate escape hatch,
+fine for structural or one-off changes. But **prefer runner bindings for anything
+the UI exposes as a control** (size, steps, cfg, seed, prompts, images):
+
+- **Images force the split anyway.** The runner must own image inputs regardless
+  (upload → filename → reference into a `LoadImage`). If the app sets scalars in
+  JS but hands images to the runner, the parameterization logic lives in two
+  places. Bindings keep it in one declarative map.
+- **Declarative + reusable.** The binding map is authored once per workflow and
+  reused across runs; the UI drives it by name. No per-run JSON surgery in JS.
+- **Fan-out handled once.** Multi-location updates (size across nodes) are a
+  binding concern, not something each app re-derives.
+
+They compose: bindings apply *on top of* whatever graph you pass, so an app can
+pre-bake structural choices in the graph and still bind the live UI controls.
+
 ## How it's exposed (and where the app's responsibility starts)
 
 **The app owns import, storage, and selection of workflows** — the framework does
@@ -133,8 +170,9 @@ it's no longer how pipelines get into the app — importing a workflow is.
    most real workflows need explicit bindings? Lean: ship both; make the sample
    use titles to show the turnkey path.
 2. **Input value types.** v1 set: `text`, `int`, `float`, `bool`, `image`,
-   `mask`. Enough for prompt/seed/steps/cfg/size/denoise + image inputs. More as
-   needed.
+   `mask`, `raw(JSONValue)`. Covers prompt/seed/steps/cfg/size/denoise + image
+   inputs + an escape hatch; arbitrary *named* inputs and one-to-many fan-out are
+   designed-in (see Binding), not an open question.
 3. **Output beyond one image.** Return all images from output nodes (batch). A
    workflow with multiple distinct `SaveImage` nodes → concatenate in node order;
    document it.

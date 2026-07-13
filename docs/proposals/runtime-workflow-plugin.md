@@ -1,8 +1,13 @@
 # Proposal: a runtime, JS-reachable AI workflow plugin (`ai.run` / `ai.describeInputs`)
 
-> **Status: proposed** (follow-up to the ComfyUI workflow runner, v0.8.9). Depends
-> on `SwiftPWARemoteAI` + the `ai.*` plugin + the shipped `runWorkflow` /
-> `inspectWorkflow` Swift primitives.
+> **Status: Phase 1a implemented** (follow-up to the ComfyUI workflow runner,
+> v0.8.9). `AIWorkflowPlugin` + `ai.run` / `ai.describeInputs`, connection-per-call,
+> coarse (`queued`→`running`→`done`) progress, `/interrupt` cancel, graph-only
+> `describeInputs` fallback, server-side `secretRef` — live-verified against a real
+> ComfyUI. **Deferred:** per-step `/ws` progress (needs a WebSocket transport,
+> Phase 1b), the cross-provider schema generalization (Phase 2), and the
+> example/docs (Phase 3). Depends on `SwiftPWARemoteAI` + the `ai.*` plugin + the
+> shipped `runWorkflow` / `inspectWorkflow` Swift primitives.
 
 ## The problem
 

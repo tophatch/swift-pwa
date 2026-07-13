@@ -7,6 +7,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Runtime, JS-reachable AI workflows — `ai.run` + `ai.describeInputs` (`AIWorkflowPlugin`).** v0.8.9's ComfyUI runner was Swift-only and build-time (one graph bound per `ComfyWorkflowProvider` in `App.swift`). This adds a runtime door: a web app can hand a provider a **graph *and* a connection per call** and run it — no Swift rebuild, no per-endpoint provider. New opt-in `AIWorkflowPlugin(providers:client:secrets:)` (shares the `ai.*` namespace like `VisionPlugin`) exposes:
+  - **`ai.describeInputs`** → `AIInputSchema` — the workflow's overridable inputs (each an `AIInputField`: `key`/`label`/`type`/`value`/range/`options`/`isImage`), keyed `"<nodeID>/<inputName>"` so a run maps straight back to node locations. Degrades to a graph-only schema (`degraded: true`) when the box is unreachable, so a pasted graph is authorable before the box is up.
+  - **`ai.run`** (subscribe) → `AIRunEvent` — `progress` (coarse `queued`→`running`) → `image` (echoing the resolved seed + PNG dimensions) → `done`. `unsubscribe()` (or window close) tears the stream down and the provider `POST`s `/interrupt`. A unary `invoke` form also works.
+  The **connection travels in the call** (`baseURL` + open-bag `headers` + a `secretRef` resolved **server-side** against `secrets.*` and substituted into `${secret}` header placeholders, so key material never enters JS). New Core contract: `AIConnection`, `AIInputField`/`AIInputSchema`, `AIRunEvent`, `AIWorkflowConfig`, `AIWorkflowProvider`. The first conformance, **`ComfyUIWorkflowProvider`** (`SwiftPWARemoteAI`), is stateless w.r.t. the endpoint and reuses the v0.8.9 binding engine + `/upload/image` + seed policy. **Verified live** against a real ComfyUI: introspection off live `/object_info` (keys + types + ranges + option counts), a Qwen-Image txt2img run (coarse `queued`→`running`, image with echoed random seed + 1024² dims), and cancel-mid-run (`/interrupt`). Phase 1a (HTTP-only; per-step `/ws` progress needs a WebSocket transport — deferred to 1b) of [docs/proposals/runtime-workflow-plugin.md](docs/proposals/runtime-workflow-plugin.md).
+
 ## [0.8.9] - 2026-07-13
 
 ### Added

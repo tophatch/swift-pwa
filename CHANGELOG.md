@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.12] - 2026-07-13
+
+### Added
+
+- **`RESTImageProvider` — one config-driven provider that adapts to arbitrary cloud image APIs from a descriptor, instead of a hand-written Swift conformance per service.** A declarative `RESTImageAPISpec` (Codable) describes an API — endpoint template, a JSON request template with `${key}` placeholders (or a multipart form for edit endpoints), one-shot or async submit→poll flow, and a tiny JSONPath (`a[*].b.c`) to the response images (base64 or a URL to fetch) — and the descriptor **travels in the call**, so a running web app can point at a new API with no rebuild. Auth/endpoint come from the `AIConnection` (a `secretRef` resolved into `${secret}` server-side, so the key never enters JS). It serves **both** surfaces: `AIWorkflowProvider` (`ai.run` / `ai.describeInputs` — generic pass-through, or a pinned preset) and `RemoteImageProvider` (`ai.generateImage` in the `MultiModelImageBackend` switcher, standard fields mapped by convention). Ships presets as data: `.imagen`, `.openAICompatible`, `.geminiImage` ("nano banana"), `.openAIEdit` (multipart edits), `.qwen` (async `qwen-image` / `wan*-t2i-*`), `.qwenImageMax` (the flagship `qwen-image-max` on DashScope's synchronous multimodal-generation endpoint). **Verified live against real APIs** with one config engine: Google **Gemini** `:generateContent` (2.0 MB), **Imagen** `:predict` (1.49 MB, 16:9), **OpenAI** `gpt-image-1` generations (1.47 MB) **and multipart edits** (2.2 MB), and **Qwen/DashScope** both the async `qwen-image` submit→poll (~8 s) and the synchronous `qwen-image-max` (2.6 MB) — DashScope needs the region base + model to match the account (an international key uses `dashscope-intl.aliyuncs.com/api/v1`). `Examples/CritterFacts` `web/workflow.html` gains a **Gemini image (nano banana)** picker option backed by `RESTImageProvider` + the `.geminiImage()` preset, keyed by `secretRef` (reusing the stored `google-ai` key — no key in JS). Findings + design in [docs/proposals/flexible-rest-image-provider.md](docs/proposals/flexible-rest-image-provider.md); usage in [docs/remote-ai.md](docs/remote-ai.md). Deferred: conditional parameter coupling (e.g. Imagen's seed→watermark) stays on the hand-written `RemoteImageProvider` seam.
+
 ## [0.8.11] - 2026-07-13
 
 ### Added

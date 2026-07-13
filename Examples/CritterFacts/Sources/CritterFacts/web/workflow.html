@@ -94,6 +94,7 @@
                 <select id="provider">
                     <option value="comfyui">ComfyUI — import a workflow graph</option>
                     <option value="imagen">Imagen — cloud (Google)</option>
+                    <option value="gemini-image">Gemini image — cloud (nano banana)</option>
                     <option value="on-device">On-device — Stable Diffusion / LaMa</option>
                 </select>
             </div>
@@ -163,6 +164,20 @@
         const isGraphProvider = () => provider() === "comfyui";
         // The endpoint connection object, for graph providers only.
         const connection = () => ({ baseURL: endpoint() });
+
+        // Fixed cloud providers backed by the config-driven RESTImageProvider need
+        // a connection (endpoint + auth) even though they carry no graph. The KEY
+        // never enters JS: we send `secretRef`, and the plugin resolves it
+        // server-side into the `${secret}` header placeholder (reusing the same
+        // "google-ai" secret the Imagen demo stores). See CritterFacts.swift.
+        const PRESET_CONNECTIONS = {
+            "gemini-image": {
+                baseURL: "https://generativelanguage.googleapis.com/v1beta",
+                headers: { "x-goog-api-key": "${secret}" },
+                secretRef: "google-ai",
+            },
+        };
+        const presetConnection = () => PRESET_CONNECTIONS[provider()];
 
         // ---- helpers ---------------------------------------------------------
 
@@ -351,8 +366,10 @@
                     if (resolved !== undefined) inputs[c.field.key] = resolved;
                 }
                 args = { provider: provider(), inputs };
-                // A graph provider also carries the endpoint + the graph itself.
+                // A graph provider carries the endpoint + graph; a preset cloud
+                // provider carries its endpoint + secretRef connection.
                 if (isGraphProvider()) { args.connection = connection(); args.graph = currentGraph; }
+                else if (presetConnection()) { args.connection = presetConnection(); }
             }
 
             sub = bridge.subscribe("ai.run", args,

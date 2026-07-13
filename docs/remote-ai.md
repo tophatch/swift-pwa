@@ -276,6 +276,59 @@ A fixed-schema provider ignores the `connection`, so the JS omits it entirely �
 inputs })`. The schema→controls renderer is identical for every provider; only a
 graph provider (ComfyUI) needs the endpoint + graph in the call.
 
+## One provider for many APIs — `RESTImageProvider` (config-driven)
+
+Writing a Swift conformance per cloud API adds up. `RESTImageProvider` adapts to
+an arbitrary JSON image API from a **descriptor** (`RESTImageAPISpec`) instead —
+and the descriptor **travels in the call**, so a running web app can point it at a
+new API with no rebuild. A descriptor parameterizes the five things these APIs
+actually differ on:
+
+- **endpoint** — a template appended to the connection's `baseURL`
+  (`/models/${model}:predict`).
+- **request** — a JSON body template with `${key}` placeholders (an exact
+  `"${key}"` node adopts the value's type; an unresolved optional drops its key),
+  **or** a multipart form (image/mask file parts + text) for edit endpoints.
+- **flow** — one-shot, **or** async submit → poll a task until it succeeds (job
+  APIs like Qwen/DashScope).
+- **output** — a tiny JSONPath (`a[*].b.c`) to the image nodes + a relative
+  `dataField` (base64 or a URL to fetch) + optional `mimeField`. Nodes missing the
+  field are skipped (so Gemini's interleaved text parts are ignored for free).
+- **auth** — from the `AIConnection` (`headers` + a `secretRef` resolved into
+  `${secret}` server-side). No key material in the descriptor.
+
+Presets ship as data — `.imagen`, `.openAICompatible`, `.geminiImage`
+("nano banana"), `.openAIEdit` (multipart edits), `.qwen` (async `qwen-image` /
+`wan*`), `.qwenImageMax` (the flagship model on DashScope's synchronous multimodal
+endpoint). Register one on the runtime surface (pinned preset, endpoint/key from
+the call):
+
+```swift
+ctx.use(AIWorkflowPlugin(providers: [
+    RESTImageProvider(providerID: "gemini-image", spec: .geminiImage()),
+], client: net, secrets: KeychainSecretStore()))
+```
+
+```js
+// The key never enters JS — secretRef is resolved server-side into ${secret}.
+__SWIFT_PWA__.subscribe('ai.run', {
+    provider: 'gemini-image',
+    connection: { baseURL: 'https://generativelanguage.googleapis.com/v1beta',
+                  headers: { 'x-goog-api-key': '${secret}' }, secretRef: 'google-ai' },
+    inputs: { prompt: 'a red panda astronaut' },
+}, onChunk, onError, onEnd);
+```
+
+Or construct `RESTImageProvider()` (no pinned spec) and let the web app send the
+descriptor in the call's `graph` — the fully bring-your-own-API path. It also
+conforms to `RemoteImageProvider`, so a preset + injected `baseURL`/`auth`/`models`
+drops it into the `ai.generateImage` switcher below.
+
+**Limits (kept on the hand-written seam):** *conditional* parameter coupling a
+flat template can't express — e.g. Imagen's "a seed forces `sampleCount:1` +
+`addWatermark:false`". The `.imagen` preset omits `seed` for that reason. See
+[docs/proposals/flexible-rest-image-provider.md](proposals/flexible-rest-image-provider.md).
+
 ## Composing into the switcher
 
 A remote backend is *just another `AIBackend`*, so it drops into the shipped

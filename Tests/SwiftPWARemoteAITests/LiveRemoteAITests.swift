@@ -23,6 +23,8 @@ struct LiveRemoteAITests {
     private static let comfyURL = ProcessInfo.processInfo.environment["SWIFT_PWA_LIVE_COMFY"]
     private static let comfyWorkflow = ProcessInfo.processInfo.environment["SWIFT_PWA_LIVE_COMFY_WORKFLOW"]
     private static let geminiKey = ProcessInfo.processInfo.environment["GEMINI_API_KEY"]
+    private static let openAIKey = ProcessInfo.processInfo.environment["OPENAI_API_KEY"]
+    private static let dashscopeKey = ProcessInfo.processInfo.environment["DASHSCOPE_API_KEY"]
     private static let env = ProcessInfo.processInfo.environment
 
     @Test("ComfyUI: prompt → image", .enabled(if: comfyURL != nil))
@@ -238,6 +240,132 @@ struct LiveRemoteAITests {
             width: 1024, height: 1024, count: 1
         ))
         try assertImage(result, label: "imagen")
+    }
+
+    // MARK: - Config-driven RESTImageProvider — real Gemini / Imagen / OpenAI / Qwen
+
+    private static let googleBase = "https://generativelanguage.googleapis.com/v1beta"
+    private static let openAIBase = "https://api.openai.com/v1"
+    /// DashScope has two regions — Beijing (default) and Singapore/international
+    /// (`dashscope-intl`); an int'l-account key 401s on Beijing. Override via `QWEN_BASE`.
+    private static let qwenBase = ProcessInfo.processInfo.environment["QWEN_BASE"]
+        ?? "https://dashscope.aliyuncs.com/api/v1"
+
+    /// One descriptor-driven provider, Google Imagen `:predict` (base64 out).
+    @Test("RESTImageProvider: Imagen :predict preset", .enabled(if: geminiKey != nil))
+    func restImagenLive() async throws {
+        let key = try #require(Self.geminiKey)
+        _ = try await runRESTLive(
+            .imagen(), base: Self.googleBase, headers: ["x-goog-api-key": key],
+            inputs: [
+                "prompt": .string("a red fox in a snowy forest, highly detailed"),
+                "aspectRatio": .string("16:9")
+            ],
+            label: "rest-imagen"
+        )
+    }
+
+    /// The same provider adapts to Gemini's structurally-different
+    /// `:generateContent` ("nano banana"). Model overridable via `GEMINI_IMAGE_MODEL`.
+    @Test("RESTImageProvider: Gemini :generateContent preset", .enabled(if: geminiKey != nil))
+    func restGeminiLive() async throws {
+        let key = try #require(Self.geminiKey)
+        let model = Self.env["GEMINI_IMAGE_MODEL"] ?? "gemini-2.5-flash-image"
+        _ = try await runRESTLive(
+            .geminiImage(model: model), base: Self.googleBase, headers: ["x-goog-api-key": key],
+            inputs: ["prompt": .string("a red fox in a snowy forest, studio photo")],
+            label: "rest-gemini"
+        )
+    }
+
+    /// OpenAI-compatible `/images/generations` (Bearer auth, base64 out). Model
+    /// overridable via `OPENAI_IMAGE_MODEL` (gpt-image-1 needs a verified org).
+    @Test("RESTImageProvider: OpenAI /images/generations preset", .enabled(if: openAIKey != nil))
+    func restOpenAILive() async throws {
+        let key = try #require(Self.openAIKey)
+        let model = Self.env["OPENAI_IMAGE_MODEL"] ?? "gpt-image-1"
+        _ = try await runRESTLive(
+            .openAICompatible(model: model), base: Self.openAIBase, headers: ["Authorization": "Bearer \(key)"],
+            inputs: ["prompt": .string("a red fox in a snowy forest, studio photo")],
+            label: "rest-openai"
+        )
+    }
+
+    /// OpenAI **image edits** — the multipart path. Generates a source image with
+    /// Imagen first, then edits it (proves file-part upload against the real API).
+    @Test("RESTImageProvider: OpenAI /images/edits (multipart)", .enabled(if: openAIKey != nil && geminiKey != nil))
+    func restOpenAIEditLive() async throws {
+        let geminiKey = try #require(Self.geminiKey)
+        let openAIKey = try #require(Self.openAIKey)
+        let model = Self.env["OPENAI_IMAGE_MODEL"] ?? "gpt-image-1"
+        // A real source image to edit.
+        let source = try await runRESTLive(
+            .imagen(), base: Self.googleBase, headers: ["x-goog-api-key": geminiKey],
+            inputs: ["prompt": .string("a plain red fox portrait, studio")], label: "rest-edit-source"
+        )
+        let sourceBase64 = try #require(source.dataBase64)
+        _ = try await runRESTLive(
+            .openAIEdit(model: model), base: Self.openAIBase, headers: ["Authorization": "Bearer \(openAIKey)"],
+            inputs: [
+                "prompt": .string("add heavy falling snow and a winter forest background"),
+                "image": .object(["dataBase64": .string(sourceBase64)])
+            ],
+            label: "rest-openai-edit"
+        )
+    }
+
+    /// Qwen / DashScope native **async** text→image (submit → poll → URL out).
+    /// Model overridable via `QWEN_IMAGE_MODEL`.
+    @Test("RESTImageProvider: Qwen async submit→poll", .enabled(if: dashscopeKey != nil))
+    func restQwenLive() async throws {
+        let key = try #require(Self.dashscopeKey)
+        let model = Self.env["QWEN_IMAGE_MODEL"] ?? "qwen-image"
+        _ = try await runRESTLive(
+            .qwen(model: model), base: Self.qwenBase, headers: ["Authorization": "Bearer \(key)"],
+            inputs: ["prompt": .string("a red fox in a snowy forest, highly detailed")],
+            label: "rest-qwen"
+        )
+    }
+
+    /// `qwen-image-max` on the synchronous multimodal-generation endpoint (a
+    /// different shape from the async `.qwen` preset — chat messages in, image URL
+    /// under `output.choices[*].message.content[*].image` out).
+    @Test("RESTImageProvider: Qwen qwen-image-max (multimodal, sync)", .enabled(if: dashscopeKey != nil))
+    func restQwenImageMaxLive() async throws {
+        let key = try #require(Self.dashscopeKey)
+        _ = try await runRESTLive(
+            .qwenImageMax(), base: Self.qwenBase, headers: ["Authorization": "Bearer \(key)"],
+            inputs: ["prompt": .string("a red fox in a snowy forest, highly detailed")],
+            label: "rest-qwen-image-max"
+        )
+    }
+
+    @discardableResult
+    private func runRESTLive(
+        _ spec: RESTImageAPISpec, base: String, headers: [String: String],
+        inputs: [String: JSONValue], label: String
+    ) async throws -> AIGeneratedImage {
+        let config = try AIWorkflowConfig(
+            connection: AIConnection(baseURL: #require(URL(string: base)), headers: headers),
+            graph: JSONEncoder().encode(spec),
+            inputs: inputs
+        )
+        var image: AIGeneratedImage?
+        var stages: [String] = []
+        for try await event in RESTImageProvider().runWorkflow(config: config, client: URLSessionNetworkClient()) {
+            switch event.type {
+            case .progress: stages.append(event.stage ?? "?")
+            case .image: image = event.image
+            case .done: break
+            }
+        }
+        let img = try #require(image, "no image event")
+        let bytes = try #require(img.dataBase64.flatMap { Data(base64Encoded: $0) })
+        #expect(bytes.count > 1000)
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("\(label).png")
+        try bytes.write(to: out)
+        print("[\(label)] stages=\(stages) \(bytes.count) bytes, mime \(img.mimeType ?? "?") → \(out.path)")
+        return img
     }
 
     private func assertImage(_ result: AIGenerateImageResult, label: String) throws {

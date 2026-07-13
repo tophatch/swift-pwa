@@ -546,9 +546,11 @@ the web app hands a provider **a graph and a connection per call** and runs it �
 no rebuild per workflow or per endpoint. The surface is **provider-agnostic**,
 routed on a `provider` id: a *graph* provider (**ComfyUI** — any "Save (API
 Format)" graph the app imported, endpoint + graph in the call) and *fixed-schema*
-providers (**Imagen** cloud, **on-device** Stable Diffusion / LaMa) answer the
-same `describeInputs` → controls → `run` loop. Opt-in on the Swift side with a
-list of providers: `ctx.use(AIWorkflowPlugin(providers: [ComfyUIWorkflowProvider(), imagenProvider, AIBackendWorkflowProvider(providerID: "on-device", backend: sd)], client: …, secrets: …))`.
+providers (**Imagen** cloud, **on-device** Stable Diffusion / LaMa, or a
+**config-driven** `RESTImageProvider` for an arbitrary cloud API — Gemini image /
+OpenAI / Qwen, chosen by a descriptor) answer the same `describeInputs` → controls
+→ `run` loop. Opt-in on the Swift side with a list of providers:
+`ctx.use(AIWorkflowPlugin(providers: [ComfyUIWorkflowProvider(), imagenProvider, RESTImageProvider(providerID: "gemini-image", spec: .geminiImage()), AIBackendWorkflowProvider(providerID: "on-device", backend: sd)], client: …, secrets: …))`.
 
 ```js
 // 1. Ask the provider what the graph's overridable inputs are. For ComfyUI this

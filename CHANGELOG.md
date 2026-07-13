@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.10] - 2026-07-13
+
 ### Added
 
 - **Runtime, JS-reachable AI workflows — `ai.run` + `ai.describeInputs` (`AIWorkflowPlugin`).** v0.8.9's ComfyUI runner was Swift-only and build-time (one graph bound per `ComfyWorkflowProvider` in `App.swift`). This adds a runtime door: a web app can hand a provider a **graph *and* a connection per call** and run it — no Swift rebuild, no per-endpoint provider. New opt-in `AIWorkflowPlugin(providers:client:secrets:)` (shares the `ai.*` namespace like `VisionPlugin`) exposes:

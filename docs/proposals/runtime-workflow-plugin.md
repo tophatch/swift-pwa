@@ -4,9 +4,13 @@
 > runner, v0.8.9). `AIWorkflowPlugin` + `ai.run` / `ai.describeInputs`,
 > connection-per-call, `/interrupt` cancel, graph-only `describeInputs` fallback,
 > server-side `secretRef`, and (1b) **per-step `/ws` progress** over a new
-> `NetworkClient.openWebSocket` transport (`URLSessionWebSocketTask` on
-> Apple/Linux/Windows; Android inherits the throwing default → coarse polling,
-> a follow-up) — all live-verified against a real ComfyUI. **Deferred:** the
+> `NetworkClient.openWebSocket` transport — `URLSessionWebSocketTask` on
+> Apple/Linux/Windows, and on Android an OkHttp-backed `net.ws.*` Kotlin RPC
+> (`HttpURLConnection` has no WebSocket) that forwards frames to Swift as
+> host-events. All live-verified against a real ComfyUI (the Android RPC
+> round-trips real progress frames on-device; see the CHANGELOG for an
+> environment-level idle-socket caveat observed on one test network).
+> **Deferred:** the
 > cross-provider schema generalization (Phase 2) and the example/JS-API docs
 > (Phase 3). Depends on `SwiftPWARemoteAI` + the `ai.*` plugin + the shipped
 > `runWorkflow` / `inspectWorkflow` Swift primitives.

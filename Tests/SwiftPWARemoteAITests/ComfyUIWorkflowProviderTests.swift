@@ -211,6 +211,27 @@ struct ComfyUIWorkflowProviderTests {
         #expect(progresses.contains { $0.0 == 4 && $0.1 == 4 })
     }
 
+    @Test("current-protocol progress_state frames become .progress events (running node's value/max)")
+    func websocketProgressState() async throws {
+        // Current ComfyUI emits `progress_state` (per-node {value,max,state})
+        // rather than the legacy flat `progress`. The running node's value/max
+        // is what drives the bar; a finished node in the same frame is ignored.
+        let client = WSProgressClient(
+            frames: [
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":2,"max":8,"state":"running"},"9":{"value":1,"max":1,"state":"finished"}}}}"#,
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":8,"max":8,"state":"running"}}}}"#
+            ],
+            historyReadyAfterPolls: 4
+        )
+        let config = AIWorkflowConfig(connection: base, graph: graph, inputs: ["6/text": .string("x")])
+        var progresses: [(Double?, Double?)] = []
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            if event.type == .progress, event.value != nil { progresses.append((event.value, event.max)) }
+        }
+        #expect(progresses.contains { $0.0 == 2 && $0.1 == 8 }) // the running node, not the finished one
+        #expect(progresses.contains { $0.0 == 8 && $0.1 == 8 })
+    }
+
     @Test("a nil seed randomizes and is echoed on the image")
     func seedRandomize() async throws {
         let client = ScriptedWSClient(choreography())

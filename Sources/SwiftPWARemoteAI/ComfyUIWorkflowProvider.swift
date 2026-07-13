@@ -206,9 +206,16 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
 
     // MARK: - Per-step progress (/ws)
 
-    /// Open ComfyUI's `/ws` and translate `progress` frames (`value`/`max`) into
-    /// fine `.progress` events for our prompt. Best-effort: any failure (no
-    /// WebSocket transport, socket drop) is swallowed — coarse polling covers it.
+    /// Open ComfyUI's `/ws` and translate its progress frames into fine
+    /// `.progress` events for our prompt. Best-effort: any failure (no WebSocket
+    /// transport, socket drop) is swallowed — coarse polling remains the floor.
+    ///
+    /// **Reconnects** until the caller cancels this task (which `run` does once
+    /// the job's outputs are in hand): a dropped socket mid-run resumes rather
+    /// than silently going coarse. Harmless on a stable connection (the loop
+    /// only re-enters after a drop), and it recovers on networks that reap idle
+    /// sockets — some mobile radios abort an idle LAN socket within seconds even
+    /// though a desktop on the same network holds it open indefinitely.
     private func streamProgress(
         promptID: String,
         connection: AIConnection,
@@ -216,25 +223,48 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         emit: @Sendable (AIRunEvent) -> Void
     ) async {
         guard let url = Self.webSocketURL(connection.baseURL, clientID: clientID) else { return }
-        do {
-            for try await frame in client.openWebSocket(NetWebSocketRequest(url: url, headers: connection.headers)) {
-                guard case let .text(text) = frame,
-                      let data = text.data(using: .utf8),
-                      let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      json["type"] as? String == "progress",
-                      let payload = json["data"] as? [String: Any]
-                else { continue }
-                // Frames may omit prompt_id on older servers; when present, filter.
-                if let pid = payload["prompt_id"] as? String, pid != promptID { continue }
-                emit(.progress(
-                    stage: "running",
-                    value: (payload["value"] as? NSNumber)?.doubleValue,
-                    max: (payload["max"] as? NSNumber)?.doubleValue
-                ))
+        while !Task.isCancelled {
+            do {
+                let request = NetWebSocketRequest(url: url, headers: connection.headers)
+                for try await frame in client.openWebSocket(request) {
+                    guard case let .text(text) = frame,
+                          let data = text.data(using: .utf8),
+                          let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                          let payload = json["data"] as? [String: Any]
+                    else { continue }
+                    // Frames may omit prompt_id on older servers; when present, filter.
+                    if let pid = payload["prompt_id"] as? String, pid != promptID { continue }
+                    switch json["type"] as? String {
+                    case "progress": // legacy: flat value/max on the sampling node
+                        emit(.progress(
+                            stage: "running",
+                            value: (payload["value"] as? NSNumber)?.doubleValue,
+                            max: (payload["max"] as? NSNumber)?.doubleValue
+                        ))
+                    case "progress_state": // current: per-node {value,max,state}
+                        guard let node = Self.activeNode(payload["nodes"]) else { continue }
+                        emit(.progress(
+                            stage: "running",
+                            value: (node["value"] as? NSNumber)?.doubleValue,
+                            max: (node["max"] as? NSNumber)?.doubleValue
+                        ))
+                    default:
+                        continue
+                    }
+                }
+            } catch {
+                // Best-effort — fall through to reconnect (or exit if cancelled).
             }
-        } catch {
-            // Best-effort — coarse /queue polling remains the floor.
+            if Task.isCancelled { break }
+            try? await Task.sleep(for: .milliseconds(300))
         }
+    }
+
+    /// From a `progress_state` frame's `nodes` map, the node to report — the one
+    /// currently `running` (the sampler mid-run), else any entry.
+    private static func activeNode(_ nodes: Any?) -> [String: Any]? {
+        guard let nodes = nodes as? [String: [String: Any]] else { return nil }
+        return nodes.values.first { ($0["state"] as? String) == "running" } ?? nodes.values.first
     }
 
     /// The `/ws?clientId=…` URL for a connection (http→ws, https→wss).

@@ -1,6 +1,12 @@
 # Proposal: run imported ComfyUI workflows (a generic workflow runner)
 
-> **Status: proposed (follow-up to the remote-AI tier, v0.8.8).** The shipped
+> **Status: implemented in v0.8.9** (`runWorkflow` + `inspectWorkflow` +
+> `ComfyWorkflowProvider`; Phases A–C, live-verified — see
+> [CHANGELOG](../../CHANGELOG.md) and [docs/remote-ai.md](../remote-ai.md#running-your-own-imported-comfyui-workflows)).
+> The `CritterFacts` demo arm and video (i2v/flf2v) remain deferred. Original
+> proposal below.
+>
+> **Was: proposed (follow-up to the remote-AI tier, v0.8.8).** The shipped
 > `ComfyUIProvider` runs one hard-coded `txt2imgSDXL` graph and discovers only
 > `CheckpointLoaderSimple` checkpoints — so on a real box, Qwen-Image / Flux /
 > edit / other pipelines never show up, and there's no image input. The obvious

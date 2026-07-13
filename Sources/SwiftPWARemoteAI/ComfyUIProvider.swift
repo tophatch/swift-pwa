@@ -28,9 +28,12 @@ public struct ComfyUIProvider: RemoteImageProvider {
     public let models: [AIModelInfo]
     public let backendID = "comfyui"
 
-    private let baseURL: URL
+    // `baseURL` / `clientID` are `internal` (not `private`) so the workflow-runner
+    // extension in ComfyWorkflowRunner.swift can build request URLs and multipart
+    // boundaries; the rest stays private to this file.
+    let baseURL: URL
     private let workflow: ComfyWorkflowTemplate
-    private let clientID: String
+    let clientID: String
     private let pollInterval: Duration
     private let timeout: Duration
 
@@ -86,7 +89,29 @@ public struct ComfyUIProvider: RemoteImageProvider {
         let seed = request.seed ?? Int.random(in: 0 ... Int(UInt32.max))
         let checkpoint = try await resolveCheckpoint(request.model, client: client)
         let graph = try workflow.build(request: request, seed: seed, checkpoint: checkpoint)
+        return try await submitAndFetch(
+            graph: graph,
+            seed: seed,
+            outputDirectory: request.outputDirectory,
+            client: client
+        )
+    }
 
+    // MARK: - Choreography
+
+    /// Submit an API-format `graph` to `POST /prompt`, poll `/history` until its
+    /// outputs appear, and fetch each output image via `/view`. Shared by
+    /// ``generateImage`` (template-driven) and ``runWorkflow`` (adopter-supplied
+    /// graph), so there's one copy of the ComfyUI job dance. `seed` is echoed on
+    /// every returned image; `outputDirectory` follows the path-vs-base64 policy.
+    /// `graph` is serialized before the first `await`, so the non-`Sendable`
+    /// dictionary never crosses a suspension point.
+    func submitAndFetch(
+        graph: [String: Any],
+        seed: Int?,
+        outputDirectory: String?,
+        client: any NetworkClient
+    ) async throws -> [AIGeneratedImage] {
         // 1. Queue the prompt.
         let promptBody = try JSONSerialization.data(withJSONObject: ["prompt": graph, "client_id": clientID])
         let queued = try await client.send(NetRequest(
@@ -128,7 +153,7 @@ public struct ComfyUIProvider: RemoteImageProvider {
                 bytes: view.body,
                 mimeType: mime,
                 seed: seed,
-                request: request,
+                outputDirectory: outputDirectory,
                 index: index
             ))
         }
@@ -140,7 +165,7 @@ public struct ComfyUIProvider: RemoteImageProvider {
 
     // MARK: - Polling
 
-    private struct ImageRef { let filename: String; let subfolder: String; let type: String }
+    struct ImageRef { let filename: String; let subfolder: String; let type: String }
 
     private func pollHistory(promptID: String, client: any NetworkClient) async throws -> [ImageRef] {
         let deadline = ContinuousClock.now + timeout

@@ -103,6 +103,100 @@ let comfy = RemoteImageBackend(
   HTTPS endpoints (and all desktop/iOS) need nothing extra (iOS uses the
   `ios.info_plist` ATS passthrough for http).
 
+## Running your own imported ComfyUI workflows
+
+The template above patches a *known* graph. ComfyUI's real power is that any
+workflow a user authored — Qwen-Image, Flux, edit, upscale, IP-Adapter — can be
+exported as an **API-format graph** ("Save (API Format)" in the ComfyUI UI, or
+the graph you get from `/prompt` history) and run **verbatim**. So the app owns
+importing / storing / selecting workflows; the framework just executes them.
+`ComfyUIProvider` has two entry points for this, plus a turnkey `ai.*` adapter.
+
+**1. Discover a workflow's overridable inputs — `inspectWorkflow`.** Real
+exports don't title their nodes `prompt` / `seed` — a positive prompt node is
+titled `"CLIP Text Encode (Positive Prompt)"`, a `LoadImage` is `"Load Image"`.
+So the reliable path is to *introspect* the graph and bind by node id, not by a
+title convention. `inspectWorkflow` crosses the graph's literal (widget) inputs —
+`[nodeId, slot]` connection inputs are excluded — with the instance's
+`/object_info` to return each overridable input's real type, range, combo
+options (sampler names, per-box model file lists), and image flag:
+
+```swift
+let comfy = ComfyUIProvider(baseURL: URL(string: "http://nas.local:8188")!)
+let inputs = try await comfy.inspectWorkflow(graph: importedGraphJSON, client: net)
+// each WorkflowInput: { nodeID, nodeClass, title, inputName, type,
+//                       currentValue, min?, max?, step?, options?, isImage }
+// … carries its own (nodeID, inputName), i.e. a ready-made binding location.
+```
+
+Build UI controls from these (a slider for an `INT`/`FLOAT` with its range, a
+picker for a `COMBO`, a file picker where `isImage`). `titledOnly: true` narrows
+to nodes the author deliberately titled. These are *candidates* — a graph has
+literals a UI shouldn't surface (internal constants), so the app curates.
+
+**2. Run it with named inputs — `runWorkflow`.** Bind values into the graph and
+get the output image(s) back, reusing the same submit → poll → fetch flow:
+
+```swift
+let images = try await comfy.runWorkflow(
+    graph: importedGraphJSON,
+    inputs: [
+        "prompt": .text("a red panda astronaut"),
+        "image":  .image(sourceBytes),   // uploaded to /upload/image, filename bound
+        "seed":   .seed(nil),            // fresh random per run (echoed on results)
+        "steps":  .int(8),
+    ],
+    bindings: [
+        "prompt": .at(node: "108", input: "text"),
+        "image":  .imageAt(node: "78", input: "image"),
+        "seed":   .at(node: "106", input: "seed"),
+        "steps":  .at(node: "106", input: "steps"),
+    ],
+    client: net)
+```
+
+- Inputs are **arbitrary** — not a fixed prompt/image/seed set. Any named input
+  works (`cfg`, `denoise`, `width`, a model filename for a picker node); value
+  types are `.text` / `.int` / `.float` / `.bool` / `.seed(Int?)` / `.image` /
+  `.mask` / `.raw(JSONValue)`.
+- A binding is a **list** of locations, so one logical input **fans out** to
+  every node that uses it: `["size": .at([("5","width"), ("12","width")])]`.
+- Omit a binding for an input and the **title convention** applies (a node whose
+  `_meta.title` equals the input name → its like-named input, else its sole
+  literal). Handy for workflows *you* authored and titled; introspection +
+  explicit bindings is the path for arbitrary imported graphs.
+- `.image` / `.mask` bytes are `POST`ed to `/upload/image` and the returned
+  filename bound into the target `LoadImage` — this is what makes img2img / edit
+  / upscale work.
+- The workflow references exact node classes **and model filenames that must
+  exist on that box** (inherent to ComfyUI portability). A bad graph surfaces
+  ComfyUI's `/prompt` validation message as `E_AI_GENERATION`.
+
+**3. Expose it as an `ai.*` model — `ComfyWorkflowProvider`.** For a workflow
+whose inputs line up with the standard request fields, wrap it so it plugs into
+the `MultiModelImageBackend` switcher and `ai.generateImage` routes to it — no
+ComfyUI-specific JS:
+
+```swift
+let workflowModel = RemoteImageBackend(
+    provider: ComfyWorkflowProvider(
+        baseURL: URL(string: "http://nas.local:8188")!,
+        graph: importedGraphJSON,
+        fields: .init(prompt: .at(node: "108", input: "text"),
+                      seed:   .at(node: "106", input: "seed"),
+                      image:  .imageAt(node: "78", input: "image")),   // omit for txt2img
+        model: AIModelInfo(id: "comfy:workflow:qwen-edit", label: "Qwen-Image-Edit (ComfyUI)",
+                           capabilities: [.imageEdit], availability: .ready, offlineCapable: false)),
+    client: net)
+```
+
+`ai.generateImage({ model: "comfy:workflow:qwen-edit", prompt, image })` then
+maps `prompt`/`image`/`seed`/… onto the bound nodes and runs `runWorkflow`. For
+inputs a request can't model (two images, a control image, exotic params), call
+`runWorkflow` directly and surface it to your web app however you like.
+
+See [`docs/sample-workflows/`](sample-workflows/) for sanitized example exports.
+
 ## Composing into the switcher
 
 A remote backend is *just another `AIBackend`*, so it drops into the shipped

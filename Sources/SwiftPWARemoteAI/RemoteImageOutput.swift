@@ -11,10 +11,10 @@ enum RemoteImageOutput {
         bytes: Data,
         mimeType: String,
         seed: Int?,
-        request: AIGenerateImageRequest,
+        outputDirectory: String?,
         index: Int
     ) throws -> AIGeneratedImage {
-        guard let directory = request.outputDirectory else {
+        guard let directory = outputDirectory else {
             return AIGeneratedImage(dataBase64: bytes.base64EncodedString(), mimeType: mimeType, seed: seed)
         }
         let ext = fileExtension(for: mimeType)

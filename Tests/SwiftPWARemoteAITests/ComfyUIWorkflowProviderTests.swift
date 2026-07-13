@@ -263,6 +263,28 @@ struct ComfyUIWorkflowProviderTests {
         #expect(progresses.contains { $0.0 == 8 && $0.1 == 8 })
     }
 
+    @Test("duplicate progress (legacy + progress_state for the same step) collapses to one event")
+    func websocketProgressDedup() async throws {
+        // A current box sends both a legacy `progress` and a `progress_state` per
+        // step — the provider prefers progress_state and drops the repeat, so a
+        // step reports once, not twice.
+        let client = WSProgressClient(
+            frames: [
+                #"{"type":"progress","data":{"value":3,"max":10,"prompt_id":"p1"}}"#,
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":3,"max":10,"state":"running"}}}}"#,
+                #"{"type":"progress_state","data":{"prompt_id":"p1","nodes":{"3":{"value":10,"max":10,"state":"running"}}}}"#
+            ],
+            historyReadyAfterPolls: 4
+        )
+        let config = AIWorkflowConfig(connection: base, graph: graph, inputs: ["6/text": .string("x")])
+        var progresses: [(Double?, Double?)] = []
+        for try await event in provider().runWorkflow(config: config, client: client) {
+            if event.type == .progress, event.value != nil { progresses.append((event.value, event.max)) }
+        }
+        #expect(progresses.count(where: { $0.0 == 3 && $0.1 == 10 }) == 1) // once, not twice
+        #expect(progresses.contains { $0.0 == 10 && $0.1 == 10 })
+    }
+
     @Test("a nil seed randomizes and is echoed on the image")
     func seedRandomize() async throws {
         let client = ScriptedWSClient(choreography())

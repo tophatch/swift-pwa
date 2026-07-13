@@ -276,6 +276,14 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         emit: @Sendable (AIRunEvent) -> Void
     ) async {
         guard let url = Self.webSocketURL(connection.baseURL, clientID: clientID) else { return }
+        // A current ComfyUI emits *both* the legacy `progress` and the newer
+        // `progress_state` for each sampling step, which would double every
+        // `.progress`. Prefer `progress_state` once we've seen it, and drop a
+        // repeat of the same (value,max) — so each step yields one event. These
+        // persist across reconnects (one `streamProgress` call spans them).
+        var sawProgressState = false
+        var lastValue: Double?
+        var lastMax: Double?
         while !Task.isCancelled {
             do {
                 let request = NetWebSocketRequest(url: url, headers: connection.headers)
@@ -287,23 +295,25 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
                     else { continue }
                     // Frames may omit prompt_id on older servers; when present, filter.
                     if let pid = payload["prompt_id"] as? String, pid != promptID { continue }
+                    let value: Double?
+                    let max: Double?
                     switch json["type"] as? String {
                     case "progress": // legacy: flat value/max on the sampling node
-                        emit(.progress(
-                            stage: "running",
-                            value: (payload["value"] as? NSNumber)?.doubleValue,
-                            max: (payload["max"] as? NSNumber)?.doubleValue
-                        ))
+                        if sawProgressState { continue } // superseded by progress_state
+                        value = (payload["value"] as? NSNumber)?.doubleValue
+                        max = (payload["max"] as? NSNumber)?.doubleValue
                     case "progress_state": // current: per-node {value,max,state}
+                        sawProgressState = true
                         guard let node = Self.activeNode(payload["nodes"]) else { continue }
-                        emit(.progress(
-                            stage: "running",
-                            value: (node["value"] as? NSNumber)?.doubleValue,
-                            max: (node["max"] as? NSNumber)?.doubleValue
-                        ))
+                        value = (node["value"] as? NSNumber)?.doubleValue
+                        max = (node["max"] as? NSNumber)?.doubleValue
                     default:
                         continue
                     }
+                    if value == lastValue, max == lastMax { continue } // drop repeats
+                    lastValue = value
+                    lastMax = max
+                    emit(.progress(stage: "running", value: value, max: max))
                 }
             } catch {
                 // Best-effort — fall through to reconnect (or exit if cancelled).

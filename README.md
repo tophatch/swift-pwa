@@ -295,6 +295,7 @@ Copy-paste-friendly, Swift-optional walkthroughs for common features live in [do
 - [Saving and loading files (Export / Import)](docs/tutorials/saving-and-loading-files.md) — native Save / Open dialogs over `dialog.*` + `fs.*`, with an automatic browser fallback so one codebase runs everywhere.
 - [On-device AI](docs/tutorials/on-device-ai.md) — wire up the `ai.*` API for local text and image generation, from `ai.info` and model download through streaming output.
 - [Importing content packs](docs/tutorials/importing-content-packs.md) — import a large `.zip` of media at runtime and serve it to the page off disk, with native extraction and re-export.
+- [Shipping your app (all platforms)](docs/tutorials/shipping-your-app.md) — build, sign, and distribute on macOS, iOS, Linux, Windows, and Android, plus one-tag cloud releases and an auto-update heads-up.
 
 ## Bundling
 

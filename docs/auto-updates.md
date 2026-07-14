@@ -68,6 +68,36 @@ try runtime.run { ctx in
 string — `BuildConfig.versionName` on Android, override via the
 `currentVersion:` arg on every backend).
 
+### Automatic background checks (`auto_check`)
+
+By default the plugin is on-demand — nothing checks for updates until JS
+calls `updater.check` / `updater.run`. Opt into background polling by
+passing `autoCheck: true` (and, optionally, a `checkInterval` in
+seconds — mirroring `pwa.json`'s `updater.auto_check` /
+`check_interval_seconds`; the default is 6 hours, floored at 60s):
+
+```swift
+ctx.use(UpdaterPlugin(
+    AppleUpdater(endpoint: …, publicKey: …),
+    autoCheck: true,
+    checkInterval: 21600
+))
+```
+
+The runtime then checks on launch and every `checkInterval` after,
+pushing any available update to JS on the **`updater.updateAvailable`**
+event-bus channel (transient network failures are swallowed and retried
+next tick). The payload is the same `UpdateInfo` `updater.check` returns
+— including the `mandatory` flag — and is *retained*, so a listener that
+subscribes after a check still receives the latest:
+
+```js
+__SWIFT_PWA__.on("updater.updateAvailable", (info) => {
+  if (info.mandatory) forceUpdateGate(info);       // kill-switch
+  else showUpdateBanner(info);                      // then updater.run
+});
+```
+
 ## JS surface
 
 ```js

@@ -52,18 +52,67 @@ import Foundation
 ///         case "error":            /* commit itself failed */ break;
 ///     }
 /// });
+///
+/// // Auto-check (opt in with UpdaterPlugin(updater, autoCheck: true)).
+/// // The runtime polls on a timer and pushes any available update here;
+/// // the payload is retained so a late subscriber still gets the latest.
+/// __SWIFT_PWA__.on("updater.updateAvailable", (info) => {
+///     if (info.mandatory) forceUpdateGate(info);
+///     else showUpdateBanner(info);   // then invoke updater.run to apply
+/// });
 /// ```
 public struct UpdaterPlugin: Plugin {
     public static let pluginName = "updater"
 
-    private let updater: any Updater
+    /// Event-bus channel the auto-check poller emits an available
+    /// `UpdateInfo` on. JS subscribes with
+    /// `__SWIFT_PWA__.on("updater.updateAvailable", info => …)`; the
+    /// payload is retained, so a late subscriber still receives the
+    /// most recent available update.
+    public static let updateAvailableChannel = "updater.updateAvailable"
 
-    public init(_ updater: any Updater) {
+    private let updater: any Updater
+    private let autoCheck: Bool
+    private let checkInterval: TimeInterval
+
+    /// - Parameters:
+    ///   - updater: the platform `Updater` backend.
+    ///   - autoCheck: when `true`, poll `updater.check()` on a timer and
+    ///     emit any available update on `updateAvailableChannel` (mirrors
+    ///     `pwa.json`'s `updater.auto_check` — pass that value through).
+    ///     Default `false` (on-demand only, unchanged behaviour).
+    ///   - checkInterval: seconds between polls when `autoCheck` is on
+    ///     (mirrors `updater.check_interval_seconds`). Default 6 hours.
+    ///     Clamped to a 60-second floor so a misconfigured `0` doesn't
+    ///     hammer the endpoint.
+    public init(
+        _ updater: any Updater,
+        autoCheck: Bool = false,
+        checkInterval: TimeInterval = 21600
+    ) {
         self.updater = updater
+        self.autoCheck = autoCheck
+        self.checkInterval = max(60, checkInterval)
     }
 
-    public func register(into registry: CommandRegistry, app _: any AppContext) {
+    public func register(into registry: CommandRegistry, app: any AppContext) {
         let updater = updater
+
+        if autoCheck {
+            let events = app.events
+            let interval = checkInterval
+            // App-lifetime poller on the cooperative pool. The first
+            // check fires promptly (retained emit closes the "JS
+            // subscribed late" gap); subsequent checks every `interval`.
+            // Transient check failures (offline, endpoint blip) are
+            // swallowed — the next tick retries.
+            Task.detached {
+                while !Task.isCancelled {
+                    await Self.checkAndEmit(updater, to: events)
+                    try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                }
+            }
+        }
 
         registry.register(
             "updater.check",
@@ -129,6 +178,21 @@ public struct UpdaterPlugin: Plugin {
                 updater.install()
             }
         )
+    }
+
+    /// One auto-check iteration: probe `updater.check()` and, if an
+    /// update is available, emit it (retained) on
+    /// `updateAvailableChannel`. Transient errors are swallowed so the
+    /// polling loop keeps ticking. `package`-visible so tests can drive
+    /// a single iteration without spinning up the timer loop.
+    package static func checkAndEmit(_ updater: any Updater, to events: EventBus) async {
+        do {
+            if let info = try await updater.check() {
+                try? events.emit(updateAvailableChannel, info, retain: true)
+            }
+        } catch {
+            // Offline / endpoint blip — the next tick retries.
+        }
     }
 }
 

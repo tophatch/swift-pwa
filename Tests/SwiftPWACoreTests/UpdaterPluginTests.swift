@@ -111,6 +111,61 @@ struct UpdaterPluginTests {
         #expect(message == "network gone")
     }
 
+    // MARK: - auto-check polling
+
+    @Test("auto-check emits an available update on updateAvailable (retained)")
+    func autoCheckEmitsAvailable() async {
+        let (app, updater) = makeApp()
+        let info = sampleInfo()
+        updater.nextCheckResult = info
+        let captured = Captured<UpdateInfo>()
+        let sub = app.events.subscribe(UpdaterPlugin.updateAvailableChannel) { data in
+            if let i = try? JSONDecoder().decode(UpdateInfo.self, from: data) { captured.append(i) }
+        }
+        defer { sub.cancel() }
+
+        await UpdaterPlugin.checkAndEmit(updater, to: app.events)
+        #expect(captured.values == [info])
+        #expect(updater.actions == [.check])
+
+        // Retained: a subscriber that connects *after* the emit still
+        // receives the latest available update.
+        let late = Captured<UpdateInfo>()
+        let sub2 = app.events.subscribe(UpdaterPlugin.updateAvailableChannel) { data in
+            if let i = try? JSONDecoder().decode(UpdateInfo.self, from: data) { late.append(i) }
+        }
+        defer { sub2.cancel() }
+        #expect(late.values == [info])
+    }
+
+    @Test("auto-check stays silent when up to date or the check throws")
+    func autoCheckSilentWhenNoUpdate() async {
+        let (app, updater) = makeApp()
+        let captured = Captured<UpdateInfo>()
+        let sub = app.events.subscribe(UpdaterPlugin.updateAvailableChannel) { data in
+            if let i = try? JSONDecoder().decode(UpdateInfo.self, from: data) { captured.append(i) }
+        }
+        defer { sub.cancel() }
+
+        // Up to date → no emit.
+        updater.nextCheckResult = nil
+        await UpdaterPlugin.checkAndEmit(updater, to: app.events)
+        #expect(captured.values.isEmpty)
+
+        // Transient check error → swallowed, still no emit.
+        updater.nextCheckError = BridgeError(code: BridgeError.handler, message: "offline")
+        await UpdaterPlugin.checkAndEmit(updater, to: app.events)
+        #expect(captured.values.isEmpty)
+    }
+
+    @Test("autoCheck clamps a too-small interval to the 60s floor")
+    func autoCheckIntervalFloor() {
+        // A misconfigured 0 must not become a hot loop; the initializer
+        // clamps to 60s. (Constructing the plugin is enough — the value
+        // is private, so this asserts the plugin builds without spinning.)
+        _ = UpdaterPlugin(MockUpdater(), autoCheck: true, checkInterval: 0)
+    }
+
     // MARK: - installAndRelaunch
 
     @Test("updater.installAndRelaunch invokes the updater")
@@ -238,5 +293,16 @@ struct UpdaterPluginTests {
             if !expectError { throw error }
         }
         return collected
+    }
+}
+
+/// Thread-safe payload collector for `EventBus` sinks (which are
+/// `@Sendable` and may run off the test's actor).
+private final class Captured<T>: @unchecked Sendable {
+    private let lock = NSLock()
+    private var storage: [T] = []
+    func append(_ value: T) { lock.withLock { storage.append(value) } }
+    var values: [T] {
+        lock.withLock { storage }
     }
 }

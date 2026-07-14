@@ -814,9 +814,9 @@ The Swift side can register arbitrary commands; JS calls them through
 the same `invoke` / `subscribe` surface:
 
 ```swift
-await ctx.registry.register("my.greet") { (args: GreetArgs, _) in
+ctx.registry.register("my.greet", typed: { (args: GreetArgs, _) -> String in
     "hello, \(args.name)"
-}
+})
 ```
 
 ```js

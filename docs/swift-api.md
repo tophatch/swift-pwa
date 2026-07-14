@@ -33,13 +33,14 @@ backend through `@_exported import`, so the call site doesn't change.
 struct GreetArgs: Codable, Sendable { let name: String }
 
 try runtime.run { ctx in
-    await ctx.registry.register("my.greet") { (args: GreetArgs, _) in
+    // Registration is synchronous — no `await`.
+    ctx.registry.register("my.greet", typed: { (args: GreetArgs, _) -> String in
         "hello, \(args.name)"
-    }
+    })
 
     // Streaming command — every yield becomes an `event` frame on JS;
-    // returning ends the stream.
-    await ctx.registry.registerStream("my.tick") { (_: EmptyArgs, ctx) in
+    // finishing the stream ends it.
+    ctx.registry.registerStream("my.tick", typed: { (_: EmptyArgs, _) -> AsyncThrowingStream<Int, any Error> in
         AsyncThrowingStream<Int, any Error> { continuation in
             Task {
                 for i in 0 ..< 10 {
@@ -49,7 +50,7 @@ try runtime.run { ctx in
                 continuation.finish()
             }
         }
-    }
+    })
 }
 ```
 

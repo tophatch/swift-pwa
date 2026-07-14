@@ -294,8 +294,11 @@ Copy-paste-friendly, Swift-optional walkthroughs for common features live in [do
 
 - [Hello, World — your first app](docs/tutorials/hello-world.md) — from `init` to a running native app with live reload; understand every generated file. Start here.
 - [Talking to the native side](docs/tutorials/talking-to-the-native-side.md) — the JS↔Swift bridge (`invoke` / `subscribe` / `on`) and how to register your own native command.
+- [Wrapping an existing React / Vite app](docs/tutorials/wrapping-a-react-or-vite-app.md) — adopt a bundler-built app in place, point at your `dist/`, keep HMR, and handle SPA routing.
 - [Saving and loading files (Export / Import)](docs/tutorials/saving-and-loading-files.md) — native Save / Open dialogs over `dialog.*` + `fs.*`, with an automatic browser fallback so one codebase runs everywhere.
 - [On-device AI](docs/tutorials/on-device-ai.md) — wire up the `ai.*` API for local text and image generation, from `ai.info` and model download through streaming output.
+- [Calling a cloud API with a stored key](docs/tutorials/calling-a-cloud-api.md) — secure key storage (`secrets.*`) + native CORS-free HTTP (`net.*`), keeping the key out of your web code.
+- [Making it feel native](docs/tutorials/making-it-feel-native.md) — window controls, native notifications, and a system-tray icon, with per-platform notes.
 - [Importing content packs](docs/tutorials/importing-content-packs.md) — import a large `.zip` of media at runtime and serve it to the page off disk, with native extraction and re-export.
 - [Shipping your app (all platforms)](docs/tutorials/shipping-your-app.md) — build, sign, and distribute on macOS, iOS, Linux, Windows, and Android, plus one-tag cloud releases and an auto-update heads-up.
 

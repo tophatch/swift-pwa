@@ -240,6 +240,11 @@
             }
             try atomicReplace(at: installPath, with: staged)
 
+            // The staged file has been moved onto the install path; drop the
+            // now-empty per-version staging directory so it doesn't accumulate
+            // across updates (parity with the macOS helper's post-swap cleanup).
+            try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
+
             // Launch the (now-updated) AppImage detached via `setsid` so
             // the new process keeps running after we exit. Redirecting
             // stdio to /dev/null severs the controlling terminal, so a

@@ -270,10 +270,11 @@ func makeUpdater() -> any Updater {
 /// build's version, not a return here.
 @MainActor
 func runUpdaterSmoke(_ updater: any Updater) {
-    func mark(_ s: String) {
+    let logPath = ProcessInfo.processInfo.environment["SWIFT_PWA_UPDATER_SMOKE_LOG"]
+    @Sendable func mark(_ s: String) {
         let line = "UPDATER_SMOKE \(s)\n"
         FileHandle.standardError.write(Data(line.utf8))
-        if let path = ProcessInfo.processInfo.environment["SWIFT_PWA_UPDATER_SMOKE_LOG"] {
+        if let path = logPath {
             if let fh = FileHandle(forWritingAtPath: path) {
                 fh.seekToEndOfFile(); fh.write(Data(line.utf8)); try? fh.close()
             } else {
@@ -281,7 +282,13 @@ func runUpdaterSmoke(_ updater: any Updater) {
             }
         }
     }
-    Task { @MainActor in
+    // Run on the cooperative pool, *not* a `@MainActor` task: on the Linux
+    // GTK backend the MainActor executor is backed by libdispatch's main
+    // queue, which `gtk_main()` never drains, so a `Task { @MainActor in }`
+    // body would never start (see CLAUDE.md's concurrency note). The
+    // `Updater` methods aren't MainActor-isolated, so a detached task drives
+    // them fine on every backend.
+    Task.detached {
         // Let the window + bridge come up first.
         try? await Task.sleep(nanoseconds: 2_000_000_000)
         do {

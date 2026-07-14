@@ -280,10 +280,15 @@
                 )
             }
             let pid = GetCurrentProcessId()
+            // Drop the now-empty per-version staging directory after the move,
+            // so it doesn't accumulate across updates (parity with the macOS
+            // helper's post-swap cleanup).
+            let stagingDir = staged.deletingLastPathComponent()
             let script = """
             $ErrorActionPreference = 'SilentlyContinue'
             try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
             Move-Item -LiteralPath \(psQuote(staged.path)) -Destination \(psQuote(target.path)) -Force
+            Remove-Item -LiteralPath \(psQuote(stagingDir.path)) -Recurse -Force
             Start-Process -FilePath \(psQuote(target.path))
             """
             try spawnDetachedPowerShell(script: script)
@@ -324,10 +329,14 @@
             } else {
                 ""
             }
+            // Drop the now-consumed per-version staging directory after the
+            // package install (parity with the macOS / portable cleanup).
+            let stagingDir = staged.deletingLastPathComponent()
             let script = """
             $ErrorActionPreference = 'SilentlyContinue'
             try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
             Add-AppxPackage -Path \(psQuote(staged.path)) -ForceUpdateFromAnyVersion
+            Remove-Item -LiteralPath \(psQuote(stagingDir.path)) -Recurse -Force
             \(relaunch)
             """
             try spawnDetachedPowerShell(script: script)

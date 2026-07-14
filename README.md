@@ -296,11 +296,16 @@ Copy-paste-friendly, Swift-optional walkthroughs for common features live in [do
 - [Talking to the native side](docs/tutorials/talking-to-the-native-side.md) — the JS↔Swift bridge (`invoke` / `subscribe` / `on`) and how to register your own native command.
 - [Wrapping an existing React / Vite app](docs/tutorials/wrapping-a-react-or-vite-app.md) — adopt a bundler-built app in place, point at your `dist/`, keep HMR, and handle SPA routing.
 - [Saving and loading files (Export / Import)](docs/tutorials/saving-and-loading-files.md) — native Save / Open dialogs over `dialog.*` + `fs.*`, with an automatic browser fallback so one codebase runs everywhere.
+- [Opening files with your app (file associations)](docs/tutorials/opening-files-with-your-app.md) — be the app the OS launches for a file type; receive it on the `app.openFile` channel.
 - [On-device AI](docs/tutorials/on-device-ai.md) — wire up the `ai.*` API for local text and image generation, from `ai.info` and model download through streaming output.
 - [Calling a cloud API with a stored key](docs/tutorials/calling-a-cloud-api.md) — secure key storage (`secrets.*`) + native CORS-free HTTP (`net.*`), keeping the key out of your web code.
+- [Locking your app with biometrics](docs/tutorials/locking-with-biometrics.md) — Touch/Face ID, Windows Hello, Android fingerprint via `biometric.*`, with graceful fallback.
 - [Making it feel native](docs/tutorials/making-it-feel-native.md) — window controls, native notifications, and a system-tray icon, with per-platform notes.
+- [Multi-window apps](docs/tutorials/multi-window-apps.md) — open and target multiple windows and coordinate between them over `events.*`.
+- [Running a command-line tool](docs/tutorials/running-a-command-line-tool.md) — spawn and drive a subprocess (`process.*`) with live output and automatic teardown (desktop-only).
 - [Importing content packs](docs/tutorials/importing-content-packs.md) — import a large `.zip` of media at runtime and serve it to the page off disk, with native extraction and re-export.
 - [Shipping your app (all platforms)](docs/tutorials/shipping-your-app.md) — build, sign, and distribute on macOS, iOS, Linux, Windows, and Android, plus one-tag cloud releases and an auto-update heads-up.
+- [Auto-updates](docs/tutorials/auto-updates.md) 🚧 — publish signed update manifests; full walkthrough lands in 0.9 once the desktop runtime updater is verified.
 
 ## Bundling
 

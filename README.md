@@ -305,7 +305,7 @@ Copy-paste-friendly, Swift-optional walkthroughs for common features live in [do
 - [Running a command-line tool](docs/tutorials/running-a-command-line-tool.md) — spawn and drive a subprocess (`process.*`) with live output and automatic teardown (desktop-only).
 - [Importing content packs](docs/tutorials/importing-content-packs.md) — import a large `.zip` of media at runtime and serve it to the page off disk, with native extraction and re-export.
 - [Shipping your app (all platforms)](docs/tutorials/shipping-your-app.md) — build, sign, and distribute on macOS, iOS, Linux, Windows, and Android, plus one-tag cloud releases and an auto-update heads-up.
-- [Auto-updates](docs/tutorials/auto-updates.md) 🚧 — publish signed update manifests; full walkthrough lands in 0.9 once the desktop runtime updater is verified.
+- [Auto-updates](docs/tutorials/auto-updates.md) — make your app update itself: publish a signed manifest, wire the runtime plugin, drive check/download/install from JS, plus background auto-check and a mandatory-update kill-switch.
 
 ## Bundling
 

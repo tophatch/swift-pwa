@@ -17,6 +17,6 @@ Step-by-step, copy-paste-friendly guides for common things you'll want to add wh
 | [Multi-window apps](multi-window-apps.md) | Open a second native window (inspector, preview, settings), target windows by id, and coordinate between them over the `events.*` bus — with the per-platform reality (desktop vs iOS/Android). |
 | [Running a command-line tool](running-a-command-line-tool.md) | Spawn and drive an external subprocess (e.g. `ffmpeg`) from your web app (`process.*`): stream stdout/stderr live, feed stdin, and get automatic teardown. Desktop-only. |
 | [Shipping your app (all platforms)](shipping-your-app.md) | Get your app into users' hands: build, sign, and distribute on macOS, iOS, Linux, Windows, and Android — plus one-tag cloud releases via GitHub Actions and a heads-up on auto-updates. |
-| [Auto-updates](auto-updates.md) 🚧 | Publish signed update manifests and let the app update itself. Publishing works today; the full step-by-step lands in **0.9** once the desktop runtime updater is verified. |
+| [Auto-updates](auto-updates.md) | Make your app update itself — publish a signed manifest, wire the runtime plugin, drive check/download/install from JS, plus background auto-check and a mandatory-update kill-switch. |
 
 More to come. For the full reference behind these guides, see the [JavaScript API](../javascript-api.md) and [Swift API](../swift-api.md) docs; for per-platform build setup, see the [`*-setup.md`](../) docs.

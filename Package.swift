@@ -95,7 +95,11 @@ let gtkBackendTarget: Target = useGtk4
             "SwiftPWACore",
             .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk4Shim", condition: .when(platforms: [.linux])),
-            .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux]))
+            .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux])),
+            // libzstd for delta (binary-patch) update reconstruction. Linux
+            // only (the AppImage updater is the sole consumer); needs
+            // libzstd-dev at build time.
+            .target(name: "CZstd", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK4",
         swiftSettings: swiftSettings
@@ -107,7 +111,11 @@ let gtkBackendTarget: Target = useGtk4
             .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk3Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux])),
-            .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux]))
+            .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux])),
+            // libzstd for delta (binary-patch) update reconstruction. Linux
+            // only (the AppImage updater is the sole consumer); needs
+            // libzstd-dev at build time.
+            .target(name: "CZstd", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK",
         swiftSettings: swiftSettings
@@ -209,6 +217,22 @@ let package = Package(
             path: "Sources/CLibSecret",
             pkgConfig: "libsecret-1",
             providers: [.apt(["libsecret-1-dev"])]
+        ),
+
+        // libzstd, imported directly by the updater backends (its API is
+        // all plain C functions, so no wrapper shim is needed) to
+        // reconstruct a delta update from the installed base + a `zstd
+        // --patch-from` patch. No pkgConfig — the header resolves from the
+        // default include path (Linux libzstd-dev) / INCLUDE (Windows
+        // vendored), which keeps non-consumer hosts free of pkg-config
+        // probes; `link "zstd"` in the modulemap emits the link flag.
+        // Depended on only via the GTK backends' `.when(.linux)` edge (and,
+        // in a follow-up, the Windows backend), so it never resolves on a
+        // host that doesn't build a delta-capable backend.
+        .systemLibrary(
+            name: "CZstd",
+            path: "Sources/CZstd",
+            providers: [.apt(["libzstd-dev"])]
         ),
 
         .target(

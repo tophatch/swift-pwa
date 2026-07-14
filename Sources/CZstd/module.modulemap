@@ -1,0 +1,11 @@
+// System module over libzstd, used by the updater backends to reconstruct a
+// delta (binary-patch) artifact from the installed base + a `zstd
+// --patch-from` patch. No pkgConfig: `<zstd.h>` resolves from the default
+// include path on Linux (libzstd-dev) and from INCLUDE on Windows (vendored
+// package), which also keeps non-Linux hosts free of spurious pkg-config
+// probes. `link "zstd"` emits the library link flag on every platform.
+module CZstd [system] {
+    header "shim.h"
+    link "zstd"
+    export *
+}

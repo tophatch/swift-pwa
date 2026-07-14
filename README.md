@@ -292,6 +292,8 @@ try runtime.run { ctx in
 
 Copy-paste-friendly, Swift-optional walkthroughs for common features live in [docs/tutorials/](docs/tutorials/):
 
+- [Hello, World — your first app](docs/tutorials/hello-world.md) — from `init` to a running native app with live reload; understand every generated file. Start here.
+- [Talking to the native side](docs/tutorials/talking-to-the-native-side.md) — the JS↔Swift bridge (`invoke` / `subscribe` / `on`) and how to register your own native command.
 - [Saving and loading files (Export / Import)](docs/tutorials/saving-and-loading-files.md) — native Save / Open dialogs over `dialog.*` + `fs.*`, with an automatic browser fallback so one codebase runs everywhere.
 - [On-device AI](docs/tutorials/on-device-ai.md) — wire up the `ai.*` API for local text and image generation, from `ai.info` and model download through streaming output.
 - [Importing content packs](docs/tutorials/importing-content-packs.md) — import a large `.zip` of media at runtime and serve it to the page off disk, with native extraction and re-export.

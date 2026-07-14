@@ -195,7 +195,14 @@ let package = Package(
         // only via SwiftPWACore's `.when(.linux)` edge above).
         .target(
             name: "CSecretShim",
-            dependencies: ["CLibSecret"]
+            // Gate the systemLibrary edge on Linux (matching the GTK/WebKit
+            // shims) so SwiftPM prunes `CLibSecret` from non-Linux build
+            // graphs and never probes its `libsecret-1` .pc file — otherwise
+            // a macOS/Windows host emits spurious pkg-config warnings for a
+            // target that never actually compiles or links there.
+            dependencies: [
+                .target(name: "CLibSecret", condition: .when(platforms: [.linux]))
+            ]
         ),
         .systemLibrary(
             name: "CLibSecret",

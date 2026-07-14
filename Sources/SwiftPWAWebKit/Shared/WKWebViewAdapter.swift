@@ -23,7 +23,9 @@
         /// `AsyncStream`'s initializer invokes the captured-continuation
         /// closure synchronously, so we can lift `continuation` out of
         /// it during init and assign it after `super.init`.
-        private nonisolated(unsafe) let stream: AsyncStream<InboundFrame>
+        /// `AsyncStream<InboundFrame>` is `Sendable`, so a plain
+        /// `nonisolated let` suffices — no `(unsafe)`.
+        private nonisolated let stream: AsyncStream<InboundFrame>
 
         public init(configuration: WKWebViewConfiguration? = nil) throws {
             var captured: AsyncStream<InboundFrame>.Continuation?
@@ -92,16 +94,20 @@
         }
 
         public nonisolated func evaluateJavaScript(_ js: String) async throws -> String? {
-            let webView = webView
-            return try await withCheckedThrowingContinuation { (cont: CheckedContinuation<String?, any Error>) in
-                Task { @MainActor in
-                    webView.evaluateJavaScript(js) { value, error in
-                        if let error { cont.resume(throwing: error); return }
-                        if let value { cont.resume(returning: String(describing: value)) }
-                        else { cont.resume(returning: nil) }
-                    }
-                }
-            }
+            try await evaluateOnMain(js)
+        }
+
+        /// Runs on the MainActor so WKWebView's `@MainActor` async
+        /// `evaluateJavaScript` — and the `String`→`NSString` bridging of
+        /// its argument — happen there, rather than being *sent* across the
+        /// isolation boundary (which Swift 6 flags as a data-race risk). The
+        /// non-`Sendable` `Any?` result is reduced to a `Sendable` `String?`
+        /// here too, so only `Sendable` values cross back out. A `nil` result
+        /// means `undefined`/no value — the common case for the `deliver`
+        /// snippets, which evaluate to `undefined`.
+        @MainActor private func evaluateOnMain(_ js: String) async throws -> String? {
+            let value: Any? = try await webView.evaluateJavaScript(js)
+            return value.map { String(describing: $0) }
         }
 
         public nonisolated func deliver(_ frame: OutboundFrame) async throws {

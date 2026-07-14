@@ -257,7 +257,12 @@ func makeUpdater() -> any Updater {
     #elseif os(Linux)
         return LinuxAppImageUpdater(endpoint: endpoint, publicKey: pubkey)
     #elseif os(Windows)
-        return WindowsUpdater(endpoint: endpoint, publicKey: pubkey)
+        // Install mode is env-selectable so one build can exercise both the
+        // portable (EXE-replace) and MSIX (Add-AppxPackage) paths:
+        // SWIFT_PWA_UPDATER_INSTALL_MODE=msix picks MSIX, else portable.
+        let mode = env["SWIFT_PWA_UPDATER_INSTALL_MODE"]
+            .flatMap(WindowsUpdater.InstallMode.init(rawValue:)) ?? .portable
+        return WindowsUpdater(endpoint: endpoint, publicKey: pubkey, installMode: mode)
     #else
         return DemoUpdater()
     #endif

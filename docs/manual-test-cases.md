@@ -41,7 +41,24 @@ bundled `Examples/HelloPWA` + the real `AppleUpdater` (ad-hoc and
 codesigned builds; a v0.3.0→v0.4.0 cycle over a local signed manifest).
 Verification hardened three cleanup gaps (self-deleting helper, no
 unverified bytes left on failure, staging dir removed after install).
-iOS / Linux / Windows cases remain to be walked on their platforms.
+
+**Linux case 3 (AppImage) verified end-to-end 2026-07-14** on the GTK
+box (GTK4 build, headless Xvfb): the full check→download→verify→atomic
+`rename(2)` swap→`setsid` relaunch cycle (confirmed via a
+self-perpetuating smoke loop + the on-disk hash flipping v1→v2), plus
+the cross-filesystem **EXDEV** copy-then-rename fallback (staging on
+tmpfs, AppImage on ext4). Surfaced a fourth cleanup gap now fixed across
+Linux + Windows: the per-version staging dir is dropped after a
+successful swap (parity with macOS).
+
+**Windows portable verified end-to-end 2026-07-14** on the x64 box,
+headlessly via a console harness driving the real `WindowsUpdater`
+(`installMode: .portable`, `executablePath:` override): download
+(streaming), Ed25519 verify, `Move-Item` swap, staging cleanup, and a
+directly observed `Start-Process` relaunch. **Windows MSIX** is
+compile-verified only — its `Add-AppxPackage` E2E needs a signed
+package, a trusted cert, and sideloading (the box lacks `makeappx`), so
+it's still to be walked. **iOS** (`itms-services://`) needs an enterprise cert.
 
 ---
 
@@ -402,12 +419,13 @@ signature handoff aren't covered by per-host unit tests.
 
 ## Checklist (copy into the release PR)
 
-- [ ] **Updater 1.** macOS `.app` auto-update end-to-end
-- [ ] **Updater 2.** macOS wrong-key rejection
-- [ ] **Updater 3.** Linux AppImage auto-update end-to-end (+ EXDEV
-      sub-case)
-- [ ] **Updater 4.** Windows portable EXE auto-update (+ Program
-      Files permission failure sub-case)
+- [x] **Updater 1.** macOS `.app` auto-update end-to-end ✓ 2026-07-14
+- [x] **Updater 2.** macOS wrong-key rejection ✓ 2026-07-14
+- [x] **Updater 3.** Linux AppImage auto-update end-to-end (+ EXDEV
+      sub-case) ✓ 2026-07-14
+- [x] **Updater 4.** Windows portable EXE auto-update ✓ 2026-07-14
+      (happy path via console harness; the Program Files
+      permission-failure sub-case is not yet walked)
 - [ ] **Updater 5.** Windows MSIX auto-update with post-install
       relaunch (+ no-identity sub-case)
 - [ ] **Updater 6.** iOS enterprise / ad-hoc update

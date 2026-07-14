@@ -154,6 +154,27 @@ struct UpdaterCLITests {
         #expect(decoded == original)
     }
 
+    @Test("min_supported_version serializes as a snake_case top-level key")
+    func minSupportedVersionWireKey() throws {
+        let entry = try UpdateManifest.PlatformEntry(
+            url: #require(URL(string: "https://example.com/MyApp.app.tar.gz")),
+            signature: "AAAA"
+        )
+        let manifest = UpdateManifest(
+            version: "0.4.0",
+            minSupportedVersion: "0.3.0",
+            platforms: ["darwin-aarch64": entry]
+        )
+        let data = try JSONEncoder().encode(manifest)
+        let json = String(data: data, encoding: .utf8) ?? ""
+        #expect(json.contains("\"min_supported_version\""))
+        #expect(!json.contains("\"minSupportedVersion\""))
+        // Omitted when nil (keeps manifests that don't set a floor clean).
+        let noFloor = UpdateManifest(version: "0.4.0", platforms: ["darwin-aarch64": entry])
+        let noFloorJSON = try String(data: JSONEncoder().encode(noFloor), encoding: .utf8) ?? ""
+        #expect(!noFloorJSON.contains("min_supported_version"))
+    }
+
     @Test("currentISO8601Date parses back into a Date")
     func iso8601IsRoundTrippable() {
         let formatted = UpdaterCLISupport.currentISO8601Date()

@@ -55,6 +55,64 @@ struct UpdateManifestTests {
         #expect(info?.notes == "hello")
         #expect(info?.signature == "S")
         #expect(info?.target == "darwin-aarch64")
+        // No floor ⇒ optional update.
+        #expect(info?.mandatory == false)
+    }
+
+    // MARK: - min_supported_version kill-switch
+
+    @Test("min_supported_version decodes from the wire")
+    func minSupportedDecodes() throws {
+        let json = """
+        {
+          "version": "0.4.0",
+          "min_supported_version": "0.3.0",
+          "platforms": { "darwin-aarch64": { "url": "https://x/a.tgz", "signature": "S" } }
+        }
+        """
+        let manifest = try JSONDecoder().decode(UpdateManifest.self, from: Data(json.utf8))
+        #expect(manifest.minSupportedVersion == "0.3.0")
+    }
+
+    @Test("update is mandatory when the running build is below the floor")
+    func mandatoryBelowFloor() throws {
+        let manifest = try UpdateManifest(
+            version: "0.4.0",
+            minSupportedVersion: "0.3.0",
+            platforms: ["darwin-aarch64": .init(url: #require(URL(string: "https://x/a.tgz")), signature: "S")]
+        )
+        // 0.2.0 < floor 0.3.0 ⇒ mandatory.
+        #expect(manifest.updateInfo(for: "darwin-aarch64", currentVersion: "0.2.0")?.mandatory == true)
+        // 0.3.0 == floor ⇒ not below it ⇒ optional.
+        #expect(manifest.updateInfo(for: "darwin-aarch64", currentVersion: "0.3.0")?.mandatory == false)
+        // 0.3.5 > floor ⇒ optional.
+        #expect(manifest.updateInfo(for: "darwin-aarch64", currentVersion: "0.3.5")?.mandatory == false)
+    }
+
+    @Test("mandatory defaults false with no floor and survives a Codable round-trip")
+    func mandatoryRoundTrip() throws {
+        let manifest = try UpdateManifest(
+            version: "0.4.0",
+            platforms: ["darwin-aarch64": .init(url: #require(URL(string: "https://x/a.tgz")), signature: "S")]
+        )
+        let info = try #require(manifest.updateInfo(for: "darwin-aarch64", currentVersion: "0.2.0"))
+        #expect(info.mandatory == false)
+        // A mandatory info round-trips through Codable with the flag intact.
+        let url = try #require(URL(string: "https://x/a.tgz"))
+        let floored = UpdateManifest(
+            version: "0.4.0",
+            minSupportedVersion: "0.3.0",
+            platforms: ["darwin-aarch64": .init(url: url, signature: "S")]
+        )
+        let mandatory = try #require(floored.updateInfo(for: "darwin-aarch64", currentVersion: "0.2.0"))
+        let decoded = try JSONDecoder().decode(UpdateInfo.self, from: JSONEncoder().encode(mandatory))
+        #expect(decoded.mandatory == true)
+        // Absent `mandatory` key ⇒ false (tolerant decode for hand-built infos).
+        let legacy = """
+        { "version": "0.4.0", "current_version": "0.2.0", "download_url": "https://x/a.tgz",
+          "signature": "S", "target": "darwin-aarch64" }
+        """
+        #expect(try JSONDecoder().decode(UpdateInfo.self, from: Data(legacy.utf8)).mandatory == false)
     }
 
     // MARK: - UpdaterEvent codable round-trip

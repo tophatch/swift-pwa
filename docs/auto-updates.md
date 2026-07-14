@@ -115,6 +115,7 @@ because `itms-services://` delegates trust to Apple's signing chain.
   "version": "0.4.0",
   "pub_date": "2026-05-12T10:00:00Z",
   "notes": "Bug fixes and improvements.",
+  "min_supported_version": "0.3.0",
   "platforms": {
     "darwin-aarch64":         { "url": "https://.../HelloPWA-0.4.0-arm64.app.tar.gz", "signature": "RUR..." },
     "darwin-x86_64":          { "url": "https://.../HelloPWA-0.4.0-x86_64.app.tar.gz", "signature": "RUR..." },
@@ -128,6 +129,30 @@ because `itms-services://` delegates trust to Apple's signing chain.
 The format is byte-compatible with Tauri v1's updater manifest, so
 existing publishing tooling (e.g. `tauri-action`) can produce
 swift-pwa manifests as-is.
+
+### Mandatory updates (`min_supported_version` kill-switch)
+
+`min_supported_version` is optional. When present, any running build
+*older* than that floor is force-upgraded: `updater.check` (and the
+`available` event from `updater.run`) sets **`mandatory: true`** on the
+resolved update, so the app can block usage until it installs — a
+security kill-switch for retiring a build with a critical bug. Builds
+at or above the floor get `mandatory: false` (an ordinary optional
+update). Omit the field and every update is optional.
+
+```js
+const info = await __SWIFT_PWA__.invoke("updater.check");
+if (info?.mandatory) {
+  // Don't let the user dismiss — drive straight into the update.
+  showBlockingUpdateGate(info);
+}
+```
+
+The floor is *advisory to the app*: swift-pwa surfaces the flag but
+doesn't itself refuse to run (the running build is already launched by
+the time it can fetch a manifest). Enforcement is the app's call — gate
+your UI on `mandatory`. Publish it with
+`swift-pwa updater manifest --min-supported-version 0.3.0 …`.
 
 You can pre-declare the same wiring in `pwa.json` so `keygen` can print
 a paste-ready block and the runtime side can read it from one source of
@@ -204,6 +229,10 @@ swift run swift-pwa updater manifest \
     --platform android-aarch64-apk=./build/HelloPWA-android/app/build/outputs/apk/release/app-release.apk=https://updates.example.com/HelloPWA-0.4.0-arm64.apk \
     --output manifest.json
 ```
+
+Add `--min-supported-version 0.3.0` to stamp the mandatory-update floor
+(see [Mandatory updates](#mandatory-updates-min_supported_version-kill-switch)
+above); omit it for all-optional releases.
 
 The CLI itself doesn't validate target names — any string the
 publisher uses must match what the runtime's `Updater` implementation
@@ -362,9 +391,6 @@ happens against the artifact bytes only.
 - **Delta updates** — full-bundle replacement only. The wire format
   reserves room for a future `signature_delta` / `url_delta` per
   platform; bsdiff-style deltas are queued.
-- **Mandatory updates / kill-switch** — no `min_supported_version`
-  enforcement. Trivially additive — the runtime will refuse to start
-  older clients once the field is wired.
 - **Prehashed minisign (`ED` mode)** — only legacy `Ed` (pure Ed25519
   over the artifact bytes) is supported. Adding `ED` means vendoring
   BLAKE2b — not in CryptoKit / swift-crypto out of the box.

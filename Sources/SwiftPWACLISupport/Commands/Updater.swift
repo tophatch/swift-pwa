@@ -187,6 +187,13 @@ extension Updater {
         @Option(help: "Path to the private key. Required when --platform values reference local artifacts to sign.")
         var privateKey: String?
 
+        @Option(help: """
+        Mandatory-update floor (e.g. 0.3.0). Clients older than this are \
+        force-upgraded — the runtime marks the update mandatory so the app \
+        can block usage until it installs. Omit for all-optional updates.
+        """)
+        var minSupportedVersion: String?
+
         @Option(
             name: .long,
             parsing: .upToNextOption,
@@ -248,6 +255,7 @@ extension Updater {
                 version: version,
                 pubDate: pubDate ?? UpdaterCLISupport.currentISO8601Date(),
                 notes: notes,
+                minSupportedVersion: minSupportedVersion,
                 platforms: entries
             )
 

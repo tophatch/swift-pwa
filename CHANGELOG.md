@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Mandatory-update kill-switch (`min_supported_version`).** The update manifest gains an optional top-level `min_supported_version`; when a running build is *older* than that floor, `updater.check` and the `available` event from `updater.run` now set **`mandatory: true`** on the resolved `UpdateInfo`, so an app can force the update UI (e.g. block usage until it installs) — a security kill-switch for retiring a build with a critical bug. Builds at/above the floor, or manifests without the field, report `mandatory: false`. Publish it with `swift-pwa updater manifest --min-supported-version <v>`. Purely additive and cross-platform (the flag is derived in `UpdateManifest.updateInfo`, which every backend already routes through); `mandatory` decodes tolerantly so hand-built `UpdateInfo`s passed back through `updater.run` stay compatible. Enforcement is the app's call — swift-pwa surfaces the flag, it doesn't refuse to launch. Docs: [docs/auto-updates.md](docs/auto-updates.md).
+
 ### Changed
 
 - **Auto-updater runtime: macOS + Linux (AppImage) + Windows (portable) verified end-to-end + hardened.** The desktop install paths (download → Ed25519 verify → atomic swap → detached-helper relaunch) were implemented but marked **Untested** — only Android's install path had been exercised end-to-end. Drove real v(N-1)→v(N) update cycles against a signed manifest on bundled apps, on each platform's own box:

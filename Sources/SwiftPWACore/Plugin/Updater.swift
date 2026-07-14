@@ -6,11 +6,12 @@ import Foundation
 /// (portable + MSIX install modes) ships from `SwiftPWAWindows`.
 /// Tests use `MockUpdater` from `_SwiftPWATestSupport`.
 ///
-/// **Scope (v0.3 first cut):** signed JSON manifest fetch, full-bundle
-/// download with progress events, Ed25519 signature verification, and
-/// platform-native install. Delta updates and a mandatory-update
-/// `min_supported_version` kill-switch are deferred — see the
-/// "Auto-updates" section of the README and each platform's setup doc.
+/// **Scope:** signed JSON manifest fetch, full-bundle download with
+/// progress events, Ed25519 signature verification, platform-native
+/// install, and a mandatory-update `min_supported_version` kill-switch
+/// (surfaced as `UpdateInfo.mandatory`). Delta updates are deferred —
+/// see the "Auto-updates" section of the README and each platform's
+/// setup doc.
 ///
 /// **Concurrency.** Implementations are *not* `@MainActor` — `download`
 /// runs on the cooperative pool so I/O doesn't block the UI thread.
@@ -92,6 +93,15 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
     public var signature: String
     public var target: String
 
+    /// `true` when the running (`currentVersion`) build is below the
+    /// manifest's `min_supported_version` floor — i.e. this update is a
+    /// mandatory kill-switch upgrade, not an optional one. Derived by
+    /// `UpdateManifest.updateInfo(for:currentVersion:)`; defaults to
+    /// `false` (no floor, or the running build is at/above it). JS reads
+    /// it off `updater.check` / the `available` event to force the
+    /// update UI (e.g. block the app until installed).
+    public var mandatory: Bool
+
     public init(
         version: String,
         currentVersion: String,
@@ -99,7 +109,8 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         notes: String? = nil,
         downloadURL: URL,
         signature: String,
-        target: String
+        target: String,
+        mandatory: Bool = false
     ) {
         self.version = version
         self.currentVersion = currentVersion
@@ -108,6 +119,7 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         self.downloadURL = downloadURL
         self.signature = signature
         self.target = target
+        self.mandatory = mandatory
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -118,6 +130,21 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         case downloadURL = "download_url"
         case signature
         case target
+        case mandatory
+    }
+
+    public init(from decoder: any Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        version = try c.decode(String.self, forKey: .version)
+        currentVersion = try c.decode(String.self, forKey: .currentVersion)
+        pubDate = try c.decodeIfPresent(String.self, forKey: .pubDate)
+        notes = try c.decodeIfPresent(String.self, forKey: .notes)
+        downloadURL = try c.decode(URL.self, forKey: .downloadURL)
+        signature = try c.decode(String.self, forKey: .signature)
+        target = try c.decode(String.self, forKey: .target)
+        // Derived + additive: tolerate its absence (older callers, or a
+        // hand-built info passed back through `updater.run`).
+        mandatory = try c.decodeIfPresent(Bool.self, forKey: .mandatory) ?? false
     }
 }
 
@@ -269,6 +296,13 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
     public var version: String
     public var pubDate: String?
     public var notes: String?
+
+    /// Optional mandatory-update floor. When set, any running build
+    /// *older* than this version is force-upgraded: the resolved
+    /// `UpdateInfo.mandatory` is `true` so the app can block usage until
+    /// the update installs (a security kill-switch — e.g. to retire a
+    /// build with a critical vuln). Absent ⇒ every update is optional.
+    public var minSupportedVersion: String?
     public var platforms: [String: PlatformEntry]
 
     public struct PlatformEntry: Codable, Sendable, Equatable {
@@ -285,11 +319,13 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
         version: String,
         pubDate: String? = nil,
         notes: String? = nil,
+        minSupportedVersion: String? = nil,
         platforms: [String: PlatformEntry]
     ) {
         self.version = version
         self.pubDate = pubDate
         self.notes = notes
+        self.minSupportedVersion = minSupportedVersion
         self.platforms = platforms
     }
 
@@ -297,14 +333,19 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
         case version
         case pubDate = "pub_date"
         case notes
+        case minSupportedVersion = "min_supported_version"
         case platforms
     }
 
     /// Resolve the entry for `target` and turn it into an `UpdateInfo`
     /// suitable for passing to `Updater.download`. Returns `nil` if the
-    /// manifest has no entry for the requested target.
+    /// manifest has no entry for the requested target. Sets
+    /// `UpdateInfo.mandatory` when `currentVersion` is below the
+    /// manifest's `min_supported_version` floor.
     public func updateInfo(for target: String, currentVersion: String) -> UpdateInfo? {
         guard let entry = platforms[target] else { return nil }
+        let mandatory = minSupportedVersion
+            .map { UpdaterVersion.isNewer($0, than: currentVersion) } ?? false
         return UpdateInfo(
             version: version,
             currentVersion: currentVersion,
@@ -312,7 +353,8 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
             notes: notes,
             downloadURL: entry.url,
             signature: entry.signature,
-            target: target
+            target: target,
+            mandatory: mandatory
         )
     }
 }

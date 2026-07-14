@@ -223,19 +223,25 @@
             let dir = try ensureVersionStagingDir(version: info.version)
             let suffix = installMode == .msix ? "msix" : "exe"
             let staged = dir.appendingPathComponent("update.\(suffix)")
+            do {
+                _ = try await UpdaterDownload.download(
+                    from: info.downloadURL,
+                    to: staged,
+                    urlSession: urlSession,
+                    onProgress: { bytes, total in
+                        yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                    }
+                )
 
-            _ = try await UpdaterDownload.download(
-                from: info.downloadURL,
-                to: staged,
-                urlSession: urlSession,
-                onProgress: { bytes, total in
-                    yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
-                }
-            )
+                try verifySignature(at: staged, info: info)
 
-            try verifySignature(at: staged, info: info)
-
-            return staged
+                return staged
+            } catch {
+                // Download / signature failure: never leave unverified or
+                // partial bytes in the cache.
+                try? FileManager.default.removeItem(at: dir)
+                throw error
+            }
         }
 
         // MARK: - installAndRelaunch

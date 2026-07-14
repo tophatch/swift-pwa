@@ -181,28 +181,34 @@
         ) async throws -> URL {
             let dir = try ensureVersionStagingDir(version: info.version)
             let staged = dir.appendingPathComponent("update.AppImage")
+            do {
+                _ = try await UpdaterDownload.download(
+                    from: info.downloadURL,
+                    to: staged,
+                    urlSession: urlSession,
+                    onProgress: { bytes, total in
+                        yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                    }
+                )
 
-            _ = try await UpdaterDownload.download(
-                from: info.downloadURL,
-                to: staged,
-                urlSession: urlSession,
-                onProgress: { bytes, total in
-                    yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
-                }
-            )
+                let bytesData = try Data(contentsOf: staged)
+                try verifyEd25519(data: bytesData, signature: info.signature)
 
-            let bytesData = try Data(contentsOf: staged)
-            try verifyEd25519(data: bytesData, signature: info.signature)
+                // AppImages must be executable to launch. The temp file from
+                // URLSession is 0644; mark it +x before staging so the
+                // atomic rename in installAndRelaunch produces a runnable
+                // file in one shot.
+                try FileManager.default.setAttributes(
+                    [.posixPermissions: 0o755], ofItemAtPath: staged.path
+                )
 
-            // AppImages must be executable to launch. The temp file from
-            // URLSession is 0644; mark it +x before staging so the
-            // atomic rename in installAndRelaunch produces a runnable
-            // file in one shot.
-            try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755], ofItemAtPath: staged.path
-            )
-
-            return staged
+                return staged
+            } catch {
+                // Download / signature failure: never leave unverified or
+                // partial bytes in the cache.
+                try? FileManager.default.removeItem(at: dir)
+                throw error
+            }
         }
 
         // MARK: - installAndRelaunch

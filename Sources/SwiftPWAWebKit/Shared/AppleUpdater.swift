@@ -166,46 +166,59 @@
             ) async throws -> URL {
                 let dir = try ensureVersionStagingDir(version: info.version)
                 let archiveURL = dir.appendingPathComponent("update.tar.gz")
+                do {
+                    _ = try await UpdaterDownload.download(
+                        from: info.downloadURL,
+                        to: archiveURL,
+                        urlSession: urlSession,
+                        onProgress: { bytes, total in
+                            yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                        }
+                    )
 
-                _ = try await UpdaterDownload.download(
-                    from: info.downloadURL,
-                    to: archiveURL,
-                    urlSession: urlSession,
-                    onProgress: { bytes, total in
-                        yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                    let archiveData = try Data(contentsOf: archiveURL)
+                    try verifyEd25519(data: archiveData, signature: info.signature)
+
+                    let extracted = dir.appendingPathComponent("extracted", isDirectory: true)
+                    try? FileManager.default.removeItem(at: extracted)
+                    try FileManager.default.createDirectory(
+                        at: extracted, withIntermediateDirectories: true
+                    )
+                    let tar = Process()
+                    tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+                    tar.arguments = ["-xzf", archiveURL.path, "-C", extracted.path]
+                    tar.standardOutput = FileHandle.nullDevice
+                    tar.standardError = FileHandle.nullDevice
+                    try tar.run()
+                    tar.waitUntilExit()
+                    guard tar.terminationStatus == 0 else {
+                        throw BridgeError(
+                            code: BridgeError.handler,
+                            message: "tar -xzf failed (status \(tar.terminationStatus))"
+                        )
                     }
-                )
 
-                let archiveData = try Data(contentsOf: archiveURL)
-                try verifyEd25519(data: archiveData, signature: info.signature)
-
-                let extracted = dir.appendingPathComponent("extracted", isDirectory: true)
-                try? FileManager.default.removeItem(at: extracted)
-                try FileManager.default.createDirectory(
-                    at: extracted, withIntermediateDirectories: true
-                )
-                let tar = Process()
-                tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-                tar.arguments = ["-xzf", archiveURL.path, "-C", extracted.path]
-                tar.standardOutput = FileHandle.nullDevice
-                tar.standardError = FileHandle.nullDevice
-                try tar.run()
-                tar.waitUntilExit()
-                guard tar.terminationStatus == 0 else {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "tar -xzf failed (status \(tar.terminationStatus))"
-                    )
+                    let entries = try FileManager.default.contentsOfDirectory(atPath: extracted.path)
+                    guard let appName = entries.first(where: { $0.hasSuffix(".app") }) else {
+                        throw BridgeError(
+                            code: BridgeError.handler,
+                            message: "extracted archive contained no .app bundle"
+                        )
+                    }
+                    // Verified + extracted: the archive is no longer needed (only
+                    // the extracted `.app` gets swapped in), so drop it — the cache
+                    // then holds just the staged bundle, which the install helper
+                    // removes after the swap.
+                    try? FileManager.default.removeItem(at: archiveURL)
+                    return extracted.appendingPathComponent(appName)
+                } catch {
+                    // Download / signature / extraction failure: never leave
+                    // unverified or partial bytes in the cache. (A wrong-key
+                    // signature used to leave the downloaded `update.tar.gz`
+                    // behind.)
+                    try? FileManager.default.removeItem(at: dir)
+                    throw error
                 }
-
-                let entries = try FileManager.default.contentsOfDirectory(atPath: extracted.path)
-                guard let appName = entries.first(where: { $0.hasSuffix(".app") }) else {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "extracted archive contained no .app bundle"
-                    )
-                }
-                return extracted.appendingPathComponent(appName)
             }
 
             func verifyEd25519(data: Data, signature: String) throws {
@@ -271,6 +284,12 @@
                 let pid = ProcessInfo.processInfo.processIdentifier
                 let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
                     .appendingPathComponent("swift-pwa-update-\(UUID().uuidString).sh")
+                // `staged` is `<stagingRoot>/<version>/extracted/<App>.app`; its
+                // grandparent is the per-version staging dir, cleaned after the
+                // swap so the cache doesn't accumulate old bundles.
+                let stagingVersionDir = staged
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
                 let script = #"""
                 #!/bin/sh
                 set -e
@@ -280,6 +299,10 @@
                 rm -rf "\#(installPath.path)"
                 /usr/bin/ditto "\#(staged.path)" "\#(installPath.path)"
                 /usr/bin/open "\#(installPath.path)"
+                # Housekeeping: drop the consumed staging dir and this helper
+                # itself (a running shell can unlink its own file on Unix).
+                rm -rf "\#(stagingVersionDir.path)"
+                rm -f "\#(scriptURL.path)"
                 """#
                 try script.write(to: scriptURL, atomically: true, encoding: .utf8)
                 try FileManager.default.setAttributes(

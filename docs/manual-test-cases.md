@@ -34,12 +34,14 @@ When adding new cases:
 
 | Module       | Cases | Last verified  |
 |--------------|-------|----------------|
-| Updater      | 8     | **Untested**¹  |
+| Updater      | 8     | **macOS ✓**¹   |
 
-¹ Runtime backends ship as preview in v0.4.0 — implementation
-complete and unit-tested, but this checklist hasn't been walked
-end-to-end yet under the release's time pressure. The next release
-cycle re-runs all eight cases against real bundled artifacts.
+¹ **macOS cases 1 + 2 verified end-to-end 2026-07-14** against a real
+bundled `Examples/HelloPWA` + the real `AppleUpdater` (ad-hoc and
+codesigned builds; a v0.3.0→v0.4.0 cycle over a local signed manifest).
+Verification hardened three cleanup gaps (self-deleting helper, no
+unverified bytes left on failure, staging dir removed after install).
+iOS / Linux / Windows cases remain to be walked on their platforms.
 
 ---
 
@@ -87,6 +89,20 @@ swift run swift-pwa updater manifest \
 
 Keep the resulting artifacts around — every case below references
 them.
+
+> **Driving it with `Examples/HelloPWA`.** HelloPWA's `Updater` backend is
+> env-selectable, so you don't have to write a throwaway app: set
+> `SWIFT_PWA_UPDATER_ENDPOINT` (+ `SWIFT_PWA_UPDATER_PUBKEY` = the
+> `updater keygen` public key) and it wires the *real* platform backend
+> instead of its `DemoUpdater`. `SWIFT_PWA_UPDATER_SMOKE=1` then drives
+> check→download→install on launch and logs `UPDATER_SMOKE` markers to
+> stderr (and to `$SWIFT_PWA_UPDATER_SMOKE_LOG` if set) — a headless
+> alternative to clicking the demo card. Launch the built app's binary
+> **directly** (`…/HelloPWA.app/Contents/MacOS/HelloPWA`), not via `open`,
+> so it inherits the env. Notes: re-running `updater manifest` over an
+> existing file needs **`--force`**; and a **local `http://` endpoint**
+> (vs. a real `https://` one) needs an ATS opt-in —
+> `"macos": { "info_plist": { "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true } } }`.
 
 ### 1. macOS `.app` auto-update end-to-end
 

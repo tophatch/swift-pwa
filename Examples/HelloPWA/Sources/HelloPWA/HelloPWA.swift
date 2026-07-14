@@ -127,7 +127,20 @@ func configure(_ ctx: any AppContext) throws {
     // with `DemoUpdater` (below) which synthesises a visible
     // progress arc and lets users exercise the streaming
     // event surface end-to-end.
-    ctx.use(UpdaterPlugin(DemoUpdater()))
+    //
+    // Set `SWIFT_PWA_UPDATER_ENDPOINT` (+ optional `SWIFT_PWA_UPDATER_PUBKEY`)
+    // to swap in the *real* platform backend against a live signed manifest —
+    // this is how the manual updater test cases (docs/manual-test-cases.md) are
+    // driven against a bundled HelloPWA. Otherwise the demo backend is used.
+    let updater = makeUpdater()
+    ctx.use(UpdaterPlugin(updater))
+    // Opt-in headless smoke (`SWIFT_PWA_UPDATER_SMOKE=1`): drive
+    // check → download → installAndRelaunch on launch, logging each stage, so
+    // the whole flow can be verified without clicking the demo's UI. Only
+    // meaningful with a real backend + endpoint.
+    if ProcessInfo.processInfo.environment["SWIFT_PWA_UPDATER_SMOKE"] != nil {
+        runUpdaterSmoke(updater)
+    }
 
     // Window content: bundled `web/` for desktop (resolved from the
     // app's resource bundle), or `https://swift-pwa.local/web/...`
@@ -224,6 +237,73 @@ final class DemoUpdater: Updater, @unchecked Sendable {
             a signed manifest endpoint to exercise the install path.
             """
         )
+    }
+}
+
+/// Select the updater backend. With `SWIFT_PWA_UPDATER_ENDPOINT` set, wire the
+/// real platform backend against that endpoint (the manifest URL may contain
+/// `{{target}}` / `{{current_version}}` placeholders); `SWIFT_PWA_UPDATER_PUBKEY`
+/// supplies the Ed25519 public key for signature verification. Without the
+/// endpoint, fall back to `DemoUpdater` so the example runs normally.
+@MainActor
+func makeUpdater() -> any Updater {
+    let env = ProcessInfo.processInfo.environment
+    guard let raw = env["SWIFT_PWA_UPDATER_ENDPOINT"], let endpoint = URL(string: raw) else {
+        return DemoUpdater()
+    }
+    let pubkey = env["SWIFT_PWA_UPDATER_PUBKEY"]
+    #if os(macOS) || os(iOS)
+        return AppleUpdater(endpoint: endpoint, publicKey: pubkey)
+    #elseif os(Linux)
+        return LinuxAppImageUpdater(endpoint: endpoint, publicKey: pubkey)
+    #elseif os(Windows)
+        return WindowsUpdater(endpoint: endpoint, publicKey: pubkey)
+    #else
+        return DemoUpdater()
+    #endif
+}
+
+/// Headless updater smoke: drive the full flow on launch and log each stage.
+/// Markers go to stderr and, if `SWIFT_PWA_UPDATER_SMOKE_LOG` is set, are
+/// appended to that file (survives a detached launch). `installAndRelaunch`
+/// replaces the process, so the "did it update" signal is the relaunched
+/// build's version, not a return here.
+@MainActor
+func runUpdaterSmoke(_ updater: any Updater) {
+    func mark(_ s: String) {
+        let line = "UPDATER_SMOKE \(s)\n"
+        FileHandle.standardError.write(Data(line.utf8))
+        if let path = ProcessInfo.processInfo.environment["SWIFT_PWA_UPDATER_SMOKE_LOG"] {
+            if let fh = FileHandle(forWritingAtPath: path) {
+                fh.seekToEndOfFile(); fh.write(Data(line.utf8)); try? fh.close()
+            } else {
+                try? line.data(using: .utf8)?.write(to: URL(fileURLWithPath: path))
+            }
+        }
+    }
+    Task { @MainActor in
+        // Let the window + bridge come up first.
+        try? await Task.sleep(nanoseconds: 2_000_000_000)
+        do {
+            mark("start")
+            guard let info = try await updater.check() else { mark("up-to-date"); return }
+            mark("available version=\(info.version) current=\(info.currentVersion)")
+            for try await event in updater.download(info) {
+                switch event {
+                case let .downloadProgress(bytes, total):
+                    mark("progress \(bytes)/\(total.map(String.init) ?? "?")")
+                case .readyToInstall:
+                    mark("readyToInstall")
+                default:
+                    mark("event \(event)")
+                }
+            }
+            mark("installing")
+            try await updater.installAndRelaunch()
+            mark("installAndRelaunch returned (process not replaced?)")
+        } catch {
+            mark("error \(error)")
+        }
     }
 }
 

@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Auto-updater runtime: macOS verified end-to-end + hardened.** The `AppleUpdater` install path (download → Ed25519 verify → `ditto` bundle swap → detached-helper relaunch) was implemented but marked **Untested** — only Android's install path had been exercised end-to-end. Drove real v(N-1)→v(N) update cycles against a signed manifest on a bundled app: the happy path (streaming download, verify, swap, relaunch to the new version), the wrong-key rejection path (`signature verification failed`, bundle untouched), and a **codesigned** build (signature stays valid across the swap — no stale-codesign SIGKILL). Verification surfaced three cleanup gaps the manual test cases assumed but the code didn't do, now fixed in `AppleUpdater` (and the analogous cleanup applied to `LinuxAppImageUpdater` / `WindowsUpdater`): (1) the relaunch **helper script now deletes itself** instead of leaving a `swift-pwa-update-*.sh` in `$TMPDIR`; (2) a **failed download / signature check no longer leaves unverified bytes** in the staging cache; (3) the **per-version staging dir is removed after a successful install**. macOS `UpdaterPlugin` flips to `Yes` in the feature matrix; iOS / Linux / Windows stay `Untested` pending their own device verification.
+- **`Examples/HelloPWA` is now a runnable updater test rig.** Its `Updater` backend is env-selectable — set `SWIFT_PWA_UPDATER_ENDPOINT` (+ optional `SWIFT_PWA_UPDATER_PUBKEY`) to drive the *real* platform backend against a live signed manifest instead of the built-in `DemoUpdater`, and `SWIFT_PWA_UPDATER_SMOKE=1` runs the whole check→download→install flow headlessly on launch (logging `UPDATER_SMOKE` markers). This is how the updater manual test cases ([docs/manual-test-cases.md](docs/manual-test-cases.md)) are now driven; see that doc's per-release setup for the recipe.
+
 ## [0.8.13] - 2026-07-14
 
 A documentation-focused release: the README is reworked as a current-state pitch, and the tutorial set grows from three guides to fourteen covering the whole "start → build → extend → ship" arc. Two small build/warning fixes ride along.

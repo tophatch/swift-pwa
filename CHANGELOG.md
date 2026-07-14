@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.8.13] - 2026-07-14
+
+A documentation-focused release: the README is reworked as a current-state pitch, and the tutorial set grows from three guides to fourteen covering the whole "start → build → extend → ship" arc. Two small build/warning fixes ride along.
+
+### Added
+
+- **A full tutorial set under [docs/tutorials/](docs/tutorials/)** — beginner-friendly, Swift-optional, casual-tone walkthroughs, each with honest per-platform notes:
+  - **Onboarding & the bridge:** [Hello, World](docs/tutorials/hello-world.md) (nothing → running native app, with a tour of every generated file and live reload) and [Talking to the native side](docs/tutorials/talking-to-the-native-side.md) (the `invoke`/`subscribe`/`on` bridge + registering your own command — unary, streaming, and server-push).
+  - **Adoption:** [Wrapping an existing React / Vite app](docs/tutorials/wrapping-a-react-or-vite-app.md) (`--in-place`, `web.directory`, the HMR dev loop, `build.prebuild`, and the SPA-routing fix).
+  - **Feature guides:** [Opening files with your app](docs/tutorials/opening-files-with-your-app.md) (`app.openFile` + file associations), [Calling a cloud API with a stored key](docs/tutorials/calling-a-cloud-api.md) (`secrets.*` + `net.*`), [Locking your app with biometrics](docs/tutorials/locking-with-biometrics.md) (`biometric.*`), [Making it feel native](docs/tutorials/making-it-feel-native.md) (window / notifications / tray), [Multi-window apps](docs/tutorials/multi-window-apps.md) (`createWindow` + `events.*`), and [Running a command-line tool](docs/tutorials/running-a-command-line-tool.md) (`process.*`).
+  - **Release:** [Shipping your app](docs/tutorials/shipping-your-app.md) (build / sign / distribute on all five platforms + one-tag CI) and an [Auto-updates](docs/tutorials/auto-updates.md) stub (full walkthrough deferred to 0.9, when the desktop runtime updater is verified).
+- **AI plugin rows in the README [feature matrix](README.md#feature-matrix)** — `AIPlugin` (text + images), `VisionPlugin`, and `AIWorkflowPlugin`, with footnotes for per-platform backends and opt-in flags. The matrix previously had no AI row at all.
+- **An iOS free-team provisioning proposal** ([docs/proposals/](docs/proposals/)).
+
+### Changed
+
+- **README reworked as a current-state pitch.** The status block (a growing per-version changelog digest) is gone; the top is now a stable elevator pitch + capability bullets, with a dedicated [On-device & cloud AI](README.md#on-device--cloud-ai) section in the features zone. The **Why** section leads with concrete wins for indies and teams (web frontend + thin Swift shell; built-in native capabilities incl. App-Store-friendly bundling; built-in AI) rather than "because Swift," and the **Roadmap** is now forward-looking only (shipped work lives here in the CHANGELOG, not as a `(released)` list). Fixed several stale README claims (Windows `.exe` icon ships; image generation shipped in 0.8.3–0.8.6; iOS save works via `dialog.exportFile`; llama.cpp on Windows arm64 is CPU-only). Added a pre-1.0 / feedback-welcome note.
+- **Corrected stale custom-command docs.** [docs/swift-api.md](docs/swift-api.md) and [docs/javascript-api.md](docs/javascript-api.md) showed `await ctx.registry.register("x") { … }`; registration is synchronous (no `await`) and uses the `typed:` label — corrected to `ctx.registry.register("x", typed: { … })`, matching the actual API.
+- **CLAUDE.md steering notes** for the README: write to current state (never a per-version changelog, at the top or in the Roadmap); add new plugins to the feature matrix; grep for stale hedges when a capability ships.
+
 ### Fixed
 
 - **No more spurious `pkg-config` / `libsecret-1` warnings on non-Linux hosts.** Building on macOS (or Windows) printed `failed to retrieve search paths with pkg-config` and two `couldn't find pc file for libsecret-1` warnings, even though the libsecret-backed `LinuxSecretStore` never compiles or links off Linux. Cause: `CSecretShim` depended on the `CLibSecret` `.systemLibrary` **unconditionally**, so SwiftPM kept `CLibSecret` reachable and probed its `libsecret-1.pc` on every host — unlike the GTK/WebKit shims, whose edges are gated `.when(platforms: [.linux])` and are therefore pruned (and silent) off Linux. The `CSecretShim → CLibSecret` edge is now gated the same way, matching the GTK pattern; the Linux `secrets.*` backend is unaffected (the edge is still present on Linux). Purely a build-graph fix — no runtime change.

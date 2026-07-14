@@ -32,7 +32,7 @@ struct Updater: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "updater",
         abstract: "Generate keys, sign artifacts, and assemble the auto-updater manifest.",
-        subcommands: [Keygen.self, Sign.self, Manifest.self]
+        subcommands: [Keygen.self, Sign.self, Manifest.self, Diff.self, Patch.self]
     )
 }
 
@@ -169,7 +169,7 @@ extension Updater {
 // MARK: - manifest
 
 extension Updater {
-    struct Manifest: ParsableCommand {
+    struct Manifest: AsyncParsableCommand {
         static let configuration = CommandConfiguration(
             commandName: "manifest",
             abstract: "Assemble the JSON updater manifest the endpoint URL serves."
@@ -215,13 +215,35 @@ extension Updater {
         )
         var platform: [String] = []
 
+        @Option(
+            name: .long,
+            parsing: .upToNextOption,
+            help: ArgumentHelp(
+                "Per-target delta (binary-patch) entry. Repeatable.",
+                discussion: """
+                <target>=<from-version>=<old-artifact-path>=<patch-download-url>
+                    Diff <old-artifact-path> against the target's NEW artifact (which
+                    must be supplied via a matching --platform <target>=<new-path>=<url>
+                    spec), writing a `.zstpatch` next to --output, and embed a delta
+                    entry with its size + base SHA-256. Requires the `zstd` CLI on PATH.
+
+                Deltas carry no signature — the client verifies the reconstructed full
+                artifact against the target's top-level `signature`. Clients that can't
+                use the delta (version not listed, base mismatch, apply failure) fall
+                back to a full download automatically.
+                """,
+                valueName: "spec"
+            )
+        )
+        var delta: [String] = []
+
         @Option(name: [.customShort("o"), .long], help: "Output path. Defaults to ./manifest.json.")
         var output: String = "manifest.json"
 
         @Flag(help: "Overwrite the output file if it already exists.")
         var force: Bool = false
 
-        func run() throws {
+        func run() async throws {
             guard !platform.isEmpty else {
                 throw ValidationError(
                     "swift-pwa: --platform must be supplied at least once. See `swift-pwa updater manifest --help`."
@@ -238,6 +260,10 @@ extension Updater {
             let signingKey = try privateKey.map { try UpdaterCLISupport.loadPrivateKey(at: $0) }
 
             var entries: [String: UpdateManifest.PlatformEntry] = [:]
+            // Track the local NEW-artifact path per target so `--delta`
+            // can diff against it (only present for the `needsSigning`
+            // --platform form, which supplies a local artifact).
+            var newArtifactPaths: [String: String] = [:]
             for spec in platform {
                 let parsed = try UpdaterCLISupport.parsePlatformSpec(spec)
                 let signature = try resolveSignature(parsed: parsed, signingKey: signingKey)
@@ -246,10 +272,15 @@ extension Updater {
                         "swift-pwa: --platform \(parsed.target): '\(parsed.downloadURL)' is not a valid URL."
                     )
                 }
+                if case let .needsSigning(artifactPath) = parsed.kind {
+                    newArtifactPaths[parsed.target] = artifactPath
+                }
                 entries[parsed.target] = UpdateManifest.PlatformEntry(
                     url: url, signature: signature
                 )
             }
+
+            try await attachDeltas(to: &entries, newArtifactPaths: newArtifactPaths, outURL: outURL)
 
             let manifest = UpdateManifest(
                 version: version,
@@ -286,6 +317,112 @@ extension Updater {
                 let data = try UpdaterCLISupport.readArtifact(at: URL(fileURLWithPath: artifactPath))
                 return try signingKey.signature(for: data).base64EncodedString()
             }
+        }
+
+        /// Generate each `--delta` patch and attach a `Delta` entry to
+        /// its target. The patch `.zstpatch` is written next to `outURL`.
+        private func attachDeltas(
+            to entries: inout [String: UpdateManifest.PlatformEntry],
+            newArtifactPaths: [String: String],
+            outURL: URL
+        ) async throws {
+            guard !delta.isEmpty else { return }
+            let outDir = outURL.deletingLastPathComponent()
+            for spec in delta {
+                let parsed = try UpdaterCLISupport.parseDeltaSpec(spec)
+                guard entries[parsed.target] != nil else {
+                    throw ValidationError("""
+                    swift-pwa: --delta \(parsed.target): no matching --platform \(parsed.target) spec. \
+                    A delta needs its target's full entry (and its NEW artifact) in the same run.
+                    """)
+                }
+                guard let newPath = newArtifactPaths[parsed.target] else {
+                    throw ValidationError("""
+                    swift-pwa: --delta \(parsed.target): the --platform \(parsed.target) spec must reference \
+                    a LOCAL new artifact (form <target>=<artifact-path>=<url>) so the patch can be diffed \
+                    against it. A pre-signed / url-only --platform spec has no bytes to diff.
+                    """)
+                }
+                guard let patchURL = URL(string: parsed.downloadURL) else {
+                    throw ValidationError(
+                        "swift-pwa: --delta \(parsed.target): '\(parsed.downloadURL)' is not a valid URL."
+                    )
+                }
+                let oldURL = URL(fileURLWithPath: parsed.oldArtifactPath)
+                let patchFile = outDir.appendingPathComponent(
+                    "\(parsed.target)-\(parsed.from)-to-\(version).zstpatch"
+                )
+                try await ZstdTool.diff(
+                    old: oldURL,
+                    new: URL(fileURLWithPath: newPath),
+                    output: patchFile
+                )
+                // Read the patch back for a robust byte count (file
+                // attribute value types differ across platforms).
+                let size = try UpdaterCLISupport.readArtifact(at: patchFile).count
+                let baseSHA = try ZstdTool.sha256Hex(of: oldURL)
+                let deltaEntry = UpdateManifest.PlatformEntry.Delta(
+                    from: parsed.from, url: patchURL, size: size, baseSHA256: baseSHA
+                )
+                let existing = entries[parsed.target]?.deltas ?? []
+                entries[parsed.target]?.deltas = existing + [deltaEntry]
+                print("Wrote delta patch: \(patchFile.path) (\(size) bytes)")
+            }
+        }
+    }
+}
+
+// MARK: - diff / patch (scripting + manual verification)
+
+extension Updater {
+    struct Diff: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "diff",
+            abstract: "Produce a binary patch that reconstructs --new from --old (zstd --patch-from)."
+        )
+
+        @Option(help: "Path to the base (old) artifact.")
+        var old: String
+
+        @Option(help: "Path to the new artifact.")
+        var new: String
+
+        @Option(name: [.customShort("o"), .long], help: "Output patch path.")
+        var output: String
+
+        func run() async throws {
+            try await ZstdTool.diff(
+                old: URL(fileURLWithPath: old),
+                new: URL(fileURLWithPath: new),
+                output: URL(fileURLWithPath: output)
+            )
+            let size = try UpdaterCLISupport.readArtifact(at: URL(fileURLWithPath: output)).count
+            print("Wrote patch: \(output) (\(size) bytes)")
+        }
+    }
+
+    struct Patch: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(
+            commandName: "patch",
+            abstract: "Reconstruct an artifact by applying --patch to --old (zstd -d --patch-from)."
+        )
+
+        @Option(help: "Path to the base (old) artifact.")
+        var old: String
+
+        @Option(help: "Path to the patch produced by `swift-pwa updater diff`.")
+        var patch: String
+
+        @Option(name: [.customShort("o"), .long], help: "Output (reconstructed) artifact path.")
+        var output: String
+
+        func run() async throws {
+            try await ZstdTool.apply(
+                old: URL(fileURLWithPath: old),
+                patch: URL(fileURLWithPath: patch),
+                output: URL(fileURLWithPath: output)
+            )
+            print("Wrote: \(output)")
         }
     }
 }
@@ -331,6 +468,28 @@ enum UpdaterCLISupport {
             return PlatformSpec(target: target, downloadURL: trailing, kind: .needsSigning(middle))
         }
         return PlatformSpec(target: target, downloadURL: middle, kind: .signed(trailing))
+    }
+
+    struct DeltaSpec: Equatable {
+        var target: String
+        var from: String
+        var oldArtifactPath: String
+        var downloadURL: String
+    }
+
+    /// Parse a `--delta` spec:
+    /// `<target>=<from-version>=<old-artifact-path>=<patch-download-url>`.
+    /// The download URL is the trailing field and may itself contain `=`
+    /// (query params), so only the first three separators are split on.
+    static func parseDeltaSpec(_ spec: String) throws -> DeltaSpec {
+        let parts = spec.split(separator: "=", maxSplits: 3, omittingEmptySubsequences: false).map(String.init)
+        guard parts.count == 4, !parts[0].isEmpty, !parts[1].isEmpty, !parts[2].isEmpty, !parts[3].isEmpty else {
+            throw ValidationError("""
+            swift-pwa: --delta spec '\(spec)' is malformed. Expected \
+            <target>=<from-version>=<old-artifact-path>=<patch-download-url>.
+            """)
+        }
+        return DeltaSpec(target: parts[0], from: parts[1], oldArtifactPath: parts[2], downloadURL: parts[3])
     }
 
     static func loadPrivateKey(at path: String) throws -> Curve25519.Signing.PrivateKey {

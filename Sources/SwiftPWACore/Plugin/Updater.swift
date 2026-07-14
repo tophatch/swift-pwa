@@ -9,9 +9,14 @@ import Foundation
 /// **Scope:** signed JSON manifest fetch, full-bundle download with
 /// progress events, Ed25519 signature verification, platform-native
 /// install, and a mandatory-update `min_supported_version` kill-switch
-/// (surfaced as `UpdateInfo.mandatory`). Delta updates are deferred —
-/// see the "Auto-updates" section of the README and each platform's
-/// setup doc.
+/// (surfaced as `UpdateInfo.mandatory`). **Delta (binary-patch)
+/// updates**: the manifest wire format carries optional per-target
+/// `deltas` (resolved into `UpdateInfo.delta`); the client-side apply
+/// path — download a small patch, reconstruct the artifact locally,
+/// then run the *same* Ed25519 check against the reconstructed bytes —
+/// lands per backend, starting with Linux AppImage + Windows portable
+/// (the two where the installed file *is* the signed artifact). Design:
+/// `docs/proposals/delta-updates.md`.
 ///
 /// **Concurrency.** Implementations are *not* `@MainActor` — `download`
 /// runs on the cooperative pool so I/O doesn't block the UI thread.
@@ -102,6 +107,42 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
     /// update UI (e.g. block the app until installed).
     public var mandatory: Bool
 
+    /// The applicable delta (binary-patch) for the running build, if the
+    /// manifest advertised one whose `from` matches `currentVersion`.
+    /// `nil` when no delta path is available — the backend then does a
+    /// full download. Resolved by `UpdateManifest.updateInfo(for:currentVersion:)`.
+    /// A delta-aware backend tries the small patch first and falls back
+    /// to `downloadURL` on any failure; JS may also read it off the
+    /// `available` event for "downloading a small update" copy.
+    public var delta: DeltaInfo?
+
+    /// The delta path chosen for this update: where to fetch the patch,
+    /// its advertised size, and the expected SHA-256 of the base
+    /// (installed) artifact the patch was cut against. A projection of
+    /// `UpdateManifest.PlatformEntry.Delta` with `from` dropped (already
+    /// matched against the running version).
+    public struct DeltaInfo: Codable, Sendable, Equatable {
+        public var url: URL
+        public var size: Int?
+        /// Lowercase-hex SHA-256 of the base artifact. Lets a backend
+        /// skip a doomed download+apply when its installed bytes don't
+        /// match the advertised base. Optimization only — trust rests on
+        /// verifying the *reconstructed* artifact's Ed25519 signature.
+        public var baseSHA256: String?
+
+        public init(url: URL, size: Int? = nil, baseSHA256: String? = nil) {
+            self.url = url
+            self.size = size
+            self.baseSHA256 = baseSHA256
+        }
+
+        private enum CodingKeys: String, CodingKey {
+            case url
+            case size
+            case baseSHA256 = "base_sha256"
+        }
+    }
+
     public init(
         version: String,
         currentVersion: String,
@@ -110,7 +151,8 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         downloadURL: URL,
         signature: String,
         target: String,
-        mandatory: Bool = false
+        mandatory: Bool = false,
+        delta: DeltaInfo? = nil
     ) {
         self.version = version
         self.currentVersion = currentVersion
@@ -120,6 +162,7 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         self.signature = signature
         self.target = target
         self.mandatory = mandatory
+        self.delta = delta
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -131,6 +174,7 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         case signature
         case target
         case mandatory
+        case delta
     }
 
     public init(from decoder: any Decoder) throws {
@@ -145,6 +189,7 @@ public struct UpdateInfo: Codable, Sendable, Equatable {
         // Derived + additive: tolerate its absence (older callers, or a
         // hand-built info passed back through `updater.run`).
         mandatory = try c.decodeIfPresent(Bool.self, forKey: .mandatory) ?? false
+        delta = try c.decodeIfPresent(DeltaInfo.self, forKey: .delta)
     }
 }
 
@@ -282,7 +327,12 @@ extension UpdaterEvent: Codable {
 ///     "darwin-aarch64":             { "url": "...", "signature": "..." },
 ///     "windows-x86_64-msix":        { "url": "...", "signature": "..." },
 ///     "ios-aarch64-enterprise":     { "url": "...", "signature": "" },
-///     "linux-x86_64-appimage":      { "url": "...", "signature": "..." }
+///     "linux-x86_64-appimage":      {
+///       "url": "...", "signature": "...",
+///       "deltas": [
+///         { "from": "0.3.0", "url": "...", "size": 214512, "base_sha256": "..." }
+///       ]
+///     }
 ///   }
 /// }
 /// ```
@@ -292,6 +342,11 @@ extension UpdaterEvent: Codable {
 /// because `itms-services://` delegates trust to Apple's signing chain
 /// rather than swift-pwa's key. Minisign-format signatures (Tauri's
 /// preferred form) are a planned follow-up; for now use raw base64.
+///
+/// The optional `deltas` array (additive; Tauri readers + older
+/// swift-pwa clients ignore it) advertises binary patches from prior
+/// versions — see `PlatformEntry.Delta` and
+/// `docs/proposals/delta-updates.md`.
 public struct UpdateManifest: Codable, Sendable, Equatable {
     public var version: String
     public var pubDate: String?
@@ -309,9 +364,48 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
         public var url: URL
         public var signature: String
 
-        public init(url: URL, signature: String) {
+        /// Optional binary-patch (delta) entries for this target — one
+        /// per prior version that can upgrade to this release with a
+        /// small patch instead of a full download. Additive: absent ⇒
+        /// full-download only (older clients + Tauri readers ignore it).
+        /// A client picks the entry whose `from` equals its running
+        /// version, downloads `url`, reconstructs the new artifact
+        /// locally, and verifies it against the top-level `signature` —
+        /// so the delta carries no signature of its own.
+        public var deltas: [Delta]?
+
+        public struct Delta: Codable, Sendable, Equatable {
+            /// Running version this patch upgrades *from* (exact match).
+            public var from: String
+            /// Where to fetch the patch (a zstd `--patch-from` frame).
+            public var url: URL
+            /// Patch size in bytes (advisory — progress + size policy).
+            public var size: Int?
+            /// Lowercase-hex SHA-256 of the base artifact this patch was
+            /// cut against, so a client can reject a mismatched base
+            /// before downloading. Optimization only; trust is the
+            /// reconstructed-artifact signature check.
+            public var baseSHA256: String?
+
+            public init(from: String, url: URL, size: Int? = nil, baseSHA256: String? = nil) {
+                self.from = from
+                self.url = url
+                self.size = size
+                self.baseSHA256 = baseSHA256
+            }
+
+            private enum CodingKeys: String, CodingKey {
+                case from
+                case url
+                case size
+                case baseSHA256 = "base_sha256"
+            }
+        }
+
+        public init(url: URL, signature: String, deltas: [Delta]? = nil) {
             self.url = url
             self.signature = signature
+            self.deltas = deltas
         }
     }
 
@@ -346,6 +440,12 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
         guard let entry = platforms[target] else { return nil }
         let mandatory = minSupportedVersion
             .map { UpdaterVersion.isNewer($0, than: currentVersion) } ?? false
+        // Pick the delta whose `from` matches the running version exactly.
+        // No match ⇒ nil ⇒ the backend full-downloads. Projected to
+        // `DeltaInfo` (drop `from`, already matched).
+        let delta = entry.deltas?
+            .first { $0.from == currentVersion }
+            .map { UpdateInfo.DeltaInfo(url: $0.url, size: $0.size, baseSHA256: $0.baseSHA256) }
         return UpdateInfo(
             version: version,
             currentVersion: currentVersion,
@@ -354,7 +454,8 @@ public struct UpdateManifest: Codable, Sendable, Equatable {
             downloadURL: entry.url,
             signature: entry.signature,
             target: target,
-            mandatory: mandatory
+            mandatory: mandatory,
+            delta: delta
         )
     }
 }

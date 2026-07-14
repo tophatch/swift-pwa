@@ -60,6 +60,81 @@ struct UpdaterCLITests {
         }
     }
 
+    // MARK: - parseDeltaSpec
+
+    @Test("Four-part delta spec parses into target/from/old/url")
+    func deltaSpecFourParts() throws {
+        let parsed = try UpdaterCLISupport.parseDeltaSpec(
+            "linux-x86_64-appimage=0.3.0=/tmp/old.AppImage=https://ex.com/0.3.0-to-0.4.0.zstpatch"
+        )
+        #expect(parsed.target == "linux-x86_64-appimage")
+        #expect(parsed.from == "0.3.0")
+        #expect(parsed.oldArtifactPath == "/tmp/old.AppImage")
+        #expect(parsed.downloadURL == "https://ex.com/0.3.0-to-0.4.0.zstpatch")
+    }
+
+    @Test("Delta spec download URL may itself contain '=' (query params)")
+    func deltaSpecURLWithEquals() throws {
+        let parsed = try UpdaterCLISupport.parseDeltaSpec(
+            "windows-x86_64-portable=0.3.0=/tmp/old.exe=https://ex.com/p.zstpatch?token=a=b&x=1"
+        )
+        #expect(parsed.oldArtifactPath == "/tmp/old.exe")
+        #expect(parsed.downloadURL == "https://ex.com/p.zstpatch?token=a=b&x=1")
+    }
+
+    @Test("Malformed delta spec (too few parts) is rejected")
+    func deltaSpecMalformed() {
+        #expect(throws: (any Error).self) {
+            _ = try UpdaterCLISupport.parseDeltaSpec("linux-x86_64-appimage=0.3.0=/tmp/old")
+        }
+        #expect(throws: (any Error).self) {
+            _ = try UpdaterCLISupport.parseDeltaSpec("=0.3.0=/tmp/old=https://ex.com/p")
+        }
+    }
+
+    // MARK: - zstd diff/patch round-trip (gated on the `zstd` CLI)
+
+    @Test("A patch reconstructs the new artifact byte-for-byte")
+    func diffPatchRoundTrip() async throws {
+        // Skip where the `zstd` binary isn't on PATH (e.g. a bare CI
+        // image). The pure-Swift parsing/selection is covered above and
+        // in the Core suite; this asserts the real engine when present.
+        guard await (try? Shell.capture("zstd", ["--version"])) != nil else { return }
+
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let old = dir.appendingPathComponent("old.bin")
+        let new = dir.appendingPathComponent("new.bin")
+        let patch = dir.appendingPathComponent("p.zstpatch")
+        let out = dir.appendingPathComponent("out.bin")
+
+        // A base with a small changed region in the middle.
+        var base = Data((0 ..< 200_000).map { UInt8($0 &* 31 & 0xFF) })
+        try base.write(to: old)
+        base.replaceSubrange(100_000 ..< 100_050, with: Data(repeating: 0xAB, count: 50))
+        try base.write(to: new)
+
+        try await ZstdTool.diff(old: old, new: new, output: patch)
+        try await ZstdTool.apply(old: old, patch: patch, output: out)
+
+        let reconstructed = try UpdaterCLISupport.readArtifact(at: out)
+        #expect(reconstructed == base)
+        // The patch is far smaller than the full artifact.
+        let patchSize = try UpdaterCLISupport.readArtifact(at: patch).count
+        #expect(patchSize < base.count / 10)
+    }
+
+    @Test("sha256Hex matches a known digest")
+    func sha256HexKnown() throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let f = dir.appendingPathComponent("f.bin")
+        try Data("abc".utf8).write(to: f)
+        // SHA-256("abc")
+        #expect(try ZstdTool.sha256Hex(of: f)
+            == "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
+    }
+
     // MARK: - loadPrivateKey
 
     @Test("loadPrivateKey round-trips a freshly written key")

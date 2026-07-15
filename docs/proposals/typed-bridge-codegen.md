@@ -23,9 +23,16 @@
 > **`swift-pwa codegen`** CLI (reads a catalog JSON, writes the client; `--check`
 > drift guard). Pure generator (no I/O), unit-tested.
 >
-> **Remaining:** the `SWIFT_PWA_DESCRIBE` headless dump so `codegen` reads the
-> catalog straight from the built app (today: capture `__bridge.describe` output
-> to a file); a Swift client; a `CritterFacts` demo.
+> **Shipped (Phase 2b — headless dump):** `swift-pwa codegen` reads the catalog
+> straight from the built app by default. Setting `SWIFT_PWA_DESCRIBE=<path>`
+> makes a backend's `run(configure:)` build a UI-less `HeadlessAppContext`
+> (built-ins + no-op `createWindow`), run the app's `configure`, write the
+> `[CommandDescriptor]` catalog to that path, and exit before any window. Wired
+> into the WebKit / GTK3 / GTK4 / Windows runtimes (Android is out of scope —
+> codegen runs on the dev/CI host). See "Open questions" #2 for the purity
+> caveat.
+>
+> **Remaining:** a Swift client (`--lang swift`); a `CritterFacts` demo.
 >
 > **Precursor #5 has shipped** ([bidirectional-bridge-sessions.md](bidirectional-bridge-sessions.md)):
 > the codegen models **three** call shapes — unary, server-stream, and the duplex
@@ -213,11 +220,15 @@ JS/TS call sites now fail the build, not the user's session.
    documented case for a `BridgeType` override. A macro could still be added later
    purely for those cases without re-taxing the core graph (it'd be opt-in), but
    there's no pressing need.
-2. **Headless dump vs. a pure static extractor.** The `SWIFT_PWA_DESCRIBE` boot
-   captures dynamic names but requires the app to build+run. Is that acceptable
-   for a codegen step (it runs the `configure` closure, which may have side
-   effects)? Mitigation: document that `configure` must be pure up to
-   registration, or add a `describeOnly` guard adopters can branch on.
+2. **Headless dump vs. a pure static extractor — RESOLVED: headless dump.** The
+   `SWIFT_PWA_DESCRIBE` boot captures dynamic names but requires the app to
+   build+run and runs the `configure` closure, which may have side effects. This
+   shipped with both mitigations from the original question: the purity
+   requirement ("`configure` must be pure up to registration") is documented, and
+   `HeadlessDescribe.isDumping` is the `describeOnly` guard an adopter branches on
+   to skip side-effectful work. `createWindow` / `serveDirectory` / `emit` are
+   inert in the headless context, so the common `configure` body needs no changes;
+   only *extra* work (downloads, subprocesses) needs the guard.
 3. **How much does #5 reshape this?** The `session` shape and
    `BridgeInbound<Frame>` schema are the main additions vs. a pre-#5 design; if
    #5 slips, Phase 1 can ship unary+stream and add session later without

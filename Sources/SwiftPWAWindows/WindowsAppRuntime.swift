@@ -33,6 +33,12 @@
         public func run(
             _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) throws -> Never {
+            // Codegen headless catalog dump (roadmap #6): if SWIFT_PWA_DESCRIBE
+            // is set, this writes the command catalog and exits before any
+            // Win32 / WebView2 bootstrap; otherwise it returns and we launch
+            // normally.
+            HeadlessDescribe.dumpIfRequested(configure)
+
             // Per-Monitor V2 DPI awareness. Has to fire before any
             // window is created, before any HDC is queried — Windows
             // latches the awareness once the process becomes

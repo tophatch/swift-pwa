@@ -60,8 +60,10 @@ const catalog = await __SWIFT_PWA__.invoke('__bridge.describe');
 ```
 
 `swift-pwa codegen` turns that catalog into a typed TypeScript client over
-`__SWIFT_PWA__` (typed `invoke` / `subscribe` / `session` call sites) — see the
-[README](../README.md#quick-start) and [docs/swift-api.md](swift-api.md).
+`__SWIFT_PWA__` (typed `invoke` / `subscribe` / `session` call sites). You don't
+need to capture `__bridge.describe` by hand: run `swift-pwa codegen` in your
+app's directory and it builds the app, dumps the catalog headlessly, and writes
+`bridge.ts` in one step — see [docs/swift-api.md](swift-api.md#typed-client-codegen).
 
 ## Duplex sessions (`session`)
 

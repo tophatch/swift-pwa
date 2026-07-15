@@ -201,6 +201,7 @@ You'll only reach for this once you're driving windows directly; a plain "comput
 
 ## Where to go next
 
+- Tired of stringly-typed calls? Generate a **typed TypeScript client** for the bridge with `swift-pwa codegen` — command names, payloads, and results become type-checked, so a rename fails the build instead of the user's session. See [Typed client codegen](../swift-api.md#typed-client-codegen).
 - The full command catalog: [JavaScript API](../javascript-api.md) and [Swift API](../swift-api.md).
 - A complete worked example that registers a custom command (and more): [`Examples/HelloPWA`](../../Examples/HelloPWA).
 - Put the bridge to work: [Saving and loading files](saving-and-loading-files.md), [On-device AI](on-device-ai.md).

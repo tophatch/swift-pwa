@@ -127,6 +127,32 @@ const router = createHashRouter([ /* your routes */ ]);
 
 > **Vite `base`:** the default `base: '/'` is fine — your app is served at the root of its origin, so root-relative asset URLs resolve normally. You don't need to change it. (`base: './'` also works and is a harmless defensive choice if you want the same `dist/` to run from a path-prefixed web host too.)
 
+## Step 6 — Type-safe bridge calls (optional)
+
+Every `__SWIFT_PWA__.invoke('cmd', …)` is stringly-typed: nothing checks the command name, the payload shape, or how you read the result — mistakes surface at runtime. Since you already have a TypeScript toolchain, you can generate a typed client instead. From your app's directory:
+
+```bash
+swift-pwa codegen -o src/bridge.ts
+```
+
+This builds your app, reads its live command catalog (built-ins *and* your own custom commands), and writes a typed façade over `__SWIFT_PWA__`:
+
+```ts
+import { createBridge } from './bridge';
+const bridge = createBridge(window.__SWIFT_PWA__);
+
+const version = await bridge.app.version();      // typed result, autocompletes
+bridge.window.setSize({ width: 900, height: 600 }); // wrong fields → compile error
+```
+
+Rename a command or change a payload struct on the Swift side, regenerate, and your JS call sites now **fail the build** instead of the user's session. Wire the drift guard into CI so a stale client can't slip through:
+
+```bash
+swift-pwa codegen -o src/bridge.ts --check   # fails if bridge.ts is out of date
+```
+
+It's entirely opt-in — the raw `__SWIFT_PWA__` calls keep working — and it needs no running window (the build runs your app headlessly just long enough to dump the catalog). See [the Swift API reference](../swift-api.md#typed-client-codegen) for the details, including the one rule: your `configure` closure must be pure up to registration.
+
 ---
 
 ## Recap
@@ -136,6 +162,7 @@ const router = createHashRouter([ /* your routes */ ]);
 3. `npm run dev` + `swift-pwa dev --server http://localhost:5173` — develop with HMR.
 4. `pwa.json` → `build.prebuild: "npm run build"` — rebuild assets on every native build.
 5. Switch your router to hash mode.
+6. *(Optional)* `swift-pwa codegen` — generate a typed TypeScript bridge client.
 
 From here, [Shipping your app](shipping-your-app.md) takes you to signed, distributable builds.
 

@@ -416,11 +416,90 @@ The trusted-comment block on minisign signatures is informational —
 swift-pwa doesn't verify the global signature over it. Verification
 happens against the artifact bytes only.
 
+## Delta (binary-patch) updates
+
+Ship only the **binary diff** between the installed build and the new one
+instead of re-downloading the whole artifact. On a typical point release
+this cuts the download by one to two orders of magnitude (a multi-MB
+artifact with a small change → a patch of a few hundred bytes to a few KB).
+
+**How it stays safe:** the client picks the patch whose `from` matches its
+running version, downloads it, **reconstructs the new artifact locally**,
+and then runs the **same** Ed25519 signature check against the
+*reconstructed* bytes that a full download runs. The delta carries no
+signature of its own — trust rests entirely on the reconstructed artifact
+verifying against the public key baked into your app. A tampered or corrupt
+patch simply produces bytes that fail that check, and the client
+**transparently falls back to a full download**. So does a missing patch
+(the running version isn't listed) or a base-SHA mismatch (the installed
+bytes aren't what the patch was cut against). Deltas are a fast path, never
+a hard dependency.
+
+**Supported backends.** Reconstruction needs the *installed signed artifact
+bytes* on disk as the patch base, which is only true where the installed
+file **is** the signed artifact:
+
+| Backend | Delta? | Why |
+| :------ | :----- | :-- |
+| Linux AppImage | ✅ | the installed AppImage (`$APPIMAGE`) is the signed artifact |
+| Windows portable `.exe` | ✅ | the installed EXE is the signed artifact |
+| macOS `.app` | ❌ | installs the *extracted* `.app`, not the signed `.app.tar.gz` |
+| Windows MSIX | ❌ | the OS installer owns the package bytes |
+| Android APK | ❌ | the system re-derives the installed APK |
+| iOS | ❌ | `itms-services://` hands the transfer to Apple |
+
+Unsupported backends just full-download, as before.
+
+**Publishing.** Add one repeatable `--delta` per prior version you want to
+serve a patch for:
+
+```bash
+swift-pwa updater manifest \
+    --version 0.4.0 \
+    --private-key ./release.priv \
+    --platform linux-x86_64-appimage=./build/MyApp-0.4.0.AppImage=https://updates.example.com/MyApp-0.4.0.AppImage \
+    --delta    linux-x86_64-appimage=0.3.0=./build/MyApp-0.3.0.AppImage=https://updates.example.com/MyApp-0.3.0-to-0.4.0.zstpatch \
+    --delta    linux-x86_64-appimage=0.3.1=./build/MyApp-0.3.1.AppImage=https://updates.example.com/MyApp-0.3.1-to-0.4.0.zstpatch \
+    --output ./manifest.json
+```
+
+Each `--delta` (`<target>=<from-version>=<old-artifact-path>=<patch-url>`)
+diffs the old artifact against the target's new artifact (which must be
+supplied via a matching `--platform` that references a **local** new-artifact
+path), writes a `.zstpatch` next to `--output`, and embeds a delta entry
+with its size + base SHA-256. Upload the `.zstpatch` files alongside the full
+artifact; older clients and non-delta backends ignore them. This needs the
+[`zstd`](https://github.com/facebook/zstd) CLI on `PATH`. Standalone
+`swift-pwa updater diff` / `updater patch` expose the engine for scripting.
+
+The resulting `deltas` array is additive (Tauri readers ignore it):
+
+```json
+"linux-x86_64-appimage": {
+  "url": "https://updates.example.com/MyApp-0.4.0.AppImage",
+  "signature": "…",
+  "deltas": [
+    { "from": "0.3.0", "url": "…/MyApp-0.3.0-to-0.4.0.zstpatch", "size": 214512, "base_sha256": "…" }
+  ]
+}
+```
+
+**No packaging burden.** The zstd decompressor is vendored and compiled into
+the runtime from source (a single-file decoder amalgamation), so there's no
+system library to install, no DLL to ship next to your app, and nothing to
+configure — delta support is simply present on the two backends above.
+
+**JS.** No API change: `updater.run` / `updater.check` behave identically; a
+delta is chosen and applied under the hood, and the `downloadProgress` events
+just report the (much smaller) patch transfer.
+
 ## What's not in the first cut
 
-- **Delta updates** — full-bundle replacement only. The wire format
-  reserves room for a future `signature_delta` / `url_delta` per
-  platform; bsdiff-style deltas are queued.
+- **Delta updates on macOS / Android** — supported on Linux AppImage and
+  Windows portable (see above); the other backends full-download. macOS would
+  need the last signed `.app.tar.gz` cached (or a content-tree diff); Android
+  delta is the store's job. Tracked in
+  [docs/proposals/delta-updates.md](proposals/delta-updates.md).
 - **Prehashed minisign (`ED` mode)** — only legacy `Ed` (pure Ed25519
   over the artifact bytes) is supported. Adding `ED` means vendoring
   BLAKE2b — not in CryptoKit / swift-crypto out of the box.

@@ -34,7 +34,7 @@ When adding new cases:
 
 | Module       | Cases | Last verified  |
 |--------------|-------|----------------|
-| Updater      | 8     | **macOS ✓**¹   |
+| Updater      | 10    | **macOS ✓**¹   |
 
 ¹ **macOS cases 1 + 2 verified end-to-end 2026-07-14** against a real
 bundled `Examples/HelloPWA` + the real `AppleUpdater` (ad-hoc and
@@ -432,3 +432,11 @@ signature handoff aren't covered by per-host unit tests.
 - [ ] **Updater 7.** minisign(1) interop (+ prehashed rejection
       sub-case)
 - [ ] **Updater 8.** CLI publishing pipeline on each host
+- [x] **Updater 9.** Linux AppImage **delta** update — patch-sized
+      download → reconstruct → verify → stage, + corrupt-patch and
+      base-mismatch fallbacks ✓ 2026-07-15 (gated `LinuxDeltaUpdateE2E`
+      suite over HTTP on the GTK box)
+- [x] **Updater 10.** Windows portable **delta** update — 391-byte patch
+      → reconstruct → verify → stage (`match=true`), + corrupt-patch
+      fallback to full download ✓ 2026-07-15 (console harness driving the
+      real `WindowsUpdater` over HTTP on the x64 box)

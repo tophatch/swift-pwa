@@ -1,6 +1,13 @@
 # Proposal: delta (binary-patch) updates
 
-> **Status: proposed.** The last open sub-item of the auto-updates epic. Today
+> **Status: shipped (Linux AppImage + Windows portable).** Both backends are
+> implemented and verified end-to-end on real boxes; the engine is a vendored,
+> compiled-from-source zstd decoder (the `CZstd` C target) rather than a system
+> lib, so there's no per-platform packaging. macOS / Android remain out of scope
+> (see [Later](#later-macos-android-ios)). This doc is kept as the design record;
+> see `CHANGELOG.md` for the shipped summary. Original proposal follows.
+>
+> **(proposed)** The last open sub-item of the auto-updates epic. Today
 > every update is a **full-bundle download**: a 40 MB AppImage / portable `.exe`
 > is re-fetched in its entirety even when the release changed 200 KB of code. A
 > *delta* update ships only the binary difference between the installed artifact

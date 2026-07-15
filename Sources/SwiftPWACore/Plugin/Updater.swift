@@ -10,13 +10,15 @@ import Foundation
 /// progress events, Ed25519 signature verification, platform-native
 /// install, and a mandatory-update `min_supported_version` kill-switch
 /// (surfaced as `UpdateInfo.mandatory`). **Delta (binary-patch)
-/// updates**: the manifest wire format carries optional per-target
-/// `deltas` (resolved into `UpdateInfo.delta`); the client-side apply
-/// path — download a small patch, reconstruct the artifact locally,
-/// then run the *same* Ed25519 check against the reconstructed bytes —
-/// lands per backend, starting with Linux AppImage + Windows portable
-/// (the two where the installed file *is* the signed artifact). Design:
-/// `docs/proposals/delta-updates.md`.
+/// updates**: the manifest carries optional per-target `deltas`
+/// (resolved into `UpdateInfo.delta`); a delta-aware backend downloads
+/// the small patch, reconstructs the artifact locally (via the vendored
+/// `CZstd` decoder), then runs the *same* Ed25519 check against the
+/// reconstructed bytes before installing — falling back to a full
+/// download on any failure. Implemented on Linux AppImage
+/// (`LinuxAppImageUpdater`) and Windows portable (`WindowsUpdater`
+/// `.portable`) — the two where the installed file *is* the signed
+/// artifact. Design: `docs/proposals/delta-updates.md`.
 ///
 /// **Concurrency.** Implementations are *not* `@MainActor` — `download`
 /// runs on the cooperative pool so I/O doesn't block the UI thread.

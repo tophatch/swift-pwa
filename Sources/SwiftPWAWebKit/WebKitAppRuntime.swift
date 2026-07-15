@@ -11,6 +11,10 @@
         public func run(
             _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) throws -> Never {
+            // Codegen headless catalog dump (roadmap #6): if SWIFT_PWA_DESCRIBE
+            // is set, this writes the command catalog and exits before any UI
+            // bootstrap; otherwise it returns and we launch normally.
+            MainActor.assumeIsolated { HeadlessDescribe.dumpIfRequested(configure) }
             #if os(macOS)
                 MainActor.assumeIsolated { MacAppRuntime.shared.bootstrap(configure: configure) }
                 MacAppRuntime.shared.runForever()

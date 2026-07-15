@@ -116,6 +116,46 @@ for await chunk in inbound {
 The JS side and its trade-offs are in
 [docs/javascript-api.md](javascript-api.md#duplex-sessions-session).
 
+## Typed client codegen
+
+Every command you register through a `typed:` variant is captured in a
+**command catalog** — one `CommandDescriptor { name, kind, args, result,
+inbound? }` per command, with the arg/result/frame *shapes* derived
+automatically from your `Codable` structs (no annotation required). `swift-pwa
+codegen` turns that catalog into a typed TypeScript client over `__SWIFT_PWA__`,
+so JS call sites autocomplete and fail the build on a renamed command or a
+changed payload instead of failing at runtime.
+
+Run it from your app's directory:
+
+```bash
+swift-pwa codegen -o web/bridge.ts        # build app, dump catalog, write client
+swift-pwa codegen -o web/bridge.ts --check # CI drift guard: fail if stale
+```
+
+By default it obtains the catalog **headlessly**: it builds the app (`swift run
+-c debug`, override with `--configuration release`) and runs it once with the
+`SWIFT_PWA_DESCRIBE` environment variable set to a temp path. The shipped
+backends check that variable at the top of `run(configure:)` — when it's set,
+the runtime installs the built-in plugins, runs *your* `configure` closure so
+every plugin (including dynamically-named ones) registers, writes the catalog to
+that path, and **exits before opening a window**. No devtools round-trip, no
+hand-maintained catalog file.
+
+> **Your `configure` closure must be pure up to registration.** The headless
+> dump runs it for real: `createWindow` returns an inert no-op window and
+> `serveDirectory` / `emit` are inert, but any *other* side effect (kicking off
+> a model download, spawning a process) still fires during codegen. Guard such
+> work with `if HeadlessDescribe.isDumping { return }` after your `ctx.use(…)`
+> calls, or move it out of `configure`.
+
+Alternatives: pass `--catalog <json>` to generate from a pre-captured
+`__bridge.describe` output instead of building; the headless path is
+desktop-only (the codegen step runs on your dev/CI machine, not the device), so
+there's no Android hook. Raw (non-`typed:`) registrations have no static shape,
+so they're omitted from the generated client — model them with a `typed:`
+variant to include them.
+
 ## Built-in plugins
 
 `WindowPlugin`, `AppPlugin` (`app.quit` / `app.name` / `app.version`),

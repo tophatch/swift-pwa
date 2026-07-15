@@ -34,12 +34,31 @@ When adding new cases:
 
 | Module       | Cases | Last verified  |
 |--------------|-------|----------------|
-| Updater      | 8     | **Untested**¹  |
+| Updater      | 10    | **macOS ✓**¹   |
 
-¹ Runtime backends ship as preview in v0.4.0 — implementation
-complete and unit-tested, but this checklist hasn't been walked
-end-to-end yet under the release's time pressure. The next release
-cycle re-runs all eight cases against real bundled artifacts.
+¹ **macOS cases 1 + 2 verified end-to-end 2026-07-14** against a real
+bundled `Examples/HelloPWA` + the real `AppleUpdater` (ad-hoc and
+codesigned builds; a v0.3.0→v0.4.0 cycle over a local signed manifest).
+Verification hardened three cleanup gaps (self-deleting helper, no
+unverified bytes left on failure, staging dir removed after install).
+
+**Linux case 3 (AppImage) verified end-to-end 2026-07-14** on the GTK
+box (GTK4 build, headless Xvfb): the full check→download→verify→atomic
+`rename(2)` swap→`setsid` relaunch cycle (confirmed via a
+self-perpetuating smoke loop + the on-disk hash flipping v1→v2), plus
+the cross-filesystem **EXDEV** copy-then-rename fallback (staging on
+tmpfs, AppImage on ext4). Surfaced a fourth cleanup gap now fixed across
+Linux + Windows: the per-version staging dir is dropped after a
+successful swap (parity with macOS).
+
+**Windows portable verified end-to-end 2026-07-14** on the x64 box,
+headlessly via a console harness driving the real `WindowsUpdater`
+(`installMode: .portable`, `executablePath:` override): download
+(streaming), Ed25519 verify, `Move-Item` swap, staging cleanup, and a
+directly observed `Start-Process` relaunch. **Windows MSIX** is
+compile-verified only — its `Add-AppxPackage` E2E needs a signed
+package, a trusted cert, and sideloading (the box lacks `makeappx`), so
+it's still to be walked. **iOS** (`itms-services://`) needs an enterprise cert.
 
 ---
 
@@ -87,6 +106,20 @@ swift run swift-pwa updater manifest \
 
 Keep the resulting artifacts around — every case below references
 them.
+
+> **Driving it with `Examples/HelloPWA`.** HelloPWA's `Updater` backend is
+> env-selectable, so you don't have to write a throwaway app: set
+> `SWIFT_PWA_UPDATER_ENDPOINT` (+ `SWIFT_PWA_UPDATER_PUBKEY` = the
+> `updater keygen` public key) and it wires the *real* platform backend
+> instead of its `DemoUpdater`. `SWIFT_PWA_UPDATER_SMOKE=1` then drives
+> check→download→install on launch and logs `UPDATER_SMOKE` markers to
+> stderr (and to `$SWIFT_PWA_UPDATER_SMOKE_LOG` if set) — a headless
+> alternative to clicking the demo card. Launch the built app's binary
+> **directly** (`…/HelloPWA.app/Contents/MacOS/HelloPWA`), not via `open`,
+> so it inherits the env. Notes: re-running `updater manifest` over an
+> existing file needs **`--force`**; and a **local `http://` endpoint**
+> (vs. a real `https://` one) needs an ATS opt-in —
+> `"macos": { "info_plist": { "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true } } }`.
 
 ### 1. macOS `.app` auto-update end-to-end
 
@@ -386,15 +419,31 @@ signature handoff aren't covered by per-host unit tests.
 
 ## Checklist (copy into the release PR)
 
-- [ ] **Updater 1.** macOS `.app` auto-update end-to-end
-- [ ] **Updater 2.** macOS wrong-key rejection
-- [ ] **Updater 3.** Linux AppImage auto-update end-to-end (+ EXDEV
-      sub-case)
-- [ ] **Updater 4.** Windows portable EXE auto-update (+ Program
-      Files permission failure sub-case)
+- [x] **Updater 1.** macOS `.app` auto-update end-to-end ✓ 2026-07-14
+- [x] **Updater 2.** macOS wrong-key rejection ✓ 2026-07-14
+- [x] **Updater 3.** Linux AppImage auto-update end-to-end (+ EXDEV
+      sub-case) ✓ 2026-07-14
+- [x] **Updater 4.** Windows portable EXE auto-update ✓ 2026-07-14
+      (happy path via console harness; the Program Files
+      permission-failure sub-case is not yet walked)
 - [ ] **Updater 5.** Windows MSIX auto-update with post-install
       relaunch (+ no-identity sub-case)
 - [ ] **Updater 6.** iOS enterprise / ad-hoc update
 - [ ] **Updater 7.** minisign(1) interop (+ prehashed rejection
       sub-case)
 - [ ] **Updater 8.** CLI publishing pipeline on each host
+- [x] **Updater 9.** Linux AppImage **delta** update — patch-sized
+      download → reconstruct → verify → stage, + corrupt-patch and
+      base-mismatch fallbacks ✓ 2026-07-15 (gated `LinuxDeltaUpdateE2E`
+      suite over HTTP on the GTK box)
+- [x] **Updater 10.** Windows portable **delta** update — 391-byte patch
+      → reconstruct → verify → stage (`match=true`), + corrupt-patch
+      fallback to full download ✓ 2026-07-15 (console harness driving the
+      real `WindowsUpdater` over HTTP on the x64 box)
+- [x] **Updater 11.** macOS **delta** update — patch-sized download →
+      reconstruct the `.app.tar.gz` from a cached base → verify → extract
+      → re-cache the new base for the next cycle, + corrupt-patch,
+      base-mismatch, and no-cached-base fallbacks ✓ 2026-07-15 (gated
+      `AppleDeltaUpdateE2E` suite over HTTP on the Mac). The install/swap
+      itself is the already-verified full-update path (Updater 1) — delta
+      only changes how the staged `.app` is obtained.

@@ -1,0 +1,10 @@
+// Public API surface of the vendored Zstandard decoder (zstddeclib.c).
+// The implementation is self-contained (it inlines the amalgamated
+// sources); these headers only expose the declarations Swift calls
+// (ZSTD_decompressDCtx / ZSTD_DCtx_refPrefix / ZSTD_getFrameContentSize
+// / ZSTD_DCtx_setParameter, etc.) via `import CZstd`.
+module CZstd {
+    header "zstd.h"
+    header "zstd_errors.h"
+    export *
+}

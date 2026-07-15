@@ -181,28 +181,102 @@
         ) async throws -> URL {
             let dir = try ensureVersionStagingDir(version: info.version)
             let staged = dir.appendingPathComponent("update.AppImage")
+            do {
+                // Fast path: if the manifest advertised a delta for our
+                // running version and we can locate the installed AppImage
+                // to patch against, download the (small) patch, reconstruct
+                // locally, and verify the *reconstructed* artifact. Any
+                // failure falls through to the full download below — the
+                // delta is an optimization, never a hard dependency.
+                if let delta = info.delta, let base = currentAppImagePath() {
+                    do {
+                        try await stageViaDelta(delta: delta, info: info, base: base, into: staged, yield: yield)
+                        try makeExecutable(staged)
+                        return staged
+                    } catch {
+                        FileHandle.standardError.write(Data(
+                            "[swift-pwa updater] delta update failed (\(error)); falling back to full download\n".utf8
+                        ))
+                        try? FileManager.default.removeItem(at: staged)
+                    }
+                }
 
+                _ = try await UpdaterDownload.download(
+                    from: info.downloadURL,
+                    to: staged,
+                    urlSession: urlSession,
+                    onProgress: { bytes, total in
+                        yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                    }
+                )
+
+                let bytesData = try Data(contentsOf: staged)
+                try verifyEd25519(data: bytesData, signature: info.signature)
+
+                // AppImages must be executable to launch. The temp file from
+                // URLSession is 0644; mark it +x before staging so the
+                // atomic rename in installAndRelaunch produces a runnable
+                // file in one shot.
+                try makeExecutable(staged)
+
+                return staged
+            } catch {
+                // Download / signature failure: never leave unverified or
+                // partial bytes in the cache.
+                try? FileManager.default.removeItem(at: dir)
+                throw error
+            }
+        }
+
+        /// Reconstruct the new AppImage from the installed one + a
+        /// `zstd --patch-from` patch, then verify it against the manifest's
+        /// full-artifact signature. Writes the verified bytes to `staged`.
+        /// Throws (so `stage` can fall back to a full download) on a base
+        /// mismatch, a download / decode error, or a signature failure.
+        private func stageViaDelta(
+            delta: UpdateInfo.DeltaInfo,
+            info: UpdateInfo,
+            base: URL,
+            into staged: URL,
+            yield: @escaping @Sendable (UpdaterEvent) -> Void
+        ) async throws {
+            let baseData = try Data(contentsOf: base)
+            // Optional local fast-reject: if the installed bytes don't match
+            // the patch's advertised base, don't bother downloading it.
+            if let expected = delta.baseSHA256 {
+                let actual = SHA256.hash(data: baseData)
+                    .map { String(format: "%02x", $0) }.joined()
+                guard actual == expected.lowercased() else {
+                    throw BridgeError(
+                        code: BridgeError.handler,
+                        message: "delta base mismatch (installed artifact differs from the patch's base)"
+                    )
+                }
+            }
+
+            let patchFile = staged.deletingLastPathComponent().appendingPathComponent("update.zstpatch")
             _ = try await UpdaterDownload.download(
-                from: info.downloadURL,
-                to: staged,
+                from: delta.url,
+                to: patchFile,
                 urlSession: urlSession,
                 onProgress: { bytes, total in
                     yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
                 }
             )
+            let patchData = try Data(contentsOf: patchFile)
+            let reconstructed = try ZstdPatch.apply(base: baseData, patch: patchData)
+            // The same Ed25519 check a full download runs — trust rests on
+            // the reconstructed artifact's signature, so a tampered patch
+            // can only fail here (→ fall back), never smuggle bytes in.
+            try verifyEd25519(data: reconstructed, signature: info.signature)
+            try reconstructed.write(to: staged)
+            try? FileManager.default.removeItem(at: patchFile)
+        }
 
-            let bytesData = try Data(contentsOf: staged)
-            try verifyEd25519(data: bytesData, signature: info.signature)
-
-            // AppImages must be executable to launch. The temp file from
-            // URLSession is 0644; mark it +x before staging so the
-            // atomic rename in installAndRelaunch produces a runnable
-            // file in one shot.
+        private func makeExecutable(_ url: URL) throws {
             try FileManager.default.setAttributes(
-                [.posixPermissions: 0o755], ofItemAtPath: staged.path
+                [.posixPermissions: 0o755], ofItemAtPath: url.path
             )
-
-            return staged
         }
 
         // MARK: - installAndRelaunch
@@ -233,6 +307,11 @@
                 )
             }
             try atomicReplace(at: installPath, with: staged)
+
+            // The staged file has been moved onto the install path; drop the
+            // now-empty per-version staging directory so it doesn't accumulate
+            // across updates (parity with the macOS helper's post-swap cleanup).
+            try? FileManager.default.removeItem(at: staged.deletingLastPathComponent())
 
             // Launch the (now-updated) AppImage detached via `setsid` so
             // the new process keeps running after we exit. Redirecting

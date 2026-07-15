@@ -223,19 +223,87 @@
             let dir = try ensureVersionStagingDir(version: info.version)
             let suffix = installMode == .msix ? "msix" : "exe"
             let staged = dir.appendingPathComponent("update.\(suffix)")
+            do {
+                // Fast path (portable only — the installed EXE *is* the
+                // signed artifact, so it's a valid patch base; MSIX bytes
+                // are the OS installer's and don't round-trip): if the
+                // manifest advertised a delta for our version and we can
+                // locate the running EXE, download the patch, reconstruct
+                // locally, and verify the *reconstructed* artifact. Any
+                // failure falls through to the full download below.
+                if installMode == .portable, let delta = info.delta, let base = currentExecutablePath() {
+                    do {
+                        try await stageViaDelta(delta: delta, info: info, base: base, into: staged, yield: yield)
+                        return staged
+                    } catch {
+                        FileHandle.standardError.writeQuietly(Data(
+                            "[swift-pwa updater] delta update failed (\(error)); falling back to full download\n".utf8
+                        ))
+                        try? FileManager.default.removeItem(at: staged)
+                    }
+                }
 
+                _ = try await UpdaterDownload.download(
+                    from: info.downloadURL,
+                    to: staged,
+                    urlSession: urlSession,
+                    onProgress: { bytes, total in
+                        yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                    }
+                )
+
+                try verifySignature(at: staged, info: info)
+
+                return staged
+            } catch {
+                // Download / signature failure: never leave unverified or
+                // partial bytes in the cache.
+                try? FileManager.default.removeItem(at: dir)
+                throw error
+            }
+        }
+
+        /// Reconstruct the new EXE from the installed one + a `zstd
+        /// --patch-from` patch, then verify it against the manifest's
+        /// full-artifact signature. Writes the verified bytes to `staged`.
+        /// Throws (so `stage` can fall back to a full download) on a base
+        /// mismatch, a download / decode error, or a signature failure.
+        private func stageViaDelta(
+            delta: UpdateInfo.DeltaInfo,
+            info: UpdateInfo,
+            base: URL,
+            into staged: URL,
+            yield: @escaping @Sendable (UpdaterEvent) -> Void
+        ) async throws {
+            let baseData = try Data(contentsOf: base)
+            if let expected = delta.baseSHA256 {
+                let actual = SHA256.hash(data: baseData)
+                    .map { String(format: "%02x", $0) }.joined()
+                guard actual == expected.lowercased() else {
+                    throw BridgeError(
+                        code: BridgeError.handler,
+                        message: "delta base mismatch (installed EXE differs from the patch's base)"
+                    )
+                }
+            }
+
+            let patchFile = staged.deletingLastPathComponent().appendingPathComponent("update.zstpatch")
             _ = try await UpdaterDownload.download(
-                from: info.downloadURL,
-                to: staged,
+                from: delta.url,
+                to: patchFile,
                 urlSession: urlSession,
                 onProgress: { bytes, total in
                     yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
                 }
             )
-
-            try verifySignature(at: staged, info: info)
-
-            return staged
+            let patchData = try Data(contentsOf: patchFile)
+            let reconstructed = try ZstdPatch.apply(base: baseData, patch: patchData)
+            // The same Ed25519 check a full download runs — trust rests on
+            // the reconstructed artifact's signature, so a tampered patch
+            // can only fail here (→ fall back), never smuggle bytes in.
+            try verifyEd25519(data: reconstructed, signature: info.signature)
+            try reconstructed.write(to: staged)
+            try? FileManager.default.removeItem(at: patchFile)
         }
 
         // MARK: - installAndRelaunch
@@ -274,10 +342,15 @@
                 )
             }
             let pid = GetCurrentProcessId()
+            // Drop the now-empty per-version staging directory after the move,
+            // so it doesn't accumulate across updates (parity with the macOS
+            // helper's post-swap cleanup).
+            let stagingDir = staged.deletingLastPathComponent()
             let script = """
             $ErrorActionPreference = 'SilentlyContinue'
             try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
             Move-Item -LiteralPath \(psQuote(staged.path)) -Destination \(psQuote(target.path)) -Force
+            Remove-Item -LiteralPath \(psQuote(stagingDir.path)) -Recurse -Force
             Start-Process -FilePath \(psQuote(target.path))
             """
             try spawnDetachedPowerShell(script: script)
@@ -318,10 +391,14 @@
             } else {
                 ""
             }
+            // Drop the now-consumed per-version staging directory after the
+            // package install (parity with the macOS / portable cleanup).
+            let stagingDir = staged.deletingLastPathComponent()
             let script = """
             $ErrorActionPreference = 'SilentlyContinue'
             try { Wait-Process -Id \(pid) -Timeout 60 -ErrorAction SilentlyContinue } catch {}
             Add-AppxPackage -Path \(psQuote(staged.path)) -ForceUpdateFromAnyVersion
+            Remove-Item -LiteralPath \(psQuote(stagingDir.path)) -Recurse -Force
             \(relaunch)
             """
             try spawnDetachedPowerShell(script: script)

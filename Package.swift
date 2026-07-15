@@ -95,7 +95,11 @@ let gtkBackendTarget: Target = useGtk4
             "SwiftPWACore",
             .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk4Shim", condition: .when(platforms: [.linux])),
-            .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux]))
+            .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux])),
+            // libzstd for delta (binary-patch) update reconstruction. Linux
+            // only (the AppImage updater is the sole consumer); needs
+            // libzstd-dev at build time.
+            .target(name: "CZstd", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK4",
         swiftSettings: swiftSettings
@@ -107,7 +111,11 @@ let gtkBackendTarget: Target = useGtk4
             .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk3Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux])),
-            .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux]))
+            .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux])),
+            // libzstd for delta (binary-patch) update reconstruction. Linux
+            // only (the AppImage updater is the sole consumer); needs
+            // libzstd-dev at build time.
+            .target(name: "CZstd", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK",
         swiftSettings: swiftSettings
@@ -211,6 +219,22 @@ let package = Package(
             providers: [.apt(["libsecret-1-dev"])]
         ),
 
+        // Vendored single-file Zstandard *decoder* (Sources/CZstd/zstddeclib.c),
+        // imported by the updater backends to reconstruct a delta update from
+        // the installed artifact + a `zstd --patch-from` patch. Compiled from
+        // source (like CStbImage vendors stb), so there's NO system libzstd /
+        // vcpkg / prebuilt-DLL dependency on any platform — nothing to stage
+        // next to the app, nothing to provision in CI. Only the decoder is
+        // vendored; the publish-side CLI uses the full `zstd` binary. Depended
+        // on only via the backends' `.when(.linux)` / `.when(.windows)` edges,
+        // so its ~900 KB of C never compiles on a host that builds no
+        // delta-capable backend. Provenance: Sources/CZstd/README.md.
+        .target(
+            name: "CZstd",
+            path: "Sources/CZstd",
+            exclude: ["README.md"]
+        ),
+
         .target(
             name: "_SwiftPWATestSupport",
             dependencies: ["SwiftPWACore"],
@@ -296,7 +320,13 @@ let package = Package(
 
         .target(
             name: "SwiftPWAWebKit",
-            dependencies: ["SwiftPWACore"],
+            dependencies: [
+                "SwiftPWACore",
+                // Vendored zstd decoder for delta (binary-patch) updates on
+                // macOS. iOS uses `itms-services://` (Apple owns the transfer,
+                // no local artifact to patch), so the edge is macOS-only.
+                .target(name: "CZstd", condition: .when(platforms: [.macOS]))
+            ],
             swiftSettings: swiftSettings
         ),
 
@@ -410,7 +440,11 @@ let package = Package(
                 // GTK targets — Linux/Windows-conditional so the empty
                 // object on macOS hosts doesn't pull BoringSSL in.
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
-                .target(name: "CWebView2Shim", condition: .when(platforms: [.windows]))
+                .target(name: "CWebView2Shim", condition: .when(platforms: [.windows])),
+                // Vendored zstd decoder for delta-update reconstruction on the
+                // portable install path (compiled from source — no DLL to
+                // stage, no runtime dependency).
+                .target(name: "CZstd", condition: .when(platforms: [.windows]))
             ],
             swiftSettings: swiftSettings
         ),

@@ -68,6 +68,36 @@ try runtime.run { ctx in
 string — `BuildConfig.versionName` on Android, override via the
 `currentVersion:` arg on every backend).
 
+### Automatic background checks (`auto_check`)
+
+By default the plugin is on-demand — nothing checks for updates until JS
+calls `updater.check` / `updater.run`. Opt into background polling by
+passing `autoCheck: true` (and, optionally, a `checkInterval` in
+seconds — mirroring `pwa.json`'s `updater.auto_check` /
+`check_interval_seconds`; the default is 6 hours, floored at 60s):
+
+```swift
+ctx.use(UpdaterPlugin(
+    AppleUpdater(endpoint: …, publicKey: …),
+    autoCheck: true,
+    checkInterval: 21600
+))
+```
+
+The runtime then checks on launch and every `checkInterval` after,
+pushing any available update to JS on the **`updater.updateAvailable`**
+event-bus channel (transient network failures are swallowed and retried
+next tick). The payload is the same `UpdateInfo` `updater.check` returns
+— including the `mandatory` flag — and is *retained*, so a listener that
+subscribes after a check still receives the latest:
+
+```js
+__SWIFT_PWA__.on("updater.updateAvailable", (info) => {
+  if (info.mandatory) forceUpdateGate(info);       // kill-switch
+  else showUpdateBanner(info);                      // then updater.run
+});
+```
+
 ## JS surface
 
 ```js
@@ -115,6 +145,7 @@ because `itms-services://` delegates trust to Apple's signing chain.
   "version": "0.4.0",
   "pub_date": "2026-05-12T10:00:00Z",
   "notes": "Bug fixes and improvements.",
+  "min_supported_version": "0.3.0",
   "platforms": {
     "darwin-aarch64":         { "url": "https://.../HelloPWA-0.4.0-arm64.app.tar.gz", "signature": "RUR..." },
     "darwin-x86_64":          { "url": "https://.../HelloPWA-0.4.0-x86_64.app.tar.gz", "signature": "RUR..." },
@@ -128,6 +159,30 @@ because `itms-services://` delegates trust to Apple's signing chain.
 The format is byte-compatible with Tauri v1's updater manifest, so
 existing publishing tooling (e.g. `tauri-action`) can produce
 swift-pwa manifests as-is.
+
+### Mandatory updates (`min_supported_version` kill-switch)
+
+`min_supported_version` is optional. When present, any running build
+*older* than that floor is force-upgraded: `updater.check` (and the
+`available` event from `updater.run`) sets **`mandatory: true`** on the
+resolved update, so the app can block usage until it installs — a
+security kill-switch for retiring a build with a critical bug. Builds
+at or above the floor get `mandatory: false` (an ordinary optional
+update). Omit the field and every update is optional.
+
+```js
+const info = await __SWIFT_PWA__.invoke("updater.check");
+if (info?.mandatory) {
+  // Don't let the user dismiss — drive straight into the update.
+  showBlockingUpdateGate(info);
+}
+```
+
+The floor is *advisory to the app*: swift-pwa surfaces the flag but
+doesn't itself refuse to run (the running build is already launched by
+the time it can fetch a manifest). Enforcement is the app's call — gate
+your UI on `mandatory`. Publish it with
+`swift-pwa updater manifest --min-supported-version 0.3.0 …`.
 
 You can pre-declare the same wiring in `pwa.json` so `keygen` can print
 a paste-ready block and the runtime side can read it from one source of
@@ -204,6 +259,10 @@ swift run swift-pwa updater manifest \
     --platform android-aarch64-apk=./build/HelloPWA-android/app/build/outputs/apk/release/app-release.apk=https://updates.example.com/HelloPWA-0.4.0-arm64.apk \
     --output manifest.json
 ```
+
+Add `--min-supported-version 0.3.0` to stamp the mandatory-update floor
+(see [Mandatory updates](#mandatory-updates-min_supported_version-kill-switch)
+above); omit it for all-optional releases.
 
 The CLI itself doesn't validate target names — any string the
 publisher uses must match what the runtime's `Updater` implementation
@@ -357,14 +416,113 @@ The trusted-comment block on minisign signatures is informational —
 swift-pwa doesn't verify the global signature over it. Verification
 happens against the artifact bytes only.
 
+## Delta (binary-patch) updates
+
+Ship only the **binary diff** between the installed build and the new one
+instead of re-downloading the whole artifact. On a typical point release
+this cuts the download by one to two orders of magnitude (a multi-MB
+artifact with a small change → a patch of a few hundred bytes to a few KB).
+
+**How it stays safe:** the client picks the patch whose `from` matches its
+running version, downloads it, **reconstructs the new artifact locally**,
+and then runs the **same** Ed25519 signature check against the
+*reconstructed* bytes that a full download runs. The delta carries no
+signature of its own — trust rests entirely on the reconstructed artifact
+verifying against the public key baked into your app. A tampered or corrupt
+patch simply produces bytes that fail that check, and the client
+**transparently falls back to a full download**. So does a missing patch
+(the running version isn't listed) or a base-SHA mismatch (the installed
+bytes aren't what the patch was cut against). Deltas are a fast path, never
+a hard dependency.
+
+**Supported backends.** Reconstruction needs the *signed artifact bytes* on
+disk as the patch base. On Linux/Windows the installed file **is** that
+artifact; on macOS it isn't (the installed thing is an extracted `.app`), so
+the backend keeps a cached copy of the last verified `.app.tar.gz` to patch
+against instead:
+
+| Backend | Delta? | Base the patch applies to |
+| :------ | :----- | :-- |
+| Linux AppImage | ✅ | the installed AppImage (`$APPIMAGE`) — it *is* the signed artifact |
+| Windows portable `.exe` | ✅ | the installed EXE — it *is* the signed artifact |
+| macOS `.app` | ✅ | a **cached** copy of the last verified `.app.tar.gz` (see below) |
+| Windows MSIX | ❌ | the OS installer owns the package bytes |
+| Android APK | ❌ | the system re-derives the installed APK |
+| iOS | ❌ | `itms-services://` hands the transfer to Apple |
+
+Unsupported backends just full-download, as before.
+
+**macOS specifics.** Because macOS installs the *extracted* `.app` and
+discards the signed `.app.tar.gz`, `AppleUpdater` caches the last verified
+tarball (one artifact's worth of disk, under
+`~/Library/Caches/<bundle-id>/SwiftPWAUpdates/base/`) and patches *that* on
+the next update. Two consequences: (1) the **first** update after you adopt
+this always full-downloads — there's no cached base yet — and then caches the
+base, so updates from that point on can go delta; (2) you publish the macOS
+delta exactly like any other, passing the old **`.app.tar.gz`** (not the
+`.app`) as the base artifact. gzip is often assumed to be "diff-hostile", but
+DEFLATE resynchronizes within a bounded (~32 KB) window, so a localized
+change to a `.app` yields a small patch in practice — measured across
+incompressible binaries and compressible web bundles alike.
+
+**Publishing.** Add one repeatable `--delta` per prior version you want to
+serve a patch for:
+
+```bash
+swift-pwa updater manifest \
+    --version 0.4.0 \
+    --private-key ./release.priv \
+    --platform linux-x86_64-appimage=./build/MyApp-0.4.0.AppImage=https://updates.example.com/MyApp-0.4.0.AppImage \
+    --delta    linux-x86_64-appimage=0.3.0=./build/MyApp-0.3.0.AppImage=https://updates.example.com/MyApp-0.3.0-to-0.4.0.zstpatch \
+    --delta    linux-x86_64-appimage=0.3.1=./build/MyApp-0.3.1.AppImage=https://updates.example.com/MyApp-0.3.1-to-0.4.0.zstpatch \
+    --output ./manifest.json
+```
+
+Each `--delta` (`<target>=<from-version>=<old-artifact-path>=<patch-url>`)
+diffs the old artifact against the target's new artifact (which must be
+supplied via a matching `--platform` that references a **local** new-artifact
+path), writes a `.zstpatch` next to `--output`, and embeds a delta entry
+with its size + base SHA-256. Upload the `.zstpatch` files alongside the full
+artifact; older clients and non-delta backends ignore them. This needs the
+[`zstd`](https://github.com/facebook/zstd) CLI on `PATH`. Standalone
+`swift-pwa updater diff` / `updater patch` expose the engine for scripting.
+
+macOS is identical — the base artifact is the old **`.app.tar.gz`** (the same
+signed tarball you published for that version), not the `.app`:
+
+```bash
+    --platform darwin-aarch64=./build/MyApp-0.4.0-arm64.app.tar.gz=https://updates.example.com/MyApp-0.4.0-arm64.app.tar.gz \
+    --delta    darwin-aarch64=0.3.0=./build/MyApp-0.3.0-arm64.app.tar.gz=https://updates.example.com/MyApp-0.3.0-to-0.4.0.zstpatch \
+```
+
+The resulting `deltas` array is additive (Tauri readers ignore it):
+
+```json
+"linux-x86_64-appimage": {
+  "url": "https://updates.example.com/MyApp-0.4.0.AppImage",
+  "signature": "…",
+  "deltas": [
+    { "from": "0.3.0", "url": "…/MyApp-0.3.0-to-0.4.0.zstpatch", "size": 214512, "base_sha256": "…" }
+  ]
+}
+```
+
+**No packaging burden.** The zstd decompressor is vendored and compiled into
+the runtime from source (a single-file decoder amalgamation), so there's no
+system library to install, no DLL to ship next to your app, and nothing to
+configure — delta support is simply present on the supported backends above.
+
+**JS.** No API change: `updater.run` / `updater.check` behave identically; a
+delta is chosen and applied under the hood, and the `downloadProgress` events
+just report the (much smaller) patch transfer.
+
 ## What's not in the first cut
 
-- **Delta updates** — full-bundle replacement only. The wire format
-  reserves room for a future `signature_delta` / `url_delta` per
-  platform; bsdiff-style deltas are queued.
-- **Mandatory updates / kill-switch** — no `min_supported_version`
-  enforcement. Trivially additive — the runtime will refuse to start
-  older clients once the field is wired.
+- **Delta updates on Android / MSIX / iOS** — the three desktop backends
+  (Linux AppImage, Windows portable, macOS) ship deltas (see above); Android
+  delta is the store's job, MSIX stays full-only (the OS installer owns the
+  bytes), and iOS hands the transfer to Apple. Tracked in
+  [docs/proposals/delta-updates.md](proposals/delta-updates.md).
 - **Prehashed minisign (`ED` mode)** — only legacy `Ed` (pure Ed25519
   over the artifact bytes) is supported. Adding `ED` means vendoring
   BLAKE2b — not in CryptoKit / swift-crypto out of the box.

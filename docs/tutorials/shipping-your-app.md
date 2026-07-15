@@ -260,7 +260,7 @@ swift-pwa updater sign    --private-key key.priv build/MyApp.AppImage     # per-
 swift-pwa updater manifest --version 1.0.1 --platform linux=…=<url> --output manifest.json
 ```
 
-⚠️ **But the runtime side is still preview on desktop.** The OS-level install-and-relaunch paths (macOS/Windows/Linux) are unit-tested but haven't been walked end-to-end against real bundled artifacts, so they're marked **Untested** in the [feature matrix](../../README.md#feature-matrix). Android's updater (via the system `PackageInstaller`) is the one that's been exercised for real. If you plan to rely on auto-updates in production, walk the Updater cases in [docs/manual-test-cases.md](../manual-test-cases.md) first, and see [docs/auto-updates.md](../auto-updates.md) for the full setup. Delta updates and a mandatory-upgrade kill-switch aren't implemented yet either.
+The **runtime** side — download, verify, swap, relaunch — is verified end-to-end on **macOS, Linux (AppImage), Windows (portable), and Android**. Windows MSIX and iOS are still preview (they need a signed package / distribution cert respectively). It also supports background auto-checks, a mandatory-update kill-switch, and **delta (binary-diff) updates** that ship a tiny patch instead of the whole artifact on all three desktop backends (macOS, Linux AppImage, Windows portable). See the **[Auto-updates tutorial](auto-updates.md)** for the full walkthrough (wiring, JS, `min_supported_version`, deltas) and [docs/auto-updates.md](../auto-updates.md) for the reference.
 
 ---
 

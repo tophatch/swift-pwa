@@ -18,6 +18,21 @@
     ///   place of the running one, and re-`open`s it. This is the
     ///   standard "Squirrel-style" trick — the kernel keeps the
     ///   running mmap valid, and the new app picks up on next launch.
+    ///
+    ///   **Delta (binary-patch) updates.** Unlike the Linux AppImage /
+    ///   Windows portable backends — where the installed file *is* the
+    ///   signed artifact, so a patch has a natural base on disk — macOS
+    ///   installs the *extracted* `.app` and discards the signed
+    ///   `.app.tar.gz`. To make deltas work anyway, this backend caches
+    ///   the last verified `.app.tar.gz` (one artifact's disk, under
+    ///   `<stagingRoot>/base/`) and, when a manifest advertises a delta
+    ///   from the running version, reconstructs the new tarball from
+    ///   that cached base + the patch, then runs the **same** Ed25519
+    ///   check as a full download. Any failure (no cached base yet,
+    ///   base-hash mismatch, corrupt patch, signature) transparently
+    ///   falls back to a full download. The first update after this
+    ///   ships has no cached base and always full-downloads; it then
+    ///   caches the base so subsequent updates can go delta.
     /// - **iOS** (enterprise / ad-hoc): the manifest entry's `url` must
     ///   point at the install-manifest `.plist` (not the `.ipa`).
     ///   `download` is a no-op that yields `readyToInstall` straight
@@ -166,46 +181,178 @@
             ) async throws -> URL {
                 let dir = try ensureVersionStagingDir(version: info.version)
                 let archiveURL = dir.appendingPathComponent("update.tar.gz")
+                do {
+                    // Fast path: if the manifest advertised a delta for our
+                    // running version and we've cached the matching signed
+                    // tarball from a prior update, download the (small) patch,
+                    // reconstruct the new tarball locally, and verify the
+                    // *reconstructed* artifact. Any failure falls through to
+                    // the full download below — the delta is an optimization,
+                    // never a hard dependency.
+                    var obtainedViaDelta = false
+                    if let delta = info.delta, let base = cachedBaseTarballURL() {
+                        do {
+                            try await stageViaDelta(
+                                delta: delta, info: info, base: base, into: archiveURL, yield: yield
+                            )
+                            obtainedViaDelta = true
+                        } catch {
+                            FileHandle.standardError.write(Data(
+                                "[swift-pwa updater] delta update failed (\(error)); falling back to full download\n"
+                                    .utf8
+                            ))
+                            try? FileManager.default.removeItem(at: archiveURL)
+                        }
+                    }
 
+                    if !obtainedViaDelta {
+                        _ = try await UpdaterDownload.download(
+                            from: info.downloadURL,
+                            to: archiveURL,
+                            urlSession: urlSession,
+                            onProgress: { bytes, total in
+                                yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
+                            }
+                        )
+
+                        let archiveData = try Data(contentsOf: archiveURL)
+                        try verifyEd25519(data: archiveData, signature: info.signature)
+                    }
+
+                    let extracted = dir.appendingPathComponent("extracted", isDirectory: true)
+                    try? FileManager.default.removeItem(at: extracted)
+                    try FileManager.default.createDirectory(
+                        at: extracted, withIntermediateDirectories: true
+                    )
+                    let tar = Process()
+                    tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+                    tar.arguments = ["-xzf", archiveURL.path, "-C", extracted.path]
+                    tar.standardOutput = FileHandle.nullDevice
+                    tar.standardError = FileHandle.nullDevice
+                    try tar.run()
+                    tar.waitUntilExit()
+                    guard tar.terminationStatus == 0 else {
+                        throw BridgeError(
+                            code: BridgeError.handler,
+                            message: "tar -xzf failed (status \(tar.terminationStatus))"
+                        )
+                    }
+
+                    let entries = try FileManager.default.contentsOfDirectory(atPath: extracted.path)
+                    guard let appName = entries.first(where: { $0.hasSuffix(".app") }) else {
+                        throw BridgeError(
+                            code: BridgeError.handler,
+                            message: "extracted archive contained no .app bundle"
+                        )
+                    }
+                    // Cache the verified tarball as the base for the *next*
+                    // update's delta (best-effort — see `saveBaseTarball`).
+                    // Do this before dropping the archive; the base cache lives
+                    // outside the per-version staging dir the install helper
+                    // cleans up, so it survives the swap.
+                    saveBaseTarball(from: archiveURL, version: info.version)
+
+                    // Verified + extracted: the archive is no longer needed (only
+                    // the extracted `.app` gets swapped in), so drop it — the cache
+                    // then holds just the staged bundle, which the install helper
+                    // removes after the swap.
+                    try? FileManager.default.removeItem(at: archiveURL)
+                    return extracted.appendingPathComponent(appName)
+                } catch {
+                    // Download / signature / extraction failure: never leave
+                    // unverified or partial bytes in the cache. (A wrong-key
+                    // signature used to leave the downloaded `update.tar.gz`
+                    // behind.)
+                    try? FileManager.default.removeItem(at: dir)
+                    throw error
+                }
+            }
+
+            /// Reconstruct the new `.app.tar.gz` from a cached base tarball + a
+            /// `zstd --patch-from` patch, verify it against the manifest's
+            /// full-artifact signature, and write the verified bytes to
+            /// `archiveURL` (from where `macStage` extracts them exactly as it
+            /// would a full download). Throws (so `macStage` falls back) on a
+            /// base-hash mismatch, a download / decode error, or a signature
+            /// failure.
+            private func stageViaDelta(
+                delta: UpdateInfo.DeltaInfo,
+                info: UpdateInfo,
+                base: URL,
+                into archiveURL: URL,
+                yield: @escaping @Sendable (UpdaterEvent) -> Void
+            ) async throws {
+                let baseData = try Data(contentsOf: base)
+                // Optional local fast-reject: if the cached base doesn't match
+                // the patch's advertised base, don't bother downloading it.
+                if let expected = delta.baseSHA256 {
+                    let actual = SHA256.hash(data: baseData)
+                        .map { String(format: "%02x", $0) }.joined()
+                    guard actual == expected.lowercased() else {
+                        throw BridgeError(
+                            code: BridgeError.handler,
+                            message: "delta base mismatch (cached artifact differs from the patch's base)"
+                        )
+                    }
+                }
+
+                let patchFile = archiveURL.deletingLastPathComponent()
+                    .appendingPathComponent("update.zstpatch")
                 _ = try await UpdaterDownload.download(
-                    from: info.downloadURL,
-                    to: archiveURL,
+                    from: delta.url,
+                    to: patchFile,
                     urlSession: urlSession,
                     onProgress: { bytes, total in
                         yield(.downloadProgress(bytesDownloaded: bytes, contentLength: total))
                     }
                 )
+                let patchData = try Data(contentsOf: patchFile)
+                let reconstructed = try ZstdPatch.apply(base: baseData, patch: patchData)
+                // The same Ed25519 check a full download runs — trust rests on
+                // the reconstructed artifact's signature, so a tampered patch
+                // can only fail here (→ fall back), never smuggle bytes in.
+                try verifyEd25519(data: reconstructed, signature: info.signature)
+                try reconstructed.write(to: archiveURL)
+                try? FileManager.default.removeItem(at: patchFile)
+            }
 
-                let archiveData = try Data(contentsOf: archiveURL)
-                try verifyEd25519(data: archiveData, signature: info.signature)
+            /// Directory holding the cached signed tarball used as a delta base.
+            /// A sibling of the per-version staging dirs (which the install
+            /// helper `rm -rf`s post-swap), so the base survives across updates.
+            private func baseCacheDir() -> URL {
+                stagingRoot.appendingPathComponent("base", isDirectory: true)
+            }
 
-                let extracted = dir.appendingPathComponent("extracted", isDirectory: true)
-                try? FileManager.default.removeItem(at: extracted)
-                try FileManager.default.createDirectory(
-                    at: extracted, withIntermediateDirectories: true
-                )
-                let tar = Process()
-                tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-                tar.arguments = ["-xzf", archiveURL.path, "-C", extracted.path]
-                tar.standardOutput = FileHandle.nullDevice
-                tar.standardError = FileHandle.nullDevice
-                try tar.run()
-                tar.waitUntilExit()
-                guard tar.terminationStatus == 0 else {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "tar -xzf failed (status \(tar.terminationStatus))"
+            /// The cached `.app.tar.gz` matching the running version, or `nil`
+            /// if we haven't cached one yet (the macOS analogue of Linux's
+            /// `currentAppImagePath()` — the on-disk base a patch applies to).
+            func cachedBaseTarballURL() -> URL? {
+                let url = baseCacheDir().appendingPathComponent("\(currentVersion).app.tar.gz")
+                return FileManager.default.fileExists(atPath: url.path) ? url : nil
+            }
+
+            /// Cache the just-verified tarball as the delta base for the next
+            /// update. Best-effort: a failure here only means the next update
+            /// full-downloads, so it must never fail the install. Keeps just the
+            /// newest tarball (one artifact's disk).
+            private func saveBaseTarball(from verifiedArchive: URL, version: String) {
+                let baseDir = baseCacheDir()
+                do {
+                    // Drop any prior cached base before copying the new one in.
+                    if FileManager.default.fileExists(atPath: baseDir.path) {
+                        try FileManager.default.removeItem(at: baseDir)
+                    }
+                    try FileManager.default.createDirectory(
+                        at: baseDir, withIntermediateDirectories: true
                     )
+                    let dest = baseDir.appendingPathComponent("\(version).app.tar.gz")
+                    try FileManager.default.copyItem(at: verifiedArchive, to: dest)
+                } catch {
+                    FileHandle.standardError.write(Data(
+                        "[swift-pwa updater] could not cache delta base (\(error)); next update will full-download\n"
+                            .utf8
+                    ))
                 }
-
-                let entries = try FileManager.default.contentsOfDirectory(atPath: extracted.path)
-                guard let appName = entries.first(where: { $0.hasSuffix(".app") }) else {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "extracted archive contained no .app bundle"
-                    )
-                }
-                return extracted.appendingPathComponent(appName)
             }
 
             func verifyEd25519(data: Data, signature: String) throws {
@@ -271,6 +418,12 @@
                 let pid = ProcessInfo.processInfo.processIdentifier
                 let scriptURL = URL(fileURLWithPath: NSTemporaryDirectory())
                     .appendingPathComponent("swift-pwa-update-\(UUID().uuidString).sh")
+                // `staged` is `<stagingRoot>/<version>/extracted/<App>.app`; its
+                // grandparent is the per-version staging dir, cleaned after the
+                // swap so the cache doesn't accumulate old bundles.
+                let stagingVersionDir = staged
+                    .deletingLastPathComponent()
+                    .deletingLastPathComponent()
                 let script = #"""
                 #!/bin/sh
                 set -e
@@ -280,6 +433,10 @@
                 rm -rf "\#(installPath.path)"
                 /usr/bin/ditto "\#(staged.path)" "\#(installPath.path)"
                 /usr/bin/open "\#(installPath.path)"
+                # Housekeeping: drop the consumed staging dir and this helper
+                # itself (a running shell can unlink its own file on Unix).
+                rm -rf "\#(stagingVersionDir.path)"
+                rm -f "\#(scriptURL.path)"
                 """#
                 try script.write(to: scriptURL, atomically: true, encoding: .utf8)
                 try FileManager.default.setAttributes(

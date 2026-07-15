@@ -20,6 +20,16 @@ public final class BridgeRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private var pumpTask: Task<Void, Never>?
     private var subscriptions: [UInt64: Task<Void, Never>] = [:]
+    /// Inbound continuations for open duplex sessions (see `registerSession`).
+    /// One is created per `subscribe` (before dispatch, so a `push` that the
+    /// serial pump handles next always finds it); plain-stream handlers simply
+    /// never read theirs. `push` frames route here; teardown finishes it.
+    private var sessionInbound: [UInt64: AsyncStream<Data>.Continuation] = [:]
+
+    /// Backstop bound on buffered client frames per session — drops oldest on
+    /// overflow so a flooding client can't grow memory unboundedly. Generous;
+    /// a genuine high-rate consumer should ack-gate in its own protocol.
+    private static let maxSessionInboundBuffer = 256
 
     public init(
         webView: any PWAWebView,
@@ -49,15 +59,18 @@ public final class BridgeRuntime: @unchecked Sendable {
     }
 
     public func stop() {
-        let (oldPump, oldSubs) = lock.withLock {
+        let (oldPump, oldSubs, oldInbound) = lock.withLock {
             let p = pumpTask
             let s = subscriptions
+            let i = sessionInbound
             pumpTask = nil
             subscriptions.removeAll()
-            return (p, s)
+            sessionInbound.removeAll()
+            return (p, s, i)
         }
         oldPump?.cancel()
         for (_, task) in oldSubs { task.cancel() }
+        for (_, cont) in oldInbound { cont.finish() }
     }
 
     /// Test hook: returns whether a streaming subscription is currently
@@ -67,11 +80,12 @@ public final class BridgeRuntime: @unchecked Sendable {
     }
 
     deinit {
-        let (oldPump, oldSubs) = lock.withLock {
-            (pumpTask, subscriptions)
+        let (oldPump, oldSubs, oldInbound) = lock.withLock {
+            (pumpTask, subscriptions, sessionInbound)
         }
         oldPump?.cancel()
         for (_, task) in oldSubs { task.cancel() }
+        for (_, cont) in oldInbound { cont.finish() }
     }
 
     // MARK: - private
@@ -84,7 +98,17 @@ public final class BridgeRuntime: @unchecked Sendable {
             await dispatchSubscribe(id: id, command: command, payload: payload)
         case let .unsubscribe(id):
             removeSubscription(id)
+        case let .push(id, payload):
+            routePush(id: id, payload: payload)
         }
+    }
+
+    /// Route a client-pushed frame into its open session's inbound stream.
+    /// A `push` for an unknown id (session already closed, or the target was
+    /// a plain non-session stream that finished) is silently dropped.
+    private func routePush(id: UInt64, payload: Data) {
+        let cont = lock.withLock { sessionInbound[id] }
+        cont?.yield(payload)
     }
 
     private func dispatchInvoke(id: UInt64, command: String, payload: Data) async {
@@ -98,14 +122,32 @@ public final class BridgeRuntime: @unchecked Sendable {
     private func dispatchSubscribe(id: UInt64, command: String, payload: Data) async {
         guard let app = app as? any AppContext else { return }
         let inv = Invocation(id: id, command: command, payload: payload)
-        let context = CommandContext(invocation: inv, originWindow: windowID, appContext: app)
+
+        // Create the session inbound stream + continuation *before* dispatch and
+        // store it synchronously, so a `push` frame the serial pump handles next
+        // always finds a live sink (see `sessionInbound`). Plain-stream handlers
+        // just never read `context.sessionInbound`; the continuation is finished
+        // on completion/teardown either way.
+        let (inbound, inboundContinuation) = AsyncStream<Data>.makeStream(
+            bufferingPolicy: .bufferingNewest(Self.maxSessionInboundBuffer)
+        )
+        lock.withLock { sessionInbound[id] = inboundContinuation }
+
+        let context = CommandContext(
+            invocation: inv,
+            originWindow: windowID,
+            appContext: app,
+            sessionInbound: inbound
+        )
         let result = await registry.dispatch(context)
         switch result {
         case let .ok(data):
             try? await webView.deliver(.event(id: id, chunk: data))
             try? await webView.deliver(.end(id: id))
+            finishInbound(id)
         case let .failure(err):
             try? await webView.deliver(.replyError(id: id, error: err))
+            finishInbound(id)
         case let .stream(stream):
             let task = Task { [weak self] in
                 guard let self else { return }
@@ -152,11 +194,26 @@ public final class BridgeRuntime: @unchecked Sendable {
     }
 
     private func removeSubscription(_ id: UInt64) {
-        let task = lock.withLock {
+        let (task, inbound) = lock.withLock {
             let t = subscriptions[id]
             subscriptions.removeValue(forKey: id)
-            return t
+            let i = sessionInbound[id]
+            sessionInbound.removeValue(forKey: id)
+            return (t, i)
         }
         task?.cancel()
+        inbound?.finish()
+    }
+
+    /// Finish + drop a session's inbound stream without cancelling a
+    /// subscription task (used on the unary `.ok` / `.failure` subscribe paths,
+    /// which have no task to cancel).
+    private func finishInbound(_ id: UInt64) {
+        let inbound = lock.withLock {
+            let i = sessionInbound[id]
+            sessionInbound.removeValue(forKey: id)
+            return i
+        }
+        inbound?.finish()
     }
 }

@@ -95,6 +95,60 @@ public final class CommandRegistry: @unchecked Sendable {
         }
     }
 
+    /// Register a typed **duplex session** handler. Opened by JS via
+    /// `__SWIFT_PWA__.session(name, openArgs, handlers)` (a `subscribe` under
+    /// the hood): `openArgs` decodes into `Args`, client `push` frames arrive
+    /// as a typed `BridgeInbound<Frame>`, and each yield from the returned
+    /// stream becomes a downstream `event` frame (completion → `end`).
+    ///
+    /// The inbound stream is live for the session's lifetime and finishes when
+    /// the client closes (`unsubscribe`), the returned stream completes, or the
+    /// window tears down — so a `for await frame in inbound` loop terminates
+    /// cleanly on any of those.
+    public func registerSession<
+        Args: Decodable & Sendable,
+        Frame: Decodable & Sendable,
+        Chunk: Encodable & Sendable
+    >(
+        _ name: String,
+        typed body: @escaping @Sendable (Args, BridgeInbound<Frame>, CommandContext)
+            -> AsyncThrowingStream<Chunk, any Error>
+    ) {
+        register(name) { context in
+            let args: Args
+            do {
+                args = try context.invocation.decode(Args.self)
+            } catch {
+                return .failure(BridgeError(
+                    code: BridgeError.decode,
+                    message: "failed to decode open args for \(name): \(error)"
+                ))
+            }
+            // A session opened via `subscribe` always carries an inbound stream
+            // (BridgeRuntime creates it before dispatch). If the command is
+            // reached some other way (e.g. `invoke`), fall back to an empty,
+            // already-finished inbound so the handler's loop just exits.
+            let rawInbound = context.sessionInbound ?? AsyncStream { $0.finish() }
+            let inbound = BridgeInbound<Frame>(rawInbound, command: name)
+            let upstream = body(args, inbound, context)
+            let translated = AsyncThrowingStream<Data, any Error> { continuation in
+                let task = Task {
+                    do {
+                        for try await chunk in upstream {
+                            let data = try JSONEncoder().encode(chunk)
+                            continuation.yield(data)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+            return .stream(translated)
+        }
+    }
+
     public func unregister(_ name: String) {
         lock.lock()
         defer { lock.unlock() }

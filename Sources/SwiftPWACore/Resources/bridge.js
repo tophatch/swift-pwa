@@ -3,11 +3,14 @@
 // Exposes globalThis.__SWIFT_PWA__ with:
 //   .invoke(cmd, args)             -> Promise<result>
 //   .subscribe(cmd, args, onChunk) -> () => void  (unsubscribe)
+//   .session(cmd, openArgs, {onChunk,onError,onEnd})
+//                                  -> { push(frame), close() }  (duplex session)
 //   .on(channel, cb)               -> () => void  (server-push subscribe)
 //   .emit(channel, payload)        -> Promise<void>  (publish to a channel)
 //
 // Wire envelope (matches Sources/SwiftPWACore/Bridge/Invocation.swift):
 //   in : {v:1, kind:"invoke"|"subscribe"|"unsubscribe", id, cmd?, payload?}
+//      | {v:1, kind:"push", id, payload}   (client frame into an open session)
 //   out: {v:1, kind:"reply", id, ok?, err?}
 //      | {v:1, kind:"event", id, chunk}
 //      | {v:1, kind:"end",   id}
@@ -119,6 +122,39 @@
         };
     }
 
+    // Duplex session: open a `subscribe`, then push client frames *into* it
+    // while receiving downstream events on the same correlated channel. The
+    // server side is a `registerSession` command. Returns { push, close }:
+    //   push(frame)  posts a `push` frame into the open session (fire-and-forget;
+    //                a no-op once the session has ended or been closed).
+    //   close()      ends the session (posts `unsubscribe`).
+    function session(cmd, openArgs, handlers) {
+        handlers = handlers || {};
+        const id = nextId++;
+        subscribes.set(id, {
+            onChunk: handlers.onChunk || (() => {}),
+            onError: handlers.onError || ((e) => console.error("swift-pwa session error:", e)),
+            onEnd: handlers.onEnd || (() => {}),
+        });
+        try {
+            post({ v: VERSION, kind: "subscribe", id, cmd, payload: openArgs === undefined ? null : openArgs });
+        } catch (e) {
+            subscribes.delete(id);
+            throw e;
+        }
+        return {
+            push(frame) {
+                if (!subscribes.has(id)) return;   // ended or closed
+                post({ v: VERSION, kind: "push", id, payload: frame === undefined ? null : frame });
+            },
+            close() {
+                if (!subscribes.has(id)) return;
+                subscribes.delete(id);
+                try { post({ v: VERSION, kind: "unsubscribe", id }); } catch (_) {}
+            },
+        };
+    }
+
     // Server-push sugar over the `events.*` command set (EventsPlugin).
     //
     //   on(channel, cb)      -> () => void  (off)   subscribe to a channel;
@@ -165,6 +201,7 @@
         value: Object.freeze({
             invoke,
             subscribe,
+            session,
             on,
             emit,
             __deliver: deliver,    // called by the native side via evaluateJavaScript (WK / WebKitGTK)

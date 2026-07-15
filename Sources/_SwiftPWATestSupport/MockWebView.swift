@@ -56,6 +56,13 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         send(.subscribe(id: id, command: command, payload: data))
     }
 
+    /// Convenience: build and send a `push` frame (a client frame into an open
+    /// duplex session) from a typed payload.
+    public func sendPush(id: UInt64, payload: some Encodable) throws {
+        let data = try JSONEncoder().encode(payload)
+        send(.push(id: id, payload: data))
+    }
+
     public func endInbound() { inboundContinuation?.finish() }
 
     // MARK: - PWAWebView

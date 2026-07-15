@@ -36,6 +36,24 @@ struct EnvelopeTests {
         #expect(unsub == .unsubscribe(id: 3))
     }
 
+    @Test("push frame decodes with payload and no cmd")
+    func decodePush() throws {
+        let push = try Envelope
+            .decode(Data(#"{"v":1,"kind":"push","id":7,"payload":{"pcm":[1,2,3]}}"#.utf8))
+        guard case let .push(id, payload) = push else {
+            Issue.record("expected .push"); return
+        }
+        #expect(id == 7)
+        let obj = try JSONSerialization.jsonObject(with: payload) as? [String: Any]
+        #expect((obj?["pcm"] as? [Int]) == [1, 2, 3])
+    }
+
+    @Test("push frame supports null payload")
+    func decodePushNull() throws {
+        let push = try Envelope.decode(Data(#"{"v":1,"kind":"push","id":8}"#.utf8))
+        #expect(push == .push(id: 8, payload: Data("null".utf8)))
+    }
+
     @Test("rejects unsupported version")
     func badVersion() {
         #expect(throws: EnvelopeError.unsupportedVersion(2)) {

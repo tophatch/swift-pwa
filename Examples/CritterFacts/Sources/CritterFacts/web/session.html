@@ -1,0 +1,124 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Live session · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --card: #171c24; --ink: #e9eef5; --muted: #8b97a7;
+            --accent: #5fd0a0; --accent-ink: #06231a; --line: #232a35;
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
+        body {
+            background: radial-gradient(120% 120% at 50% 0%, #1a212c 0%, var(--bg) 60%);
+            color: var(--ink);
+            font: 16px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column; align-items: center;
+            padding: 32px 20px; gap: 22px; min-height: 100%;
+        }
+        header { text-align: center; }
+        h1 { margin: 0 0 4px; font-size: 24px; letter-spacing: -0.01em; }
+        header p { margin: 0; color: var(--muted); font-size: 14px; max-width: 46ch; }
+        .stage {
+            width: 100%; max-width: 540px; background: var(--card);
+            border: 1px solid var(--line); border-radius: 18px; padding: 28px;
+            display: flex; flex-direction: column; align-items: center; gap: 18px;
+            box-shadow: 0 12px 40px rgba(0,0,0,0.35);
+        }
+        .total { font-size: 64px; font-weight: 800; color: var(--accent); line-height: 1; }
+        .count { color: var(--muted); font-size: 14px; min-height: 20px; }
+        .row { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+        button {
+            appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 700;
+            background: var(--accent); color: var(--accent-ink);
+            padding: 12px 18px; border-radius: 12px; transition: transform .06s ease, opacity .2s;
+        }
+        button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.4; cursor: not-allowed; }
+        .log {
+            width: 100%; max-width: 540px; background: var(--card); border: 1px solid var(--line);
+            border-radius: 12px; padding: 12px 14px; font: 13px/1.6 ui-monospace, Menlo, monospace;
+            color: var(--muted); max-height: 180px; overflow-y: auto; white-space: pre-wrap;
+        }
+        a.back { color: var(--muted); text-decoration: none; font-size: 14px; }
+        a.back:hover { color: var(--accent); }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>🔁 Live duplex session</h1>
+        <p>
+            One open session, two-way. Each <code>+N</code> pushes a frame <em>into</em> the
+            running subscription; the Swift handler keeps the per-session total and streams
+            it back. A plain <code>subscribe</code> can't do this — the client can only listen.
+        </p>
+    </header>
+
+    <main class="stage">
+        <div id="total" class="total">0</div>
+        <div id="count" class="count">Open a session to begin.</div>
+        <div class="row">
+            <button id="open">Open session</button>
+            <button id="add1" class="ghost" disabled>+1</button>
+            <button id="add5" class="ghost" disabled>+5</button>
+            <button id="add10" class="ghost" disabled>+10</button>
+            <button id="close" class="ghost" disabled>Close</button>
+        </div>
+    </main>
+
+    <div id="log" class="log">ready.</div>
+    <a class="back" href="index.html">← back</a>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const logEl = $("log");
+        function log(msg) {
+            logEl.textContent += "\n" + msg;
+            logEl.scrollTop = logEl.scrollHeight;
+        }
+        function setAdders(enabled) {
+            for (const id of ["add1", "add5", "add10", "close"]) $(id).disabled = !enabled;
+            $("open").disabled = enabled;
+        }
+
+        let session = null;
+
+        $("open").onclick = () => {
+            $("total").textContent = "0";
+            $("count").textContent = "session open — push some numbers";
+            log("→ open session demo.runningTotal");
+            session = __SWIFT_PWA__.session("demo.runningTotal", {}, {
+                onChunk: (e) => {
+                    $("total").textContent = e.total;
+                    $("count").textContent = e.count + " frame" + (e.count === 1 ? "" : "s") + " pushed";
+                    log("← total=" + e.total + " (count=" + e.count + ")");
+                },
+                onError: (err) => log("✗ error: " + (err && err.message || err)),
+                onEnd: () => log("• session ended"),
+            });
+            setAdders(true);
+        };
+
+        function pushAdd(n) {
+            if (!session) return;
+            log("→ push { add: " + n + " }");
+            session.push({ add: n });
+        }
+        $("add1").onclick = () => pushAdd(1);
+        $("add5").onclick = () => pushAdd(5);
+        $("add10").onclick = () => pushAdd(10);
+
+        $("close").onclick = () => {
+            if (!session) return;
+            log("→ close()");
+            session.close();
+            session = null;
+            setAdders(false);
+            $("count").textContent = "session closed.";
+        };
+    </script>
+</body>
+</html>

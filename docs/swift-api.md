@@ -58,6 +58,45 @@ try runtime.run { ctx in
 runtime serializes them through `JSONEncoder` / `JSONDecoder`, so any
 JSON-compatible shape works.
 
+### Duplex sessions
+
+`registerStream` is server → client only. `registerSession` is the two-way
+form: the JS side opens it with `__SWIFT_PWA__.session(name, openArgs, handlers)`
+and pushes client frames into it (`sess.push(frame)`) while the handler streams
+downstream events. The handler receives the decoded open args, a typed
+`BridgeInbound<Frame>` of the pushed client frames, and returns its downstream
+stream:
+
+```swift
+struct EvalConfig: Codable, Sendable { let lang: String }
+struct AudioChunk: Codable, Sendable { let pcm: [Float] }
+enum EvalEvent: Codable, Sendable { case partial(String), final(String) }
+
+ctx.registry.registerSession(
+    "speech.evaluate",
+    typed: { (open: EvalConfig, inbound: BridgeInbound<AudioChunk>, _)
+        -> AsyncThrowingStream<EvalEvent, any Error> in
+        AsyncThrowingStream { continuation in
+            let task = Task {
+                for await chunk in inbound {                 // client → server
+                    continuation.yield(.partial(feed(chunk, open.lang)))
+                }
+                continuation.yield(.final(finish()))         // server → client
+                continuation.finish()
+            }
+            continuation.onTermination = { _ in task.cancel() }
+        }
+    }
+)
+```
+
+The `inbound` loop finishes when the client closes the session, the returned
+stream completes, or the window tears down — so `for await` exits cleanly on any
+of those. Client pushes are buffered with a bounded drop-oldest policy (the JS
+`postMessage` can't be back-pressured); a malformed push (one that doesn't
+decode to `Frame`) is skipped and logged rather than ending the session. The JS
+side and its trade-offs are in [docs/javascript-api.md](javascript-api.md#duplex-sessions-session).
+
 ## Built-in plugins
 
 `WindowPlugin`, `AppPlugin` (`app.quit` / `app.name` / `app.version`),

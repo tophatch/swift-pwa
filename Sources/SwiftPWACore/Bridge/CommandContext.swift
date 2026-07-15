@@ -14,13 +14,23 @@ public struct CommandContext: Sendable {
     public let originWindow: WindowID?
     public let appContext: any AppContext
 
+    /// For a duplex-session command (`registerSession`), the stream of raw
+    /// client frame payloads pushed into this open session via `push`. `nil`
+    /// for ordinary `invoke` / `subscribe` dispatch. Threaded in by
+    /// `BridgeRuntime`, which owns the continuation and routes `push` frames
+    /// to it; `registerSession`'s typed wrapper decodes it into a
+    /// `BridgeInbound<Frame>`.
+    public let sessionInbound: AsyncStream<Data>?
+
     public init(
         invocation: Invocation,
         originWindow: WindowID?,
-        appContext: any AppContext
+        appContext: any AppContext,
+        sessionInbound: AsyncStream<Data>? = nil
     ) {
         self.invocation = invocation
         self.originWindow = originWindow
         self.appContext = appContext
+        self.sessionInbound = sessionInbound
     }
 }

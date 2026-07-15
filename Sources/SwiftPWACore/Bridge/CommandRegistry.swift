@@ -19,6 +19,10 @@ public final class CommandRegistry: @unchecked Sendable {
     /// Per-command inbound-buffer bound for `registerSession` commands, read by
     /// `BridgeRuntime` at subscribe time to size the session's inbound stream.
     private var sessionBounds: [String: Int] = [:]
+    /// Typed shape of each command registered through a `typed:` variant, for
+    /// the codegen layer (roadmap #6). Raw `register(_:_:)` registrations have
+    /// no type/kind info and so get no descriptor (they still appear in `names()`).
+    private var descriptorsByName: [String: CommandDescriptor] = [:]
 
     public init() {}
 
@@ -26,6 +30,24 @@ public final class CommandRegistry: @unchecked Sendable {
     /// command, or `nil` if `name` isn't a `registerSession` command.
     public func sessionBufferBound(for name: String) -> Int? {
         lock.withLock { sessionBounds[name] }
+    }
+
+    /// Typed descriptors for every command registered via a `typed:` variant,
+    /// sorted by name — the input to typed client codegen. Commands registered
+    /// with the raw `register(_:_:)` handler (no static type/kind info) are
+    /// absent here but still present in `names()`.
+    public func descriptors() -> [CommandDescriptor] {
+        lock.withLock { Array(descriptorsByName.values) }.sorted { $0.name < $1.name }
+    }
+
+    /// The structural schema for a type: its `BridgeType.bridgeSchema` if it
+    /// conforms, else `.unknown`.
+    static func bridgeSchema(for type: Any.Type) -> BridgeSchema {
+        (type as? any BridgeType.Type)?.bridgeSchema ?? .unknown
+    }
+
+    private func record(_ descriptor: CommandDescriptor) {
+        lock.withLock { descriptorsByName[descriptor.name] = descriptor }
     }
 
     // MARK: - Registration
@@ -39,10 +61,16 @@ public final class CommandRegistry: @unchecked Sendable {
 
     /// Register a typed unary handler. JSON decode/encode is handled for you.
     /// Errors thrown by `body` become `BridgeError(code: .handler, ...)`.
-    public func register<Args: Decodable & Sendable>(
+    public func register<Args: Decodable & Sendable, Result: Encodable & Sendable>(
         _ name: String,
-        typed body: @escaping @Sendable (Args, CommandContext) async throws -> some Encodable & Sendable
+        typed body: @escaping @Sendable (Args, CommandContext) async throws -> Result
     ) {
+        record(CommandDescriptor(
+            name: name,
+            kind: .unary,
+            args: Self.bridgeSchema(for: Args.self),
+            result: Self.bridgeSchema(for: Result.self)
+        ))
         register(name) { context in
             let args: Args
             do {
@@ -75,6 +103,12 @@ public final class CommandRegistry: @unchecked Sendable {
         _ name: String,
         typed body: @escaping @Sendable (Args, CommandContext) -> AsyncThrowingStream<Chunk, any Error>
     ) {
+        record(CommandDescriptor(
+            name: name,
+            kind: .stream,
+            args: Self.bridgeSchema(for: Args.self),
+            result: Self.bridgeSchema(for: Chunk.self)
+        ))
         register(name) { context in
             let args: Args
             do {
@@ -131,6 +165,13 @@ public final class CommandRegistry: @unchecked Sendable {
         // Record the per-command buffer bound so `BridgeRuntime` can size the
         // inbound stream at subscribe time (before this handler closure runs).
         lock.withLock { sessionBounds[name] = max(1, maxBufferedFrames) }
+        record(CommandDescriptor(
+            name: name,
+            kind: .session,
+            args: Self.bridgeSchema(for: Args.self),
+            result: Self.bridgeSchema(for: Chunk.self),
+            inbound: Self.bridgeSchema(for: Frame.self)
+        ))
         register(name) { context in
             let args: Args
             do {
@@ -174,6 +215,7 @@ public final class CommandRegistry: @unchecked Sendable {
         defer { lock.unlock() }
         handlers.removeValue(forKey: name)
         sessionBounds.removeValue(forKey: name)
+        descriptorsByName.removeValue(forKey: name)
     }
 
     public func has(_ name: String) -> Bool {

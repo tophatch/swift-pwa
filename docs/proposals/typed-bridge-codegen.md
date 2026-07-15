@@ -1,13 +1,22 @@
 # Proposal: typed JS↔Swift codegen layer
 
-> **Status: proposed.** Roadmap item #6. Generate typed client bindings (TS +
-> Swift) for `invoke` / `subscribe` / `session` from the registered command set,
-> replacing the stringly-typed envelope at the call site.
+> **Status: Phase 1 shipped** (the registration-time catalog). Roadmap item #6.
+> Generate typed client bindings (TS + Swift) for `invoke` / `subscribe` /
+> `session` from the registered command set, replacing the stringly-typed
+> envelope at the call site.
+>
+> **Shipped so far (Phase 1):** `BridgeSchema` + the `BridgeType` protocol
+> (protocol-first, macro deferred to 1b), `CommandRegistry` records a
+> `CommandDescriptor { name, kind, args, result, inbound? }` per `typed:`
+> registration (`.descriptors()`), and the built-in `__bridge.describe` command
+> exposes the catalog. Non-conforming types degrade to `.unknown`. **Remaining:**
+> the `@BridgeType` macro (1b), the `SWIFT_PWA_DESCRIBE` headless dump, the
+> `swift-pwa codegen` CLI (TS generator), and `--check` drift guard.
 >
 > **Precursor #5 has shipped** ([bidirectional-bridge-sessions.md](bidirectional-bridge-sessions.md)):
-> the codegen must model **three** call shapes — unary, server-stream, and the
-> now-shipped duplex `session` (`registerSession` / `BridgeInbound<Frame>`). The
-> descriptor `kind` enum below covers all three.
+> the codegen models **three** call shapes — unary, server-stream, and the duplex
+> `session` (`registerSession` / `BridgeInbound<Frame>`). The descriptor `kind`
+> enum covers all three.
 
 ## The problem
 

@@ -32,7 +32,8 @@ public struct SwiftPWACLIRoot: AsyncParsableCommand {
         abstract: "Build, run, and bundle Swift-native PWA apps.",
         version: SwiftPWAVersion.current,
         subcommands: [
-            Init.self, Dev.self, Build.self, Updater.self, GenerateCI.self, Doctor.self, SelfUpdate.self
+            Init.self, Dev.self, Build.self, Updater.self, GenerateCI.self, Codegen.self, Doctor.self,
+            SelfUpdate.self
         ],
         defaultSubcommand: nil
     )

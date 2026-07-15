@@ -1,17 +1,26 @@
 # Proposal: typed JS↔Swift codegen layer
 
-> **Status: Phase 1 shipped** (the registration-time catalog). Roadmap item #6.
-> Generate typed client bindings (TS + Swift) for `invoke` / `subscribe` /
-> `session` from the registered command set, replacing the stringly-typed
-> envelope at the call site.
+> **Status: Phases 1–2 shipped.** Roadmap item #6. Generate typed client
+> bindings (TS + Swift) for `invoke` / `subscribe` / `session` from the
+> registered command set, replacing the stringly-typed envelope at the call site.
 >
-> **Shipped so far (Phase 1):** `BridgeSchema` + the `BridgeType` protocol
+> **Shipped (Phase 1 — catalog):** `BridgeSchema` + the `BridgeType` protocol
 > (protocol-first, macro deferred to 1b), `CommandRegistry` records a
 > `CommandDescriptor { name, kind, args, result, inbound? }` per `typed:`
 > registration (`.descriptors()`), and the built-in `__bridge.describe` command
-> exposes the catalog. Non-conforming types degrade to `.unknown`. **Remaining:**
-> the `@BridgeType` macro (1b), the `SWIFT_PWA_DESCRIBE` headless dump, the
-> `swift-pwa codegen` CLI (TS generator), and `--check` drift guard.
+> exposes the catalog. Non-conforming types degrade to `.unknown`.
+>
+> **Shipped (Phase 2 — generator + CLI):** `TypeScriptClientGenerator`
+> (descriptors → a typed `bridge.ts` over `__SWIFT_PWA__`, all three call shapes,
+> dotted names → namespaces, named `interface`/`type` decls) and the
+> **`swift-pwa codegen`** CLI (reads a catalog JSON, writes the client; `--check`
+> drift guard). Pure generator (no I/O), unit-tested.
+>
+> **Remaining:** the `@BridgeType` macro (1b, so real types get schemas without
+> hand-writing them — today most degrade to `.unknown`); the `SWIFT_PWA_DESCRIBE`
+> headless dump so `codegen` reads the catalog straight from the built app
+> (today: capture `__bridge.describe` output to a file); a Swift client; a
+> `CritterFacts` demo.
 >
 > **Precursor #5 has shipped** ([bidirectional-bridge-sessions.md](bidirectional-bridge-sessions.md)):
 > the codegen models **three** call shapes — unary, server-stream, and the duplex

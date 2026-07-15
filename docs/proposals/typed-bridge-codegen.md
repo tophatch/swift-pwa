@@ -4,11 +4,18 @@
 > bindings (TS + Swift) for `invoke` / `subscribe` / `session` from the
 > registered command set, replacing the stringly-typed envelope at the call site.
 >
-> **Shipped (Phase 1 — catalog):** `BridgeSchema` + the `BridgeType` protocol
-> (protocol-first, macro deferred to 1b), `CommandRegistry` records a
+> **Shipped (Phase 1 — catalog):** `BridgeSchema`, `CommandRegistry` records a
 > `CommandDescriptor { name, kind, args, result, inbound? }` per `typed:`
 > registration (`.descriptors()`), and the built-in `__bridge.describe` command
-> exposes the catalog. Non-conforming types degrade to `.unknown`.
+> exposes the catalog.
+>
+> **Shipped (Phase 1b — auto-derivation, *without* a macro):** schemas are
+> derived by a **reflecting `Codable` probe** (`SchemaReflection`) rather than
+> the `@BridgeType` macro this proposal originally recommended — see "Macro vs.
+> probe" below. Plain command structs get a full schema with **zero
+> annotation**; derivation is lazy (catalog-time only) and degrades unhandled
+> types (enums, custom `init(from:)`, cycles) to `.unknown`, recoverable with an
+> explicit `BridgeType` conformance.
 >
 > **Shipped (Phase 2 — generator + CLI):** `TypeScriptClientGenerator`
 > (descriptors → a typed `bridge.ts` over `__SWIFT_PWA__`, all three call shapes,
@@ -16,11 +23,9 @@
 > **`swift-pwa codegen`** CLI (reads a catalog JSON, writes the client; `--check`
 > drift guard). Pure generator (no I/O), unit-tested.
 >
-> **Remaining:** the `@BridgeType` macro (1b, so real types get schemas without
-> hand-writing them — today most degrade to `.unknown`); the `SWIFT_PWA_DESCRIBE`
-> headless dump so `codegen` reads the catalog straight from the built app
-> (today: capture `__bridge.describe` output to a file); a Swift client; a
-> `CritterFacts` demo.
+> **Remaining:** the `SWIFT_PWA_DESCRIBE` headless dump so `codegen` reads the
+> catalog straight from the built app (today: capture `__bridge.describe` output
+> to a file); a Swift client; a `CritterFacts` demo.
 >
 > **Precursor #5 has shipped** ([bidirectional-bridge-sessions.md](bidirectional-bridge-sessions.md)):
 > the codegen models **three** call shapes — unary, server-stream, and the duplex
@@ -189,11 +194,25 @@ JS/TS call sites now fail the build, not the user's session.
 
 ## Open questions
 
-1. **Macro vs. protocol-only.** Could ship `BridgeType` as a
-   conform-and-hand-write-`bridgeSchema` protocol *without* the macro first,
-   proving the pipeline, then add the macro as ergonomics. Leaning:
-   protocol-first in Phase 1, macro in Phase 1b — de-risks the generator before
-   taking on macro maintenance.
+1. **Macro vs. probe — RESOLVED: reflecting probe, no macro.** The design above
+   recommends a `@BridgeType` macro to synthesize schemas. Shipped instead: a
+   reflecting `Codable` **probe** (`SchemaReflection`) that derives the schema by
+   decoding a throwaway instance through a recording `Decoder`, capturing the
+   keys/types the synthesized `init(from:)` asks for. Why the probe won:
+   - **No build tax.** A macro drags **swift-syntax into the core build graph** —
+     every contributor and every app that links `SwiftPWACore` pays a multi-minute
+     cold-build cost, forever, for a codegen convenience. The probe is pure
+     Foundation, zero new dependencies.
+   - **Zero annotation.** The probe types *existing* command structs as-is; a
+     macro would require adding `@BridgeType` to each. (`BridgeType` survives as a
+     manual override for what the probe can't do.)
+   - **Safe by construction.** Derivation is lazy (catalog-time only) and any
+     failure degrades to `.unknown`, so it never touches normal dispatch/startup.
+
+   Probe limitations (enums, custom `init(from:)`, cycles → `.unknown`) are the
+   documented case for a `BridgeType` override. A macro could still be added later
+   purely for those cases without re-taxing the core graph (it'd be opt-in), but
+   there's no pressing need.
 2. **Headless dump vs. a pure static extractor.** The `SWIFT_PWA_DESCRIBE` boot
    captures dynamic names but requires the app to build+run. Is that acceptable
    for a codegen step (it runs the `configure` closure, which may have side

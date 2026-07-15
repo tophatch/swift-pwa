@@ -66,15 +66,38 @@ struct BridgeCatalogTests {
         #expect(session?.result == Point2D.bridgeSchema)
     }
 
-    @Test("a non-BridgeType arg/result degrades to .unknown")
-    func unknownForNonConforming() {
-        struct Opaque: Codable, Sendable { let v: Int }
+    @Test("a plain Codable struct (no BridgeType) is probed to a real object schema")
+    func probesPlainStruct() {
+        struct Plain: Codable, Sendable {
+            let v: Int
+            let name: String
+            let tags: [String]
+            let note: String?
+        }
         let registry = CommandRegistry()
-        registry.register("x.opaque", typed: { (_: Opaque, _) -> Opaque in Opaque(v: 1) })
+        registry.register("x.plain", typed: { (_: Plain, _) -> Plain in
+            Plain(v: 1, name: "", tags: [], note: nil)
+        })
 
-        let d = registry.descriptors().first { $0.name == "x.opaque" }
-        #expect(d?.args == .unknown)
-        #expect(d?.result == .unknown)
+        let d = registry.descriptors().first { $0.name == "x.plain" }
+        #expect(d?.args == .object(name: "Plain", fields: [
+            .init(name: "v", schema: .int),
+            .init(name: "name", schema: .string),
+            .init(name: "tags", schema: .array(.string)),
+            .init(name: "note", schema: .optional(.string))
+        ]))
+    }
+
+    @Test("an un-probeable type (bare enum) degrades to .unknown")
+    func unknownForUnprobeable() {
+        enum Mode: String, Codable, Sendable { case a, b }
+        struct HasEnum: Codable, Sendable { let mode: Mode }
+        let registry = CommandRegistry()
+        registry.register("x.enum", typed: { (_: HasEnum, _) -> HasEnum in HasEnum(mode: .a) })
+
+        // The probe can't construct a valid enum dummy, so the whole struct
+        // degrades — recover it with an explicit BridgeType conformance.
+        #expect(registry.descriptors().first { $0.name == "x.enum" }?.args == .unknown)
     }
 
     @Test("raw register has no descriptor but still appears in names()")
@@ -106,6 +129,23 @@ struct BridgeCatalogTests {
         let data = try JSONEncoder().encode(d)
         let back = try JSONDecoder().decode(CommandDescriptor.self, from: data)
         #expect(back == d)
+    }
+
+    @Test("real built-in command types are typed by the probe (no annotation)")
+    @MainActor
+    func realPluginTypesAreProbed() {
+        let app = MockAppContext()
+        app.use(WindowPlugin())
+
+        let setSize = app.registry.descriptors().first { $0.name == "window.setSize" }
+        // SetSizeArgs { id: String?, width: Double, height: Double, animated: Bool? }
+        // — a plain Codable struct, typed with zero BridgeType conformance.
+        #expect(setSize?.args == .object(name: "SetSizeArgs", fields: [
+            .init(name: "id", schema: .optional(.string)),
+            .init(name: "width", schema: .double),
+            .init(name: "height", schema: .double),
+            .init(name: "animated", schema: .optional(.bool))
+        ]))
     }
 
     @Test("__bridge.describe returns the catalog over the bridge")

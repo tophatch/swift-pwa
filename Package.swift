@@ -219,20 +219,20 @@ let package = Package(
             providers: [.apt(["libsecret-1-dev"])]
         ),
 
-        // libzstd, imported directly by the updater backends (its API is
-        // all plain C functions, so no wrapper shim is needed) to
-        // reconstruct a delta update from the installed base + a `zstd
-        // --patch-from` patch. No pkgConfig — the header resolves from the
-        // default include path (Linux libzstd-dev) / INCLUDE (Windows
-        // vendored), which keeps non-consumer hosts free of pkg-config
-        // probes; `link "zstd"` in the modulemap emits the link flag.
-        // Depended on only via the GTK backends' `.when(.linux)` edge (and,
-        // in a follow-up, the Windows backend), so it never resolves on a
-        // host that doesn't build a delta-capable backend.
-        .systemLibrary(
+        // Vendored single-file Zstandard *decoder* (Sources/CZstd/zstddeclib.c),
+        // imported by the updater backends to reconstruct a delta update from
+        // the installed artifact + a `zstd --patch-from` patch. Compiled from
+        // source (like CStbImage vendors stb), so there's NO system libzstd /
+        // vcpkg / prebuilt-DLL dependency on any platform — nothing to stage
+        // next to the app, nothing to provision in CI. Only the decoder is
+        // vendored; the publish-side CLI uses the full `zstd` binary. Depended
+        // on only via the backends' `.when(.linux)` / `.when(.windows)` edges,
+        // so its ~900 KB of C never compiles on a host that builds no
+        // delta-capable backend. Provenance: Sources/CZstd/README.md.
+        .target(
             name: "CZstd",
             path: "Sources/CZstd",
-            providers: [.apt(["libzstd-dev"])]
+            exclude: ["README.md"]
         ),
 
         .target(
@@ -434,7 +434,11 @@ let package = Package(
                 // GTK targets — Linux/Windows-conditional so the empty
                 // object on macOS hosts doesn't pull BoringSSL in.
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
-                .target(name: "CWebView2Shim", condition: .when(platforms: [.windows]))
+                .target(name: "CWebView2Shim", condition: .when(platforms: [.windows])),
+                // Vendored zstd decoder for delta-update reconstruction on the
+                // portable install path (compiled from source — no DLL to
+                // stage, no runtime dependency).
+                .target(name: "CZstd", condition: .when(platforms: [.windows]))
             ],
             swiftSettings: swiftSettings
         ),

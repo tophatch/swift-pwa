@@ -1,4 +1,4 @@
-#if os(Linux)
+#if os(Windows)
     import CZstd
     import Foundation
     import SwiftPWACore

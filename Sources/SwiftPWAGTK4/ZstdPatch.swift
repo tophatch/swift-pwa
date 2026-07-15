@@ -3,18 +3,21 @@
     import Foundation
     import SwiftPWACore
 
-    // NOTE: This file is duplicated verbatim in Sources/SwiftPWAGTK4/ for the
-    // same reason as LinuxAppImageUpdater.swift — the GTK3 and GTK4 backends
-    // are separate Swift targets. Keep the two copies in sync.
+    // NOTE: The body of this type is shared verbatim with the GTK4 copy
+    // (Sources/SwiftPWAGTK4/) and the Windows copy (Sources/SwiftPWAWindows/) —
+    // only the `#if os(...)` guard differs. The three backends are separate
+    // Swift targets, so the apply logic can't live in one file; keep all three
+    // copies in sync.
 
-    /// Reconstruct a delta (binary-patch) update artifact via the libzstd C
-    /// API. The runtime counterpart to the publish-side `swift-pwa updater
-    /// diff`/`patch` (which shells out to the `zstd` CLI): a shipped app
-    /// can't assume a `zstd` binary on `PATH`, so it links libzstd and calls
-    /// the API directly. The exact sequence (window-log-max → refPrefix →
-    /// decompressDCtx) is what reconstructs a `zstd --patch-from` frame; it
-    /// was validated byte-for-byte against real patch bytes before landing.
-    /// Design: docs/proposals/delta-updates.md.
+    /// Reconstruct a delta (binary-patch) update artifact via the vendored,
+    /// compiled-in Zstandard decoder (the `CZstd` C target — a single-file
+    /// decoder amalgamation, no system libzstd / DLL). The runtime counterpart
+    /// to the publish-side `swift-pwa updater diff`/`patch` (which shell out to
+    /// the `zstd` CLI): a shipped app can't assume a `zstd` binary on `PATH`,
+    /// so it calls the decoder API directly. The exact sequence (window-log-max
+    /// → refPrefix → decompressDCtx) is what reconstructs a `zstd --patch-from`
+    /// frame; it was validated byte-for-byte against real patch bytes before
+    /// landing. Design: docs/proposals/delta-updates.md.
     enum ZstdPatch {
         // Sentinel return values of ZSTD_getFrameContentSize (macros that
         // don't reliably import into Swift): UNKNOWN = (0ULL - 1),

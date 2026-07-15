@@ -1,6 +1,7 @@
 #if os(Linux)
     import Crypto
     import Foundation
+    import Glibc // kill(2) / SIGKILL for reliable HTTP-server teardown
     import SwiftPWACore
     @testable import SwiftPWAGTK
     import Testing
@@ -128,7 +129,14 @@
             }
 
             let server = try startHTTPServer(directory: serveDir, port: port)
-            defer { server.terminate() }
+            defer {
+                // SIGTERM (Process.terminate) does NOT reliably kill
+                // `python -m http.server` here — a plain terminate() leaves
+                // the server alive holding its port, which fails the next
+                // run. SIGKILL by pid, then reap so the port is freed.
+                kill(server.processIdentifier, SIGKILL)
+                server.waitUntilExit()
+            }
             try await waitForServer(port: port)
 
             let staging = root.appendingPathComponent("staging", isDirectory: true)

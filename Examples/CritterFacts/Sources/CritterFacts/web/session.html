@@ -65,8 +65,10 @@
             <button id="add1" class="ghost" disabled>+1</button>
             <button id="add5" class="ghost" disabled>+5</button>
             <button id="add10" class="ghost" disabled>+10</button>
+            <button id="flood" class="ghost" disabled>flood 300× +1</button>
             <button id="close" class="ghost" disabled>Close</button>
         </div>
+        <div id="dropped" class="count"></div>
     </main>
 
     <div id="log" class="log">ready.</div>
@@ -80,7 +82,7 @@
             logEl.scrollTop = logEl.scrollHeight;
         }
         function setAdders(enabled) {
-            for (const id of ["add1", "add5", "add10", "close"]) $(id).disabled = !enabled;
+            for (const id of ["add1", "add5", "add10", "flood", "close"]) $(id).disabled = !enabled;
             $("open").disabled = enabled;
         }
 
@@ -89,12 +91,17 @@
         $("open").onclick = () => {
             $("total").textContent = "0";
             $("count").textContent = "session open — push some numbers";
+            $("dropped").textContent = "";
             log("→ open session demo.runningTotal");
             session = __SWIFT_PWA__.session("demo.runningTotal", {}, {
                 onChunk: (e) => {
                     $("total").textContent = e.total;
-                    $("count").textContent = e.count + " frame" + (e.count === 1 ? "" : "s") + " pushed";
-                    log("← total=" + e.total + " (count=" + e.count + ")");
+                    $("count").textContent = e.count + " frame" + (e.count === 1 ? "" : "s") + " applied";
+                    $("dropped").textContent = e.dropped > 0
+                        ? "⚠️ " + e.dropped + " frame" + (e.dropped === 1 ? "" : "s") + " dropped (buffer overflow, drop-oldest)"
+                        : "";
+                    // Only log non-flood events to keep the log readable.
+                    if (e.count < 20 || e.count % 50 === 0) log("← total=" + e.total + " count=" + e.count + " dropped=" + e.dropped);
                 },
                 onError: (err) => log("✗ error: " + (err && err.message || err)),
                 onEnd: () => log("• session ended"),
@@ -110,6 +117,15 @@
         $("add1").onclick = () => pushAdd(1);
         $("add5").onclick = () => pushAdd(5);
         $("add10").onclick = () => pushAdd(10);
+
+        // Push 300 frames in a tight loop. The server buffer is bounded (32), so
+        // it overflows and drops the oldest — the total lands well under 300 and
+        // the dropped counter climbs. Shows the no-back-pressure trade-off.
+        $("flood").onclick = () => {
+            if (!session) return;
+            log("→ flood: 300× push { add: 1 }");
+            for (let i = 0; i < 300; i++) session.push({ add: 1 });
+        };
 
         $("close").onclick = () => {
             if (!session) return;

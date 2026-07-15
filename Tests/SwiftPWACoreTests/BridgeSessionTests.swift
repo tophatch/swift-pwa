@@ -129,4 +129,105 @@ struct BridgeSessionTests {
         try await Task.sleep(for: .milliseconds(50))
         #expect(echoEvents(webView, id: 999).isEmpty)
     }
+
+    @Test("registerSession records its per-command buffer bound")
+    func boundRecorded() {
+        let registry = CommandRegistry()
+        registry.registerSession("s.big", maxBufferedFrames: 512, typed: passthroughSession)
+        registry.registerSession("s.small", maxBufferedFrames: 8, typed: passthroughSession)
+        registry.registerSession("s.default", typed: passthroughSession)
+        registry.register("plain.cmd", typed: { (_: EmptyArgs, _) -> EmptyResult in EmptyResult() })
+
+        #expect(registry.sessionBufferBound(for: "s.big") == 512)
+        #expect(registry.sessionBufferBound(for: "s.small") == 8)
+        #expect(registry.sessionBufferBound(for: "s.default") == 256)
+        #expect(registry.sessionBufferBound(for: "plain.cmd") == nil)
+        #expect(registry.sessionBufferBound(for: "nope") == nil)
+    }
+
+    struct NumFrame: Codable { let n: Int }
+    struct DrainEvent: Codable, Equatable { let n: Int; let dropped: Int }
+
+    @Test("overflowing the bounded buffer drops oldest and counts drops")
+    func droppedCountReflectsOverflow() async throws {
+        let app = MockAppContext()
+        // Gate the handler so it doesn't drain until the flood is fully buffered,
+        // making the drop count deterministic (no consume/produce interleaving).
+        let gate = Gate()
+        app.registry.registerSession(
+            "test.bounded",
+            maxBufferedFrames: 4,
+            typed: { (_: EmptyArgs, inbound: BridgeInbound<NumFrame>, _)
+                -> AsyncThrowingStream<DrainEvent, any Error> in
+                AsyncThrowingStream { continuation in
+                    let task = Task {
+                        await gate.wait()
+                        for await frame in inbound {
+                            continuation.yield(DrainEvent(n: frame.n, dropped: inbound.droppedCount))
+                        }
+                        continuation.finish()
+                    }
+                    continuation.onTermination = { _ in task.cancel() }
+                }
+            }
+        )
+        let webView = MockWebView()
+        let win = MockWindow(webView: webView)
+        app.attach(win)
+        let bridge = BridgeRuntime(webView: webView, registry: app.registry, windowID: win.id, app: app)
+        bridge.start()
+        defer { withExtendedLifetime((app, win)) { bridge.stop() } }
+
+        try webView.sendSubscribe(id: 500, command: "test.bounded", payload: EmptyArgs())
+        try await waitForCondition { bridge.hasActiveSubscription(id: 500) }
+
+        // Flood 10 frames into a 4-deep buffer while the handler is gated: the
+        // newest 4 (n=6..9) survive, the oldest 6 (n=0..5) are dropped.
+        for n in 0 ..< 10 { try webView.sendPush(id: 500, payload: NumFrame(n: n)) }
+        // Let the serial pump route all 10 into the bounded buffer before the
+        // handler starts draining (10 trivial synchronous routes).
+        try await Task.sleep(for: .milliseconds(40))
+        await gate.open()
+
+        let events = { () -> [DrainEvent] in
+            webView.deliveredFrames.compactMap { frame -> DrainEvent? in
+                guard case let .event(eid, chunk) = frame, eid == 500 else { return nil }
+                return try? JSONDecoder().decode(DrainEvent.self, from: chunk)
+            }
+        }
+        try await waitForCondition { events().count >= 4 }
+        let drained = events()
+        #expect(drained.map(\.n) == [6, 7, 8, 9])
+        // Six frames were dropped before the handler drained a single one.
+        #expect(drained.allSatisfy { $0.dropped == 6 })
+    }
+}
+
+/// A trivial passthrough session (non-isolated) used only to exercise bound
+/// registration in `boundRecorded`.
+private func passthroughSession(
+    _: EmptyArgs, _ inbound: BridgeInbound<BridgeSessionTests.EchoFrame>, _: CommandContext
+) -> AsyncThrowingStream<BridgeSessionTests.EchoFrame, any Error> {
+    AsyncThrowingStream { continuation in
+        let task = Task { for await f in inbound { continuation.yield(f) }; continuation.finish() }
+        continuation.onTermination = { _ in task.cancel() }
+    }
+}
+
+/// A one-shot gate for deterministic session tests: the handler awaits `wait()`
+/// and the test flips it with `open()` once it has staged the state it wants.
+private actor Gate {
+    private var opened = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func open() {
+        opened = true
+        for w in waiters { w.resume() }
+        waiters.removeAll()
+    }
+
+    func wait() async {
+        if opened { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
 }

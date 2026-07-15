@@ -92,10 +92,29 @@ ctx.registry.registerSession(
 
 The `inbound` loop finishes when the client closes the session, the returned
 stream completes, or the window tears down — so `for await` exits cleanly on any
-of those. Client pushes are buffered with a bounded drop-oldest policy (the JS
-`postMessage` can't be back-pressured); a malformed push (one that doesn't
-decode to `Frame`) is skipped and logged rather than ending the session. The JS
-side and its trade-offs are in [docs/javascript-api.md](javascript-api.md#duplex-sessions-session).
+of those. A malformed push (one that doesn't decode to `Frame`) is skipped and
+logged rather than ending the session.
+
+Client pushes are buffered with a bounded drop-oldest policy (the JS
+`postMessage` can't be back-pressured). Size it per command with
+`registerSession(name, maxBufferedFrames: 256, typed:)` (default 256), and read
+`inbound.droppedCount` at any time to see how many frames were dropped because
+the buffer overflowed — e.g. to surface a "you're sending faster than I can
+process" signal, or to ack-gate:
+
+```swift
+for await chunk in inbound {
+    let dropped = inbound.droppedCount
+    if dropped > lastDropped {
+        continuation.yield(.warning(droppedSoFar: dropped))
+        lastDropped = dropped
+    }
+    // … process chunk …
+}
+```
+
+The JS side and its trade-offs are in
+[docs/javascript-api.md](javascript-api.md#duplex-sessions-session).
 
 ## Built-in plugins
 

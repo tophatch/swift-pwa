@@ -83,10 +83,11 @@ The Swift side of a session is a `registerSession` command (see
   the open, in send order.
 - **No back-pressure JS→Swift.** The native `postMessage` can't block, so pushes
   are buffered with a bounded, drop-oldest policy — a client that floods faster
-  than the handler drains loses the *oldest* buffered frames. If you can't
-  tolerate loss (e.g. a command channel), ack-gate in your own protocol: have
-  the handler yield a downstream event and wait for it before pushing the next
-  frame.
+  than the handler drains loses the *oldest* buffered frames. (The Swift side
+  sizes the buffer per command and can observe the drop count; see
+  [docs/swift-api.md](swift-api.md#duplex-sessions).) If you can't tolerate loss
+  (e.g. a command channel), ack-gate in your own protocol: have the handler
+  yield a downstream event and wait for it before pushing the next frame.
 - **Binary** (audio, images) rides in a frame as base64, same as every other
   binary on the bridge.
 - A malformed push (one that doesn't decode to the handler's frame type) is

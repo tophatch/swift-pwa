@@ -105,13 +105,15 @@ failure is skipped + logged, matching the typed-args contract). `postMessage`
 is fire-and-forget — JS can't be back-pressured — so the underlying stream is
 bounded `.bufferingNewest(n)` and **drops oldest on overflow**.
 
-**As shipped:** the bound is a fixed `BridgeRuntime` constant (256), not a
-per-registration `maxBufferedFrames:`, and drops are silent (no
-`inbound.droppedCount`). Both were deferred — the memory-safety bound is the
-essential part; a configurable bound and a surfaced drop counter earn their
-keep only when a real high-rate consumer needs them (see open question 1). The
-`AsyncStream.Continuation.YieldResult` `.dropped` case makes an accurate counter
-cheap to add later.
+**As shipped:** the bound is **per-registration** —
+`registerSession(name, maxBufferedFrames: 256, typed:)` — looked up by command
+name in `BridgeRuntime` at subscribe time (the handler closure that carries it
+doesn't run until dispatch, so the registry records it separately). Overflow
+drops are **counted**: `BridgeRuntime.routePush` inspects the
+`AsyncStream.Continuation.YieldResult` and bumps a per-session `DropCounter` on
+`.dropped`, surfaced to the handler as **`BridgeInbound.droppedCount`** (a live
+read, threaded through a `SessionInbound` value on `CommandContext`). Decode
+skips are *not* counted as drops — they're a separate malformed-frame signal.
 
 `CommandContext` gains an optional `sessionInbound: AsyncStream<Data>?` that
 `BridgeRuntime` threads in; the typed `registerSession` wraps/decodes it into
@@ -161,10 +163,11 @@ change to `invoke` / `subscribe` / `on` / `emit`.
 
 - **No true backpressure JS→Swift.** `postMessage` can't block, so a client that
   floods faster than the handler drains will hit the bounded buffer and drop
-  oldest (fixed 256-frame bound as shipped; drops are silent — see the Swift API
-  note above). Adopters that can't tolerate loss (a command channel) should
-  ack-gate in their own protocol (yield an `event` the client waits for before
-  pushing the next frame) — the primitive supports it, it isn't imposed.
+  oldest (per-registration `maxBufferedFrames`, default 256; drops counted in
+  `BridgeInbound.droppedCount`). Adopters that can't tolerate loss (a command
+  channel) should ack-gate in their own protocol (yield an `event` the client
+  waits for before pushing the next frame) — the primitive supports it, it
+  isn't imposed.
 - **Ordering** is preserved per session: `push` frames traverse the same single
   message channel as the open, and the pump is serial, so a handler sees pushes
   in send order (modulo drops).
@@ -207,9 +210,9 @@ change to `invoke` / `subscribe` / `on` / `emit`.
 1. **Push decode failures** → **silent-drop + log**, matching the typed-args
    contract; the session survives. A per-frame `replyError` strict mode is
    deferred until asked for.
-2. **`droppedCount` + a configurable `maxBufferedFrames`** → **deferred.** A
-   fixed 256-frame drop-oldest bound (the memory-safety essential) shipped;
-   surfacing an accurate drop counter (cheap via `YieldResult.dropped`) and a
-   per-registration bound wait for a real high-rate consumer.
+2. **`droppedCount` + a configurable `maxBufferedFrames`** → **shipped.**
+   `registerSession(maxBufferedFrames:)` (default 256) sets a per-command
+   drop-oldest bound; overflow drops are counted (`routePush` inspects
+   `YieldResult.dropped`) and surfaced as `BridgeInbound.droppedCount`.
 3. **An untyped raw `registerSession`** → **not shipped;** the typed surface is
    the only one. Add a raw variant if an adopter genuinely needs bytes.

@@ -14,23 +14,44 @@ public struct CommandContext: Sendable {
     public let originWindow: WindowID?
     public let appContext: any AppContext
 
-    /// For a duplex-session command (`registerSession`), the stream of raw
-    /// client frame payloads pushed into this open session via `push`. `nil`
-    /// for ordinary `invoke` / `subscribe` dispatch. Threaded in by
-    /// `BridgeRuntime`, which owns the continuation and routes `push` frames
-    /// to it; `registerSession`'s typed wrapper decodes it into a
+    /// For a duplex-session command (`registerSession`), the client→server
+    /// inbound side. `nil` for ordinary `invoke` / `subscribe` dispatch.
+    /// Threaded in by `BridgeRuntime`, which owns the continuation and routes
+    /// `push` frames to it; `registerSession`'s typed wrapper decodes it into a
     /// `BridgeInbound<Frame>`.
-    public let sessionInbound: AsyncStream<Data>?
+    public let sessionInbound: SessionInbound?
 
     public init(
         invocation: Invocation,
         originWindow: WindowID?,
         appContext: any AppContext,
-        sessionInbound: AsyncStream<Data>? = nil
+        sessionInbound: SessionInbound? = nil
     ) {
         self.invocation = invocation
         self.originWindow = originWindow
         self.appContext = appContext
         self.sessionInbound = sessionInbound
+    }
+}
+
+/// The client→server inbound side of an open duplex session, threaded onto
+/// `CommandContext` by `BridgeRuntime`. Carries the raw pushed-frame payloads
+/// plus a live accessor for how many were dropped because the bounded buffer
+/// overflowed (drop-oldest). Typed handlers consume this indirectly through
+/// `BridgeInbound<Frame>`; the raw `frames` are available for a bytes-level
+/// handler.
+public struct SessionInbound: Sendable {
+    /// Raw JSON payloads of client `push` frames, in send order.
+    public let frames: AsyncStream<Data>
+    private let dropCount: @Sendable () -> Int
+
+    /// Number of client frames dropped so far because the buffer was full.
+    public var droppedCount: Int {
+        dropCount()
+    }
+
+    public init(frames: AsyncStream<Data>, droppedCount: @escaping @Sendable () -> Int) {
+        self.frames = frames
+        dropCount = droppedCount
     }
 }

@@ -20,16 +20,24 @@ public final class BridgeRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private var pumpTask: Task<Void, Never>?
     private var subscriptions: [UInt64: Task<Void, Never>] = [:]
-    /// Inbound continuations for open duplex sessions (see `registerSession`).
-    /// One is created per `subscribe` (before dispatch, so a `push` that the
-    /// serial pump handles next always finds it); plain-stream handlers simply
-    /// never read theirs. `push` frames route here; teardown finishes it.
-    private var sessionInbound: [UInt64: AsyncStream<Data>.Continuation] = [:]
+    /// Inbound sinks for open duplex sessions (see `registerSession`). One is
+    /// created per `subscribe` (before dispatch, so a `push` that the serial
+    /// pump handles next always finds it); plain-stream handlers simply never
+    /// read theirs. `push` frames route here; teardown finishes it. Each sink
+    /// pairs the bounded continuation with a drop counter incremented when the
+    /// buffer overflows (drop-oldest), surfaced to the handler as
+    /// `BridgeInbound.droppedCount`.
+    private var sessionInbound: [UInt64: SessionSink] = [:]
 
-    /// Backstop bound on buffered client frames per session — drops oldest on
-    /// overflow so a flooding client can't grow memory unboundedly. Generous;
-    /// a genuine high-rate consumer should ack-gate in its own protocol.
-    private static let maxSessionInboundBuffer = 256
+    /// Default bound on buffered client frames per session when a
+    /// `registerSession` command doesn't specify one — drops oldest on overflow
+    /// so a flooding client can't grow memory unboundedly.
+    static let defaultSessionInboundBuffer = 256
+
+    private struct SessionSink {
+        let continuation: AsyncStream<Data>.Continuation
+        let drops: DropCounter
+    }
 
     public init(
         webView: any PWAWebView,
@@ -70,7 +78,7 @@ public final class BridgeRuntime: @unchecked Sendable {
         }
         oldPump?.cancel()
         for (_, task) in oldSubs { task.cancel() }
-        for (_, cont) in oldInbound { cont.finish() }
+        for (_, sink) in oldInbound { sink.continuation.finish() }
     }
 
     /// Test hook: returns whether a streaming subscription is currently
@@ -85,7 +93,7 @@ public final class BridgeRuntime: @unchecked Sendable {
         }
         oldPump?.cancel()
         for (_, task) in oldSubs { task.cancel() }
-        for (_, cont) in oldInbound { cont.finish() }
+        for (_, sink) in oldInbound { sink.continuation.finish() }
     }
 
     // MARK: - private
@@ -105,10 +113,13 @@ public final class BridgeRuntime: @unchecked Sendable {
 
     /// Route a client-pushed frame into its open session's inbound stream.
     /// A `push` for an unknown id (session already closed, or the target was
-    /// a plain non-session stream that finished) is silently dropped.
+    /// a plain non-session stream that finished) is silently dropped. If the
+    /// bounded buffer is full, the oldest frame is dropped and the session's
+    /// drop counter is bumped (surfaced as `BridgeInbound.droppedCount`).
     private func routePush(id: UInt64, payload: Data) {
-        let cont = lock.withLock { sessionInbound[id] }
-        cont?.yield(payload)
+        let sink = lock.withLock { sessionInbound[id] }
+        guard let sink else { return }
+        if case .dropped = sink.continuation.yield(payload) { sink.drops.increment() }
     }
 
     private func dispatchInvoke(id: UInt64, command: String, payload: Data) async {
@@ -127,17 +138,21 @@ public final class BridgeRuntime: @unchecked Sendable {
         // store it synchronously, so a `push` frame the serial pump handles next
         // always finds a live sink (see `sessionInbound`). Plain-stream handlers
         // just never read `context.sessionInbound`; the continuation is finished
-        // on completion/teardown either way.
+        // on completion/teardown either way. The bound is per-command
+        // (`registerSession(maxBufferedFrames:)`), looked up by name here since
+        // the handler closure that carries it doesn't run until dispatch.
+        let bound = registry.sessionBufferBound(for: command) ?? Self.defaultSessionInboundBuffer
         let (inbound, inboundContinuation) = AsyncStream<Data>.makeStream(
-            bufferingPolicy: .bufferingNewest(Self.maxSessionInboundBuffer)
+            bufferingPolicy: .bufferingNewest(bound)
         )
-        lock.withLock { sessionInbound[id] = inboundContinuation }
+        let drops = DropCounter()
+        lock.withLock { sessionInbound[id] = SessionSink(continuation: inboundContinuation, drops: drops) }
 
         let context = CommandContext(
             invocation: inv,
             originWindow: windowID,
             appContext: app,
-            sessionInbound: inbound
+            sessionInbound: SessionInbound(frames: inbound, droppedCount: { drops.value })
         )
         let result = await registry.dispatch(context)
         switch result {
@@ -194,26 +209,38 @@ public final class BridgeRuntime: @unchecked Sendable {
     }
 
     private func removeSubscription(_ id: UInt64) {
-        let (task, inbound) = lock.withLock {
+        let (task, sink) = lock.withLock {
             let t = subscriptions[id]
             subscriptions.removeValue(forKey: id)
-            let i = sessionInbound[id]
+            let s = sessionInbound[id]
             sessionInbound.removeValue(forKey: id)
-            return (t, i)
+            return (t, s)
         }
         task?.cancel()
-        inbound?.finish()
+        sink?.continuation.finish()
     }
 
     /// Finish + drop a session's inbound stream without cancelling a
     /// subscription task (used on the unary `.ok` / `.failure` subscribe paths,
     /// which have no task to cancel).
     private func finishInbound(_ id: UInt64) {
-        let inbound = lock.withLock {
-            let i = sessionInbound[id]
+        let sink = lock.withLock {
+            let s = sessionInbound[id]
             sessionInbound.removeValue(forKey: id)
-            return i
+            return s
         }
-        inbound?.finish()
+        sink?.continuation.finish()
     }
+}
+
+/// Thread-safe monotonic counter of dropped session-inbound frames. A reference
+/// type so `BridgeRuntime` (which increments on buffer overflow) and the
+/// handler's `BridgeInbound.droppedCount` observe the same value.
+final class DropCounter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int {
+        lock.withLock { count }
+    }
+    func increment() { lock.withLock { count += 1 } }
 }

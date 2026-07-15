@@ -320,7 +320,13 @@ let package = Package(
 
         .target(
             name: "SwiftPWAWebKit",
-            dependencies: ["SwiftPWACore"],
+            dependencies: [
+                "SwiftPWACore",
+                // Vendored zstd decoder for delta (binary-patch) updates on
+                // macOS. iOS uses `itms-services://` (Apple owns the transfer,
+                // no local artifact to patch), so the edge is macOS-only.
+                .target(name: "CZstd", condition: .when(platforms: [.macOS]))
+            ],
             swiftSettings: swiftSettings
         ),
 

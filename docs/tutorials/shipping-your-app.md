@@ -260,7 +260,7 @@ swift-pwa updater sign    --private-key key.priv build/MyApp.AppImage     # per-
 swift-pwa updater manifest --version 1.0.1 --platform linux=…=<url> --output manifest.json
 ```
 
-The **runtime** side — download, verify, swap, relaunch — is verified end-to-end on **macOS, Linux (AppImage), Windows (portable), and Android**. Windows MSIX and iOS are still preview (they need a signed package / distribution cert respectively). It also supports background auto-checks and a mandatory-update kill-switch. See the **[Auto-updates tutorial](auto-updates.md)** for the full walkthrough (wiring, JS, `min_supported_version`) and [docs/auto-updates.md](../auto-updates.md) for the reference. Delta (binary-diff) updates are the one piece still on the roadmap.
+The **runtime** side — download, verify, swap, relaunch — is verified end-to-end on **macOS, Linux (AppImage), Windows (portable), and Android**. Windows MSIX and iOS are still preview (they need a signed package / distribution cert respectively). It also supports background auto-checks, a mandatory-update kill-switch, and **delta (binary-diff) updates** that ship a tiny patch instead of the whole artifact on all three desktop backends (macOS, Linux AppImage, Windows portable). See the **[Auto-updates tutorial](auto-updates.md)** for the full walkthrough (wiring, JS, `min_supported_version`, deltas) and [docs/auto-updates.md](../auto-updates.md) for the reference.
 
 ---
 

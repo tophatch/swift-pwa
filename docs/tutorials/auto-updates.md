@@ -162,7 +162,7 @@ Upload the artifact(s) and `manifest.json` to the URL your `endpoint` points at,
 
 ## 7. Ship smaller updates (deltas, optional)
 
-On **Linux (AppImage)** and **Windows (portable)** you can ship a tiny binary **patch** instead of the whole artifact — the app downloads the diff, rebuilds the new version locally, and verifies it with the same signature check. Add a `--delta` per prior version alongside the full `--platform`:
+On **Linux (AppImage)**, **Windows (portable)**, and **macOS** you can ship a tiny binary **patch** instead of the whole artifact — the app downloads the diff, rebuilds the new version locally, and verifies it with the same signature check. Add a `--delta` per prior version alongside the full `--platform`:
 
 ```bash
 swift run swift-pwa updater manifest \
@@ -172,7 +172,7 @@ swift run swift-pwa updater manifest \
     --output ./manifest.json
 ```
 
-Upload the generated `.zstpatch` next to the full artifact. That's the only change — **nothing in your app or JS changes**: `updater.run` picks the patch automatically, and if anything's off (no patch for that version, a corrupted patch), it silently falls back to the full download. Needs the [`zstd`](https://github.com/facebook/zstd) CLI on your build machine. Details + the other platforms' status: [docs/auto-updates.md](../auto-updates.md#delta-binary-patch-updates).
+Upload the generated `.zstpatch` next to the full artifact. That's the only change — **nothing in your app or JS changes**: `updater.run` picks the patch automatically, and if anything's off (no patch for that version, a corrupted patch), it silently falls back to the full download. On **macOS** the base artifact is the old `.app.tar.gz` (not the `.app`), and the first update after you adopt deltas full-downloads to seed a local base — every update after that goes delta. Needs the [`zstd`](https://github.com/facebook/zstd) CLI on your build machine. Details + the other platforms' status: [docs/auto-updates.md](../auto-updates.md#delta-binary-patch-updates).
 
 ---
 

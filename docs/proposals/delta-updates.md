@@ -1,11 +1,15 @@
 # Proposal: delta (binary-patch) updates
 
-> **Status: shipped (Linux AppImage + Windows portable).** Both backends are
-> implemented and verified end-to-end on real boxes; the engine is a vendored,
-> compiled-from-source zstd decoder (the `CZstd` C target) rather than a system
-> lib, so there's no per-platform packaging. macOS / Android remain out of scope
-> (see [Later](#later-macos-android-ios)). This doc is kept as the design record;
-> see `CHANGELOG.md` for the shipped summary. Original proposal follows.
+> **Status: shipped on all three desktop backends (Linux AppImage + Windows
+> portable + macOS).** All are implemented and verified end-to-end on real
+> hardware; the engine is a vendored, compiled-from-source zstd decoder (the
+> `CZstd` C target) rather than a system lib, so there's no per-platform
+> packaging. Linux/Windows patch the installed artifact directly; **macOS
+> patches a cached copy of the last verified `.app.tar.gz`** (approach (a)
+> below — the empirical check that gzip stays diff-friendly enough is in
+> [Later](#later-macos-android-ios)). Android remains out of scope (the store
+> owns delta delivery); iOS is N/A. This doc is kept as the design record; see
+> `CHANGELOG.md` for the shipped summary. Original proposal follows.
 >
 > **(proposed)** The last open sub-item of the auto-updates epic. Today
 > every update is a **full-bundle download**: a 40 MB AppImage / portable `.exe`
@@ -347,12 +351,23 @@ as the rest of this epic.
 
 ## Later (macOS, Android, iOS)
 
-- **macOS**: the signed artifact is a `.app.tar.gz`; the installed thing is the
-  extracted `.app`. Two viable paths, both v2: (a) **cache the last signed
-  tarball** in the staging root and delta against it (simple, costs one artifact's
-  disk); (b) **content-tree delta** — diff the installed `.app` tree against the
-  new one (per-file patches), which sidesteps gzip's diff-hostility entirely but
-  is a bigger engine. (a) is the likely first step.
+- **macOS**: **shipped** via approach (a) below. The signed artifact is a
+  `.app.tar.gz`; the installed thing is the extracted `.app`, so there's no
+  signed base on disk. Two paths were on the table: (a) **cache the last signed
+  tarball** in the staging root (under `SwiftPWAUpdates/base/`) and delta
+  against it (simple, costs one artifact's disk); (b) **content-tree delta** —
+  diff the installed `.app` tree against the new one (per-file patches), a
+  bigger engine justified only if gzip's reputed diff-hostility sank (a). We
+  **measured (a) before committing** and it held: DEFLATE resynchronizes within
+  a bounded (~32 KB) window, so a localized change to a `.app` perturbs only a
+  couple of gzip blocks and `zstd --patch-from` matches the identical head+tail
+  — patches stayed in the hundreds-of-bytes-to-low-KB range across incompressible
+  binaries *and* highly compressible web bundles. So (a) shipped; (b) is
+  unnecessary. Cost: the backend keeps one cached tarball; the **first** update
+  after adoption full-downloads to seed it, every update after goes delta.
+  `AppleUpdater.stageViaDelta` mirrors the Linux/Windows `stageViaDelta` (base
+  from `cachedBaseTarballURL()` instead of the installed file); the reconstructed
+  tarball flows through the *unchanged* verify → extract → install path.
 - **Android**: `PackageInstaller` wants a full APK; Play delivers deltas itself
   for store apps. Sideload delta would need Google's archived `archive-patcher`
   approach (APK-aware, recompress-matching) — real work, low payoff for the

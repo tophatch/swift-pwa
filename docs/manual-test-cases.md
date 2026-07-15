@@ -440,3 +440,10 @@ signature handoff aren't covered by per-host unit tests.
       → reconstruct → verify → stage (`match=true`), + corrupt-patch
       fallback to full download ✓ 2026-07-15 (console harness driving the
       real `WindowsUpdater` over HTTP on the x64 box)
+- [x] **Updater 11.** macOS **delta** update — patch-sized download →
+      reconstruct the `.app.tar.gz` from a cached base → verify → extract
+      → re-cache the new base for the next cycle, + corrupt-patch,
+      base-mismatch, and no-cached-base fallbacks ✓ 2026-07-15 (gated
+      `AppleDeltaUpdateE2E` suite over HTTP on the Mac). The install/swap
+      itself is the already-verified full-update path (Updater 1) — delta
+      only changes how the staged `.app` is obtained.

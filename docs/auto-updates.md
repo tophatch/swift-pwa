@@ -435,20 +435,35 @@ patch simply produces bytes that fail that check, and the client
 bytes aren't what the patch was cut against). Deltas are a fast path, never
 a hard dependency.
 
-**Supported backends.** Reconstruction needs the *installed signed artifact
-bytes* on disk as the patch base, which is only true where the installed
-file **is** the signed artifact:
+**Supported backends.** Reconstruction needs the *signed artifact bytes* on
+disk as the patch base. On Linux/Windows the installed file **is** that
+artifact; on macOS it isn't (the installed thing is an extracted `.app`), so
+the backend keeps a cached copy of the last verified `.app.tar.gz` to patch
+against instead:
 
-| Backend | Delta? | Why |
+| Backend | Delta? | Base the patch applies to |
 | :------ | :----- | :-- |
-| Linux AppImage | ✅ | the installed AppImage (`$APPIMAGE`) is the signed artifact |
-| Windows portable `.exe` | ✅ | the installed EXE is the signed artifact |
-| macOS `.app` | ❌ | installs the *extracted* `.app`, not the signed `.app.tar.gz` |
+| Linux AppImage | ✅ | the installed AppImage (`$APPIMAGE`) — it *is* the signed artifact |
+| Windows portable `.exe` | ✅ | the installed EXE — it *is* the signed artifact |
+| macOS `.app` | ✅ | a **cached** copy of the last verified `.app.tar.gz` (see below) |
 | Windows MSIX | ❌ | the OS installer owns the package bytes |
 | Android APK | ❌ | the system re-derives the installed APK |
 | iOS | ❌ | `itms-services://` hands the transfer to Apple |
 
 Unsupported backends just full-download, as before.
+
+**macOS specifics.** Because macOS installs the *extracted* `.app` and
+discards the signed `.app.tar.gz`, `AppleUpdater` caches the last verified
+tarball (one artifact's worth of disk, under
+`~/Library/Caches/<bundle-id>/SwiftPWAUpdates/base/`) and patches *that* on
+the next update. Two consequences: (1) the **first** update after you adopt
+this always full-downloads — there's no cached base yet — and then caches the
+base, so updates from that point on can go delta; (2) you publish the macOS
+delta exactly like any other, passing the old **`.app.tar.gz`** (not the
+`.app`) as the base artifact. gzip is often assumed to be "diff-hostile", but
+DEFLATE resynchronizes within a bounded (~32 KB) window, so a localized
+change to a `.app` yields a small patch in practice — measured across
+incompressible binaries and compressible web bundles alike.
 
 **Publishing.** Add one repeatable `--delta` per prior version you want to
 serve a patch for:
@@ -472,6 +487,14 @@ artifact; older clients and non-delta backends ignore them. This needs the
 [`zstd`](https://github.com/facebook/zstd) CLI on `PATH`. Standalone
 `swift-pwa updater diff` / `updater patch` expose the engine for scripting.
 
+macOS is identical — the base artifact is the old **`.app.tar.gz`** (the same
+signed tarball you published for that version), not the `.app`:
+
+```bash
+    --platform darwin-aarch64=./build/MyApp-0.4.0-arm64.app.tar.gz=https://updates.example.com/MyApp-0.4.0-arm64.app.tar.gz \
+    --delta    darwin-aarch64=0.3.0=./build/MyApp-0.3.0-arm64.app.tar.gz=https://updates.example.com/MyApp-0.3.0-to-0.4.0.zstpatch \
+```
+
 The resulting `deltas` array is additive (Tauri readers ignore it):
 
 ```json
@@ -487,7 +510,7 @@ The resulting `deltas` array is additive (Tauri readers ignore it):
 **No packaging burden.** The zstd decompressor is vendored and compiled into
 the runtime from source (a single-file decoder amalgamation), so there's no
 system library to install, no DLL to ship next to your app, and nothing to
-configure — delta support is simply present on the two backends above.
+configure — delta support is simply present on the supported backends above.
 
 **JS.** No API change: `updater.run` / `updater.check` behave identically; a
 delta is chosen and applied under the hood, and the `downloadProgress` events
@@ -495,10 +518,10 @@ just report the (much smaller) patch transfer.
 
 ## What's not in the first cut
 
-- **Delta updates on macOS / Android** — supported on Linux AppImage and
-  Windows portable (see above); the other backends full-download. macOS would
-  need the last signed `.app.tar.gz` cached (or a content-tree diff); Android
-  delta is the store's job. Tracked in
+- **Delta updates on Android / MSIX / iOS** — the three desktop backends
+  (Linux AppImage, Windows portable, macOS) ship deltas (see above); Android
+  delta is the store's job, MSIX stays full-only (the OS installer owns the
+  bytes), and iOS hands the transfer to Apple. Tracked in
   [docs/proposals/delta-updates.md](proposals/delta-updates.md).
 - **Prehashed minisign (`ED` mode)** — only legacy `Ed` (pure Ed25519
   over the artifact bytes) is supported. Adding `ED` means vendoring

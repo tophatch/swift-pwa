@@ -126,16 +126,20 @@ struct Doctor: AsyncParsableCommand {
                     label: "linuxdeploy (AppImage)",
                     required: true,
                     fix: "Download linuxdeploy-x86_64.AppImage from github.com/linuxdeploy/linuxdeploy/releases and put it on PATH."
-                )
+                ),
+                zstdDeltaTool()
             ]
         case .windows:
             #if os(Windows)
-                return await [tool(
-                    "link",
-                    label: "MSVC linker (link.exe)",
-                    required: true,
-                    fix: "Run from a Visual Studio Developer prompt, or set up the MSVC environment."
-                )]
+                return await [
+                    tool(
+                        "link",
+                        label: "MSVC linker (link.exe)",
+                        required: true,
+                        fix: "Run from a Visual Studio Developer prompt, or set up the MSVC environment."
+                    ),
+                    zstdDeltaTool()
+                ]
             #else
                 return [Check(
                     name: "Windows host", ok: false, detail: "Windows builds must run on a Windows machine",
@@ -257,6 +261,20 @@ struct Doctor: AsyncParsableCommand {
             return Check(name: label, ok: true, detail: "found", required: required, fix: nil)
         }
         return Check(name: label, ok: false, detail: "not on PATH", required: required, fix: fix)
+    }
+
+    /// Advisory: the `zstd` CLI backs `swift-pwa updater manifest --delta`
+    /// (and `updater diff` / `patch`) — delta (binary-patch) updates on the
+    /// Linux AppImage + Windows portable backends. Only needed when publishing
+    /// deltas, so non-required (a `•`, never a build blocker).
+    private static func zstdDeltaTool() async -> Check {
+        await tool(
+            "zstd",
+            label: "zstd (delta updates)",
+            required: false,
+            fix: "Optional — only for `swift-pwa updater manifest --delta` (binary-patch updates). "
+                + "Install: apt install zstd · brew install zstd · choco install zstandard."
+        )
     }
 
     private static func xcrun(_ name: String, label: String, required: Bool, fix: String) async -> Check {

@@ -359,6 +359,8 @@ swift test                                     # unit + WebKit integration on ma
 SWIFT_PWA_LINUX_GUI=1 swift test               # GTK integration tests on Linux
 ```
 
+[docs/contributing.md](docs/contributing.md) is the practical guide — the build/test loop, the **generated files you must regenerate** (e.g. run `Scripts/regenerate-bridge-js.sh` after editing `bridge.js`), and the gotchas that otherwise cost a CI round.
+
 Before tagging a release, walk the manual cases in [docs/manual-test-cases.md](docs/manual-test-cases.md) — they cover the OS-level install machinery, on-device installer flows, and visual smoothness checks that the unit suite can't reach.
 
 ## License

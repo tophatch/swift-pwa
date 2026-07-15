@@ -16,8 +16,17 @@ public final class CommandRegistry: @unchecked Sendable {
 
     private let lock = NSLock()
     private var handlers: [String: Handler] = [:]
+    /// Per-command inbound-buffer bound for `registerSession` commands, read by
+    /// `BridgeRuntime` at subscribe time to size the session's inbound stream.
+    private var sessionBounds: [String: Int] = [:]
 
     public init() {}
+
+    /// The client→server inbound buffer bound registered for a duplex-session
+    /// command, or `nil` if `name` isn't a `registerSession` command.
+    public func sessionBufferBound(for name: String) -> Int? {
+        lock.withLock { sessionBounds[name] }
+    }
 
     // MARK: - Registration
 
@@ -95,10 +104,76 @@ public final class CommandRegistry: @unchecked Sendable {
         }
     }
 
+    /// Register a typed **duplex session** handler. Opened by JS via
+    /// `__SWIFT_PWA__.session(name, openArgs, handlers)` (a `subscribe` under
+    /// the hood): `openArgs` decodes into `Args`, client `push` frames arrive
+    /// as a typed `BridgeInbound<Frame>`, and each yield from the returned
+    /// stream becomes a downstream `event` frame (completion → `end`).
+    ///
+    /// The inbound stream is live for the session's lifetime and finishes when
+    /// the client closes (`unsubscribe`), the returned stream completes, or the
+    /// window tears down — so a `for await frame in inbound` loop terminates
+    /// cleanly on any of those.
+    ///
+    /// `maxBufferedFrames` bounds the client→server buffer (drop-oldest, since
+    /// the JS `postMessage` can't be back-pressured); overflow drops are counted
+    /// in `BridgeInbound.droppedCount`. Default 256.
+    public func registerSession<
+        Args: Decodable & Sendable,
+        Frame: Decodable & Sendable,
+        Chunk: Encodable & Sendable
+    >(
+        _ name: String,
+        maxBufferedFrames: Int = 256,
+        typed body: @escaping @Sendable (Args, BridgeInbound<Frame>, CommandContext)
+            -> AsyncThrowingStream<Chunk, any Error>
+    ) {
+        // Record the per-command buffer bound so `BridgeRuntime` can size the
+        // inbound stream at subscribe time (before this handler closure runs).
+        lock.withLock { sessionBounds[name] = max(1, maxBufferedFrames) }
+        register(name) { context in
+            let args: Args
+            do {
+                args = try context.invocation.decode(Args.self)
+            } catch {
+                return .failure(BridgeError(
+                    code: BridgeError.decode,
+                    message: "failed to decode open args for \(name): \(error)"
+                ))
+            }
+            // A session opened via `subscribe` always carries an inbound side
+            // (BridgeRuntime creates it before dispatch). If the command is
+            // reached some other way (e.g. `invoke`), fall back to an empty,
+            // already-finished inbound so the handler's loop just exits.
+            let session = context.sessionInbound
+            let rawInbound = session?.frames ?? AsyncStream { $0.finish() }
+            let inbound = BridgeInbound<Frame>(
+                rawInbound, command: name, droppedCount: { session?.droppedCount ?? 0 }
+            )
+            let upstream = body(args, inbound, context)
+            let translated = AsyncThrowingStream<Data, any Error> { continuation in
+                let task = Task {
+                    do {
+                        for try await chunk in upstream {
+                            let data = try JSONEncoder().encode(chunk)
+                            continuation.yield(data)
+                        }
+                        continuation.finish()
+                    } catch {
+                        continuation.finish(throwing: error)
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
+            return .stream(translated)
+        }
+    }
+
     public func unregister(_ name: String) {
         lock.lock()
         defer { lock.unlock() }
         handlers.removeValue(forKey: name)
+        sessionBounds.removeValue(forKey: name)
     }
 
     public func has(_ name: String) -> Bool {

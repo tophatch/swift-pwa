@@ -1,19 +1,32 @@
 # JavaScript API
 
 The `__SWIFT_PWA__` object is injected at document-start by `bridge.js`,
-so every command call works before user JS loads. Two primitives —
-unary `invoke` and streaming `subscribe` — cover every plugin.
+so every command call works before user JS loads. Three primitives —
+unary `invoke`, server-streaming `subscribe`, and duplex `session` —
+cover every plugin.
 
 ```js
 // Unary: returns a Promise.
 const result = await __SWIFT_PWA__.invoke(commandName, payload);
 
-// Streaming: returns an unsubscribe function. The callback fires on
-// every yielded chunk; `end` and errors are surfaced internally.
+// Streaming (server → client): returns an unsubscribe function. The
+// callback fires on every yielded chunk; `end` and errors are surfaced
+// internally.
 const unsub = __SWIFT_PWA__.subscribe(commandName, payload, (chunk) => {
     /* ... */
 });
 unsub();
+
+// Duplex session (client ⇄ server): open once, then push frames *into*
+// the running subscription while receiving downstream events. Returns
+// { push, close }. See "Duplex sessions" below.
+const sess = __SWIFT_PWA__.session(commandName, openArgs, {
+    onChunk: (event) => { /* server → client */ },
+    onError: (err) => {},
+    onEnd: () => {},
+});
+sess.push(frame);   // client → server, into the open session
+sess.close();
 ```
 
 The wire envelope (`{v, kind, id, cmd, payload}`) is identical across
@@ -37,6 +50,51 @@ and absent in WKWebView/iOS). `appMemoryLimitBytes` is the per-app ceiling where
 the OS defines one (Android's large-heap class), else `null`. Both are static
 for the session; for a live "available now" read and a memory-pressure event,
 see [`system.*`](#system).
+
+## Duplex sessions (`session`)
+
+`subscribe` is one-directional — the server streams to you and you can only
+*close* it. A **session** is the two-way version: you open it once, then push
+client frames *into* the running subscription while downstream events arrive on
+the same correlated channel. Use it for live, interactive streams a plain
+`subscribe` can't express — continuous-mic evaluation, an interactive
+generation loop, a collaborative feed.
+
+```js
+// Open. `openArgs` is the one-time opening payload (like a subscribe payload).
+const sess = __SWIFT_PWA__.session('speech.evaluate', { lang: 'en' }, {
+    onChunk: (event) => renderPartial(event),   // server → client, many
+    onError: (err) => showError(err),
+    onEnd: () => finalize(),                     // server finished the stream
+});
+
+// Push client frames into the open session (fire-and-forget). A no-op once
+// the session has ended or been closed.
+mic.on('data', (pcm) => sess.push({ pcm }));
+
+// Close it (half-nothing fancy — sends an unsubscribe under the hood).
+sess.close();
+```
+
+The Swift side of a session is a `registerSession` command (see
+[docs/swift-api.md](swift-api.md)). Notes:
+
+- **Ordering** is preserved: pushes travel the same single message channel as
+  the open, in send order.
+- **No back-pressure JS→Swift.** The native `postMessage` can't block, so pushes
+  are buffered with a bounded, drop-oldest policy — a client that floods faster
+  than the handler drains loses the *oldest* buffered frames. (The Swift side
+  sizes the buffer per command and can observe the drop count; see
+  [docs/swift-api.md](swift-api.md#duplex-sessions).) If you can't tolerate loss
+  (e.g. a command channel), ack-gate in your own protocol: have the handler
+  yield a downstream event and wait for it before pushing the next frame.
+- **Binary** (audio, images) rides in a frame as base64, same as every other
+  binary on the bridge.
+- A malformed push (one that doesn't decode to the handler's frame type) is
+  dropped and logged — it doesn't tear the session down.
+
+Live demo: `Examples/CritterFacts/web/session.html` (push numbers, the handler
+keeps a per-session running total and streams it back).
 
 ## Built-in plugins (auto-installed on every backend)
 

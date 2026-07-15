@@ -51,11 +51,74 @@
             let result = try await waitForJSResult(in: adapter)
             #expect(result == #"{"value":"hello world"}"#)
         }
+
+        /// Drives the real `__SWIFT_PWA__.session(...)` sugar (bridge.js) through
+        /// a real WKWebView against a `registerSession` handler: open a session,
+        /// push two client frames into it, collect the echoed downstream events,
+        /// then close. This is the duplex path (#5) verified end-to-end on macOS.
+        @Test("session push/receive round-trips through a real WKWebView")
+        func sessionRoundTrip() async throws {
+            let app = MockAppContext()
+            app.registry.registerSession(
+                "test.echo",
+                typed: { (open: SessionOpen, inbound: BridgeInbound<SessionFrame>, _)
+                    -> AsyncThrowingStream<SessionEvent, any Error> in
+                    AsyncThrowingStream { continuation in
+                        let task = Task {
+                            for await frame in inbound {
+                                continuation.yield(SessionEvent(echo: open.prefix + frame.text))
+                            }
+                            continuation.finish()
+                        }
+                        continuation.onTermination = { _ in task.cancel() }
+                    }
+                }
+            )
+
+            let adapter = try WKWebViewAdapter(configuration: WKWebViewConfiguration())
+            let win = MockWindow(webView: adapter)
+            app.attach(win)
+
+            let bridge = BridgeRuntime(
+                webView: adapter,
+                registry: app.registry,
+                windowID: win.id,
+                app: app
+            )
+            bridge.start()
+            defer { bridge.stop() }
+
+            let html = """
+            <!doctype html><html><head><meta charset="utf-8"></head><body>
+            <script>
+              window.__result = null;
+              const got = [];
+              const sess = __SWIFT_PWA__.session('test.echo', { prefix: '>>' }, {
+                onChunk: (e) => {
+                  got.push(e.echo);
+                  if (got.length === 2) { window.__result = JSON.stringify(got); sess.close(); }
+                },
+                onError: (err) => { window.__result = 'ERR: ' + err.message; },
+              });
+              // Push two client frames into the open session.
+              sess.push({ text: 'a' });
+              sess.push({ text: 'b' });
+            </script></body></html>
+            """
+            adapter.webView.loadHTMLString(html, baseURL: nil)
+
+            let result = try await waitForJSResult(in: adapter)
+            #expect(result == #"[">>a",">>b"]"#)
+        }
     }
 
     private struct EchoArgs: Codable, Equatable {
         let value: String
     }
+
+    private struct SessionOpen: Codable { let prefix: String }
+    private struct SessionFrame: Codable { let text: String }
+    private struct SessionEvent: Codable { let echo: String }
 
     @MainActor
     private func waitForJSResult(

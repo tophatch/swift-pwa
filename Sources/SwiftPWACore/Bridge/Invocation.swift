@@ -37,6 +37,11 @@ public enum InboundFrame: Sendable, Equatable {
     case invoke(id: UInt64, command: String, payload: Data)
     case subscribe(id: UInt64, command: String, payload: Data)
     case unsubscribe(id: UInt64)
+    /// A client frame pushed *into* an already-open duplex session `id`
+    /// (opened via `subscribe` of a `registerSession` command). The command
+    /// was fixed at open time, so no `cmd` — just the correlation id and the
+    /// frame payload. See `registerSession` / `BridgeInbound`.
+    case push(id: UInt64, payload: Data)
 }
 
 /// One frame to be sent to JS over the bridge channel.
@@ -76,6 +81,9 @@ public enum Envelope {
                 : .subscribe(id: id, command: cmd, payload: payload)
         case "unsubscribe":
             return .unsubscribe(id: id)
+        case "push":
+            let payload = try reserialize(dict["payload"] ?? NSNull())
+            return .push(id: id, payload: payload)
         default:
             throw EnvelopeError.unknownKind(kind)
         }

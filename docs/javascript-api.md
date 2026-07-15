@@ -51,6 +51,18 @@ the OS defines one (Android's large-heap class), else `null`. Both are static
 for the session; for a live "available now" read and a memory-pressure event,
 see [`system.*`](#system).
 
+For a *typed* catalog rather than just names, `__bridge.describe` returns one
+`CommandDescriptor` (`{ name, kind, args, result, inbound? }`) per command
+registered with a typed handler — the input to the typed-client generator:
+
+```js
+const catalog = await __SWIFT_PWA__.invoke('__bridge.describe');
+```
+
+`swift-pwa codegen` turns that catalog into a typed TypeScript client over
+`__SWIFT_PWA__` (typed `invoke` / `subscribe` / `session` call sites) — see the
+[README](../README.md#quick-start) and [docs/swift-api.md](swift-api.md).
+
 ## Duplex sessions (`session`)
 
 `subscribe` is one-directional — the server streams to you and you can only

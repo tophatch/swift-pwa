@@ -323,7 +323,7 @@ swift run swift-pwa build --target android --cross-compile-android --android-abi
 
 `pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup). If `pwa.json` declares a [`build.prebuild`](#configuring-pwajson) command, every `build` runs it first.
 
-The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md). To update the CLI itself, run `swift-pwa self-update`.
+The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md). `swift-pwa codegen` generates a typed TypeScript client for the bridge from the `__bridge.describe` command catalog (typed `invoke` / `subscribe` / `session` call sites; `--check` guards drift in CI). To update the CLI itself, run `swift-pwa self-update`.
 
 ## Roadmap
 

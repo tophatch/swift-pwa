@@ -19,6 +19,19 @@ public final class CommandRegistry: @unchecked Sendable {
     /// Per-command inbound-buffer bound for `registerSession` commands, read by
     /// `BridgeRuntime` at subscribe time to size the session's inbound stream.
     private var sessionBounds: [String: Int] = [:]
+    /// Call shape + arg/result/frame metatypes of each command registered
+    /// through a `typed:` variant, for the codegen layer (roadmap #6). Schemas
+    /// are derived from these **lazily** in `descriptors()` (never on the normal
+    /// command path). Raw `register(_:_:)` registrations have no type/kind info
+    /// and so get no entry (they still appear in `names()`).
+    private var typed: [String: TypedRegistration] = [:]
+
+    private struct TypedRegistration {
+        let kind: CommandKind
+        let args: Any.Type
+        let result: Any.Type
+        let inbound: Any.Type?
+    }
 
     public init() {}
 
@@ -26,6 +39,30 @@ public final class CommandRegistry: @unchecked Sendable {
     /// command, or `nil` if `name` isn't a `registerSession` command.
     public func sessionBufferBound(for name: String) -> Int? {
         lock.withLock { sessionBounds[name] }
+    }
+
+    /// Typed descriptors for every command registered via a `typed:` variant,
+    /// sorted by name — the input to typed client codegen. Schemas are derived
+    /// here (lazily) by `SchemaReflection`. Commands registered with the raw
+    /// `register(_:_:)` handler (no static type/kind info) are absent here but
+    /// still present in `names()`.
+    public func descriptors() -> [CommandDescriptor] {
+        let snapshot = lock.withLock { typed }
+        return snapshot.map { name, reg in
+            CommandDescriptor(
+                name: name,
+                kind: reg.kind,
+                args: SchemaReflection.schema(for: reg.args),
+                result: SchemaReflection.schema(for: reg.result),
+                inbound: reg.inbound.map { SchemaReflection.schema(for: $0) }
+            )
+        }.sorted { $0.name < $1.name }
+    }
+
+    private func recordTyped(
+        _ name: String, kind: CommandKind, args: Any.Type, result: Any.Type, inbound: Any.Type? = nil
+    ) {
+        lock.withLock { typed[name] = TypedRegistration(kind: kind, args: args, result: result, inbound: inbound) }
     }
 
     // MARK: - Registration
@@ -39,10 +76,11 @@ public final class CommandRegistry: @unchecked Sendable {
 
     /// Register a typed unary handler. JSON decode/encode is handled for you.
     /// Errors thrown by `body` become `BridgeError(code: .handler, ...)`.
-    public func register<Args: Decodable & Sendable>(
+    public func register<Args: Decodable & Sendable, Result: Encodable & Sendable>(
         _ name: String,
-        typed body: @escaping @Sendable (Args, CommandContext) async throws -> some Encodable & Sendable
+        typed body: @escaping @Sendable (Args, CommandContext) async throws -> Result
     ) {
+        recordTyped(name, kind: .unary, args: Args.self, result: Result.self)
         register(name) { context in
             let args: Args
             do {
@@ -75,6 +113,7 @@ public final class CommandRegistry: @unchecked Sendable {
         _ name: String,
         typed body: @escaping @Sendable (Args, CommandContext) -> AsyncThrowingStream<Chunk, any Error>
     ) {
+        recordTyped(name, kind: .stream, args: Args.self, result: Chunk.self)
         register(name) { context in
             let args: Args
             do {
@@ -131,6 +170,7 @@ public final class CommandRegistry: @unchecked Sendable {
         // Record the per-command buffer bound so `BridgeRuntime` can size the
         // inbound stream at subscribe time (before this handler closure runs).
         lock.withLock { sessionBounds[name] = max(1, maxBufferedFrames) }
+        recordTyped(name, kind: .session, args: Args.self, result: Chunk.self, inbound: Frame.self)
         register(name) { context in
             let args: Args
             do {
@@ -174,6 +214,7 @@ public final class CommandRegistry: @unchecked Sendable {
         defer { lock.unlock() }
         handlers.removeValue(forKey: name)
         sessionBounds.removeValue(forKey: name)
+        typed.removeValue(forKey: name)
     }
 
     public func has(_ name: String) -> Bool {

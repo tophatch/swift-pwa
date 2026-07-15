@@ -106,6 +106,16 @@ public final class PlatformInfoPlugin: Plugin {
                 appMemoryLimitBytes: appMemoryLimit()
             )
         })
+
+        // Typed command catalog for the codegen layer (roadmap #6). Like
+        // `__platform.info`'s `commands`, it's read late-bound so it reflects
+        // every plugin registered by the time it's called. Returns one
+        // `CommandDescriptor` per command registered through a `typed:` variant
+        // (raw handlers have no static shape, so they're absent — present only
+        // in `__platform.info.commands`).
+        registry.register("__bridge.describe", typed: { (_: EmptyArgs, _) -> [CommandDescriptor] in
+            registryRef.descriptors()
+        })
     }
 }
 

@@ -7,7 +7,13 @@
     <style>
         :root {
             --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
-            --line: #232a35;
+            --line: #232a35; --accent-ink: #06231a; --card: #171c24;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f4f6f9; --card: #ffffff; --ink: #1b2330; --muted: #5c6775;
+                --accent: #1f9d70; --accent-ink: #ffffff; --line: #dce2ea;
+            }
         }
         * { box-sizing: border-box; }
         html, body { margin: 0; height: 100%; overflow: hidden; }

@@ -400,37 +400,6 @@ func configure(_ ctx: any AppContext) throws {
         }
     #endif
 
-    // Duplex-session demo (#5 — bidirectional bridge sessions). A `registerSession`
-    // command that keeps per-session state: the page pushes numbers into the open
-    // session (`session.push({ add })`) and the handler streams back the running
-    // total after each one, on the same correlated channel. This is the thing a
-    // plain `subscribe` can't express — the client feeds the stream while it runs.
-    // Needs nothing platform-specific, so it's wired unconditionally. See
-    // web/session.html.
-    // A small `maxBufferedFrames` so the page's "flood" button visibly overflows
-    // the client→server buffer: dropped frames' adds are lost (drop-oldest) and
-    // `inbound.droppedCount` climbs, which each event reports back to the UI.
-    ctx.registry.registerSession(
-        "demo.runningTotal",
-        maxBufferedFrames: 32,
-        typed: { (_: EmptyArgs, inbound: BridgeInbound<AddFrame>, _)
-            -> AsyncThrowingStream<TotalEvent, any Error> in
-            AsyncThrowingStream { continuation in
-                let task = Task {
-                    var total = 0.0
-                    var count = 0
-                    for await frame in inbound {
-                        total += frame.add
-                        count += 1
-                        continuation.yield(TotalEvent(total: total, count: count, dropped: inbound.droppedCount))
-                    }
-                    continuation.finish()
-                }
-                continuation.onTermination = { _ in task.cancel() }
-            }
-        }
-    )
-
     // Android serves bundled web assets through the WebViewAssetLoader virtual
     // host (the adapter ignores the directory path); desktop resolves the
     // real `web/` from the resource bundle.
@@ -473,13 +442,6 @@ func makeTextBackend(_ ctx: any AppContext) -> (any AIBackend)? {
         return nil
     #endif
 }
-
-/// A client frame pushed into the `demo.runningTotal` session (#5 demo).
-struct AddFrame: Codable, Sendable { let add: Double }
-
-/// A downstream event the `demo.runningTotal` session streams back. `dropped`
-/// is how many pushed frames the bounded buffer discarded (drop-oldest).
-struct TotalEvent: Codable, Sendable { let total: Double; let count: Int; let dropped: Int }
 
 /// Locates the bundled `web/` folder: the `.app` resource bundle when built by
 /// `swift-pwa build`, else the SwiftPM resource bundle under plain `swift run`.

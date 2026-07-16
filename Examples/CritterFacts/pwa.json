@@ -18,7 +18,8 @@
     "width": 720,
     "height": 720,
     "resizable": true,
-    "fullscreen": false
+    "fullscreen": false,
+    "background_color": { "light": "#f4f6f9", "dark": "#0e1116" }
   },
   "macos": {
     "bundle_identifier": "com.swiftpwa.critterfacts",

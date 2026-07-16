@@ -63,10 +63,28 @@ It's a hard build dep of the GTK3 backend even if you don't use
 > The library prints `libayatana-appindicator is deprecated. Please
 > use libayatana-appindicator-glib in newly written code.` to stderr
 > at startup. Soft deprecation, not a removal — the library still
-> works on every distro that has it. Migrating the shim to the GTK-
-> free `libayatana-appindicator-glib` is queued for v0.5+ (bundled
-> with finally enabling the GTK4 tray); see the
-> [README Roadmap](../README.md#roadmap).
+> works on every distro that has it, and it only affects the **GTK3**
+> backend. The **GTK4** tray takes a different route entirely (see
+> below): it speaks the StatusNotifierItem + `com.canonical.dbusmenu`
+> D-Bus protocols directly over GDBus, so it has no appindicator
+> dependency at all.
+
+### GTK4 tray (StatusNotifierItem over GDBus)
+
+The GTK4 backend can't use `libayatana-appindicator3` (it links GTK3,
+and a process can't link both GTK versions), and
+`libayatana-appindicator-gtk4` isn't packaged on target distros. So the
+GTK4 `TrayPlugin` implements the freedesktop **StatusNotifierItem** and
+**com.canonical.dbusmenu** protocols directly over **GDBus**, using
+GdkPixbuf to load the icon. Both `gio-2.0` and `gdk-pixbuf-2.0` are
+already pulled in by `libgtk-4-dev`, so the GTK4 tray needs **no extra
+apt package**.
+
+The cross-platform `Tray` API is unchanged — the same
+`TrayPlugin(SystemTray())` and the same `tray.*` JS work on GTK4. As on
+GTK3, only menu-item activations reach the app (`tray.subscribe`); the
+SNI spec gives the desktop panel ownership of icon-click semantics, so
+`.click` is never emitted on Linux.
 
 Sanity-check the headers are findable:
 
@@ -350,6 +368,16 @@ remain:
   last `setFullscreen(_:)` call (and the initial `window.fullscreen`
   config) on both backends — it just doesn't yet observe a WM/F11-driven
   toggle.
+- **The tray icon needs a StatusNotifierHost.** Both Linux backends
+  publish the tray over the freedesktop StatusNotifierItem D-Bus protocol
+  (GTK3 via `libayatana-appindicator`, GTK4 hand-rolled over GDBus). It
+  shows in Plasma, Sway/waybar, XFCE, MATE, Cinnamon, etc. out of the
+  box; **bare GNOME Shell needs the AppIndicator extension** (GNOME
+  dropped its own tray host). Where no host is present the app owns its
+  bus name, registers as soon as a host appears, and never crashes — the
+  icon just isn't drawn until then. Also per the SNI spec, icon clicks
+  are owned by the panel, so `.click` (`tray.subscribe`) never fires on
+  Linux; only menu-item activations do.
 - **No `system.memoryPressure` event.** `system.memory` works (total RAM,
   plus `availableBytes` from `/proc/meminfo`'s `MemAvailable`), but Linux has
   no portable per-process memory-pressure signal, so the

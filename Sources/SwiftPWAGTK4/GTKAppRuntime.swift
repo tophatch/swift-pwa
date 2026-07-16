@@ -71,6 +71,21 @@
         swiftpwa_gtk_init()
     }
 
+    /// Test-only: pump the global-default `GMainContext` for roughly
+    /// `seconds`, so `SWIFT_PWA_LINUX_GUI`-gated tests can let async GDBus
+    /// callbacks (bus-name acquisition, tray D-Bus method dispatch) run
+    /// without a full `g_main_loop_run`. Pumps on the calling (main)
+    /// thread so `@convention(c)` callbacks that `assumeIsolated` land on
+    /// the main actor, exactly as they do under the real loop.
+    @MainActor
+    func pumpMainContextForTesting(seconds: Double) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            _ = g_main_context_iteration(nil, gboolean(0)) // non-blocking
+            usleep(2000)
+        }
+    }
+
     /// Heap-boxed `() -> Void` closure ferried across the C boundary.
     final class GTKMainThreadJob {
         let body: @Sendable () -> Void

@@ -81,6 +81,31 @@ let appIndicatorSystemLibraryTarget: Target? = useGtk4
         ]
     )
 
+/// The GTK4 tray. `libayatana-appindicator3` is GTK3-only and
+/// `libayatana-appindicator-gtk4` isn't packaged, so the GTK4 backend
+/// speaks the StatusNotifierItem + com.canonical.dbusmenu D-Bus protocols
+/// directly over GDBus (gio-2.0) with GdkPixbuf for icon loading — no
+/// external tray dependency. `pkgConfig` only supplies include/lib search
+/// paths; actual linking comes from the modulemap's `link` directives
+/// (same pattern as `CAyatanaAppIndicator3Shim`).
+let statusNotifierSystemLibraryTarget: Target? = useGtk4
+    ? .systemLibrary(
+        name: "CStatusNotifierShim",
+        path: "Sources/CStatusNotifierShim",
+        pkgConfig: "gio-2.0",
+        providers: [
+            .apt(["libglib2.0-dev", "libgtk-4-dev"])
+        ]
+    )
+    : nil
+
+/// The GTK3-or-GTK4 tray system-library shim (exactly one is non-nil,
+/// gated on `useGtk4`). Combined into a single term so the big `targets:`
+/// literal keeps just one optional `+` splice — extending that chain
+/// further trips the type-checker on older Swift toolchains.
+let optionalLinuxTrayTargets: [Target] =
+    [appIndicatorSystemLibraryTarget, statusNotifierSystemLibraryTarget].compactMap(\.self)
+
 /// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
 /// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit
 /// itself is Apple-only). On Apple it shadows CryptoKit; on Linux it
@@ -96,6 +121,9 @@ let gtkBackendTarget: Target = useGtk4
             .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
             .target(name: "CGtk4Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux])),
+            // Hand-rolled StatusNotifierItem tray (GTK4 has no GtkStatusIcon
+            // and can't link the GTK3-only appindicator).
+            .target(name: "CStatusNotifierShim", condition: .when(platforms: [.linux])),
             // libzstd for delta (binary-patch) update reconstruction. Linux
             // only (the AppImage updater is the sole consumer); needs
             // libzstd-dev at build time.
@@ -335,7 +363,7 @@ let package = Package(
         gtkSystemLibraryTarget,
         webkitSystemLibraryTarget,
         gtkBackendTarget
-    ] + (appIndicatorSystemLibraryTarget.map { [$0] } ?? []) + [
+    ] + optionalLinuxTrayTargets + [
         // MARK: - Android backend (android.webkit.WebView via a JNI C shim)
 
         //

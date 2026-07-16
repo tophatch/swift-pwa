@@ -67,6 +67,19 @@
         gtk_init(&argc, nil)
     }
 
+    /// Test-only: pump the global-default `GMainContext` for roughly
+    /// `seconds` on the calling (main) thread, so `SWIFT_PWA_LINUX_GUI`-
+    /// gated tests can let async GLib callbacks run without a full
+    /// `gtk_main()`. Kept in parity with the GTK4 backend.
+    @MainActor
+    func pumpMainContextForTesting(seconds: Double) {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            _ = g_main_context_iteration(nil, gboolean(0)) // non-blocking
+            usleep(2000)
+        }
+    }
+
     /// Heap-boxed `() -> Void` closure ferried across the C boundary.
     final class GTKMainThreadJob {
         let body: @Sendable () -> Void

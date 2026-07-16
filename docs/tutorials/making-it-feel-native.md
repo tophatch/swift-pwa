@@ -16,7 +16,7 @@ If the bridge is new to you, read [Talking to the native side](talking-to-the-na
 |---|---|---|---|
 | Window controls | `window.*` (`WindowPlugin`) | **Yes — built in** | everywhere (some no-ops on mobile / GTK4) |
 | Notifications | `notifications.*` (`NotificationsPlugin`) | opt-in | **all platforms** (Apple needs a bundled app) |
-| Tray icon | `tray.*` (`TrayPlugin`) | opt-in | macOS, Linux GTK3, Windows (not iOS / GTK4 / Android) |
+| Tray icon | `tray.*` (`TrayPlugin`) | opt-in | macOS, Linux (GTK3 + GTK4), Windows (not iOS / Android) |
 
 Turn the two opt-in ones on in `configure` (in `Sources/MyApp/App.swift`):
 
@@ -128,7 +128,7 @@ The menu is a flat list of `{ id, label, enabled?, separator? }`; a click sends 
 
 ### Degrade gracefully where there's no tray
 
-The tray only exists on macOS, Linux GTK3, and Windows — **not** iOS, GTK4, or Android. Because the opt-in stub still registers the commands on those platforms (they just do nothing), don't rely on "does the command exist." Check the OS instead, and hide any tray-dependent UI where it won't show:
+The tray exists on macOS, Linux (both GTK3 and GTK4), and Windows — **not** iOS or Android. Even where it's supported, the icon only *shows* if the desktop runs a tray host: on Linux GTK4 the tray is a StatusNotifierItem, which Plasma / Sway / XFCE display but bare GNOME Shell needs the AppIndicator extension for. Because the opt-in stub still registers the commands on the unsupported platforms (they just do nothing), don't rely on "does the command exist." Check the OS instead, and hide any tray-dependent UI where it won't show:
 
 ```js
 const info = await __SWIFT_PWA__.invoke('__platform.info');   // { os, commands, ... }
@@ -138,7 +138,7 @@ if (!trayLikelyWorks) {
 }
 ```
 
-> Don't make the tray the *only* way to reach an important action — always leave an in-window path too, so mobile and GTK4 users aren't stuck.
+> Don't make the tray the *only* way to reach an important action — always leave an in-window path too, so mobile users (and desktop users whose panel has no tray host) aren't stuck.
 
 ---
 

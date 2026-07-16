@@ -220,6 +220,29 @@ let sd = StableDiffusionBackend(cacheDirectory: sdDir, source: mySource, spec: .
 
 The `spec` (a `StableDiffusionModelSpec`) describes the graph contract — tensor names, dtypes, the scheduler, VAE scaling. `.sdTurbo` (fp32) and `.sdTurboFp16` (fp16) are ready to use; a different architecture (e.g. an SD-1.5 checkpoint) is a matter of adjusting the spec's fields. If your model is fp16, use `.sdTurboFp16` — **the backend already handles the one Android-specific gotcha for fp16 ONNX** (it lowers the graph-optimization level so the Android runtime doesn't try to run a fused half-precision op it has no kernel for).
 
+### Memory on constrained devices
+
+A fp16 SD pipeline is ~2 GB of session weights, and the **VAE decode** at the end of a run is the single largest memory spike — landing on top of the ~1.7 GB UNet still resident from the denoise loop. On an ample-RAM desktop this is fine; on a phone it can trip the kernel's low-memory killer and take the whole app down. Two knobs handle it:
+
+- **`lowMemory: true`** on the backend evicts the text-encoder after text-encoding and the UNet immediately *before* VAE decode, so the UNet is freed ahead of the spike. It costs a graph re-parse on the next run, so leave it `false` on desktop and turn it on for mobile builds:
+
+  ```swift
+  #if os(Android)
+      let sd = StableDiffusionBackend(cacheDirectory: sdDir, source: mySource, spec: .sdTurboFp16, lowMemory: true)
+  #else
+      let sd = StableDiffusionBackend(cacheDirectory: sdDir, source: mySource, spec: .sdTurboFp16)
+  #endif
+  ```
+
+- **`ai.unload`** (from JS) frees the resident model entirely — call it after you're done generating, or from a `system.memoryPressure` listener, to give the RAM back instead of holding the pipeline until the next model switch:
+
+  ```js
+  await __SWIFT_PWA__.invoke('ai.generateImage', { prompt });
+  await __SWIFT_PWA__.invoke('ai.unload'); // release the ~2 GB pipeline
+  ```
+
+  It's a no-op for backends that cache nothing (remote / not-configured), so it's safe to call unconditionally. See [docs/ai-plugin.md](../ai-plugin.md) for wiring it to `system.memoryPressure`.
+
 ### Serving more than one purpose from one `ai.*`
 
 `AIPlugin` takes **one** backend — but "one" can compose several. If you want text *and* image editing *and* text→image all on the same `ai.*` surface, write a tiny router that forwards each call to the right engine. The [`CompositeAIBackend` in `CritterFacts`](../../Examples/CritterFacts/Sources/CritterFacts/CompositeAIBackend.swift) is a worked example: it sends `ai.generate*` to a text backend, and routes `ai.generateImage` by whether the request carries a source `image` (present → inpaint/LaMa, absent → text→image/SD). That "the adopter composes purposes" pattern is exactly what the contract is designed for.

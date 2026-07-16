@@ -41,6 +41,15 @@
         private let tokenizerVocabPath: String
         private let tokenizerMergesPath: String
         private let spec: StableDiffusionModelSpec
+        /// Evict the text-encoder session after text-encoding and the UNet
+        /// session before VAE decode, within each `runTxt2Img`, so the
+        /// ~1.7 GB UNet is freed *before* the VAE decode's memory spike rather
+        /// than staying resident on top of it. Trades reload latency (the graph
+        /// is re-parsed on the next run, and per image when `count > 1`) for a
+        /// much lower peak — meant for memory-constrained (mobile) devices,
+        /// where holding all three sessions + the VAE spike can OOM the process.
+        /// Defaults `false`: desktop/Apple keep the resident-cache latency win.
+        private let lowMemory: Bool
         /// Set only for the downloadable tier — drives `ensureModel`. `nil`
         /// for the fixed-path tier, whose `ensureModel` throws. `files` is in
         /// download order (see `StableDiffusionModelSource.files`).
@@ -61,7 +70,8 @@
             vaeDecoderPath: String,
             tokenizerVocabPath: String,
             tokenizerMergesPath: String,
-            spec: StableDiffusionModelSpec = .sdTurbo
+            spec: StableDiffusionModelSpec = .sdTurbo,
+            lowMemory: Bool = false
         ) {
             self.textEncoderPath = textEncoderPath
             self.unetPath = unetPath
@@ -69,6 +79,7 @@
             self.tokenizerVocabPath = tokenizerVocabPath
             self.tokenizerMergesPath = tokenizerMergesPath
             self.spec = spec
+            self.lowMemory = lowMemory
             download = nil
         }
 
@@ -82,7 +93,8 @@
         public init(
             cacheDirectory: URL,
             source: StableDiffusionModelSource = .sdTurboFp16,
-            spec: StableDiffusionModelSpec = .sdTurboFp16
+            spec: StableDiffusionModelSpec = .sdTurboFp16,
+            lowMemory: Bool = false
         ) {
             let downloader = ModelDownloader(directory: cacheDirectory)
             func path(_ file: StableDiffusionModelSource.File) -> String {
@@ -94,6 +106,7 @@
             tokenizerVocabPath = path(source.tokenizerVocab)
             tokenizerMergesPath = path(source.tokenizerMerges)
             self.spec = spec
+            self.lowMemory = lowMemory
             download = (downloader, source.files)
         }
 
@@ -268,14 +281,29 @@
                 ? .int64(ids.map(Int64.init), shape: [1, seqLen])
                 : .int32(ids, shape: [1, seqLen])
 
-            // 2. Text-encode → cross-attention context.
-            let te = try loadedTextEncoder(runtime)
-            let teOut = try mapOrt {
-                try te.run(inputs: [spec.inputIdsName: idsInput], outputNames: [spec.textEmbeddingName])
+            // 2. Text-encode → cross-attention context. The session and its
+            //    output are scoped to this `do` block so that, in low-memory
+            //    mode, no local reference outlives the `textEncoder = nil`
+            //    below — `embedding` is a value type (own `[Float]` storage),
+            //    so it survives while the session is released. (Holding a local
+            //    `let te` across the eviction would keep the session alive via
+            //    ARC and defeat the free — the bug device testing caught.)
+            let embedding: OrtModelSession.Tensor
+            do {
+                let te = try loadedTextEncoder(runtime)
+                let teOut = try mapOrt {
+                    try te.run(inputs: [spec.inputIdsName: idsInput], outputNames: [spec.textEmbeddingName])
+                }
+                guard let out = teOut[spec.textEmbeddingName] else {
+                    throw AIError.generationFailed("text encoder produced no \"\(spec.textEmbeddingName)\" output")
+                }
+                embedding = out
             }
-            guard let embedding = teOut[spec.textEmbeddingName] else {
-                throw AIError.generationFailed("text encoder produced no \"\(spec.textEmbeddingName)\" output")
-            }
+            // Low-memory: the text encoder is done — drop the cached session
+            // (frees it via `deinit` → `ReleaseSession`) so it isn't resident
+            // through the denoise loop. With the `do` block above closed, this
+            // is the last reference.
+            if lowMemory { textEncoder = nil }
 
             // 3. Initial latent: seeded (or injected) Gaussian × initNoiseSigma.
             //    The scheduler is chosen by the spec (Euler for SD-Turbo/SD,
@@ -303,7 +331,12 @@
 
             // 4. Denoise loop. One UNet pass per step (guidance is baked into
             //    the embedding for LCM, and SD-Turbo is guidance-free).
-            let unet = try loadedUnet(runtime)
+            //    `loadedUnet` is called *inline* per step rather than bound to
+            //    a `let unet` that would outlive the loop — so that in
+            //    low-memory mode the `unet = nil` after the loop is the last
+            //    reference and actually frees the session before VAE decode.
+            //    Each call returns the cached property (O(1)); the temporary is
+            //    released at the end of its statement.
             let timesteps = scheduler.timesteps
             for (index, timestep) in timesteps.enumerated() {
                 let scaled = scheduler.scaleModelInput(latent, stepIndex: index)
@@ -318,7 +351,9 @@
                 if let name = spec.unetTimestepCondName, let guidanceEmbedding {
                     inputs[name] = floatInput(guidanceEmbedding, shape: [1, Int64(spec.guidanceEmbeddingDim)])
                 }
-                let unetOut = try mapOrt { try unet.run(inputs: inputs, outputNames: [spec.unetOutputName]) }
+                let unetOut = try mapOrt {
+                    try loadedUnet(runtime).run(inputs: inputs, outputNames: [spec.unetOutputName])
+                }
                 guard let noisePred = unetOut[spec.unetOutputName] else {
                     throw AIError.generationFailed("UNet produced no \"\(spec.unetOutputName)\" output")
                 }
@@ -337,6 +372,15 @@
                 )
                 onStep?(index + 1, timesteps.count)
             }
+
+            // Low-memory: the denoise loop is done — drop the UNet (~1.7 GB
+            // fp16) *before* VAE decode so its session is freed ahead of the
+            // decode's memory spike rather than staying resident on top of it.
+            // This is the core OOM fix on constrained devices; the next run
+            // reloads it lazily. Because the loop above holds no local UNet
+            // reference, this is the last one — `deinit` → `ReleaseSession`
+            // runs here, not when the function returns.
+            if lowMemory { unet = nil }
 
             // 5. VAE-decode (latent / scaling_factor → image in [-1, 1]).
             let vae = try loadedVAEDecoder(runtime)

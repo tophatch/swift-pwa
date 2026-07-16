@@ -236,6 +236,14 @@
                 $("out").hidden = false; $("placeholder").hidden = true;
                 $("hint").innerHTML = `Generated in ${secs}s (seed ${out.seed ?? 0}) · ${modelByID(id)?.label || id}.`;
                 hideOverlay();
+
+                // Proactively free the resident model now the image is shown.
+                // On a memory-constrained device this returns the ~2 GB on-device
+                // pipeline to the OS instead of holding it until the next model
+                // switch; the next generate reloads it lazily. Remote backends
+                // (Imagen / ComfyUI) cache nothing, so this is a no-op for them.
+                // Fire-and-forget — a failed unload shouldn't disrupt the UI.
+                bridge.invoke("ai.unload", {}).catch(() => {});
             } catch (e) {
                 showError((e && e.message) || String(e));
             } finally {

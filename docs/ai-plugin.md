@@ -302,6 +302,32 @@ method (default no-op; `StableDiffusionBackend` / `LaMaBackend` implement it to
 release their ONNX sessions). If you write a session-caching backend, implement
 `unload()`; a remote backend inherits the no-op.
 
+**Freeing the model proactively — `ai.unload` + `system.memoryPressure`.** The
+per-switch eviction above only fires when the *model* changes. To free the
+resident model at other times — after a one-off generation, or when the OS is
+under memory pressure — JS can call **`ai.unload`**, which invokes the backend's
+`unload()` (routed through `MultiModelImageBackend` to free every entry). Wire it
+to the OS pressure signal so a background app sheds its ~2 GB pipeline before the
+kernel starts killing processes:
+
+```js
+// Free the on-device model when the OS reports memory pressure, and after a
+// run. `ai.unload` is a no-op for backends that cache nothing.
+__SWIFT_PWA__.on('system.memoryPressure', ({ level }) => {
+    if (level === 'critical') __SWIFT_PWA__.invoke('ai.unload').catch(() => {});
+});
+await __SWIFT_PWA__.invoke('ai.generateImage', { prompt });
+await __SWIFT_PWA__.invoke('ai.unload'); // done with it — give the RAM back
+```
+
+**Low-memory mode for constrained devices.** Even one resident pipeline can OOM
+mid-run on a phone: the VAE decode's memory spike stacks on top of the ~1.7 GB
+UNet held from the denoise loop. `StableDiffusionBackend(…, lowMemory: true)`
+evicts the text-encoder after text-encoding and the UNet immediately before VAE
+decode, so the UNet is freed *ahead of* the spike rather than under it. It trades
+per-run graph-reparse latency for a much lower peak — default `false` (desktop
+keeps the resident-cache speed); turn it on for mobile builds.
+
 ## Swift surface — implementing a backend
 
 A backend conforms to `AIBackend` (in `SwiftPWACore`, dependency-free).

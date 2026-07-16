@@ -178,6 +178,23 @@ private struct StreamingAudioBackend: AIBackend {
     }
 }
 
+/// Records `unload()` calls so a test can prove `ai.unload` routes through to
+/// the backend. `@unchecked Sendable` is safe here — mutated only from the
+/// serial test dispatch.
+private final class UnloadSpyBackend: AIBackend, @unchecked Sendable {
+    private(set) var unloadCalls = 0
+
+    func info() async -> AICapabilities {
+        AICapabilities(available: true, backend: "spy", model: "spy")
+    }
+
+    func generate(_: AIGenerateRequest) async throws -> AIGenerateResult {
+        AIGenerateResult(text: "", backend: "spy")
+    }
+
+    func unload() async { unloadCalls += 1 }
+}
+
 @Suite("AIPlugin")
 @MainActor
 struct AIPluginTests {
@@ -468,6 +485,27 @@ struct AIPluginTests {
         #expect(events.map(\.type) == ["chunk", "chunk", "done"])
         #expect(events.first?.dataBase64 == "AA==")
         #expect(events.last?.audio?.path == "/out.wav")
+    }
+
+    // MARK: - Model unload
+
+    @Test("ai.unload routes through to the backend's unload() and replies ok")
+    func unloadRoutes() async throws {
+        let backend = UnloadSpyBackend()
+        let result = await dispatch(app(backend), "ai.unload", "{}")
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        // The handler awaits unload() before returning, so it has run by now.
+        #expect(backend.unloadCalls == 1)
+        // Reply is an EmptyResult (an empty JSON object).
+        #expect(try JSONDecoder().decode(EmptyResult.self, from: data) == EmptyResult())
+    }
+
+    @Test("ai.unload is a no-op success on a backend that caches nothing")
+    func unloadNoneBackend() async {
+        // NoneBackend inherits the default no-op unload(); the command still
+        // succeeds so a shell can call it unconditionally.
+        let result = await dispatch(app(NoneBackend()), "ai.unload", "{}")
+        guard case .ok = result else { Issue.record("expected ok"); return }
     }
 }
 

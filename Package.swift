@@ -1118,6 +1118,34 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             swiftSettings: swiftSettings
         )
     ])
+
+    // MARK: - Qwen3-TTS backend (ai.generateAudio text→speech, TTS via ONNX Runtime)
+
+    // `QwenTTSBackend` conforms to Core's `AIBackend` and is the first consumer
+    // of the `ai.generateAudio` (text→speech / TTS) path — the on-device audio
+    // tier (see docs/proposals/v0.9-plan.md §"Phase B"). It reuses the shared
+    // `SwiftPWAONNX` tier (same OrtModelSession as SD/LaMa/MobileSAM) and keeps
+    // its own ONNX-module dependencies so the backend's `canImport(ONNXRuntime*)`
+    // gate stays exact. The weight-free pieces (Qwen2 tokenizer, the .npy reader,
+    // the embedding store, the sampler, WAV encoding) are ungated and unit-tested
+    // now; the full pipeline is verified against the reference (Phase B.1–B.3).
+    package.products.append(.library(name: "SwiftPWAQwenTTS", targets: ["SwiftPWAQwenTTS"]))
+    package.targets.append(contentsOf: [
+        .target(
+            name: "SwiftPWAQwenTTS",
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX"] + onnxRuntimeModuleDependencies(),
+            swiftSettings: segmentationSwiftSettings,
+            linkerSettings: onnxRuntimeLinkerSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAQwenTTSTests",
+            // SwiftPWAONNX (+ the ONNX module deps) so the opt-in end-to-end test
+            // can `canImport(ONNXRuntime*)` and drive the real backend when a
+            // model directory is provided.
+            dependencies: ["SwiftPWAQwenTTS", "SwiftPWACore", "SwiftPWAONNX"] + onnxRuntimeModuleDependencies(),
+            swiftSettings: swiftSettings
+        )
+    ])
 }
 
 // MARK: - Optional Windows Phi Silica backend (env-gated, Windows App SDK)

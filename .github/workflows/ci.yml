@@ -484,7 +484,19 @@ jobs:
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v5
+      # Pin swiftformat to a specific release rather than `brew install
+      # swiftformat` (which tracks latest) so the lint is reproducible: an
+      # unpinned upgrade that adds/enables a new default rule (e.g.
+      # wrapIfStatementBodies) would otherwise fail the whole repo on an
+      # unrelated PR. Bump this in lockstep with a `swiftformat .` reformat.
       - name: Install swiftformat
-        run: brew install swiftformat
+        env:
+          SWIFTFORMAT_VERSION: 0.61.1
+        run: |
+          curl -fsSL "https://github.com/nicklockwood/SwiftFormat/releases/download/${SWIFTFORMAT_VERSION}/swiftformat.zip" -o /tmp/swiftformat.zip
+          unzip -o /tmp/swiftformat.zip -d /tmp/swiftformat
+          sudo mv /tmp/swiftformat/swiftformat /usr/local/bin/swiftformat
+          sudo chmod +x /usr/local/bin/swiftformat
+          /usr/local/bin/swiftformat --version
       - name: Lint
-        run: swiftformat --lint .
+        run: /usr/local/bin/swiftformat --lint .

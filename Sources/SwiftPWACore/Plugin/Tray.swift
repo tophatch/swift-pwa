@@ -4,12 +4,13 @@ import Foundation
 /// concrete implementation (`SystemTray` in `SwiftPWAWebKit` and
 /// `SwiftPWAGTK`); tests use `MockTray` from `_SwiftPWATestSupport`.
 ///
-/// **Platform support:** full on macOS (`NSStatusItem`) and the GTK3
-/// Linux backend (`GtkStatusIcon`). On iOS and the GTK4 backend the
-/// concrete `SystemTray` is a no-op stub that logs a one-shot warning,
-/// so the same JS works everywhere — the tray just isn't displayed.
-/// `GtkStatusIcon` was removed in GTK4; AppIndicator support comes in a
-/// follow-up release once we add the libayatana dependency.
+/// **Platform support:** full on macOS (`NSStatusItem`), Windows, and
+/// both Linux backends — GTK3 via `libayatana-appindicator`, GTK4 via a
+/// hand-rolled StatusNotifierItem + `com.canonical.dbusmenu`
+/// implementation over GDBus (GTK4 removed `GtkStatusIcon`). On iOS the
+/// concrete `SystemTray` is a no-op stub that logs a one-shot warning, so
+/// the same JS works everywhere — the tray just isn't displayed. On Linux
+/// the icon shows only where the desktop runs a StatusNotifierHost.
 @MainActor
 public protocol Tray: AnyObject, Sendable {
     /// Set the icon shown in the tray. Path is interpreted by the

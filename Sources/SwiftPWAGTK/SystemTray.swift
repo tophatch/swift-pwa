@@ -95,6 +95,13 @@
         fileprivate func _emit(_ event: TrayEvent) {
             for c in continuations.values { c.yield(event) }
         }
+
+        /// Parity with the GTK4 backend's test accessor. The GTK3 tray
+        /// goes through `libayatana-appindicator`, which owns and hides
+        /// the SNI bus name, so there's nothing to report here.
+        var registeredBusName: String {
+            ""
+        }
     }
 
     /// `@convention(c)` callback for `swiftpwa_tray_*`. Always fires on

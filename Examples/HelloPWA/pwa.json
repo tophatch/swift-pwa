@@ -17,7 +17,8 @@
     "width": 1024,
     "height": 768,
     "resizable": true,
-    "fullscreen": false
+    "fullscreen": false,
+    "background_color": { "light": "#f4f6f9", "dark": "#0e1116" }
   },
   "macos": {
     "bundle_identifier": "com.swiftpwa.hello",

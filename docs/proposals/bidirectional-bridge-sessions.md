@@ -7,7 +7,7 @@
 > + the `__SWIFT_PWA__.session(...)` JS sugar — **zero per-backend code** (the
 > inbound `postMessage` path is uniform across all five backends). Verified
 > end-to-end on macOS through a real WKWebView + real `bridge.js`; demo at
-> `Examples/CritterFacts/web/session.html`. Precursor to the typed codegen layer
+> the **Duplex session** card in `Examples/HelloPWA/web/index.html`. Precursor to the typed codegen layer
 > (#6), which must model this third call shape — see
 > [typed-bridge-codegen.md](typed-bridge-codegen.md). The v1 scope note below
 > (droppedCount) records what shipped vs. deferred.
@@ -184,8 +184,8 @@ change to `invoke` / `subscribe` / `on` / `emit`.
    backend work) — round-trip, open/push race, malformed-drop, close, unknown-id.
 2. **JS sugar.** ✅ `session()` + `push` in `bridge.js`.
 3. **A real duplex consumer.** ✅ A `demo.runningTotal` session in
-   `Examples/CritterFacts` (`web/session.html`: push numbers → the handler keeps
-   a per-session running total and streams it back) — a deliberately simple
+   `Examples/HelloPWA` (the **Duplex session** card: push numbers → the handler
+   keeps a per-session running total and streams it back) — a deliberately simple
    stand-in until #3's audio backend gives a production consumer. Verified
    end-to-end on **macOS through a real WKWebView + real `bridge.js`** (a
    `WKBridgeIntegrationTests` case drives `session()` open → push → downstream

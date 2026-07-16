@@ -5,27 +5,41 @@
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
     <title>Hello, swift-pwa</title>
     <style>
+        /* Palette pulled from CritterFacts: dark surface, green accent. */
         :root {
-            --bg: #ffffff;
-            --fg: #1c1c1e;
-            --muted: #6e6e73;
-            --surface: #f4f4f7;
-            --accent: #0a84ff;
+            --bg: #0e1116;
+            --fg: #e9eef5;
+            --muted: #8b97a7;
+            --surface: #171c24;
+            --accent: #5fd0a0;
+            --accent-ink: #06231a;
+            --line: #232a35;
+            --glow: #1a212c;
         }
-        @media (prefers-color-scheme: dark) {
+        /* Light mode: follows the system. Dark is the default above; these
+           vars override it when the OS reports a light appearance. */
+        @media (prefers-color-scheme: light) {
             :root {
-                --bg: #1c1c1e;
-                --fg: #f2f2f7;
-                --muted: #98989d;
-                --surface: #2c2c2e;
-                --accent: #0a84ff;
+                --bg: #f4f6f9;
+                --fg: #1b2330;
+                --muted: #5c6775;
+                --surface: #ffffff;
+                --accent: #1f9d70;
+                --accent-ink: #ffffff;
+                --line: #dce2ea;
+                --glow: #ffffff;
             }
         }
         * { box-sizing: border-box; }
-        html, body { margin: 0; background: var(--bg); color: var(--fg); }
+        html {
+            min-height: 100%;
+            background: var(--bg) radial-gradient(120% 120% at 50% 0%, var(--glow) 0%, var(--bg) 60%) fixed;
+        }
+        html, body { margin: 0; color: var(--fg); }
         body {
             font-family: -apple-system, system-ui, sans-serif;
             line-height: 1.4;
+            background: transparent;
             padding:
                 max(1rem, env(safe-area-inset-top))
                 max(1.25rem, env(safe-area-inset-right))
@@ -34,32 +48,39 @@
             max-width: 1080px;
             margin: 0 auto;
         }
-        h1 { font-weight: 600; font-size: 1.6rem; margin: 0 0 .5rem; }
+        /* Centered header, matching CritterFacts: emoji + title, muted tagline. */
+        header { text-align: center; }
+        h1 { font-weight: 600; font-size: 1.6rem; letter-spacing: -0.01em; margin: 0 0 .35rem; }
         p { color: var(--muted); margin: 0 0 1.25rem; }
+        header p { max-width: 60ch; margin-left: auto; margin-right: auto; }
         code {
             font-size: .9em;
-            background: var(--surface);
+            /* A muted tint rather than --surface, so inline code stays visible
+               whether it sits on the page or inside a --surface card. */
+            background: color-mix(in srgb, var(--muted) 16%, transparent);
             padding: 1px 5px;
             border-radius: 4px;
         }
         button {
             font: inherit;
-            font-weight: 500;
+            font-weight: 600;
             padding: .65rem 1rem;
             min-height: 44px;
             border: 0;
-            border-radius: 10px;
+            border-radius: 12px;
             background: var(--accent);
-            color: white;
+            color: var(--accent-ink);
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
         button:active { opacity: 0.7; }
         button:disabled,
         button.disabled-by-platform {
-            background: color-mix(in srgb, var(--accent) 30%, transparent);
+            /* Neutral muted chip (not a faded accent) so disabled text stays
+               legible in both light and dark. */
+            background: color-mix(in srgb, var(--muted) 22%, transparent);
+            color: var(--muted);
             cursor: not-allowed;
-            opacity: 0.7;
         }
         .actions {
             display: flex;
@@ -72,56 +93,98 @@
         @media (hover: none) and (pointer: coarse) {
             .resize-only { display: none; }
         }
+        /* The log is frameless — just monospace text, no card chrome. */
         pre {
-            background: var(--bg);
-            padding: .65rem .75rem;
-            border-radius: 6px;
-            font-size: .85rem;
+            background: transparent;
+            padding: 0;
+            font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: var(--muted);
             white-space: pre-wrap;
             word-break: break-word;
             margin: 0;
             min-height: 5rem;
-            max-height: 14rem;
+            max-height: 16rem;
             overflow-y: auto;
-            border: 1px solid color-mix(in srgb, var(--muted) 20%, transparent);
         }
 
-        /* Two-column shell: controls on the left, logs on the right.
-           Reflows to a single column at narrow widths and on touch
-           where vertical real estate is at a premium. The grid lets
-           individual sections size to their content rather than
-           stretching uniformly. */
-        .layout {
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-            gap: 1rem;
-            align-items: start;
-        }
-        @media (max-width: 760px) {
-            .layout { grid-template-columns: 1fr; }
-        }
-        .controls, .logs {
+        /* Card deck: each capability is a card in one horizontally
+           scrolling, snap-aligned row (swipe on touch, scroll/drag on
+           desktop). The inline padding is half the leftover width so the
+           first and last cards snap to centre instead of the edges. The
+           logs sit in a static grid *below* the deck. */
+        .deck {
             display: flex;
-            flex-direction: column;
-            gap: .75rem;
-            min-width: 0;
+            gap: 1rem;
+            overflow-x: auto;
+            overflow-y: hidden;
+            scroll-snap-type: x mandatory;
+            -webkit-overflow-scrolling: touch;
+            padding: .5rem calc(50% - min(42vw, 170px)) 1rem;
+            margin: 0 0 1.5rem;
         }
+        /* Idle deck stays clean: the 8px track keeps its space (no layout
+           jump) but the thumb only appears on hover or while scrolling
+           (.scrolling toggled in JS). */
+        .deck::-webkit-scrollbar { height: 8px; }
+        .deck::-webkit-scrollbar-thumb {
+            background: transparent; border-radius: 8px; transition: background .25s ease;
+        }
+        .deck:hover::-webkit-scrollbar-thumb,
+        .deck.scrolling::-webkit-scrollbar-thumb {
+            background: color-mix(in srgb, var(--muted) 45%, transparent);
+        }
+        /* Cards are equal height (flex stretches them to the tallest) so any
+           slack falls at the card's bottom, below its buttons. */
+        .deck > .section {
+            flex: 0 0 auto;
+            width: min(84vw, 340px);
+            scroll-snap-align: center;
+            margin: 0;
+        }
+        /* Dot pager: an accessible, tappable way to jump between cards without
+           swiping — keyboard- and screen-reader-friendly. Built from the cards
+           in JS so it stays in sync with the deck. */
+        .pager { display: flex; justify-content: center; gap: 10px; margin-top: .5rem; }
+        .pager:empty { display: none; }
+        .dot {
+            appearance: none; border: 0; background: transparent; cursor: pointer;
+            width: 24px; height: 24px; min-height: 0; padding: 0; border-radius: 50%;
+            display: grid; place-items: center;
+        }
+        .dot::before {
+            content: ""; width: 9px; height: 9px; border-radius: 50%;
+            background: var(--line); transition: background .2s ease, transform .2s ease;
+        }
+        .dot:hover::before { background: var(--muted); }
+        .dot.active::before { background: var(--accent); transform: scale(1.3); }
+        .dot:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+        /* One combined, frameless log below the deck — a centered column that
+           grows to fill the width up to a comfortable reading max. */
+        .logs {
+            margin: 1.5rem auto 0;
+            width: 100%;
+            max-width: 760px;
+        }
+        .log-title {
+            font-size: .8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--muted);
+            margin: 0 0 .5rem;
+        }
+        .log-title .hint { font-weight: 400; text-transform: none; letter-spacing: 0; }
+        /* Compact running-total readout for the duplex-session card. */
+        .sess-total { font-size: 2.2rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
+        .sess-count { color: var(--muted); font-size: .85rem; min-height: 1.15em; margin-top: .15rem; }
 
-        /* Card style shared by control sections (left column) and log
-           panes (right column). The accent stripe gives the Notifications
-           card the same visual weight the Windows-toast verification
-           block had before — every section is a peer now, so the same
-           treatment applies uniformly. */
+        /* Card style pulled from CritterFacts: dark surface, hairline
+           border, generous radius. */
         .section {
-            padding: .85rem 1rem;
+            padding: 1.25rem;
             background: var(--surface);
-            border-radius: 10px;
-            border-left: 3px solid var(--accent);
-        }
-        .section.log {
-            /* Logs get a softer accent so the controls column remains
-               the eye-grabbing one. */
-            border-left-color: color-mix(in srgb, var(--accent) 50%, transparent);
+            border: 1px solid var(--line);
+            border-radius: 18px;
         }
         .section > h2 {
             font-size: .8rem;
@@ -210,8 +273,10 @@
     </style>
 </head>
 <body>
-    <h1>Hello from swift-pwa</h1>
-    <p>A system webview (<code id="webview-name">WKWebView / WebKitGTK / WebView2</code>) driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
+    <header>
+        <h1>👋 Hello from swift-pwa</h1>
+        <p>A system webview (<code id="webview-name">WKWebView / WebKitGTK / WebView2</code>) driven from Swift, with the <code>__SWIFT_PWA__</code> bridge wired up at document start.</p>
+    </header>
     <p class="shortcuts" id="shortcuts">
         <strong>Shortcuts:</strong>
         <kbd id="k-rename">⌘R</kbd> rename ·
@@ -223,8 +288,7 @@
         <kbd id="k-clear">⌘K</kbd> clear log
     </p>
 
-    <div class="layout">
-        <div class="controls">
+    <div class="deck">
             <section class="section">
                 <h2>Window</h2>
                 <p>Title and size go through <code>WindowPlugin</code>'s
@@ -273,15 +337,9 @@
             <section class="section">
                 <h2>Dialogs</h2>
                 <p>Native message / confirm / file pickers via
-                <code>DialogPlugin</code>. Each backend wires its
-                platform's HIG dialog: <code>NSAlert</code> /
-                <code>NSOpenPanel</code> on macOS,
-                <code>UIAlertController</code> /
-                <code>UIDocumentPickerViewController</code> on iOS,
-                <code>GtkMessageDialog</code> /
-                <code>GtkFileChooser</code> on Linux,
-                <code>MessageBoxW</code> /
-                <code>IFileOpenDialog</code> on Windows.</p>
+                <code>DialogPlugin</code> — each backend wires its platform's
+                HIG dialog (NSAlert/NSOpenPanel, UIAlertController,
+                GtkFileChooser, IFileOpenDialog).</p>
                 <div class="actions">
                     <button id="dialog-confirm" data-requires="dialog.confirm">Confirm</button>
                     <button id="dialog-open" data-requires="dialog.openFile">Open file</button>
@@ -308,20 +366,14 @@
 
             <section class="section">
                 <h2>Content packs</h2>
-                <p>The runtime content-pack flow: extract a <code>.zip</code>
-                natively (<code>fs.extractZip</code>, bytes never cross the
-                bridge) into the app's data dir, then reference the extracted
-                media by an origin-relative URL served via
-                <code>ctx.serveDirectory("/packs")</code> — same code on every
-                backend, streamed with HTTP range requests. The sample pack is
-                staged to a real path by a small <code>demo.stageSamplePack</code>
-                command (standing in for <code>dialog.openFile</code>).</p>
-                <p><strong>Import pack</strong> exercises the real flow:
+                <p>Extract a <code>.zip</code> natively
+                (<code>fs.extractZip</code>, bytes never cross the bridge) into
+                the app's data dir, then serve the media by an origin-relative
+                URL via <code>ctx.serveDirectory("/packs")</code>.
+                <strong>Import pack</strong> runs the real
                 <code>dialog.openFile</code> → <code>fs.listZip</code> /
-                <code>fs.extractZip</code> on the picked archive. On Android the
-                pick is a <code>content://</code> SAF URI fed straight to the zip
-                ops (read off-bridge via the ContentResolver); on desktop it's a
-                real path. Pick any <code>.zip</code>.</p>
+                <code>fs.extractZip</code> flow (a <code>content://</code> SAF
+                URI on Android, a path on desktop).</p>
                 <div class="actions">
                     <button id="pack-list" data-requires="fs.listZip">Peek pack</button>
                     <button id="pack-extract" data-requires="fs.extractZip">Install &amp; show</button>
@@ -348,18 +400,11 @@
 
             <section class="section">
                 <h2>Updater</h2>
-                <p>
-                    Cross-platform <code>updater.check</code> +
-                    <code>updater.run</code> +
-                    <code>updater.installAndRelaunch</code>. The demo wires
-                    a synthetic <code>DemoUpdater</code> (defined in
-                    <code>HelloPWA.swift</code>) so you can see the
-                    streaming progress bar fill without a real release
-                    server. Production apps swap in <code>AppleUpdater</code>
-                    / <code>LinuxAppImageUpdater</code> /
-                    <code>WindowsUpdater</code> pointed at a signed
-                    manifest.
-                </p>
+                <p>Cross-platform <code>updater.check</code> /
+                <code>run</code> / <code>installAndRelaunch</code>. A synthetic
+                <code>DemoUpdater</code> streams a fake progress arc so the bar
+                fills without a release server; production apps swap in the real
+                platform backend against a signed manifest.</p>
                 <div class="actions">
                     <button id="updater-check" data-requires="updater.check">Check for updates</button>
                     <button id="updater-run" data-requires="updater.run">Run full flow</button>
@@ -370,38 +415,41 @@
 
             <section class="section">
                 <h2>Notifications</h2>
-                <p>
-                    Cross-platform <code>notifications.send</code>. On
-                    Windows the second button names what it's exercising:
-                    look for the toast in Action Center attributed to
-                    <code>SwiftPWA.HelloPWA</code> (the AUMID derived
-                    from the exe basename). If the WinRT path failed,
-                    stderr will say so and the message came from the
-                    <code>Shell_NotifyIconW</code> balloon fallback. On
-                    macOS / Linux both buttons just send a regular
-                    notification.
-                </p>
+                <p>Cross-platform <code>notifications.send</code>. The second
+                button sends a fixed Windows toast (look for it in Action Center
+                under <code>SwiftPWA.HelloPWA</code>); on macOS / Linux both send
+                a regular notification.</p>
                 <div class="actions">
                     <button id="notify" data-requires="notifications.send">Send notification</button>
                     <button id="toast" data-requires="notifications.send">Send Windows toast</button>
                 </div>
             </section>
-        </div>
 
-        <aside class="logs">
-            <section class="section log">
-                <h2>Actions</h2>
-                <pre id="log"></pre>
+            <section class="section">
+                <h2>Duplex session</h2>
+                <p>Two-way over one open subscription: push frames <em>in</em>
+                while the Swift handler streams a running total back — a plain
+                <code>subscribe</code> can only listen. <strong>Flood</strong>
+                overruns the bounded buffer, so the oldest frames drop.</p>
+                <div class="sess-total" id="sess-total">0</div>
+                <div class="sess-count" id="sess-count">Open a session to begin.</div>
+                <div class="sess-count" id="sess-dropped"></div>
+                <div class="actions">
+                    <button id="sess-open">Open session</button>
+                    <button id="sess-add1" disabled>+1</button>
+                    <button id="sess-add5" disabled>+5</button>
+                    <button id="sess-add10" disabled>+10</button>
+                    <button id="sess-flood" disabled>flood 300× +1</button>
+                    <button id="sess-close" disabled>Close</button>
+                </div>
             </section>
-            <section class="section log">
-                <h2>Window events</h2>
-                <pre id="events"></pre>
-            </section>
-            <section class="section log">
-                <h2>Tray events <span class="hint">— click the menu-bar icon, or pick a menu item</span></h2>
-                <pre id="tray-events"></pre>
-            </section>
-        </aside>
+    </div>
+
+    <nav class="pager" aria-label="Choose a demo card"></nav>
+
+    <div class="logs">
+        <h2 class="log-title">Log <span class="hint">— actions, window &amp; tray events</span></h2>
+        <pre id="log"></pre>
     </div>
 
     <footer>
@@ -498,12 +546,14 @@
         const append = (id, msg) => {
             const el = document.getElementById(id);
             const line = new Date().toLocaleTimeString() + "  " + msg + "\n";
-            el.textContent += line;
-            el.scrollTop = el.scrollHeight;
+            // Newest first: prepend the line and keep the view pinned to the top.
+            el.textContent = line + el.textContent;
+            el.scrollTop = 0;
         };
+        // One combined log: actions plus window/tray events, tagged by source.
         const log = (m) => append("log", m);
-        const evt = (m) => append("events", m);
-        const trayEvt = (m) => append("tray-events", m);
+        const evt = (m) => append("log", "window · " + m);
+        const trayEvt = (m) => append("log", "tray · " + m);
         const clearLog = () => { document.getElementById("log").textContent = ""; };
 
         // Bridge actions, named so shortcuts can re-use them.
@@ -899,6 +949,115 @@
         document.getElementById("updater-check").onclick   = actions.updaterCheck;
         document.getElementById("updater-run").onclick     = actions.updaterRun;
         document.getElementById("updater-install").onclick = actions.updaterInstall;
+
+        // Duplex-session card: open one bidirectional session, push frames into
+        // it, and render the running total the Swift handler streams back. Key
+        // events also land in the Actions log. This is the one call shape a
+        // plain subscribe can't express — the client feeds the live stream.
+        (() => {
+            let session = null;
+            const el = (id) => document.getElementById(id);
+            const setAdders = (on) => {
+                for (const id of ["sess-add1", "sess-add5", "sess-add10", "sess-flood", "sess-close"])
+                    el(id).disabled = !on;
+                el("sess-open").disabled = on;
+            };
+            el("sess-open").onclick = () => {
+                el("sess-total").textContent = "0";
+                el("sess-count").textContent = "session open — push some numbers";
+                el("sess-dropped").textContent = "";
+                log("session → open demo.runningTotal");
+                session = __SWIFT_PWA__.session("demo.runningTotal", {}, {
+                    onChunk: (e) => {
+                        el("sess-total").textContent = e.total;
+                        el("sess-count").textContent =
+                            e.count + " frame" + (e.count === 1 ? "" : "s") + " applied";
+                        el("sess-dropped").textContent = e.dropped > 0
+                            ? "⚠️ " + e.dropped + " dropped (buffer overflow, drop-oldest)" : "";
+                        // Keep the log readable during a flood.
+                        if (e.count < 20 || e.count % 50 === 0)
+                            log("session ← total=" + e.total + " count=" + e.count + " dropped=" + e.dropped);
+                    },
+                    onError: (err) => log("session ✗ " + (err && err.message || err)),
+                    onEnd: () => log("session • ended"),
+                });
+                setAdders(true);
+            };
+            const push = (n) => {
+                if (!session) return;
+                log("session → push { add: " + n + " }");
+                session.push({ add: n });
+            };
+            el("sess-add1").onclick = () => push(1);
+            el("sess-add5").onclick = () => push(5);
+            el("sess-add10").onclick = () => push(10);
+            // 300 frames in a tight loop overruns the bounded (32) server buffer,
+            // so the total lands well under 300 and the dropped counter climbs.
+            el("sess-flood").onclick = () => {
+                if (!session) return;
+                log("session → flood 300× push { add: 1 }");
+                for (let i = 0; i < 300; i++) session.push({ add: 1 });
+            };
+            el("sess-close").onclick = () => {
+                if (!session) return;
+                log("session → close()");
+                session.close();
+                session = null;
+                setAdders(false);
+                el("sess-count").textContent = "session closed.";
+            };
+        })();
+
+        // Reveal the deck's scrollbar only while actively scrolling (hover
+        // shows it too, via CSS); it fades out shortly after the last scroll.
+        (() => {
+            const deck = document.querySelector(".deck");
+            let t;
+            deck.addEventListener("scroll", () => {
+                deck.classList.add("scrolling");
+                clearTimeout(t);
+                t = setTimeout(() => deck.classList.remove("scrolling"), 700);
+            }, { passive: true });
+        })();
+
+        // Dot pager under the deck: one dot per card, click to centre it, and the
+        // active dot tracks whichever card is centred. Built from the cards so it
+        // stays in sync with the deck's contents.
+        (() => {
+            const deck = document.querySelector(".deck");
+            const pager = document.querySelector(".pager");
+            if (!deck || !pager) return;
+            const cards = [...deck.children];
+            cards.forEach((card, i) => {
+                const dot = document.createElement("button");
+                dot.type = "button";
+                dot.className = "dot";
+                dot.setAttribute("aria-label", card.dataset.pagerLabel
+                    || card.querySelector(".ctitle, h2")?.textContent?.trim()
+                    || `Card ${i + 1}`);
+                dot.addEventListener("click", () =>
+                    card.scrollIntoView({ behavior: "smooth", inline: "center", block: "nearest" }));
+                pager.appendChild(dot);
+            });
+            const dots = [...pager.children];
+            const sync = () => {
+                const mid = deck.getBoundingClientRect().left + deck.clientWidth / 2;
+                let best = 0, bestDist = Infinity;
+                cards.forEach((card, i) => {
+                    const r = card.getBoundingClientRect();
+                    const d = Math.abs(r.left + r.width / 2 - mid);
+                    if (d < bestDist) { bestDist = d; best = i; }
+                });
+                dots.forEach((dot, i) => {
+                    dot.classList.toggle("active", i === best);
+                    if (i === best) dot.setAttribute("aria-current", "true");
+                    else dot.removeAttribute("aria-current");
+                });
+            };
+            deck.addEventListener("scroll", sync, { passive: true });
+            window.addEventListener("resize", sync);
+            sync();
+        })();
 
         // React to tray clicks / menu-item activations from the JS side.
         // Some items (e.g. "rename") map directly onto existing actions;

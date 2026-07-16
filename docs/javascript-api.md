@@ -107,8 +107,8 @@ The Swift side of a session is a `registerSession` command (see
 - A malformed push (one that doesn't decode to the handler's frame type) is
   dropped and logged — it doesn't tear the session down.
 
-Live demo: `Examples/CritterFacts/web/session.html` (push numbers, the handler
-keeps a per-session running total and streams it back).
+Live demo: the **Duplex session** card in `Examples/HelloPWA/web/index.html`
+(push numbers, the handler keeps a per-session running total and streams it back).
 
 ## Built-in plugins (auto-installed on every backend)
 

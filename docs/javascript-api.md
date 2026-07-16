@@ -600,6 +600,13 @@ const { audio: cloned } = await __SWIFT_PWA__.invoke('ai.generateAudio', {
     referenceAudio: { path: '/voices/narrator.wav' }, // or { dataBase64 }
     referenceText: 'the transcript of the reference clip',
 });
+
+// Release the backend's cached model weights / inference sessions after a run,
+// returning it to its just-constructed state (the next generate reloads
+// lazily). Lets a shell proactively free a multi-GB on-device model — e.g. from
+// a `system.memoryPressure` listener — instead of holding it resident. A no-op
+// for backends that cache nothing (remote / not-configured).
+await __SWIFT_PWA__.invoke('ai.unload');
 ```
 
 `ai.generateJSON` always returns schema-valid JSON regardless of backend

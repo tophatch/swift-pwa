@@ -137,6 +137,42 @@ struct StableDiffusionReferenceVerificationTests {
         print("[SD verify] LCM pipeline matched the diffusers reference")
     }
 
+    /// `lowMemory` eviction must be functionally transparent: dropping the
+    /// text-encoder and UNet sessions between pipeline stages changes *when*
+    /// weights are resident, not *what* the pipeline computes. Runs the same
+    /// injected-latent SD-Turbo pass with the flag off and on and asserts the
+    /// decoded VAE image is **bit-for-bit identical**. Reuses `SD_VERIFY_DIR`
+    /// (real weights), so it no-ops in CI like the reference tests above.
+    @Test func lowMemoryEvictionIsBitIdentical() async throws {
+        guard let dirPath = ProcessInfo.processInfo.environment["SD_VERIFY_DIR"] else { return }
+        let env = ProcessInfo.processInfo.environment
+        let base = URL(fileURLWithPath: dirPath)
+        let model = base.appendingPathComponent(env["SD_VERIFY_MODEL"] ?? "sd-turbo-onnx")
+        let ref = base.appendingPathComponent(env["SD_VERIFY_REF"] ?? "ref")
+        let spec: StableDiffusionModelSpec = env["SD_VERIFY_SPEC"] == "fp16" ? .sdTurboFp16 : .sdTurbo
+
+        func run(lowMemory: Bool) async throws -> [Float] {
+            let backend = StableDiffusionBackend(
+                textEncoderPath: model.appendingPathComponent("text_encoder/model.onnx").path,
+                unetPath: model.appendingPathComponent("unet/model.onnx").path,
+                vaeDecoderPath: model.appendingPathComponent("vae_decoder/model.onnx").path,
+                tokenizerVocabPath: model.appendingPathComponent("tokenizer/vocab.json").path,
+                tokenizerMergesPath: model.appendingPathComponent("tokenizer/merges.txt").path,
+                spec: spec, lowMemory: lowMemory
+            )
+            let initLatent = try floats(ref.appendingPathComponent("init_latent.bin"))
+            let request = AIGenerateImageRequest(
+                prompt: "a photograph of an astronaut riding a horse",
+                width: 512, height: 512, steps: 1, seed: 42
+            )
+            return try await backend.runTxt2Img(request, injectedLatent: initLatent).image.values
+        }
+
+        let resident = try await run(lowMemory: false)
+        let evicted = try await run(lowMemory: true)
+        #expect(resident == evicted)
+    }
+
     // MARK: - Fixture readers
 
     private func floats(_ url: URL) throws -> [Float] {

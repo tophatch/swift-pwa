@@ -24,6 +24,9 @@ import Foundation
 /// - `ai.generateStream` (subscribe) → `AIChunk` (`delta`…, then `done`)
 /// - `ai.ensureModel` (subscribe) → `AIDownloadEvent` — **reserved** for
 ///   the downloadable-Gemma tier; throws `E_UNIMPLEMENTED` until then.
+/// - `ai.unload` → releases the backend's cached model weights / inference
+///   sessions (default no-op; multi-GB backends override) so a shell can
+///   proactively free memory after a run.
 public struct AIPlugin: Plugin {
     public static let pluginName = "ai"
 
@@ -110,6 +113,16 @@ public struct AIPlugin: Plugin {
                 Self.mapping(backend.generateAudioStream(req))
             }
         )
+
+        // Release cached model weights / inference sessions (default no-op;
+        // the Stable Diffusion and LaMa backends override it). Lets a shell
+        // proactively free multi-GB models after a run — e.g. from a
+        // `system.memoryPressure` listener — instead of holding them resident
+        // until the next model switch. Doesn't throw, so no `Self.mapping`.
+        registry.register("ai.unload", typed: { (_: EmptyArgs, _) async -> EmptyResult in
+            await backend.unload()
+            return EmptyResult()
+        })
     }
 
     // MARK: - AIError → BridgeError mapping

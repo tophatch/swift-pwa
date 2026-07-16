@@ -231,6 +231,16 @@ func configure(_ ctx: any AppContext) throws {
         #if canImport(SwiftPWAStableDiffusion)
             let lcmDir = ctx.dataDirectory().appendingPathComponent("lcm-dreamshaper", isDirectory: true)
             let sdTurboDir = ctx.dataDirectory().appendingPathComponent("sd-turbo", isDirectory: true)
+            // Evict the text-encoder + UNet between pipeline stages on
+            // memory-constrained mobile devices so the ~1.7 GB UNet is freed
+            // before the VAE decode spike (which otherwise OOM-kills the app on
+            // an 11 GB phone). Desktop has ample RAM, so keep the sessions
+            // resident there for lower per-run latency. See docs/tutorials/on-device-ai.md.
+            #if os(Android)
+                let sdLowMemory = true
+            #else
+                let sdLowMemory = false
+            #endif
             let imageEntries: [MultiModelImageBackend.Entry] = [
                 .init(
                     AIModelInfo(
@@ -240,7 +250,8 @@ func configure(_ ctx: any AppContext) throws {
                         offlineCapable: true, license: "OpenRAIL-M"
                     ),
                     StableDiffusionBackend(
-                        cacheDirectory: lcmDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16
+                        cacheDirectory: lcmDir, source: .lcmDreamshaperFp16, spec: .lcmDreamshaperFp16,
+                        lowMemory: sdLowMemory
                     )
                 ),
                 .init(
@@ -251,7 +262,8 @@ func configure(_ ctx: any AppContext) throws {
                         offlineCapable: true, license: "Stability Non-Commercial"
                     ),
                     StableDiffusionBackend(
-                        cacheDirectory: sdTurboDir, source: .sdTurboFp16, spec: .sdTurboFp16
+                        cacheDirectory: sdTurboDir, source: .sdTurboFp16, spec: .sdTurboFp16,
+                        lowMemory: sdLowMemory
                     )
                 ),
             ]

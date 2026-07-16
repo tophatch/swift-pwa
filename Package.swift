@@ -104,7 +104,7 @@ let statusNotifierSystemLibraryTarget: Target? = useGtk4
 /// literal keeps just one optional `+` splice — extending that chain
 /// further trips the type-checker on older Swift toolchains.
 let optionalLinuxTrayTargets: [Target] =
-    [appIndicatorSystemLibraryTarget, statusNotifierSystemLibraryTarget].compactMap { $0 }
+    [appIndicatorSystemLibraryTarget, statusNotifierSystemLibraryTarget].compactMap(\.self)
 
 /// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
 /// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit

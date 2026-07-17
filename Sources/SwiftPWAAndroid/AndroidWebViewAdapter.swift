@@ -61,7 +61,7 @@
         /// content URL.
         static func resolveURL(for content: WindowContent) -> String {
             switch content {
-            case let .bundled(_, entry):
+            case let .bundled(_, entry, _):
                 "https://swift-pwa.local/web/\(entry)"
             case let .remote(url):
                 url.absoluteString

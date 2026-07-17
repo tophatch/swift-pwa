@@ -4,7 +4,7 @@
 
 Assumes you've met the bridge — see [Talking to the native side](talking-to-the-native-side.md).
 
-> Uses swift-pwa **0.8+**. Fully wired on macOS, iOS, and Android; on Linux/Windows the *receiving* half works but you declare the association yourself (see the last section).
+> Uses swift-pwa **0.9+**. The association is generated on every platform — macOS/iOS via the `info_plist` passthrough, Android via `android.document_types`, Linux via `linux.document_types`, Windows via `windows.document_types`.
 
 ---
 
@@ -72,6 +72,33 @@ Use the `android.document_types` key — swift-pwa turns it into `VIEW` / `SEND`
 
 Wildcards like `"image/*"` work. Omit the key and your app only opens from the launcher.
 
+### Linux
+
+Linux associates by **MIME type**. Use the `linux.document_types` key — swift-pwa adds a `MimeType=` line to the generated `.desktop` entry *and* the `%F` field code to its `Exec=` line (so the desktop environment passes the opened file's path, which reaches `app.openFile`):
+
+```json
+"linux": {
+  "document_types": [
+    { "mime_types": ["application/json", "image/png"] }
+  ]
+}
+```
+
+### Windows
+
+Windows associates by **file extension**. Use the `windows.document_types` key:
+
+```json
+"windows": {
+  "document_types": [
+    { "extensions": [".myapp", ".json"], "name": "MyApp Document" }
+  ]
+}
+```
+
+- For an **MSIX** build (`--package-format msix`), this becomes a `<uap:FileTypeAssociation>` in the generated `AppxManifest.xml`, and the OS registers the association when the package installs.
+- For a **portable** `.exe`, there's no installer, so the bundler drops `register-file-types.cmd` (and `unregister-file-types.cmd`) next to the exe. Run it once — it writes per-user (`HKCU`) associations pointing at the exe *at its current location*. (Extensions are normalized: `"MyApp"`, `".myapp"`, `"myapp"` all mean `.myapp`.)
+
 ---
 
 ## Try it
@@ -80,17 +107,8 @@ Rebuild and install a real bundle (associations don't apply to `swift-pwa dev`):
 
 - **macOS:** `swift-pwa build --target macos`, then `open -a build/MyApp.app somefile.json` (or right-click a file → Open With). Both cold launch and warm (app already running) route to `app.openFile`.
 - **Android:** build/install, then open a matching file from Files or share one to your app.
-
----
-
-## Linux & Windows: receiving works, declaring is manual
-
-On Linux and Windows, the **receiving** half works — if the OS launches your app with a file path as an argument, it arrives on `app.openFile` just like everywhere else. But swift-pwa doesn't yet generate the OS-side **declaration**, so you wire that part yourself:
-
-- **Linux:** after bundling, edit the generated `.desktop` file to add a `MimeType=` line *and* a field code to the exec line (`Exec=myapp %F`) so the launcher passes the file path — then register the MIME type (`xdg-mime`). Without the `%F`, the file path is never handed to your app.
-- **Windows:** register the file type with Explorer yourself (a ProgID + `HKCR` entries in your installer, or an MSIX `FileTypeAssociation` extension). Once the association passes the file as an argument, `app.openFile` receives it.
-
-(These declaration gaps are tracked for a future release — the runtime side is already in place, so they'll "just work" on those platforms once the bundler emits the association.)
+- **Linux:** build the AppImage, install its `.desktop` (or run `xdg-mime default`), then open a matching file from your file manager.
+- **Windows:** install the MSIX, or run `register-file-types.cmd` from the portable folder, then double-click a matching file.
 
 ---
 

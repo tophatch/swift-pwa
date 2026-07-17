@@ -52,6 +52,14 @@
         /// folder build. Read/written only on the UI thread.
         private nonisolated(unsafe) var embeddedAssets: EmbeddedWebAssets?
 
+        /// SPA history-routing fallback, seeded from `WindowContent.bundled`'s
+        /// `spaFallback` in `load(_:)`. For the disk build the fallback lives in
+        /// the shared router (`assetProvider.spaFallback(for:)`); these two hold
+        /// the policy for the single-file (embedded) build, whose bundle has no
+        /// disk root to consult. Read/written only on the UI thread.
+        private nonisolated(unsafe) var spaFallbackEnabled = false
+        private nonisolated(unsafe) var spaFallbackDocument = "index.html"
+
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache
         // the most recently issued one so `respond` can find its way
         // back to the owner; freeing happens with the controller.
@@ -166,6 +174,20 @@
                 // the native virtual-host mapping (disk web/).
                 if let embedded = embeddedAssets {
                     serveEmbedded(url: url, token: token, embedded: embedded, view: view)
+                } else if let fallback = assetProvider.spaFallback(for: url) {
+                    // SPA history routing: a client-side route the native
+                    // virtual-host mapping would 404 → serve the entry document
+                    // off disk so a hard reload / deep-link loads the app.
+                    let path = fallback.fileURL.withUnsafeFileSystemRepresentation { rep -> String in
+                        rep.map { String(cString: $0) } ?? fallback.fileURL.path
+                    }
+                    path.withCString(encodedAs: UTF16.self) { pathW in
+                        fallback.mimeType.withCString { mime in
+                            swiftpwa_w2_resource_respond_file(
+                                view, token, 200, mime, pathW, 0, fallback.fileSize, fallback.fileSize
+                            )
+                        }
+                    }
                 } else {
                     swiftpwa_w2_resource_passthrough(view, token)
                 }
@@ -215,7 +237,14 @@
         ) {
             var path = url.path
             if path.isEmpty || path == "/" { path = "/index.html" }
-            guard let data = embedded.data(for: path) else {
+            var data = embedded.data(for: path)
+            // SPA history routing: a client-side route with no overlay entry →
+            // serve the bundle entry document from the overlay instead of 404.
+            if data == nil, spaFallbackEnabled, AssetProvider.looksLikeNavigation(path) {
+                data = embedded.data(for: "/" + spaFallbackDocument)
+                if data != nil { path = "/" + spaFallbackDocument }
+            }
+            guard let data else {
                 "text/plain; charset=utf-8".withCString { mime in
                     swiftpwa_w2_resource_respond(view, token, 404, mime, nil, 0)
                 }
@@ -286,7 +315,11 @@
             // pump.)
             guard let view else { return }
             switch content {
-            case let .bundled(directory, entry):
+            case let .bundled(directory, entry, spaFallback):
+                // Record the SPA-fallback policy for the interception path
+                // (both the embedded and disk branches consult it below).
+                spaFallbackEnabled = spaFallback
+                spaFallbackDocument = entry
                 // Single-file build: the web bundle is an overlay in our own
                 // exe, not a folder on disk. Serve it from memory through the
                 // resource-interception hook (set up in `_onControllerReady`)
@@ -323,8 +356,11 @@
                 // Bundle is served natively by the virtual-host mapping
                 // above; the shared router still records the `/` root so
                 // `serveDirectory` mounts (handled via interception below)
-                // can resolve relative file paths consistently.
-                assetProvider.setBundleRoot(directory)
+                // can resolve relative file paths consistently — and, when
+                // `spaFallback` is on, so the interception path can serve the
+                // entry document for a client-side route the native mapping
+                // would 404 (see `_onWebResourceRequested`).
+                assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
             case let .remote(url):
                 url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)

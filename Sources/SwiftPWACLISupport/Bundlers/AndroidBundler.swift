@@ -201,7 +201,10 @@ struct AndroidBundler {
         // shadow or rewrap it.
         let runtimeDir = main.appendingPathComponent("java/dev/swiftpwa/runtime")
         try FileManager.default.createDirectory(at: runtimeDir, withIntermediateDirectories: true)
-        try AndroidTemplates.swiftPWABridgeKt.write(
+        try AndroidTemplates.swiftPWABridgeKt(
+            spaFallback: manifest.web.spaFallback ?? false,
+            entry: manifest.web.entry
+        ).write(
             to: runtimeDir.appendingPathComponent("SwiftPWABridge.kt"),
             atomically: true, encoding: .utf8
         )

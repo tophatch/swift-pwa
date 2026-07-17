@@ -86,6 +86,12 @@ enum AppxManifestGenerator {
         let description = xmlEscape(manifest.description ?? manifest.name)
         let executable = manifest.name + ".exe"
 
+        // File-type associations (windows.document_types) → a
+        // `windows.fileTypeAssociation` extension per declared group, so the OS
+        // associates the app with those extensions on install. Empty when none
+        // are declared, keeping the manifest byte-for-byte as before.
+        let fileTypeExtensions = fileTypeAssociationsXML(manifest.windows?.documentTypes ?? [])
+
         return """
         <?xml version="1.0" encoding="utf-8"?>
         <Package
@@ -124,7 +130,7 @@ enum AppxManifestGenerator {
                   Description="\(description)"
                   BackgroundColor="transparent"
                   Square150x150Logo="Square150x150Logo.png"
-                  Square44x44Logo="Square150x150Logo.png" />
+                  Square44x44Logo="Square150x150Logo.png" />\(fileTypeExtensions)
             </Application>
           </Applications>
 
@@ -134,6 +140,38 @@ enum AppxManifestGenerator {
 
         </Package>
         """
+    }
+
+    /// Render the `<Extensions>` block of `windows.fileTypeAssociation`
+    /// entries, or "" when none are declared. One `<uap:FileTypeAssociation>`
+    /// per document-type group; its `Name` (the association identifier) must be
+    /// lowercase and `[a-z0-9.-_]`, so it's sanitized / auto-numbered.
+    static func fileTypeAssociationsXML(_ docTypes: [PWAManifest.ExtensionDocumentType]) -> String {
+        // Normalize + drop entries with no usable extension.
+        let groups: [(name: String, exts: [String])] = docTypes.enumerated().compactMap { index, dt in
+            let exts = FileAssociationSupport.normalizedExtensions(dt.extensions)
+            guard !exts.isEmpty else { return nil }
+            let name = FileAssociationSupport.associationName(dt.name, fallbackIndex: index)
+            return (name, exts)
+        }
+        guard !groups.isEmpty else { return "" }
+
+        let associations = groups.map { group in
+            let fileTypes = group.exts
+                .map { "              <uap:FileType>\($0)</uap:FileType>" }
+                .joined(separator: "\n")
+            return """
+                  <uap:Extension Category="windows.fileTypeAssociation">
+                    <uap:FileTypeAssociation Name="\(group.name)">
+                      <uap:SupportedFileTypes>
+            \(fileTypes)
+                      </uap:SupportedFileTypes>
+                    </uap:FileTypeAssociation>
+                  </uap:Extension>
+            """
+        }.joined(separator: "\n")
+
+        return "\n          <Extensions>\n\(associations)\n          </Extensions>"
     }
 
     private static func xmlEscape(_ s: String) -> String {

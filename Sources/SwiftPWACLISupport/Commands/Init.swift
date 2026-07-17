@@ -127,7 +127,12 @@ struct Init: AsyncParsableCommand {
             atomically: true,
             encoding: .utf8
         )
-        try Templates.mainSwift(structName: identifier, window: manifest.window, entry: manifest.web.entry).write(
+        try Templates.mainSwift(
+            structName: identifier,
+            window: manifest.window,
+            entry: manifest.web.entry,
+            spaFallback: manifest.web.spaFallback ?? false
+        ).write(
             to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
             atomically: true,
             encoding: .utf8
@@ -380,7 +385,8 @@ enum Templates {
     static func mainSwift(
         structName: String,
         window: PWAManifest.WindowSection,
-        entry: String = "index.html"
+        entry: String = "index.html",
+        spaFallback: Bool = false
     ) -> String {
         // Escape the window title for safe embedding in the generated
         // Swift source. `window.title` is whatever the user typed, which
@@ -487,7 +493,11 @@ enum Templates {
                 #endif
                 // `entry` is seeded from pwa.json's `web.entry` at `init`
                 // time; edit it here to change which file the window opens.
-                content = .bundled(directory: webRoot, entry: "\(entryLiteral)")
+                // `spaFallback` (from pwa.json's `web.spa_fallback`) serves
+                // `entry` for client-side routes that name no file on disk, so
+                // history-mode deep links / hard reloads work under the custom
+                // scheme instead of 404ing.
+                content = .bundled(directory: webRoot, entry: "\(entryLiteral)", spaFallback: \(spaFallback))
             }
 
             // This WindowConfig is the *runtime* source of truth for the

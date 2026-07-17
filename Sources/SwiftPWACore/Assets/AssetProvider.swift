@@ -27,6 +27,14 @@ public final class AssetProvider: @unchecked Sendable {
         let prefix: String // normalized: "/" or "/foo" (no trailing slash)
         let root: URL
         let writable: Bool
+        /// SPA history-routing fallback (only ever set on the `/` bundle
+        /// mount): when a request under this mount names no file on disk and
+        /// looks like a client-side route, serve `fallbackDocument` instead of
+        /// 404ing. `false` on served-pack mounts.
+        var spaFallback: Bool = false
+        /// The document served for an SPA-fallback hit (the bundle entry, e.g.
+        /// `index.html`), relative to `root`.
+        var fallbackDocument: String = "index.html"
     }
 
     public init(scheme: String = "pwa", host: String = "localhost", root: URL) {
@@ -50,10 +58,17 @@ public final class AssetProvider: @unchecked Sendable {
     /// Install (or replace) the read-only bundle `/` mount. Idempotent for
     /// the common case where every window loads the same bundle directory;
     /// the last writer wins if windows somehow disagree.
-    public func setBundleRoot(_ root: URL) {
+    ///
+    /// `spaFallback` / `fallbackDocument` opt the bundle into single-page-app
+    /// history routing — see ``WindowContent/bundled(directory:entry:spaFallback:)``
+    /// and ``resolve(_:)``.
+    public func setBundleRoot(_ root: URL, spaFallback: Bool = false, fallbackDocument: String = "index.html") {
         lock.lock(); defer { lock.unlock() }
         mounts.removeAll { $0.prefix == "/" }
-        mounts.append(Mount(prefix: "/", root: root.standardizedFileURL, writable: false))
+        mounts.append(Mount(
+            prefix: "/", root: root.standardizedFileURL, writable: false,
+            spaFallback: spaFallback, fallbackDocument: fallbackDocument
+        ))
     }
 
     /// The bundle root (the `/` mount) — exposed for the rare caller that
@@ -122,8 +137,22 @@ public final class AssetProvider: @unchecked Sendable {
             let rootPath = mount.root.path
             let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
             guard candidate.path == rootPath || candidate.path.hasPrefix(rootPrefix) else { continue }
-            guard let size = Self.regularFileSize(candidate) else { continue }
-            return Resolved(fileURL: candidate, mimeType: Self.mimeType(for: candidate), fileSize: size)
+            if let size = Self.regularFileSize(candidate) {
+                return Resolved(fileURL: candidate, mimeType: Self.mimeType(for: candidate), fileSize: size)
+            }
+            // No file on disk. If this mount opts into SPA history routing and
+            // the request looks like a client-side route (not an asset), serve
+            // its fallback document instead of falling through to a 404 — so a
+            // hard reload / deep-link of `/settings` loads the app. Only the
+            // bundle `/` mount ever sets `spaFallback`.
+            if mount.spaFallback, Self.looksLikeNavigation(path) {
+                let fallback = mount.root.appendingPathComponent(mount.fallbackDocument).standardizedFileURL
+                if let size = Self.regularFileSize(fallback) {
+                    return Resolved(
+                        fileURL: fallback, mimeType: Self.mimeType(for: fallback), fileSize: size
+                    )
+                }
+            }
         }
         return nil
     }
@@ -150,6 +179,40 @@ public final class AssetProvider: @unchecked Sendable {
         return false
     }
 
+    /// The SPA-fallback resolution for `url` **only**: the bundle entry
+    /// document when `url` names no file on disk, the bundle `/` mount opted
+    /// into SPA fallback, and the path looks like a client-side route. Returns
+    /// nil for a real file (so the caller keeps serving those its own way) and
+    /// for a missing asset with an extension (an honest 404).
+    ///
+    /// The counterpart to the fallback baked into ``resolve(_:)``, for backends
+    /// whose bundle is served **natively** (Windows' `SetVirtualHostNameTo`
+    /// `FolderMapping`) rather than through `resolve` — they consult this in
+    /// their resource-interception path to answer a route the native mapping
+    /// would 404. Only applies to the bundle `/` mount.
+    public func spaFallback(for url: URL) -> Resolved? {
+        guard url.scheme?.lowercased() == scheme else { return nil }
+        guard let urlHost = url.host?.lowercased(), urlHost == host else { return nil }
+        var path = url.path
+        if path.isEmpty { path = "/" }
+        guard Self.looksLikeNavigation(path) else { return nil }
+
+        let bundle: Mount? = {
+            lock.lock(); defer { lock.unlock() }
+            return mounts.first { $0.prefix == "/" }
+        }()
+        guard let bundle, bundle.spaFallback else { return nil }
+
+        // A real file at this exact path is not a fallback case.
+        let relative = String(path.drop(while: { $0 == "/" }))
+        let direct = bundle.root.appendingPathComponent(relative).standardizedFileURL
+        if Self.regularFileSize(direct) != nil { return nil }
+
+        let fallback = bundle.root.appendingPathComponent(bundle.fallbackDocument).standardizedFileURL
+        guard let size = Self.regularFileSize(fallback) else { return nil }
+        return Resolved(fileURL: fallback, mimeType: Self.mimeType(for: fallback), fileSize: size)
+    }
+
     // MARK: - Helpers
 
     /// The path *under* `prefix`, or nil if `path` isn't covered by it.
@@ -161,6 +224,17 @@ public final class AssetProvider: @unchecked Sendable {
         if path == prefix { return "" }
         if path.hasPrefix(prefix + "/") { return String(path.dropFirst(prefix.count + 1)) }
         return nil
+    }
+
+    /// Heuristic for "this request is a client-side route, not a file":
+    /// the last path segment has no extension (`/settings`, `/users/42`,
+    /// `/app/`). An asset request (`/assets/app.abc.js`, `/logo.png`,
+    /// `/data.json`) has one, so it still 404s honestly rather than being
+    /// masked by an HTML body — the standard SPA-fallback rule that keeps a
+    /// missing chunk from silently returning `index.html`.
+    public static func looksLikeNavigation(_ path: String) -> Bool {
+        let last = path.split(separator: "/").last.map(String.init) ?? ""
+        return !last.contains(".")
     }
 
     private static func normalize(_ prefix: String) -> String {

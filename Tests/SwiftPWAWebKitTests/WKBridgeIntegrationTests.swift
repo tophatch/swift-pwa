@@ -110,6 +110,37 @@
             let result = try await waitForJSResult(in: adapter)
             #expect(result == #"[">>a",">>b"]"#)
         }
+
+        /// End-to-end SPA history-routing fallback: a deep-link to a
+        /// client-side route with no file on disk must serve the bundle
+        /// entry (index.html) through the real `pwa://` scheme handler,
+        /// rather than failing the navigation. Proves the wiring from
+        /// `setBundleRoot(spaFallback:)` → `WKSchemeHandler` → a rendered
+        /// page, not just the resolver in isolation.
+        @Test("spa fallback serves the entry for a deep-link route through a real WKWebView")
+        func spaFallbackDeepLink() async throws {
+            let dir = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("swift-pwa-spa-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            // index.html carries a recognizable <title> marker.
+            try Data("<!doctype html><html><head><title>SPA_ROOT</title></head><body>ok</body></html>".utf8)
+                .write(to: dir.appendingPathComponent("index.html"))
+
+            let provider = AssetProvider()
+            provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "index.html")
+
+            let cfg = WKWebViewConfiguration()
+            WKWebViewAdapter.registerScheme("pwa", on: cfg, assetProvider: provider)
+            let adapter = try WKWebViewAdapter(configuration: cfg)
+
+            // Hard-load a nested client-side route that names no file on disk.
+            let route = try #require(URL(string: "pwa://localhost/settings/deep"))
+            adapter.webView.load(URLRequest(url: route))
+
+            let title = try await waitForJSExpr(in: adapter, "document.title")
+            #expect(title == "SPA_ROOT")
+        }
     }
 
     private struct EchoArgs: Codable, Equatable {
@@ -132,6 +163,27 @@
             // the value is null/undefined.
             if let value, value != "<null>", value != "(null)" {
                 return value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            }
+            try await Task.sleep(for: .milliseconds(50))
+        }
+        return nil
+    }
+
+    /// Poll an arbitrary JS expression until it evaluates to a non-empty,
+    /// non-null string (or the timeout elapses). Used to wait for a page to
+    /// finish loading and expose a marker (e.g. `document.title`).
+    @MainActor
+    private func waitForJSExpr(
+        in adapter: WKWebViewAdapter,
+        _ expr: String,
+        timeout: Duration = .seconds(5)
+    ) async throws -> String? {
+        let deadline = ContinuousClock.now + timeout
+        while ContinuousClock.now < deadline {
+            let value = try await adapter.evaluateJavaScript(expr)
+            if let value, value != "<null>", value != "(null)" {
+                let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                if !trimmed.isEmpty { return trimmed }
             }
             try await Task.sleep(for: .milliseconds(50))
         }

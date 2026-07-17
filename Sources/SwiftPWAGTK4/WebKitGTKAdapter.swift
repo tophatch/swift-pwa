@@ -68,10 +68,10 @@
             }
             viewWidget = view
 
-            if case let .bundled(directory, _) = content {
+            if case let .bundled(directory, entry, spaFallback) = content {
                 // Use the context-level shared router so runtime
                 // `serveDirectory` mounts reach this window's handler.
-                sharedProvider.setBundleRoot(directory)
+                sharedProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
                 assetProvider = sharedProvider
                 registerScheme(provider: sharedProvider)
             }
@@ -146,7 +146,7 @@
                     let webView = UnsafeMutableRawPointer(view)
                         .assumingMemoryBound(to: WebKitWebView.self)
                     switch content {
-                    case let .bundled(_, entry):
+                    case let .bundled(_, entry, _):
                         let url = "pwa://localhost/\(entry)"
                         url.withCString { webkit_web_view_load_uri(webView, $0) }
                     case let .remote(url):

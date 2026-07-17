@@ -51,7 +51,7 @@ Edit the `web` block in `pwa.json` so `directory` is wherever your bundler emits
 
 swift-pwa copies that directory **verbatim** into the app bundle and serves it. The `entry` is the HTML file to open (relative to `directory`).
 
-> ⚠️ **The directory must exist and be populated when you build.** If `dist/` isn't there at `swift-pwa build` time (you forgot to build your frontend), swift-pwa **silently skips** copying it and you get a blank/erroring window at runtime instead of a build error. Step 4 wires this up so it can't happen — but it's the #1 gotcha, so know it's coming.
+> ⚠️ **The directory must exist and be populated when you build.** If `dist/` isn't there at `swift-pwa build` time (you forgot to build your frontend), or `directory`/`entry` name the wrong path, `swift-pwa build` **fails up front** with an explanation instead of shipping an app that opens a blank window. Step 4 wires the build in so this can't happen — but if you build by hand, know the check is watching.
 
 ---
 
@@ -108,14 +108,22 @@ swift-pwa build                # runs `npm run build`, then bundles for your OS
 
 ---
 
-## Step 5 — The one thing to fix in your app: routing
+## Step 5 — The one thing to know about routing
 
-Your app is served from a custom origin (`pwa://localhost/` on Apple/Linux, `https://swift-pwa.local/` on Windows/Android), and **there's no server-side SPA fallback** — swift-pwa serves files that exist on disk, and only maps the bare root to `index.html`. That has one practical consequence for single-page-app routers:
+Your app is served from a custom origin (`pwa://localhost/` on Apple/Linux, `https://swift-pwa.local/` on Windows/Android) that serves files that exist on disk. That has one consequence for single-page-app routers:
 
 - **Client-side navigation works fine** — clicking `<Link>`s, `history.pushState`, etc. all stay in memory and never hit the "server."
-- **But a hard reload (or first load) of a *nested* path** like `/settings` will 404 in **history/`BrowserRouter` mode**, because there's no `settings` file on disk and nothing rewrites it back to `index.html`.
+- **But a hard reload (or first load) of a *nested* path** like `/settings` would 404 in **history/`BrowserRouter` mode**, because there's no `settings` file on disk.
 
-**The fix is one line: use hash-based routing.** With React Router, that's `createHashRouter` (or `<HashRouter>`); the route lives in the URL fragment (`…/index.html#/settings`), which never becomes a file lookup, so reloads and deep links just work:
+**The fix is one line of config — turn on the SPA fallback:**
+
+```json
+"web": { "directory": "dist", "entry": "index.html", "spa_fallback": true }
+```
+
+With `spa_fallback` on, a request that names no file *and* looks like a client-side route (no file extension) is served your `entry` (`index.html`) instead of 404ing — so a hard reload / deep-link of `/settings` loads the app and your router takes over. A missing *asset* (anything with an extension, like a JS chunk) still 404s honestly, so you don't mask real errors. Works on all five platforms. (Re-run `swift-pwa init … --in-place` after adding it, or edit the `spaFallback:` argument in `Sources/<name>/App.swift` directly — it's build-time metadata, like `entry`.)
+
+**Alternatively, use hash-based routing** — no flag needed. With React Router that's `createHashRouter` (or `<HashRouter>`); the route lives in the URL fragment (`…/index.html#/settings`), which is never a file lookup, so reloads and deep links just work:
 
 ```jsx
 import { createHashRouter, RouterProvider } from 'react-router-dom';
@@ -161,7 +169,7 @@ It's entirely opt-in — the raw `__SWIFT_PWA__` calls keep working — and it n
 2. `pwa.json` → `web.directory: "dist"` — point at your build output.
 3. `npm run dev` + `swift-pwa dev --server http://localhost:5173` — develop with HMR.
 4. `pwa.json` → `build.prebuild: "npm run build"` — rebuild assets on every native build.
-5. Switch your router to hash mode.
+5. `pwa.json` → `web.spa_fallback: true` (or switch your router to hash mode) — make history-mode deep links work.
 6. *(Optional)* `swift-pwa codegen` — generate a typed TypeScript bridge client.
 
 From here, [Shipping your app](shipping-your-app.md) takes you to signed, distributable builds.

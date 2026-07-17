@@ -1,0 +1,55 @@
+name: qwen-tts vendor
+
+# Assemble + re-host the Qwen3-TTS on-device model as STABLE swift-pwa release
+# assets, so SwiftPWAQwenTTS's QwenTTSBackend fetches the pipeline (at runtime,
+# via ModelDownloader / ai.ensureModel) from a URL we control — the audio
+# analogue of lama-vendor.yml. The weights are derived (fp16 talker +
+# text-embedding) by Scripts/vendor-qwen-tts.sh from the Apache-2.0 elbruno ONNX
+# export.
+#
+# Run manually (workflow_dispatch). It publishes to the `qwen-tts-vendor`
+# release, then prints each asset's sha256 + size in the job summary — pin those
+# into QwenTTSModelSource.customVoice0_6B
+# (Sources/SwiftPWAQwenTTS/QwenTTSModelSource.swift) if they differ from the
+# committed pins (e.g. after a tool-version bump changes the fp16 bytes).
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Assemble assets
+        run: bash Scripts/vendor-qwen-tts.sh Vendor/qwen-tts
+
+      - name: Publish to qwen-tts-vendor
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: qwen-tts-vendor
+          name: Qwen3-TTS 12Hz 0.6B CustomVoice (ONNX, vendored)
+          prerelease: true
+          files: Vendor/qwen-tts/*
+
+      - name: Report checksums to pin into QwenTTSModelSource
+        run: |
+          {
+            echo "### Qwen3-TTS assets published to the \`qwen-tts-vendor\` release"
+            echo
+            echo "Pin these into \`QwenTTSModelSource.customVoice0_6B\` if they differ from the committed values:"
+            echo
+            echo '```'
+            cd Vendor/qwen-tts
+            for f in *; do
+              printf '%s  %s  %s\n' "$f" "$(sha256sum "$f" | awk '{print $1}')" "$(wc -c < "$f" | tr -d '[:space:]')"
+            done
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

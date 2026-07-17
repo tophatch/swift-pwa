@@ -876,10 +876,19 @@ enum AndroidTemplates {
         fun postToPage(json: String) {
             main.post {
                 // PostWebMessage equivalent: deliver via the global
-                // resolver in bridge.js.
-                val safe = json.replace("\\", "\\\\").replace("`", "\\`")
+                // resolver in bridge.js. Build the argument as a double-quoted
+                // JS string literal (via org.json.JSONObject.quote), NOT a
+                // template literal: a template literal treats `${…}` as
+                // interpolation, so a payload whose text contains `${…}` — e.g.
+                // fs.readText of a file with a `${secret}` REST-header template —
+                // made JS evaluate `${secret}` → ReferenceError inside
+                // evaluateJavascript, so __deliver never ran and the JS promise
+                // hung forever (readBinary was unaffected — base64 has no `${`).
+                // Inside double quotes `${…}` is inert; this matches how the
+                // Apple/GTK/WebView2 backends already escape the payload.
+                val arg = org.json.JSONObject.quote(json)
                 webView.evaluateJavascript(
-                    "globalThis.__SWIFT_PWA__.__deliver(`$safe`)",
+                    "globalThis.__SWIFT_PWA__.__deliver($arg)",
                     null
                 )
             }

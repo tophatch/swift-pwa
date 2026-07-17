@@ -133,6 +133,22 @@ struct AndroidBundlerUnitTests {
         #expect(withTypes.components(separatedBy: "android:mimeType=\"image/png\"").count - 1 == 2)
     }
 
+    @Test("bridge delivery escapes the payload as a JS string literal, not a template literal")
+    func deliveryDoesNotUseTemplateLiteral() {
+        // Regression: postToPage used a backtick template literal, so a payload
+        // whose text contained `${…}` (e.g. fs.readText of a REST-plugin def
+        // with a `${secret}` header template) was interpreted as interpolation
+        // → ReferenceError in evaluateJavascript → __deliver never ran → the JS
+        // promise hung forever. The fix delivers a double-quoted, JSON-escaped
+        // string literal instead (org.json.JSONObject.quote), where `${…}` is
+        // inert.
+        let bridge = AndroidTemplates.swiftPWABridgeKt
+        // The payload is quoted safely, and __deliver is not fed a template literal.
+        #expect(bridge.contains("org.json.JSONObject.quote(json)"))
+        #expect(bridge.contains("__SWIFT_PWA__.__deliver($arg)"))
+        #expect(!bridge.contains("__SWIFT_PWA__.__deliver(`"))
+    }
+
     @Test("cleartext_domains: scoped network_security_config + manifest reference only when set")
     func cleartextNetworkConfig() throws {
         // Absent → no config, manifest has no networkSecurityConfig attribute

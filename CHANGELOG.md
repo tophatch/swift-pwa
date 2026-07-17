@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-07-17
+
 ### Changed
 
 - **macOS builds cache the generated `.icns`, skipping the icon toolchain on an unchanged icon.** Building the macOS app icon spawned ~14 `sips` resizes plus `iconutil` on **every** `swift-pwa build --target macos`, even when the source PNG hadn't changed. The rendered `.icns` is now cached under `.build/swift-pwa/icon-cache/`, keyed by the source PNG's content **and** the CLI version (so a changed icon — or a CLI whose icon logic changed — misses and rebuilds). A rebuild with an unchanged icon is a single file copy instead of the full pipeline; `.build` is git-ignored and dropped by `swift package clean`. Behavior is otherwise identical (same `.icns`), and a cache miss / unwritable cache dir falls back to direct generation.

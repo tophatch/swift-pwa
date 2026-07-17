@@ -83,6 +83,12 @@
         }
         button:active { transform: translateY(1px); }
         button:disabled { opacity: 0.5; cursor: progress; }
+        .factbtns { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
+        button.ghost {
+            background: transparent; color: var(--accent);
+            border: 1px solid var(--line);
+        }
+        button.ghost:disabled { opacity: 0.6; }
 
         /* Link cards: whole card is the tap target, CTA pinned to the bottom. */
         a.card {
@@ -143,7 +149,11 @@
             <div id="critter" class="critter">🐾</div>
             <div id="name" class="name"></div>
             <div id="fact" class="fact">Tap the button for a fact about a random critter.</div>
-            <button id="go">Tell me a fact</button>
+            <div class="factbtns">
+                <button id="go">Tell me a fact</button>
+                <button id="speak" class="ghost" hidden>🔊 Speak</button>
+            </div>
+            <audio id="player"></audio>
         </section>
 
         <a class="card" href="segment.html">
@@ -165,6 +175,13 @@
             <div class="ctitle">Prompt-to-image</div>
             <div class="cdesc">Type a prompt and Stable Diffusion paints it — on-device.</div>
             <span class="cta">Generate →</span>
+        </a>
+
+        <a class="card" href="speak.html">
+            <div class="critter">🗣️</div>
+            <div class="ctitle">Text-to-speech</div>
+            <div class="cdesc">Type text and hear it spoken in one of 9 voices — Qwen3-TTS on-device.</div>
+            <span class="cta">Speak →</span>
         </a>
 
         <a class="card" href="workflow.html">
@@ -203,6 +220,12 @@
 
         let busy = false;
         let modelReady = false;
+        // Text-to-speech (the "🔊 Speak" button) — available when the build
+        // includes the Qwen3-TTS backend (ai.local_onnx_runtime).
+        let audioAvailable = false;
+        let ttsReady = false;
+        let ttsModel = null;
+        let lastFact = "";
 
         function showNotice(msg) {
             const n = $("notice");
@@ -221,6 +244,13 @@
                     showNotice("No on-device AI backend is available. Build with `swift-pwa build` " +
                         "(ai.local_llama is set in pwa.json) or run with SWIFT_PWA_LLAMA=1.");
                 }
+                // Enable the "🔊 Speak" affordance if this build can synthesize
+                // speech (the composite reports audioGeneration + a TTS model).
+                audioAvailable = !!caps.audioGeneration;
+                ttsModel = (caps.models || []).find(
+                    (m) => Array.isArray(m.capabilities) && m.capabilities.includes("text-to-speech")
+                );
+                if ((ttsModel && ttsModel.availability || {}).kind === "ready") ttsReady = true;
             } catch (e) {
                 $("backend").textContent = "unavailable";
                 $("go").disabled = true;
@@ -271,6 +301,9 @@
             $("name").textContent = name;
             const factEl = $("fact");
             factEl.innerHTML = '<span class="cursor">&nbsp;</span>';
+            $("speak").hidden = true; // stale until the new fact finishes
+            $("speak").textContent = "🔊 Speak";
+            $("player").pause(); $("player").removeAttribute("src"); // stop/clear old audio
 
             try {
                 await ensureModel();
@@ -289,6 +322,8 @@
                             factEl.innerHTML = escapeHtml(text) + '<span class="cursor">&nbsp;</span>';
                         } else if (e.type === "done") {
                             factEl.textContent = text.trim() || "(no answer)";
+                            lastFact = factEl.textContent;
+                            if (audioAvailable && lastFact) $("speak").hidden = false;
                             unsub(); resolve();
                         } else if (e.type === "error") {
                             unsub(); reject(new Error(e.message || "generation failed"));
@@ -308,6 +343,84 @@
         }
 
         $("go").addEventListener("click", tellFact);
+
+        // "🔊 Speak" — synthesize the current fact with Qwen3-TTS and play it,
+        // showcasing on-device LLM → TTS in one tap. First use downloads the
+        // ~2.5 GB speech pipeline (model id "qwen-tts") via the same progress
+        // bar as the LLM; later runs are a cache hit.
+        function ensureTTS() {
+            if (ttsReady) return Promise.resolve();
+            return new Promise((resolve, reject) => {
+                $("progress").hidden = false;
+                $("bar").value = 0;
+                $("progress-label").textContent = "Downloading voice (first run only)…";
+                const unsub = bridge.subscribe("ai.ensureModel", { model: "qwen-tts" }, (e) => {
+                    if (e.type === "progress") {
+                        if (e.totalBytes) {
+                            $("bar").value = e.bytesDone / e.totalBytes;
+                            const mb = (e.bytesDone / 1048576).toFixed(0);
+                            const total = (e.totalBytes / 1048576).toFixed(0);
+                            $("progress-label").textContent = `Downloading voice… ${mb} / ${total} MB`;
+                        } else {
+                            $("progress-label").textContent =
+                                `Downloading voice… ${(e.bytesDone / 1048576).toFixed(0)} MB`;
+                        }
+                    } else if (e.type === "done") {
+                        ttsReady = true; $("progress").hidden = true; unsub(); resolve();
+                    } else if (e.type === "error") {
+                        $("progress").hidden = true; unsub();
+                        reject(new Error(e.message || "voice download failed"));
+                    }
+                });
+            });
+        }
+
+        // The player is a hidden playback engine — the deck card presents its own
+        // control via the Speak button (which toggles to Stop during playback),
+        // so no browser <audio controls> clutters the card. (The dedicated
+        // speak.html shows controls, as an example of that style.)
+        $("player").addEventListener("ended", () => { $("speak").textContent = "🔊 Speak"; });
+
+        function stopSpeaking() {
+            const p = $("player");
+            p.pause(); p.currentTime = 0;
+            $("speak").textContent = "🔊 Speak";
+        }
+
+        async function speakFact() {
+            if (busy || !lastFact) return;
+            busy = true; $("speak").disabled = true; $("go").disabled = true;
+            $("speak").textContent = "🔊 …";
+            try {
+                // Free any resident on-device model before loading the ~2.5 GB
+                // TTS pipeline, so they don't co-reside (the fact just used the
+                // LLM). Fire-and-forget; harmless if nothing is loaded.
+                await bridge.invoke("ai.unload", {}).catch(() => {});
+                await ensureTTS();
+                const { audio } = await bridge.invoke("ai.generateAudio", { prompt: lastFact, voice: "ryan" });
+                if (!audio || !audio.dataBase64) throw new Error("no audio returned");
+                const player = $("player");
+                player.src = "data:" + (audio.mimeType || "audio/wav") + ";base64," + audio.dataBase64;
+                await player.play().catch(() => {});
+                // Playing → the button becomes Stop; if autoplay was blocked, it
+                // stays Speak so a second tap plays (now within a gesture).
+                $("speak").textContent = player.paused ? "🔊 Speak" : "⏹ Stop";
+                // Free the resident ~2.5 GB pipeline now the clip is playing.
+                bridge.invoke("ai.unload", {}).catch(() => {});
+            } catch (e) {
+                showNotice("Speak failed: " + (e.message || e));
+                $("speak").textContent = "🔊 Speak";
+            } finally {
+                busy = false; $("speak").disabled = false; $("go").disabled = false;
+            }
+        }
+
+        // The Speak button toggles: play the fact, or stop it mid-playback.
+        $("speak").addEventListener("click", () => {
+            const p = $("player");
+            if (p.src && !p.paused) stopSpeaking();
+            else speakFact();
+        });
 
         // Reveal the deck's scrollbar only while it's actively scrolling; it
         // fades back out shortly after the last scroll event (hover shows it

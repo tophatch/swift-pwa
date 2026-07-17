@@ -78,6 +78,9 @@
                 .assumingMemoryBound(to: WebKitWebView.self)
             if let settings = webkit_web_view_get_settings(webViewPtr) {
                 webkit_settings_set_enable_developer_extras(settings, gboolean(1))
+                // Let first-party app JS autoplay media it generates (e.g. TTS)
+                // without a user gesture — see WKWebViewAdapter for the rationale.
+                webkit_settings_set_media_playback_requires_user_gesture(settings, gboolean(0))
             }
 
             // Connect `script-message-received` so JS calls to

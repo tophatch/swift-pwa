@@ -197,8 +197,16 @@ extern "C" void swiftpwa_w2_create_environment(
             return S_OK;
         });
 
+    // Let first-party app JS autoplay media it generates (e.g. on-device TTS)
+    // without a user gesture — see WKWebViewAdapter for the rationale. Chromium's
+    // default autoplay policy otherwise rejects a programmatic `audio.play()`
+    // that isn't tied to a fresh user activation.
+    auto options = Microsoft::WRL::Make<CoreWebView2EnvironmentOptions>();
+    if (options) {
+        options->put_AdditionalBrowserArguments(L"--autoplay-policy=no-user-gesture-required");
+    }
     HRESULT hr = CreateCoreWebView2EnvironmentWithOptions(
-        nullptr, user_data_folder, nullptr, handler.Get());
+        nullptr, user_data_folder, options.Get(), handler.Get());
     if (FAILED(hr)) {
         cb(nullptr, static_cast<int32_t>(hr), user);
     }

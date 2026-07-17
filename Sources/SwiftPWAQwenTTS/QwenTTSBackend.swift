@@ -36,6 +36,15 @@
     public actor QwenTTSBackend: AIBackend {
         private let modelDirectory: URL
         private let spec: QwenTTSModelSpec
+        /// Evict the talker + code-predictor sessions (~2 GB resident) *before*
+        /// loading the vocoder within each `generateAudio`, so the vocoder's
+        /// memory doesn't stack on top of them — the AR loop is done by then, so
+        /// only the vocoder is needed. Trades a small reload cost on the next
+        /// call for a much lower peak; meant for memory-constrained (mobile)
+        /// devices, where the vocoder-on-top-of-talker spike can OOM the process
+        /// (device-verified: the peak that killed the app was exactly this
+        /// stack). Defaults `false`: desktop keeps the resident-cache latency win.
+        private let lowMemory: Bool
 
         private var talker: OrtModelSession?
         private var codePredictor: OrtModelSession?
@@ -52,9 +61,10 @@
         /// layout: the three graphs at the root, `embeddings/` + `tokenizer/`
         /// subdirs). `ai.ensureModel` throws `.unsupportedPlatform`. The default
         /// `spec` is the device-verified fp16-talker config.
-        public init(modelDirectory: URL, spec: QwenTTSModelSpec = .customVoice0_6B) {
+        public init(modelDirectory: URL, spec: QwenTTSModelSpec = .customVoice0_6B, lowMemory: Bool = false) {
             self.modelDirectory = modelDirectory
             self.spec = spec
+            self.lowMemory = lowMemory
             download = nil
         }
 
@@ -68,12 +78,19 @@
         public init(
             cacheDirectory: URL,
             source: QwenTTSModelSource = .customVoice0_6B,
-            spec: QwenTTSModelSpec = .customVoice0_6B
+            spec: QwenTTSModelSpec = .customVoice0_6B,
+            lowMemory: Bool = false
         ) {
             modelDirectory = cacheDirectory
             self.spec = spec
+            self.lowMemory = lowMemory
             download = (ModelDownloader(directory: cacheDirectory), source.files)
         }
+
+        /// The model id this backend advertises in `info().models` — the id a
+        /// page (or a composite router) passes to `ai.ensureModel` to fetch the
+        /// downloadable pipeline.
+        public static let modelID = "qwen-tts"
 
         // MARK: AIBackend
 
@@ -83,7 +100,36 @@
                 available: true,
                 backend: AIBackendID.qwenTTS,
                 model: "qwen3-tts-12hz-0.6b-customvoice",
-                audioGeneration: true
+                audioGeneration: true,
+                models: [modelInfo()]
+            )
+        }
+
+        /// A single-entry catalog describing the TTS model + its availability, so
+        /// a page can show a download bar (`.downloadable`) and flip to enabled
+        /// once present (`.ready`) — mirrors `MultiModelImageBackend`. On the
+        /// download tier, availability is derived from whether every source file
+        /// is already on disk (a cheap existence check, not a re-hash); the
+        /// fixed-path init is always `.ready`.
+        private func modelInfo() -> AIModelInfo {
+            let availability: AIModelAvailability
+            if let download {
+                let present = download.files.allSatisfy {
+                    FileManager.default.fileExists(
+                        atPath: modelDirectory.appendingPathComponent($0.fileName).path
+                    )
+                }
+                availability = present ? .ready : .downloadable(bytes: download.files.reduce(0) { $0 + $1.sizeBytes })
+            } else {
+                availability = .ready
+            }
+            return AIModelInfo(
+                id: Self.modelID,
+                label: "Qwen3-TTS (0.6B CustomVoice)",
+                capabilities: [.textToSpeech],
+                availability: availability,
+                offlineCapable: true,
+                license: "Apache-2.0"
             )
         }
 
@@ -246,7 +292,10 @@
             let prefillLength = prefill.count
 
             // 3. Warm up the talker token-by-token through the decode graph.
-            let talker = try loadedTalker(runtime)
+            //    `loadedTalker` is called inline per step (not bound to a local
+            //    that would outlive the loop) so that in low-memory mode the
+            //    `talker = nil` eviction below is the last reference and actually
+            //    frees the session before the vocoder loads.
             var pastKeys = OrtModelSession.Tensor(
                 values: [],
                 shape: talkerKVShape(
@@ -261,14 +310,13 @@
             var lastHidden = [Float]()
             for step in 0 ..< prefillLength {
                 let out = try runTalker(
-                    talker, embed: prefill[step], position: step, seqLen: step + 1,
+                    loadedTalker(runtime), embed: prefill[step], position: step, seqLen: step + 1,
                     pastKeys: pastKeys, pastValues: pastValues
                 )
                 logits = out.logits; lastHidden = out.hidden; pastKeys = out.presentKeys; pastValues = out.presentValues
             }
 
             // 4. Autoregressive generation.
-            let cp = try loadedCodePredictor(runtime)
             var rng = QwenSeededGenerator(seed: 0)
             var codes: [[Int]] = []
             var previous = Set<Int>()
@@ -300,7 +348,8 @@
                 var nextSeq = 2
                 for group in 1 ..< numGroups {
                     let cpOut = try runCodePredictor(
-                        cp, embed: next, seq: nextSeq, generationStep: group - 1, pastKeys: cpKeys, pastValues: cpValues
+                        loadedCodePredictor(runtime), embed: next, seq: nextSeq,
+                        generationStep: group - 1, pastKeys: cpKeys, pastValues: cpValues
                     )
                     // Read the codebook logits from the LAST sequence position
                     // (the first cp call feeds 2 tokens — the B.3 fix).
@@ -321,10 +370,21 @@
                 for g in 1 ..< numGroups { ni = qwenVectorAdd(ni, emb.cpCodec(g - 1, row[g])) }
                 ni = qwenVectorAdd(ni, ttsPad)
                 let out = try runTalker(
-                    talker, embed: ni, position: prefillLength + step, seqLen: prefillLength + step + 1,
+                    loadedTalker(runtime), embed: ni, position: prefillLength + step,
+                    seqLen: prefillLength + step + 1,
                     pastKeys: pastKeys, pastValues: pastValues
                 )
                 logits = out.logits; lastHidden = out.hidden; pastKeys = out.presentKeys; pastValues = out.presentValues
+            }
+
+            // Low-memory: the talker + code-predictor are done — drop them
+            // (~2 GB) *before* the vocoder loads, so its memory doesn't stack on
+            // top (the spike that OOM-killed the app on a phone). The loops above
+            // hold no session locals, so these are the last references —
+            // `deinit` → `ReleaseSession` runs here. Next call reloads lazily.
+            if lowMemory {
+                talker = nil
+                codePredictor = nil
             }
 
             guard !codes.isEmpty else {

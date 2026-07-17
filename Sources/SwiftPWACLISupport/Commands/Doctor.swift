@@ -75,10 +75,33 @@ struct Doctor: AsyncParsableCommand {
     // MARK: - Checks
 
     private static func swiftToolchain() async -> Check {
-        if let v = try? await Shell.capture("/usr/bin/env", ["swift", "--version"], timeout: 10, discardStderr: true) {
-            let line = v.split(separator: "\n").first.map(String.init) ?? "installed"
-            return Check(name: "Swift toolchain", ok: true, detail: line, required: true, fix: nil)
-        }
+        #if os(Windows)
+            // No `/usr/bin/env` on Windows — resolve `swift` on PATH via
+            // where.exe, then read its --version. (Probing through /usr/bin/env
+            // here made the Windows preflight always report the toolchain
+            // "not found" even on a healthy VS Developer shell.)
+            if let path = try? await Shell.capture("where.exe", ["swift"], timeout: 10, discardStderr: true),
+               let exe = path.split(whereSeparator: \.isNewline).first.map(String.init),
+               !exe.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+            {
+                let v = try? await Shell.capture(
+                    exe.trimmingCharacters(in: .whitespacesAndNewlines), ["--version"],
+                    timeout: 10, discardStderr: true
+                )
+                let line = v?.split(separator: "\n").first.map(String.init) ?? "installed"
+                return Check(name: "Swift toolchain", ok: true, detail: line, required: true, fix: nil)
+            }
+        #else
+            if let v = try? await Shell.capture(
+                "/usr/bin/env",
+                ["swift", "--version"],
+                timeout: 10,
+                discardStderr: true
+            ) {
+                let line = v.split(separator: "\n").first.map(String.init) ?? "installed"
+                return Check(name: "Swift toolchain", ok: true, detail: line, required: true, fix: nil)
+            }
+        #endif
         return Check(
             name: "Swift toolchain", ok: false, detail: "not found",
             required: true, fix: "Install Swift 6+ from https://swift.org/install (or Xcode on macOS)."
@@ -255,12 +278,23 @@ struct Doctor: AsyncParsableCommand {
     // MARK: - Probes
 
     private static func tool(_ name: String, label: String, required: Bool, fix: String) async -> Check {
-        if await (try? Shell.capture("/usr/bin/env", ["which", name], timeout: 10, discardStderr: true))
-            .map({ !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }) == true
-        {
+        if await onPath(name) {
             return Check(name: label, ok: true, detail: "found", required: required, fix: nil)
         }
         return Check(name: label, ok: false, detail: "not on PATH", required: required, fix: fix)
+    }
+
+    /// Whether `name` resolves on `PATH`. Windows has no `/usr/bin/env`, so a
+    /// POSIX `env which` probe there fails for *every* tool — which made
+    /// `doctor`/`build`'s Windows preflight falsely report present tools (Swift,
+    /// link.exe) as missing. Use `where.exe` on Windows, `env which` elsewhere.
+    private static func onPath(_ name: String) async -> Bool {
+        #if os(Windows)
+            let out = try? await Shell.capture("where.exe", [name], timeout: 10, discardStderr: true)
+        #else
+            let out = try? await Shell.capture("/usr/bin/env", ["which", name], timeout: 10, discardStderr: true)
+        #endif
+        return out?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
     }
 
     /// Advisory: the `zstd` CLI backs `swift-pwa updater manifest --delta`

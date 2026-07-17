@@ -124,7 +124,12 @@ struct MacAppBundler {
         do {
             let sizes = try await IconConverter.makeICNS(
                 from: iconURL,
-                into: resourcesDir.appendingPathComponent("AppIcon.icns")
+                into: resourcesDir.appendingPathComponent("AppIcon.icns"),
+                // Persist the rendered .icns across rebuilds (keyed by the
+                // source PNG + CLI version) so an unchanged icon skips the
+                // sips/iconutil pipeline. `.build` is git-ignored and dropped
+                // by `swift package clean`.
+                cacheDir: projectRoot.appendingPathComponent(".build/swift-pwa/icon-cache")
             )
             return .bundled(source: icon, detail: "\(sizes) sizes")
         } catch {

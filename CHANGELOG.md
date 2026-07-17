@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **macOS builds cache the generated `.icns`, skipping the icon toolchain on an unchanged icon.** Building the macOS app icon spawned ~14 `sips` resizes plus `iconutil` on **every** `swift-pwa build --target macos`, even when the source PNG hadn't changed. The rendered `.icns` is now cached under `.build/swift-pwa/icon-cache/`, keyed by the source PNG's content **and** the CLI version (so a changed icon — or a CLI whose icon logic changed — misses and rebuilds). A rebuild with an unchanged icon is a single file copy instead of the full pipeline; `.build` is git-ignored and dropped by `swift package clean`. Behavior is otherwise identical (same `.icns`), and a cache miss / unwritable cache dir falls back to direct generation.
+
 ### Fixed
 
 - **Android: `fs.readText` (and any bridge reply) no longer hangs forever when the payload contains `${…}`.** The Android bridge delivered Swift→JS frames by embedding the JSON payload in a **JS template literal** (`` __deliver(`…`) ``), escaping `\` and `` ` `` but not `${`. Any text payload containing `${…}` — e.g. `fs.readText` of a file holding a REST-plugin definition with a `${secret}` auth-header template — was parsed as template interpolation, so JS evaluated `${secret}` → `ReferenceError` inside `evaluateJavascript`, `__deliver` never ran, and the `invoke` promise **never settled** (the call silently wedged; `fs.readBinary` was unaffected because base64 has no `${`). The payload is now delivered as a double-quoted, JSON-escaped string literal (`org.json.JSONObject.quote`), where `${…}` is inert — matching how the Apple / GTK / WebView2 backends already escape it. Android-only (the other backends never used a template literal). **Device-verified on a Galaxy Z Fold7**: a file written with `${secret}`/`${model}`/`${prompt}` content now round-trips through `fs.readText` with matching content instead of hanging. Thanks to the adopter who reported and root-caused this.

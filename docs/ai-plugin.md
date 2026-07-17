@@ -218,6 +218,17 @@ the backend side.
 > yourself. Voice *cloning* (arbitrary reference audio) needs the Base model and
 > isn't wired yet, so this backend reports `voiceCloning: false`.
 >
+> **Memory.** Synthesis peaks around **3 GB RSS** on-device — the talker +
+> code-predictor sessions are co-resident through the autoregressive loop, and
+> the fp16 talker appears to expand toward fp32 in the ONNX Runtime CPU arena.
+> Pass **`lowMemory: true`** (default on the example's Android build) to evict
+> the talker + code-predictor before the vocoder loads, so the vocoder doesn't
+> stack on top (the spike that OOM-kills the app when a large LLM is also
+> resident). That caps the *peak* but not the ~3 GB AR-loop *base*. **Future
+> trim lever** (not yet done): shrink that base — e.g. keep the talker fp16 at
+> runtime (avoid the CPU-arena fp32 expansion) or run the two talker graphs in a
+> shared session — for tighter-RAM devices. Fine on ≥8 GB devices today.
+>
 > **Live, continuous audio streaming** (push mic frames into an open
 > session for real-time incremental results) is **not** part of this
 > contract — the bridge is request → server-stream-out, with no

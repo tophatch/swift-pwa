@@ -263,6 +263,16 @@ let package = Package(
             exclude: ["README.md"]
         ),
 
+        // Vendored stb_image / stb_image_write (single-header, public-domain) —
+        // the desktop image decoder/encoder (Linux/Windows have no CoreGraphics
+        // / BitmapFactory). Declared here in the static `targets:` array (not the
+        // later `package.targets.append` block) so the static `SwiftPWACLISupport`
+        // target — the Windows multi-size `.exe` icon builder — can depend on it;
+        // a static target can't resolve a target that's appended afterwards.
+        // Consumed by `SwiftPWAImageIO` / `SwiftPWASegmentation` (linux/windows)
+        // and `SwiftPWACLISupport` (every host, for the icon resize).
+        .target(name: "CStbImage", path: "Sources/CStbImage", publicHeadersPath: "include"),
+
         .target(
             name: "_SwiftPWATestSupport",
             dependencies: ["SwiftPWACore"],
@@ -509,7 +519,14 @@ let package = Package(
             dependencies: [
                 "SwiftPWACore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-                .product(name: "Crypto", package: "swift-crypto")
+                .product(name: "Crypto", package: "swift-crypto"),
+                // Vendored stb (portable public-domain C) for the multi-size
+                // Windows `.exe` icon builder's PNG decode/re-encode. Linked on
+                // every host — not platform-gated like SwiftPWAImageIO's use of
+                // it — so the resize path (`WindowsIcon.resizePNG`) is available
+                // and unit-testable on the CI machines (macOS/Linux) even though
+                // the embed it feeds only runs on a Windows host.
+                .target(name: "CStbImage")
             ],
             // No `resources:` on purpose. The vendored Gradle wrapper (pinned
             // version, in `Vendor/gradle-wrapper/`) is base64-embedded into
@@ -623,7 +640,10 @@ let package = Package(
             dependencies: [
                 "SwiftPWACLISupport",
                 "SwiftPWACore",
-                .product(name: "Crypto", package: "swift-crypto")
+                .product(name: "Crypto", package: "swift-crypto"),
+                // For the multi-size icon resize round-trip test: build a source
+                // PNG and re-decode the resized output to check dimensions/colour.
+                .target(name: "CStbImage")
             ],
             resources: [
                 .copy("Fixtures")
@@ -1010,8 +1030,9 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         ),
         // Vendored stb_image (single-header, public-domain) — the desktop
         // image decoder (Linux/Windows have no CoreGraphics / BitmapFactory).
-        // Compiled only where SwiftPWASegmentation depends on it (linux/windows).
-        .target(name: "CStbImage", path: "Sources/CStbImage", publicHeadersPath: "include"),
+        // (The target itself is declared in the static `targets:` array so the
+        // static `SwiftPWACLISupport` — the Windows icon builder — can reference
+        // it; a static target can't resolve a forward-`append`ed one.)
         // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
         // internal — reused by `SwiftPWAImageEdit` (LaMa) and
         // `SwiftPWAStableDiffusion` so both share one platform implementation

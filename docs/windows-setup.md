@@ -631,15 +631,17 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   low/high object rather than the graded warning/critical bands the event
   models, so it isn't wired yet — size memory-scaled caches from a
   `system.memory` read and treat the event as best-effort.
-- **The portable `.exe` icon is a single source image, not a multi-size
-  set (yet).** `pwa.json`'s `icon` is now embedded into the portable
-  `.exe` — it shows in Explorer / the taskbar / Alt-Tab — by injecting an
-  `RT_GROUP_ICON` / `RT_ICON` resource into the linked PE via the Win32
-  `UpdateResource` API (the same post-link resource editing the bundler
-  does for the Common Controls manifest, so no extra tool is needed). The
-  first cut embeds the single source PNG and lets the shell downscale it
-  for the 16/32/48 px slots; a WIC-based resize to ship pixel-crisp small
-  sizes is a follow-up. A missing / non-PNG icon leaves the default
+- **The portable `.exe` embeds a multi-size icon.** `pwa.json`'s `icon`
+  is injected into the portable `.exe` as an `RT_GROUP_ICON` / `RT_ICON`
+  resource via the Win32 `UpdateResource` API (the same post-link resource
+  editing the bundler does for the Common Controls manifest, so no extra
+  tool is needed) — it shows in Explorer / the taskbar / Alt-Tab. Rather
+  than shipping one image and letting the shell downscale it (which looked
+  soft at small sizes), the bundler pre-renders the source down to dedicated
+  **16 / 32 / 48 / 256 px** slots (an area-average, premultiplied-alpha
+  resize so transparent edges stay clean) and lists them all in the group;
+  the largest slot is the source PNG verbatim, and only sizes smaller than
+  the source are rendered. A missing / non-PNG icon leaves the default
   Windows icon and never fails the build (reported in the build's one-line
   icon summary).
 - **Action Center persistence requires a Start-menu shortcut.** The

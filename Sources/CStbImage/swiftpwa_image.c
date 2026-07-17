@@ -33,10 +33,24 @@ void swiftpwa_free_image(unsigned char *pixels) {
     stbi_image_free(pixels);
 }
 
+unsigned char *swiftpwa_decode_image_rgba(const unsigned char *data, int len,
+                                          int *width, int *height) {
+    int channels = 0;
+    // Force 4 channels (RGBA) — stb fills alpha = 255 for sources without one,
+    // so callers always get a uniform RGBA8 buffer.
+    return stbi_load_from_memory(data, len, width, height, &channels, 4);
+}
+
 unsigned char *swiftpwa_encode_png_rgb(const unsigned char *pixels, int width,
                                        int height, int *out_len) {
     // 3 = RGB, stride = width*3 (tightly packed). stb returns a malloc'd PNG.
     return stbi_write_png_to_mem(pixels, width * 3, width, height, 3, out_len);
+}
+
+unsigned char *swiftpwa_encode_png_rgba(const unsigned char *pixels, int width,
+                                        int height, int *out_len) {
+    // 4 = RGBA, stride = width*4 (tightly packed). stb returns a malloc'd PNG.
+    return stbi_write_png_to_mem(pixels, width * 4, width, height, 4, out_len);
 }
 
 void swiftpwa_free_png(unsigned char *data) {

@@ -233,7 +233,15 @@ func configure(_ ctx: any AppContext) throws {
         // gate as LaMa above, so ONNX is guaranteed present in this block.)
         #if canImport(SwiftPWAQwenTTS)
             let ttsDir = ctx.dataDirectory().appendingPathComponent("qwen-tts", isDirectory: true)
-            let tts: (any AIBackend)? = QwenTTSBackend(cacheDirectory: ttsDir)
+            // On mobile, evict the talker + code-predictor (~2 GB) before the
+            // vocoder so its load doesn't stack on top (the OOM that killed the
+            // app when the LLM had just run — see docs/tutorials/on-device-ai.md).
+            #if os(Android)
+                let ttsLowMemory = true
+            #else
+                let ttsLowMemory = false
+            #endif
+            let tts: (any AIBackend)? = QwenTTSBackend(cacheDirectory: ttsDir, lowMemory: ttsLowMemory)
         #else
             let tts: (any AIBackend)? = nil
         #endif

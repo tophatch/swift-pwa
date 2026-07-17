@@ -378,6 +378,10 @@
             busy = true; $("speak").disabled = true; $("go").disabled = true;
             const label = $("speak").textContent;
             try {
+                // Free any resident on-device model before loading the ~2.5 GB
+                // TTS pipeline, so they don't co-reside (the fact just used the
+                // LLM). Fire-and-forget; harmless if nothing is loaded.
+                await bridge.invoke("ai.unload", {}).catch(() => {});
                 await ensureTTS();
                 $("speak").textContent = "🔊 …";
                 const { audio } = await bridge.invoke("ai.generateAudio", { prompt: lastFact, voice: "ryan" });

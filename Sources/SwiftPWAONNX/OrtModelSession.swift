@@ -81,6 +81,13 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// `.cpu` otherwise (including a transparent fallback).
         public let provider: OrtExecutionProvider
 
+        /// A stable non-null pointer handed to ORT for zero-element input
+        /// tensors (empty KV caches), which it never dereferences. Allocated
+        /// once for the process; the 1-byte leak is intentional.
+        private nonisolated(unsafe) static let zeroSizeScratch = UnsafeRawPointer(
+            UnsafeMutableRawPointer.allocate(byteCount: 1, alignment: 1)
+        )
+
         /// Loads `path` under `runtime`'s shared environment. Throws
         /// `OrtError.apiUnavailable` if `runtime` itself failed to initialize
         /// (no usable ONNX Runtime linked), or `.failed` if the model fails to
@@ -282,10 +289,16 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
                     func makeTensor(
                         _ base: UnsafeRawPointer?, byteCount: Int, type: ONNXTensorElementDataType
                     ) throws {
-                        guard let base else { throw OrtError.failed("empty input tensor \"\(name)\"") }
+                        // A zero-element input (a shape with a 0 dim — e.g. an
+                        // empty KV cache on an autoregressive model's first
+                        // step) has a nil `baseAddress`. ORT still wants a
+                        // non-null data pointer, but never dereferences it when
+                        // the byte count is 0, so a stable dummy is safe.
+                        let dataPtr = base ?? (byteCount == 0 ? Self.zeroSizeScratch : nil)
+                        guard let dataPtr else { throw OrtError.failed("empty input tensor \"\(name)\"") }
                         try runtime.check(api.pointee.CreateTensorWithDataAsOrtValue(
                             cpuMemoryInfo,
-                            UnsafeMutableRawPointer(mutating: base),
+                            UnsafeMutableRawPointer(mutating: dataPtr),
                             byteCount,
                             shapePtr.baseAddress,
                             shapePtr.count,

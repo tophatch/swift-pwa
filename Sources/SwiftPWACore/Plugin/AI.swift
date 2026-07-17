@@ -296,6 +296,8 @@ public enum AIBackendID {
     public static let appleSpeech = "apple-speech"
     public static let whisperMLX = "whisper-mlx"
     public static let ttsMLX = "tts-mlx"
+    /// On-device Qwen3-TTS (ONNX tier) — the `SwiftPWAQwenTTS` backend.
+    public static let qwenTTS = "qwen-tts"
 
     /// A composite that routes among several backends by model id
     /// (`MultiModelImageBackend`) — reported by `ai.info` when a switcher is

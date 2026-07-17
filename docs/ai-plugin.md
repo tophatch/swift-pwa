@@ -200,6 +200,22 @@ on-disk `path`) + `referenceText` to clone a voice per request — see
 [the worked example](#worked-example-a-custom-on-device-audio-tts-backend) for
 the backend side.
 
+> **A shipped TTS backend: `SwiftPWAQwenTTS`.** The `ai.generateAudio` contract
+> above is served on-device by an opt-in backend built on the shared ONNX
+> Runtime tier (same as the Stable-Diffusion / LaMa image backends) —
+> **Qwen3-TTS** (`Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice`, Apache-2.0). Wire it
+> with `ctx.use(AIPlugin(QwenTTSBackend(modelDirectory: url)))`, where `url` is
+> a directory laid out like the ONNX export (the three graphs — talker,
+> code-predictor, vocoder — at the root, plus `embeddings/` and `tokenizer/`
+> subdirs). It reports `audioGeneration: true`, synthesizes 24 kHz mono WAV, and
+> offers **9 preset voices** via the `voice` field (ryan/serena/vivian/uncle_fu/
+> aiden/ono_anna/sohee/eric/dylan) with a `language` selector. Shipping precision
+> is fp16 talker + fp32 code-predictor + fp32 vocoder + fp16 text-embedding
+> (~2.5 GB). Today it's **fixed-path** — stage the model directory yourself; a
+> hosted `ai.ensureModel` download tier (like the image backends') is a
+> follow-up. Voice *cloning* (arbitrary reference audio) needs the Base model and
+> isn't wired yet, so this backend reports `voiceCloning: false`.
+>
 > **Live, continuous audio streaming** (push mic frames into an open
 > session for real-time incremental results) is **not** part of this
 > contract — the bridge is request → server-stream-out, with no

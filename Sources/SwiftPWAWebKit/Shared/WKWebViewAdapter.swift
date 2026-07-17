@@ -32,6 +32,14 @@
             stream = AsyncStream { captured = $0 }
 
             let cfg = configuration ?? WKWebViewConfiguration()
+            // Let the app's own JS (first-party content from pwa://) play media
+            // it generates — e.g. on-device TTS — without a user gesture.
+            // Autoplay policies exist to tame untrusted web pages; for a
+            // first-party wrapper they just break `audio.play()` (a long async
+            // between the tap and playback drops the user-activation, so the
+            // play is rejected and stays silent). Empty set = no media type
+            // requires a gesture.
+            cfg.mediaTypesRequiringUserActionForPlayback = []
             // Inject bridge.js at document start.
             let bridge = try BridgeScript.source()
             let userScript = WKUserScript(

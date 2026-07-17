@@ -819,6 +819,12 @@ enum AndroidTemplates {
 
             webView.settings.javaScriptEnabled = true
             webView.settings.domStorageEnabled = true
+            // The app's own JS (first-party content served from pwa://) may play
+            // audio/video it generates — e.g. on-device TTS. Autoplay policies
+            // exist to tame untrusted web pages; for a first-party wrapper they
+            // just break `audio.play()` (silent, since a long async breaks the
+            // user-gesture chain). Allow programmatic playback without a gesture.
+            webView.settings.mediaPlaybackRequiresUserGesture = false
             webView.addJavascriptInterface(JsBridge(this), "__SwiftPWA__post")
 
             if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {

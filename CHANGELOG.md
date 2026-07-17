@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-07-18
+
 ### Added
 
 - **`SwiftPWAONNX` is now a public product** — apps can author their **own** on-device ONNX backends against the shared `OrtRuntime` / `OrtModelSession` wrapper (arbitrary graph, fp32/fp16/int tensors, and the per-platform ONNX Runtime linkage — Apple xcframework / Android AAR / desktop CUDA·DirectML·CPU EPs — all already solved) instead of vendoring ONNX Runtime a second time or waiting on a bespoke upstream backend per model. The wrapper was previously an internal `.target` only the shipped backends (`SwiftPWASegmentation` / `SwiftPWAImageEdit` / `SwiftPWAStableDiffusion`) could see; its types were already `public`, so this is a one-line product export with no new code, no API change, and no behaviour change. An app runs a model via `OrtModelSession`, exposes it on an `ai.*` command with a `Plugin`, and fetches weights with `ModelDownloader` (`SwiftPWAModelStore`, already public) — entirely app-side. Gated with the rest of the tier behind the ONNX Runtime build flag (`ai.local_onnx_runtime` in the consumer's `pwa.json`), so a build without the tier never links it. Requested by an adopter building an app-side depth-estimation backend. Guide: [docs/ai-plugin.md](docs/ai-plugin.md).

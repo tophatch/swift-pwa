@@ -562,6 +562,35 @@ lets you stream PCM out of an existing Python synthesizer through
 `process.stream` with the *same* page-side ring-buffer code, then swap to this
 `AIBackend` later without touching the page.
 
+### Bringing your own ONNX model (`SwiftPWAONNX`)
+
+If your model is an **ONNX** graph, you don't need to vendor ONNX Runtime
+yourself — the shared wrapper the built-in image/vision backends run on is a
+public product. Add `SwiftPWAONNX` to your app's dependencies (it links the
+per-platform ONNX Runtime — Apple xcframework / Android AAR / desktop CUDA ·
+DirectML · CPU EPs — behind the same `ai.local_onnx_runtime` opt-in in your
+`pwa.json`), then drive an arbitrary graph directly:
+
+```swift
+import SwiftPWAONNX
+
+let session = try OrtModelSession(modelPath: modelURL.path, runtime: OrtRuntime())
+let out = try session.run(
+    inputs: ["input": .float(pixels, shape: [1, 3, 518, 518])],  // OrtInput: .float / .float16 / .int32 / .int64
+    outputNames: ["depth"]
+)
+let depth = out["depth"]!.values   // [Float], row-major — your post-processing
+```
+
+Wrap that in your own `AIBackend` (or a plain `Plugin` exposing an `ai.depth.*`
+command), fetch the weights with `ModelDownloader` (`SwiftPWAModelStore`, also a
+public product), and the whole feature lives app-side — no upstream backend
+needed per model. The shipped `SwiftPWASegmentation` / `SwiftPWAImageEdit` /
+`SwiftPWAStableDiffusion` backends are just larger examples of this same
+pattern. `OrtModelSession` accepts fp32/fp16 and integer input tensors and reads
+fp16 outputs back as float32; see its API for the exact `Tensor` / `OrtInput`
+shapes.
+
 ### Available backend: Apple Foundation Models
 
 `SwiftPWAFoundationModels` ships the first real backend — Apple's on-device

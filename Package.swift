@@ -1020,6 +1020,16 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     let segmentationSwiftSettings: [SwiftSetting] =
         onnxGpu ? swiftSettings + [.define("SWIFT_PWA_ONNXRUNTIME_GPU")] : swiftSettings
 
+    // Export the shared ONNX Runtime wrapper as a product so apps can author
+    // their own on-device backends against `OrtRuntime` / `OrtModelSession`
+    // (an arbitrary model with a different graph — depth, pose, upscale — driven
+    // from an app-side `Plugin`), the same self-service posture as
+    // `SwiftPWAModelStore`. The shipped backends still consume the target
+    // privately; this only makes it reachable. `libonnxruntime` staging keys off
+    // `ai.local_onnx_runtime` in the consumer's `pwa.json`, independent of which
+    // Swift module links the runtime.
+    package.products.append(.library(name: "SwiftPWAONNX", targets: ["SwiftPWAONNX"]))
+
     package.targets.append(contentsOf: [
         // The shared ONNX Runtime tier: the `OrtRuntime`/`OrtModelSession`
         // wrapper + all ORT linkage, owned here so more than one backend can

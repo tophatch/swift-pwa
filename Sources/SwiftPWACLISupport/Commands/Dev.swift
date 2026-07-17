@@ -43,7 +43,7 @@ struct Dev: AsyncParsableCommand {
             // External dev server (Vite, etc.) — use it as-is.
             devURL = server
         } else {
-            #if canImport(Darwin) || canImport(Glibc)
+            #if canImport(Darwin) || canImport(Glibc) || canImport(WinSDK)
                 // Built-in live-reload server over the project's web/ dir.
                 let pwa = try PWAManifest.load(from: cwd.appendingPathComponent(manifest))
                 let webDir = cwd.appendingPathComponent(pwa.web.directory)
@@ -88,15 +88,24 @@ struct Dev: AsyncParsableCommand {
 enum Bash {
     static func which(_ name: String) throws -> URL {
         let task = Process()
-        task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
-        task.arguments = ["which", name]
+        #if os(Windows)
+            // No `/usr/bin/env` on Windows; `where.exe` is the PATH resolver
+            // (and it may print several matches, one per line — take the first).
+            task.executableURL = URL(fileURLWithPath: "C:/Windows/System32/where.exe")
+            task.arguments = [name]
+        #else
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            task.arguments = ["which", name]
+        #endif
         let pipe = Pipe()
         task.standardOutput = pipe
         try task.run()
         task.waitUntilExit()
         let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let path = String(data: data, encoding: .utf8)?
+        let output = String(data: data, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        // `where` returns one path per line; `which` returns a single path.
+        let path = output.split(whereSeparator: \.isNewline).first.map(String.init) ?? ""
         guard !path.isEmpty else {
             throw ValidationError("Could not find executable: \(name)")
         }

@@ -308,6 +308,24 @@ succeeds but warns, and the EXE keeps its console. (A consequence: `print` /
 stderr don't appear when the app is launched from Explorer — use `swift run`
 during development to see logs.)
 
+### Live reload
+
+`swift-pwa dev` works on Windows (it used to be macOS / Linux only). Run it
+from your project root:
+
+```powershell
+swift-pwa dev                              # serves web/ with live reload, launches the app
+swift-pwa dev --server http://localhost:5173   # or point at your own bundler's dev server
+```
+
+It serves your `web/` directory over a loopback port, injects a live-reload
+client, and refreshes the WebView2 window whenever you save a file — no JS
+framework or external server needed. Run it inside a VS Developer shell so the
+`swift run` it launches finds the MSVC toolchain (same requirement as
+`swift build`). The loopback server is a small Winsock listener; a fixed
+`--port` (default 4321) keeps a stable dev origin so per-origin web storage
+(OPFS / localStorage / IndexedDB) persists across launches.
+
 ### Single-file distribution
 
 To ship the portable app as **one self-contained `.exe`** instead of a folder,

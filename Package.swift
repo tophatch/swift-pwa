@@ -535,7 +535,12 @@ let package = Package(
             // binary stages `./gradlew` too, and `Bundle.module` (which
             // *traps* when the bundle isn't co-located) is never synthesized
             // for this target. Regenerate via Scripts/regenerate-gradle-wrapper.sh.
-            swiftSettings: swiftSettings
+            swiftSettings: swiftSettings,
+            // Winsock (`ws2_32.lib`) backs the built-in `swift-pwa dev`
+            // live-reload server on Windows (DevNet). Unlike POSIX BSD sockets
+            // — which are in the C runtime the toolchain already links — Winsock
+            // is a separate import library that must be named explicitly.
+            linkerSettings: [.linkedLibrary("ws2_32", .when(platforms: [.windows]))]
         ),
 
         .executableTarget(

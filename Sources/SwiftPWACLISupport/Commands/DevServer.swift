@@ -1,12 +1,6 @@
 import Foundation
 
-#if canImport(Darwin)
-    import Darwin
-#elseif canImport(Glibc)
-    import Glibc
-#endif
-
-#if canImport(Darwin) || canImport(Glibc)
+#if canImport(Darwin) || canImport(Glibc) || canImport(WinSDK)
 
     /// A tiny static file server with live reload, for `swift-pwa dev`.
     ///
@@ -17,17 +11,18 @@ import Foundation
     /// required — point `swift-pwa dev` at a plain `web/` folder and edits
     /// show up live.
     ///
-    /// Hand-rolled POSIX sockets (no dependency, matching the project's
-    /// ethos). `@unchecked Sendable` + an `NSLock` guard the shared client
-    /// list across the accept / per-connection / watcher threads — same
-    /// pattern as `CommandRegistry`.
+    /// The socket layer goes through `DevNet` (BSD sockets on Darwin/Glibc,
+    /// Winsock on Windows) so this file carries no platform `#if`; the file
+    /// watcher is plain Foundation and already portable. `@unchecked Sendable`
+    /// + an `NSLock` guard the shared client list across the accept /
+    /// per-connection / watcher threads — same pattern as `CommandRegistry`.
     final class DevServer: @unchecked Sendable {
         private let root: URL
         private let entry: String
         private let requestedPort: UInt16
         private let lock = NSLock()
-        private var clientFds: [Int32] = []
-        private var listenFd: Int32 = -1
+        private var clientFds: [DevSocket] = []
+        private var listenFd: DevSocket = DevNet.invalid
         private var running = true
 
         /// `port` is the loopback port to bind. A fixed, non-zero port gives
@@ -44,22 +39,13 @@ import Foundation
         /// Bind the loopback port, start the accept + watch threads, and
         /// return the URL the app should load.
         func start() throws -> URL {
-            let fd = socket(AF_INET, sockStreamType, 0)
-            guard fd >= 0 else { throw DevServerError.socket("socket() failed") }
-            var yes: Int32 = 1
-            setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &yes, socklen_t(MemoryLayout<Int32>.size))
+            DevNet.startup() // Winsock init (no-op on POSIX)
+            let fd = DevNet.makeStreamSocket()
+            guard DevNet.isValid(fd) else { throw DevServerError.socket("socket() failed") }
+            DevNet.setReuseAddr(fd)
 
-            var addr = sockaddr_in()
-            addr.sin_family = sa_family_t(AF_INET)
-            addr.sin_port = requestedPort.bigEndian // 0 → OS picks a free port
-            addr.sin_addr.s_addr = inet_addr("127.0.0.1")
-            let bindOK = withUnsafePointer(to: &addr) { p in
-                p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                    bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-                }
-            }
-            guard bindOK == 0 else {
-                close(fd)
+            guard DevNet.bindLoopback(fd, port: requestedPort) else {
+                DevNet.closeSocket(fd)
                 if requestedPort != 0 {
                     throw DevServerError.socket(
                         "port \(requestedPort) is already in use — pass `--port <n>` to pick another, "
@@ -68,16 +54,12 @@ import Foundation
                 }
                 throw DevServerError.socket("bind() failed")
             }
-            guard listen(fd, 16) == 0 else { close(fd); throw DevServerError.socket("listen() failed") }
-
-            // Read back the assigned port.
-            var bound = sockaddr_in()
-            var len = socklen_t(MemoryLayout<sockaddr_in>.size)
-            _ = withUnsafeMutablePointer(to: &bound) { p in
-                p.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) }
+            guard DevNet.startListening(fd, backlog: 16) else {
+                DevNet.closeSocket(fd)
+                throw DevServerError.socket("listen() failed")
             }
-            let port = UInt16(bigEndian: bound.sin_port)
 
+            let port = DevNet.boundPort(fd)
             listenFd = fd
             Thread.detachNewThread { [self] in acceptLoop() }
             Thread.detachNewThread { [self] in watchLoop() }
@@ -91,11 +73,11 @@ import Foundation
         func stop() {
             lock.lock()
             running = false
-            let fds = clientFds + (listenFd >= 0 ? [listenFd] : [])
+            let fds = clientFds + (DevNet.isValid(listenFd) ? [listenFd] : [])
             clientFds = []
-            listenFd = -1
+            listenFd = DevNet.invalid
             lock.unlock()
-            for fd in fds { close(fd) }
+            for fd in fds { DevNet.closeSocket(fd) }
         }
 
         // MARK: - Accept + dispatch
@@ -103,7 +85,7 @@ import Foundation
         private func acceptLoop() {
             while true {
                 lock.lock(); let fd = listenFd; let go = running; lock.unlock()
-                guard go, fd >= 0 else { return }
+                guard go, DevNet.isValid(fd) else { return }
                 // Poll with a timeout rather than blocking in `accept()`
                 // indefinitely: on Linux, `stop()` closing `listenFd` from
                 // another thread does NOT wake a thread already blocked in
@@ -111,27 +93,24 @@ import Foundation
                 // leaves this thread — and thus the whole process — alive after
                 // `stop()`. That's what hung `swift test` on exit in CI. The
                 // 300 ms timeout means we re-check `running` promptly and exit.
-                var pfd = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
-                let pr = poll(&pfd, 1, 300)
-                if pr <= 0 { continue } // timeout / EINTR → re-check `running`
-                // Closed-or-errored fd (e.g. POLLNVAL after `stop()`) → loop
-                // and let the `running` guard end the thread.
-                if pfd.revents & Int16(POLLIN) == 0 { continue }
-                let client = accept(fd, nil, nil)
-                if client < 0 { continue }
+                let pr = DevNet.pollReadable(fd, timeoutMs: 300)
+                if pr <= 0 { continue } // timeout / error → re-check `running`
+                let client = DevNet.acceptOne(fd)
+                if !DevNet.isValid(client) { continue }
                 Thread.detachNewThread { [self] in handle(client) }
             }
         }
 
-        private func handle(_ fd: Int32) {
+        private func handle(_ fd: DevSocket) {
             var buf = [UInt8](repeating: 0, count: 8192)
-            let n = read(fd, &buf, buf.count)
-            guard n > 0 else { close(fd); return }
+            let n = DevNet.recvInto(fd, &buf)
+            guard n > 0 else { DevNet.closeSocket(fd); return }
             let request = String(decoding: buf[0 ..< n], as: UTF8.self)
             // First line: "GET /path HTTP/1.1"
-            guard let line = request.split(separator: "\r\n", maxSplits: 1).first else { close(fd); return }
+            guard let line = request.split(separator: "\r\n", maxSplits: 1).first
+            else { DevNet.closeSocket(fd); return }
             let parts = line.split(separator: " ")
-            guard parts.count >= 2 else { close(fd); return }
+            guard parts.count >= 2 else { DevNet.closeSocket(fd); return }
             let rawPath = String(parts[1])
             let path = String(rawPath.split(separator: "?").first ?? "")
 
@@ -140,12 +119,12 @@ import Foundation
                 return // keep the socket open; the watcher writes to it
             }
             serveFile(path: path, fd: fd)
-            close(fd)
+            DevNet.closeSocket(fd)
         }
 
         // MARK: - Static files
 
-        private func serveFile(path: String, fd: Int32) {
+        private func serveFile(path: String, fd: DevSocket) {
             let rel = (path == "/" || path.isEmpty) ? entry : String(path.dropFirst())
             // Block path-traversal: the resolved file must stay under root.
             let fileURL = root.appendingPathComponent(rel).standardizedFileURL
@@ -181,7 +160,7 @@ import Foundation
 
         // MARK: - SSE live reload
 
-        private func startSSE(fd: Int32) {
+        private func startSSE(fd: DevSocket) {
             let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n" +
                 "Cache-Control: no-cache\r\nConnection: keep-alive\r\n\r\nretry: 1000\n\n"
             writeAll(fd, Array(header.utf8))
@@ -191,11 +170,11 @@ import Foundation
         private func broadcastReload() {
             lock.lock(); let fds = clientFds; lock.unlock()
             let event = Array("event: reload\ndata: 1\n\n".utf8)
-            var dead: [Int32] = []
+            var dead: [DevSocket] = []
             for fd in fds where !writeAll(fd, event) { dead.append(fd) }
             if !dead.isEmpty {
                 lock.lock(); clientFds.removeAll { dead.contains($0) }; lock.unlock()
-                for fd in dead { close(fd) }
+                for fd in dead { DevNet.closeSocket(fd) }
             }
         }
 
@@ -233,17 +212,8 @@ import Foundation
         // MARK: - Helpers
 
         @discardableResult
-        private func writeAll(_ fd: Int32, _ bytes: [UInt8]) -> Bool {
-            var offset = 0
-            return bytes.withUnsafeBytes { raw -> Bool in
-                guard let base = raw.bindMemory(to: UInt8.self).baseAddress else { return true }
-                while offset < bytes.count {
-                    let n = write(fd, base + offset, bytes.count - offset)
-                    if n <= 0 { return false }
-                    offset += n
-                }
-                return true
-            }
+        private func writeAll(_ fd: DevSocket, _ bytes: [UInt8]) -> Bool {
+            DevNet.sendAll(fd, bytes, offset: 0, count: bytes.count)
         }
 
         private static let livereloadPath = "/__swift_pwa_livereload__"
@@ -267,15 +237,6 @@ import Foundation
             case "map": "application/json"
             default: "application/octet-stream"
             }
-        }
-
-        /// `SOCK_STREAM` is an enum on Linux and an Int32 on Darwin; normalize.
-        private var sockStreamType: Int32 {
-            #if canImport(Darwin)
-                SOCK_STREAM
-            #else
-                Int32(SOCK_STREAM.rawValue)
-            #endif
         }
     }
 

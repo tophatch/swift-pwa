@@ -8,7 +8,7 @@ import Foundation
 /// cutting a release — there's no SwiftPM hook to inject the package
 /// version into a host-tool build, so it lives here by hand.
 public enum SwiftPWAVersion {
-    public static let current = "0.9.1"
+    public static let current = "0.9.2"
 }
 
 /// Root command for the `swift-pwa` CLI. Lives in the

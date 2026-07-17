@@ -1133,7 +1133,10 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     package.targets.append(contentsOf: [
         .target(
             name: "SwiftPWAQwenTTS",
-            dependencies: ["SwiftPWACore", "SwiftPWAONNX"] + onnxRuntimeModuleDependencies(),
+            dependencies: ["SwiftPWACore", "SwiftPWAONNX", "SwiftPWAModelStore"]
+                + onnxRuntimeModuleDependencies()
+                // Android routes the model download through the Kotlin RPC.
+                + [.target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))],
             swiftSettings: segmentationSwiftSettings,
             linkerSettings: onnxRuntimeLinkerSettings
         ),

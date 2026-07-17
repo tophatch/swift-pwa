@@ -8,7 +8,11 @@
 #if canImport(ONNXRuntime) || canImport(ONNXRuntimeAndroid) || canImport(ONNXRuntimeDesktop) || canImport(ONNXRuntimeDirectML)
     import Foundation
     import SwiftPWACore
+    import SwiftPWAModelStore
     import SwiftPWAONNX
+    #if os(Android)
+        import SwiftPWAAndroid // AndroidFileDownload — model download routes through Kotlin's HTTP stack
+    #endif
 
     /// An `AIBackend` that synthesizes speech from text on-device via the
     /// Qwen3-TTS ONNX pipeline on the shared `SwiftPWAONNX` tier — the
@@ -39,13 +43,36 @@
         private var embeddings: QwenTTSEmbeddings?
         private var tokenizer: QwenTokenizer?
 
-        /// Back a pipeline present on disk under `modelDirectory` (the elbruno
-        /// export layout: the three graphs at the root, `embeddings/` +
-        /// `tokenizer/` subdirs). The default `spec` is the device-verified
-        /// fp16-talker config.
+        /// Set only for the downloadable tier — drives `ensureModel`. `nil` for
+        /// the fixed-path tier, whose `ensureModel` throws. `files` is in
+        /// download order (large weights first).
+        private let download: (downloader: ModelDownloader, files: [QwenTTSModelSource.File])?
+
+        /// Back a pipeline present on disk under `modelDirectory` (the export
+        /// layout: the three graphs at the root, `embeddings/` + `tokenizer/`
+        /// subdirs). `ai.ensureModel` throws `.unsupportedPlatform`. The default
+        /// `spec` is the device-verified fp16-talker config.
         public init(modelDirectory: URL, spec: QwenTTSModelSpec = .customVoice0_6B) {
             self.modelDirectory = modelDirectory
             self.spec = spec
+            download = nil
+        }
+
+        /// Back a **downloadable** pipeline: `ai.ensureModel` fetches the files
+        /// described by `source` into `cacheDirectory` (resumable,
+        /// checksum-pinned, subdir-qualified so it lands in the expected
+        /// layout), and generation loads them from there. Mirrors
+        /// `StableDiffusionBackend(cacheDirectory:source:)`. Defaults to the
+        /// `qwen-tts-vendor`-published 0.6B CustomVoice pipeline; `source` and
+        /// `spec` must match.
+        public init(
+            cacheDirectory: URL,
+            source: QwenTTSModelSource = .customVoice0_6B,
+            spec: QwenTTSModelSpec = .customVoice0_6B
+        ) {
+            modelDirectory = cacheDirectory
+            self.spec = spec
+            download = (ModelDownloader(directory: cacheDirectory), source.files)
         }
 
         // MARK: AIBackend
@@ -81,6 +108,66 @@
                 )
             }
             return AIGenerateAudioResult(audio: audio, backend: AIBackendID.qwenTTS)
+        }
+
+        /// Fetch the downloadable pipeline (resumable, checksum-pinned) into the
+        /// cache directory, streaming one aggregate progress bar across every
+        /// file. Throws `.unsupportedPlatform` on the fixed-path init. Mirrors
+        /// `StableDiffusionBackend.ensureModel`.
+        public nonisolated func ensureModel(_: AIEnsureModelRequest)
+            -> AsyncThrowingStream<AIDownloadEvent, any Error>
+        {
+            guard let download else {
+                return AsyncThrowingStream {
+                    $0.finish(throwing: AIError
+                        .unsupportedPlatform("this backend was constructed with a fixed model directory"))
+                }
+            }
+            let (downloader, files) = download
+            return AsyncThrowingStream { continuation in
+                let task = Task {
+                    do {
+                        let grandTotal = files.reduce(Int64(0)) { $0 + $1.sizeBytes }
+                        var completed: Int64 = 0
+                        for file in files {
+                            let spec = ModelSpec(url: file.url, sha256: file.sha256, fileName: file.fileName)
+                            let base = completed
+                            #if os(Android)
+                                // Swift's URLSession has no injectable CA store on
+                                // Android; fetch through Android's HTTP stack via
+                                // the Kotlin `net.downloadFile` RPC (system TLS,
+                                // checksum-verified), as SD/LaMa/MobileSAM do. The
+                                // destination path carries the subdir, and the
+                                // downloader's parent-dir creation applies there too
+                                // — but the RPC writes the raw path, so ensure the
+                                // parent exists first.
+                                let dest = downloader.localURL(for: spec)
+                                try FileManager.default.createDirectory(
+                                    at: dest.deletingLastPathComponent(), withIntermediateDirectories: true
+                                )
+                                continuation.yield(.progress(bytesDone: base, totalBytes: grandTotal))
+                                _ = try await AndroidFileDownload.download(
+                                    url: file.url.absoluteString, destPath: dest.path, sha256: file.sha256
+                                ) { bytesDone, _ in
+                                    continuation.yield(.progress(bytesDone: base + bytesDone, totalBytes: grandTotal))
+                                }
+                            #else
+                                _ = try await downloader.ensure(spec) { bytesDone, _ in
+                                    continuation.yield(.progress(bytesDone: base + bytesDone, totalBytes: grandTotal))
+                                }
+                            #endif
+                            completed += file.sizeBytes
+                        }
+                        continuation.yield(.done)
+                        continuation.finish()
+                    } catch let error as AIError {
+                        continuation.finish(throwing: AIError.modelDownloadFailed(error.bridgeError.message))
+                    } catch {
+                        continuation.finish(throwing: AIError.modelDownloadFailed("\(error)"))
+                    }
+                }
+                continuation.onTermination = { _ in task.cancel() }
+            }
         }
 
         /// Free the cached ONNX sessions + tables (several GB): dropping the

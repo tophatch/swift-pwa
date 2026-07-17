@@ -211,9 +211,11 @@ the backend side.
 > offers **9 preset voices** via the `voice` field (ryan/serena/vivian/uncle_fu/
 > aiden/ono_anna/sohee/eric/dylan) with a `language` selector. Shipping precision
 > is fp16 talker + fp32 code-predictor + fp32 vocoder + fp16 text-embedding
-> (~2.5 GB). Today it's **fixed-path** — stage the model directory yourself; a
-> hosted `ai.ensureModel` download tier (like the image backends') is a
-> follow-up. Voice *cloning* (arbitrary reference audio) needs the Base model and
+> (~2.5 GB). Fetch it with the checksum-pinned **`ai.ensureModel`** download tier
+> — `QwenTTSBackend(cacheDirectory: url)` fetches the `qwen-tts-vendor`-published
+> pipeline into `url` on first use (like the image backends' downloadable tier) —
+> or point `QwenTTSBackend(modelDirectory: url)` at a directory you staged
+> yourself. Voice *cloning* (arbitrary reference audio) needs the Base model and
 > isn't wired yet, so this backend reports `voiceCloning: false`.
 >
 > **Live, continuous audio streaming** (push mic frames into an open

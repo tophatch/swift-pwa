@@ -75,8 +75,11 @@ public struct ModelDownloader: Sendable {
         onProgress: (@Sendable (Int64, Int64?) -> Void)? = nil
     ) async throws -> URL {
         let fm = FileManager.default
-        try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         let final = localURL(for: spec)
+        // `fileName` may carry a subpath (e.g. `embeddings/text_embedding.npy`),
+        // so create the file's parent — not just `directory` — before writing.
+        // For a plain (non-subpath) fileName this is `directory` itself.
+        try fm.createDirectory(at: final.deletingLastPathComponent(), withIntermediateDirectories: true)
 
         if fm.fileExists(atPath: final.path) {
             if let want = spec.sha256 {

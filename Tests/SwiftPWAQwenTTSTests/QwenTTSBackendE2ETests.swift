@@ -39,5 +39,49 @@ import Testing
             #expect(ms < 40000)
             print("[qwen-tts-e2e] wrote \(path) — \(wav.count) bytes, \(ms) ms")
         }
+
+        /// Opt-in end-to-end of the **download tier**: set `QWEN_TTS_SERVE_URL`
+        /// to a base URL serving the release assets by their flat names (e.g. a
+        /// local `python -m http.server` over the vendored files). Rewrites the
+        /// pinned `customVoice0_6B` source's URLs to that base — so this also
+        /// cross-checks the committed checksums against the served bytes — runs
+        /// `ai.ensureModel` into a fresh cache (verifying the subdir layout), and
+        /// synthesizes from the downloaded files.
+        @Test func downloadsAndSynthesizesWhenServed() async throws {
+            guard let base = ProcessInfo.processInfo.environment["QWEN_TTS_SERVE_URL"],
+                  let baseURL = URL(string: base) else { return }
+            let cache = FileManager.default.temporaryDirectory
+                .appendingPathComponent("qwen-tts-dl-\(baseURL.port ?? 0)", isDirectory: true)
+            try? FileManager.default.removeItem(at: cache)
+
+            let source = QwenTTSModelSource(files: QwenTTSModelSource.customVoice0_6B.files.map { f in
+                QwenTTSModelSource.File(
+                    url: baseURL.appendingPathComponent(f.url.lastPathComponent),
+                    sha256: f.sha256, fileName: f.fileName, sizeBytes: f.sizeBytes
+                )
+            })
+            let backend = QwenTTSBackend(cacheDirectory: cache, source: source)
+
+            var sawDone = false
+            var lastBytes: Int64 = 0
+            for try await event in backend.ensureModel(AIEnsureModelRequest()) {
+                if event.type == "done" { sawDone = true }
+                if let b = event.bytesDone { lastBytes = b }
+            }
+            #expect(sawDone)
+            #expect(lastBytes > 2_000_000_000) // ~2.5 GB fetched + checksum-verified
+            // The downloaded layout is what the fixed-path backend reads.
+            #expect(FileManager.default.fileExists(
+                atPath: cache.appendingPathComponent("embeddings/text_embedding.npy").path
+            ))
+
+            let result = try await backend.generateAudio(
+                AIGenerateAudioRequest(prompt: "Downloaded model works.", voice: "serena")
+            )
+            let ms = try #require(result.audio.durationMs)
+            #expect(ms > 500)
+            #expect(ms < 40000)
+            print("[qwen-tts-dl] downloaded \(lastBytes) bytes; synthesized \(ms) ms")
+        }
     }
 #endif

@@ -17,14 +17,22 @@ public enum WindowContent: Sendable, Equatable {
     /// A `pwa://`-resolvable folder containing the web bundle. The
     /// `directory` is exposed as `pwa://localhost/...`; the index file
     /// is `pwa://localhost/<entry>` (default `index.html`).
-    case bundled(directory: URL, entry: String)
+    ///
+    /// `spaFallback` opts into single-page-app history routing: a request
+    /// for a path that doesn't name a file on disk **and** looks like a
+    /// client-side route (no file extension) is served `entry` instead of
+    /// 404ing, so a hard reload / deep-link of e.g. `/settings` under a
+    /// `BrowserRouter` loads the app rather than a blank page. Off by
+    /// default — a non-SPA app keeps strict 404s (a mistyped asset URL
+    /// shouldn't silently return HTML).
+    case bundled(directory: URL, entry: String, spaFallback: Bool)
 
     /// A remote URL. Used in development (`PWA_DEV_SERVER`) or for
     /// thin clients that wrap a hosted PWA.
     case remote(URL)
 
-    public static func bundled(directory: URL) -> WindowContent {
-        .bundled(directory: directory, entry: "index.html")
+    public static func bundled(directory: URL, entry: String = "index.html") -> WindowContent {
+        .bundled(directory: directory, entry: entry, spaFallback: false)
     }
 }
 

@@ -25,8 +25,8 @@
 
         public init(config: WindowConfig, app: IOSAppContext) throws {
             let cfg = WKWebViewConfiguration()
-            if case let .bundled(directory, _) = config.content {
-                app.assetProvider.setBundleRoot(directory)
+            if case let .bundled(directory, entry, spaFallback) = config.content {
+                app.assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
                 WKWebViewAdapter.registerScheme("pwa", on: cfg, assetProvider: app.assetProvider)
             }
             let adapter = try WKWebViewAdapter(configuration: cfg)

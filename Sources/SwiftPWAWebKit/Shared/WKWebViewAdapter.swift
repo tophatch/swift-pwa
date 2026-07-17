@@ -89,14 +89,14 @@
             let webView = webView
             Task { @MainActor in
                 switch content {
-                case let .bundled(_, entry):
+                case let .bundled(_, entry, _):
                     let url = URL(string: "pwa://localhost/\(entry)")!
                     webView.load(URLRequest(url: url))
                 case let .remote(url):
                     webView.load(URLRequest(url: url))
                 }
             }
-            if case let .bundled(directory, _) = content {
+            if case let .bundled(directory, _, _) = content {
                 attachAssetProvider(AssetProvider(root: directory))
             }
         }

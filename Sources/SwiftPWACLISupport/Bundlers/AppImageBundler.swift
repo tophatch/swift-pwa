@@ -79,16 +79,7 @@ struct AppImageBundler {
         IconOutcome.report(iconOutcome)
 
         // .desktop
-        let desktop = """
-        [Desktop Entry]
-        Type=Application
-        Name=\(manifest.name)
-        Exec=\(exeName)
-        Icon=\(exeName)
-        Categories=\(manifest.linux?.desktopCategories?.joined(separator: ";") ?? "Utility");
-        Comment=\(manifest.description ?? manifest.name)
-        Terminal=false
-        """
+        let desktop = Self.desktopEntry(manifest: manifest, exeName: exeName)
         try desktop.write(
             to: appDir.appendingPathComponent("usr/share/applications/\(exeName).desktop"),
             atomically: true,
@@ -195,6 +186,37 @@ struct AppImageBundler {
             0x00, 0x00, 0x49, 0x45, 0x4E, 0x44, 0xAE, 0x42, 0x60, 0x82
         ]
         try Data(bytes).write(to: url)
+    }
+
+    /// Render the `.desktop` entry. When `linux.document_types` declares MIME
+    /// types, add a `MimeType=` list (so the desktop environment associates the
+    /// app with them) and a `%F` field code on `Exec=` (so opened file paths are
+    /// passed as arguments — the runtime forwards them to `app.openFile`).
+    /// Without doc types the output is unchanged (bare `Exec=`, no `MimeType=`).
+    static func desktopEntry(manifest: PWAManifest, exeName: String) -> String {
+        let mimeTypes = (manifest.linux?.documentTypes ?? [])
+            .flatMap(\.mimeTypes)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+        // `%F` = a list of local file paths (freedesktop Exec field code). Only
+        // added when the app declares openable types, so a launcher-only app's
+        // Exec line stays bare.
+        let exec = mimeTypes.isEmpty ? exeName : "\(exeName) %F"
+        var lines = [
+            "[Desktop Entry]",
+            "Type=Application",
+            "Name=\(manifest.name)",
+            "Exec=\(exec)",
+            "Icon=\(exeName)",
+            "Categories=\(manifest.linux?.desktopCategories?.joined(separator: ";") ?? "Utility");",
+            "Comment=\(manifest.description ?? manifest.name)",
+            "Terminal=false"
+        ]
+        if !mimeTypes.isEmpty {
+            // Trailing `;` is required by the spec for list values.
+            lines.append("MimeType=\(mimeTypes.joined(separator: ";"));")
+        }
+        return lines.joined(separator: "\n")
     }
 
     private static func findOrThrow(_ name: String) async throws -> URL {

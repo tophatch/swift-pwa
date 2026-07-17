@@ -761,303 +761,332 @@ enum AndroidTemplates {
         return "\"\(escaped)\""
     }
 
-    static let swiftPWABridgeKt: String = #"""
-    package dev.swiftpwa.runtime
+    /// `spaFallback` / `entry` come from `pwa.json`'s `web.spa_fallback` /
+    /// `web.entry` and are baked into the generated bridge so
+    /// `shouldInterceptRequest` can serve the entry document for a client-side
+    /// route the `WebViewAssetLoader` would 404 (the Android counterpart to the
+    /// desktop `AssetProvider` fallback).
+    static func swiftPWABridgeKt(spaFallback: Bool = false, entry: String = "index.html") -> String {
+        let spaEntryLiteral = kotlinString(entry)
+        return #"""
+        package dev.swiftpwa.runtime
 
-    import android.app.Activity
-    import android.os.Handler
-    import android.os.Looper
-    import android.webkit.JavascriptInterface
-    import android.webkit.WebResourceRequest
-    import android.webkit.WebResourceResponse
-    import android.webkit.WebView
-    import android.webkit.WebViewClient
-    import android.content.Intent
-    import androidx.appcompat.app.AppCompatActivity
-    import androidx.core.view.WindowCompat
-    import androidx.core.view.WindowInsetsCompat
-    import androidx.core.view.WindowInsetsControllerCompat
-    import androidx.webkit.WebViewAssetLoader
-    import androidx.webkit.WebViewCompat
-    import androidx.webkit.WebViewFeature
+        import android.app.Activity
+        import android.os.Handler
+        import android.os.Looper
+        import android.webkit.JavascriptInterface
+        import android.webkit.WebResourceRequest
+        import android.webkit.WebResourceResponse
+        import android.webkit.WebView
+        import android.webkit.WebViewClient
+        import android.content.Intent
+        import androidx.appcompat.app.AppCompatActivity
+        import androidx.core.view.WindowCompat
+        import androidx.core.view.WindowInsetsCompat
+        import androidx.core.view.WindowInsetsControllerCompat
+        import androidx.webkit.WebViewAssetLoader
+        import androidx.webkit.WebViewCompat
+        import androidx.webkit.WebViewFeature
 
-    /// Bridge object owned by `MainActivity`. Provides the JS<->Swift
-    /// channel via `addJavascriptInterface` plus the outbound calls
-    /// the Swift side makes to drive the WebView (loadUrl, evaluateJs,
-    /// runOnMain). All native methods are JNI-bound to the C shim
-    /// under `Sources/CSwiftPWAAndroidJNI/swiftpwa_android.c`.
-    ///
-    /// The class name + method signatures are pinned by the JNI
-    /// symbol mangling on the C side. Do not rename without updating
-    /// `swiftpwa_android.c` in lockstep.
-    class SwiftPWABridge(
-        private val activity: Activity,
-        private val webView: WebView,
-        assetLoader: WebViewAssetLoader
-    ) {
-        private val main = Handler(Looper.getMainLooper())
-        private val systemPlugins: SwiftPWASystemPlugins = SwiftPWASystemPlugins(activity, this)
+        /// Bridge object owned by `MainActivity`. Provides the JS<->Swift
+        /// channel via `addJavascriptInterface` plus the outbound calls
+        /// the Swift side makes to drive the WebView (loadUrl, evaluateJs,
+        /// runOnMain). All native methods are JNI-bound to the C shim
+        /// under `Sources/CSwiftPWAAndroidJNI/swiftpwa_android.c`.
+        ///
+        /// The class name + method signatures are pinned by the JNI
+        /// symbol mangling on the C side. Do not rename without updating
+        /// `swiftpwa_android.c` in lockstep.
+        class SwiftPWABridge(
+            private val activity: Activity,
+            private val webView: WebView,
+            assetLoader: WebViewAssetLoader
+        ) {
+            private val main = Handler(Looper.getMainLooper())
+            private val systemPlugins: SwiftPWASystemPlugins = SwiftPWASystemPlugins(activity, this)
 
-        init {
-            // bridge.js needs to run *before* any page script —
-            // otherwise the page's `__SWIFT_PWA__.invoke(...)` calls
-            // race with the bridge installation. AndroidX webkit's
-            // `WebViewCompat.addDocumentStartJavaScript` (added in
-            // androidx.webkit 1.5+, gated on
-            // `WebViewFeature.DOCUMENT_START_SCRIPT`) is the
-            // equivalent of WebKit's `addUserScript(atDocumentStart)`
-            // and is what we want. The previous version injected via
-            // `WebViewClient.onPageStarted` + `evaluateJavascript`,
-            // which fires too late — page scripts can run first and
-            // see an undefined `__SWIFT_PWA__`. We fall back to the
-            // late-injection path on devices whose System WebView
-            // doesn't support the document-start API (Chrome/WebView
-            // ≥ ~83 covers it; the fallback exists for older OEM
-            // forks).
-            val bridgeJs = activity.assets.open("swift_pwa/bridge.js")
-                .bufferedReader().use { it.readText() }
+            // SPA history-routing fallback, baked in from pwa.json's
+            // web.spa_fallback / web.entry (see AndroidTemplates.swiftPWABridgeKt).
+            private val spaFallback = \#(spaFallback)
+            private val spaEntry = \#(spaEntryLiteral)
 
-            webView.settings.javaScriptEnabled = true
-            webView.settings.domStorageEnabled = true
-            // The app's own JS (first-party content served from pwa://) may play
-            // audio/video it generates — e.g. on-device TTS. Autoplay policies
-            // exist to tame untrusted web pages; for a first-party wrapper they
-            // just break `audio.play()` (silent, since a long async breaks the
-            // user-gesture chain). Allow programmatic playback without a gesture.
-            webView.settings.mediaPlaybackRequiresUserGesture = false
-            webView.addJavascriptInterface(JsBridge(this), "__SwiftPWA__post")
+            init {
+                // bridge.js needs to run *before* any page script —
+                // otherwise the page's `__SWIFT_PWA__.invoke(...)` calls
+                // race with the bridge installation. AndroidX webkit's
+                // `WebViewCompat.addDocumentStartJavaScript` (added in
+                // androidx.webkit 1.5+, gated on
+                // `WebViewFeature.DOCUMENT_START_SCRIPT`) is the
+                // equivalent of WebKit's `addUserScript(atDocumentStart)`
+                // and is what we want. The previous version injected via
+                // `WebViewClient.onPageStarted` + `evaluateJavascript`,
+                // which fires too late — page scripts can run first and
+                // see an undefined `__SWIFT_PWA__`. We fall back to the
+                // late-injection path on devices whose System WebView
+                // doesn't support the document-start API (Chrome/WebView
+                // ≥ ~83 covers it; the fallback exists for older OEM
+                // forks).
+                val bridgeJs = activity.assets.open("swift_pwa/bridge.js")
+                    .bufferedReader().use { it.readText() }
 
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                WebViewCompat.addDocumentStartJavaScript(
-                    webView,
-                    bridgeJs,
-                    setOf("https://swift-pwa.local")
-                )
-            } else {
-                android.util.Log.w(
-                    "swift-pwa",
-                    "DOCUMENT_START_SCRIPT unsupported on this WebView; falling back to onPageStarted (page scripts may race the bridge)"
-                )
-            }
+                webView.settings.javaScriptEnabled = true
+                webView.settings.domStorageEnabled = true
+                // The app's own JS (first-party content served from pwa://) may play
+                // audio/video it generates — e.g. on-device TTS. Autoplay policies
+                // exist to tame untrusted web pages; for a first-party wrapper they
+                // just break `audio.play()` (silent, since a long async breaks the
+                // user-gesture chain). Allow programmatic playback without a gesture.
+                webView.settings.mediaPlaybackRequiresUserGesture = false
+                webView.addJavascriptInterface(JsBridge(this), "__SwiftPWA__post")
 
-            webView.webViewClient = object : WebViewClient() {
-                override fun shouldInterceptRequest(
-                    view: WebView,
-                    request: WebResourceRequest
-                ): WebResourceResponse? {
-                    return assetLoader.shouldInterceptRequest(request.url)
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                    WebViewCompat.addDocumentStartJavaScript(
+                        webView,
+                        bridgeJs,
+                        setOf("https://swift-pwa.local")
+                    )
+                } else {
+                    android.util.Log.w(
+                        "swift-pwa",
+                        "DOCUMENT_START_SCRIPT unsupported on this WebView; falling back to onPageStarted (page scripts may race the bridge)"
+                    )
                 }
-                override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
-                    super.onPageStarted(view, url, favicon)
-                    if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
-                        view.evaluateJavascript(bridgeJs, null)
+
+                webView.webViewClient = object : WebViewClient() {
+                    override fun shouldInterceptRequest(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): WebResourceResponse? {
+                        val response = assetLoader.shouldInterceptRequest(request.url)
+                        // SPA history-routing fallback: a main-frame navigation to a
+                        // client-side route with no file under assets/web/ (the loader
+                        // returns null / a not-found with no data) loads the entry
+                        // document instead of failing. Sub-resources (JS/CSS — not
+                        // main-frame) and asset URLs with an extension are never masked,
+                        // so a missing chunk still 404s honestly.
+                        if (spaFallback && request.isForMainFrame && response?.data == null) {
+                            val last = request.url.lastPathSegment ?: ""
+                            if (!last.contains('.')) {
+                                val entryUrl = android.net.Uri.parse(
+                                    "https://swift-pwa.local/web/" + spaEntry
+                                )
+                                return assetLoader.shouldInterceptRequest(entryUrl)
+                            }
+                        }
+                        return response
+                    }
+                    override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+                        super.onPageStarted(view, url, favicon)
+                        if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+                            view.evaluateJavascript(bridgeJs, null)
+                        }
                     }
                 }
             }
-        }
 
-        // -------------------------------------------------------------
-        // Lifecycle
-        // -------------------------------------------------------------
+            // -------------------------------------------------------------
+            // Lifecycle
+            // -------------------------------------------------------------
 
-        fun attach() {
-            nativeAttach(this)
-        }
-
-        fun detach() {
-            nativeDetach()
-        }
-
-        // -------------------------------------------------------------
-        // Outbound (called by Swift via JNI)
-        // -------------------------------------------------------------
-
-        @Suppress("unused") // called from JNI
-        fun postToPage(json: String) {
-            main.post {
-                // PostWebMessage equivalent: deliver via the global
-                // resolver in bridge.js. Build the argument as a double-quoted
-                // JS string literal (via org.json.JSONObject.quote), NOT a
-                // template literal: a template literal treats `${…}` as
-                // interpolation, so a payload whose text contains `${…}` — e.g.
-                // fs.readText of a file with a `${secret}` REST-header template —
-                // made JS evaluate `${secret}` → ReferenceError inside
-                // evaluateJavascript, so __deliver never ran and the JS promise
-                // hung forever (readBinary was unaffected — base64 has no `${`).
-                // Inside double quotes `${…}` is inert; this matches how the
-                // Apple/GTK/WebView2 backends already escape the payload.
-                val arg = org.json.JSONObject.quote(json)
-                webView.evaluateJavascript(
-                    "globalThis.__SWIFT_PWA__.__deliver($arg)",
-                    null
-                )
+            fun attach() {
+                nativeAttach(this)
             }
-        }
 
-        @Suppress("unused")
-        fun loadUrl(url: String) {
-            android.util.Log.i("swift-pwa", "loadUrl: $url")
-            main.post { webView.loadUrl(url) }
-        }
+            fun detach() {
+                nativeDetach()
+            }
 
-        @Suppress("unused")
-        fun setTitle(title: String) {
-            // Updates the action-bar / task-list label. No-op on
-            // apps that hide the action bar via theme.
-            main.post { activity.title = title }
-        }
+            // -------------------------------------------------------------
+            // Outbound (called by Swift via JNI)
+            // -------------------------------------------------------------
 
-        @Suppress("unused")
-        fun spawnWindow(configJson: String) {
-            // Launch a fresh MainActivity instance with the config
-            // JSON in an intent extra. The new Activity's onCreate
-            // reads the extra, recognises it as a secondary, loads
-            // the configured URL into its own WebView, and skips the
-            // Swift runtime spawn. No special flags — the secondary
-            // pushes onto the current task's back stack so the system
-            // back button returns to the originating Activity, which
-            // is the platform-native "open detail / settings view"
-            // UX. Multi-instance launching across tasks (separate
-            // entries in recents) would need
-            // `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_MULTIPLE_TASK`
-            // plus `documentLaunchMode` on the manifest — out of
-            // scope for the v0.5.x multi-window cut.
-            main.post {
-                val intent = Intent(activity, activity.javaClass)
-                    .putExtra("swift-pwa.config-json", configJson)
-                try {
-                    activity.startActivity(intent)
-                } catch (t: Throwable) {
-                    android.util.Log.e(
-                        "swift-pwa",
-                        "spawnWindow failed: ${t.javaClass.simpleName}: ${t.message}"
+            @Suppress("unused") // called from JNI
+            fun postToPage(json: String) {
+                main.post {
+                    // PostWebMessage equivalent: deliver via the global
+                    // resolver in bridge.js. Build the argument as a double-quoted
+                    // JS string literal (via org.json.JSONObject.quote), NOT a
+                    // template literal: a template literal treats `${…}` as
+                    // interpolation, so a payload whose text contains `${…}` — e.g.
+                    // fs.readText of a file with a `${secret}` REST-header template —
+                    // made JS evaluate `${secret}` → ReferenceError inside
+                    // evaluateJavascript, so __deliver never ran and the JS promise
+                    // hung forever (readBinary was unaffected — base64 has no `${`).
+                    // Inside double quotes `${…}` is inert; this matches how the
+                    // Apple/GTK/WebView2 backends already escape the payload.
+                    val arg = org.json.JSONObject.quote(json)
+                    webView.evaluateJavascript(
+                        "globalThis.__SWIFT_PWA__.__deliver($arg)",
+                        null
                     )
                 }
             }
-        }
 
-        @Suppress("unused")
-        fun setFullscreen(on: Boolean) {
-            // Toggles immersive / edge-to-edge layout. The
-            // `WindowInsetsControllerCompat` flavour is the
-            // forward-compatible replacement for the deprecated
-            // `View.setSystemUiVisibility` flag set; it works on every
-            // supported API (28+) and adapts to the new behaviour on
-            // API 30+ without per-version branching.
-            main.post {
-                val window = activity.window ?: return@post
-                WindowCompat.setDecorFitsSystemWindows(window, !on)
-                val controller = WindowInsetsControllerCompat(window, window.decorView)
-                if (on) {
-                    controller.hide(WindowInsetsCompat.Type.systemBars())
-                    // Transient bars on swipe: matches the platform
-                    // default for media / game immersive flows and
-                    // keeps system gestures reachable.
-                    controller.systemBarsBehavior =
-                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                } else {
-                    controller.show(WindowInsetsCompat.Type.systemBars())
-                }
+            @Suppress("unused")
+            fun loadUrl(url: String) {
+                android.util.Log.i("swift-pwa", "loadUrl: $url")
+                main.post { webView.loadUrl(url) }
             }
-        }
 
-        @Suppress("unused")
-        fun evaluateJs(snippet: String, callback: Long, user: Long) {
-            main.post {
-                webView.evaluateJavascript(snippet) { result ->
-                    // result is a JSON-encoded string or "null"; pass
-                    // it through to the C side which forwards to the
-                    // Swift continuation.
-                    nativeEvalDone(result, null, callback, user)
-                }
+            @Suppress("unused")
+            fun setTitle(title: String) {
+                // Updates the action-bar / task-list label. No-op on
+                // apps that hide the action bar via theme.
+                main.post { activity.title = title }
             }
-        }
 
-        @Suppress("unused")
-        fun openDevTools() {
-            // Android WebView doesn't expose a programmatic DevTools
-            // window; remote debugging is the only path. We surface
-            // the URL the developer should visit on their host so the
-            // call has a visible effect even though we can't open a
-            // window from here.
-            main.post {
-                val msg = "swift-pwa: open chrome://inspect on a connected host to debug this WebView"
-                android.util.Log.i("swift-pwa", msg)
-            }
-        }
-
-        @Suppress("unused")
-        fun runOnMain(box: Long) {
-            main.post { nativeRunMain(box) }
-        }
-
-        // -------------------------------------------------------------
-        // Generic Swift -> Kotlin RPC for the System* plugins.
-        //
-        // The C shim (`swiftpwa_android_rpc`) packs a method name +
-        // JSON args and calls this method. The Swift side gets the
-        // result back through `nativeRpcDone`. All dispatch hops to
-        // the UI thread first because most of the underlying Android
-        // APIs (ClipboardManager, AlertDialog, BiometricPrompt) are
-        // documented as UI-thread-only on at least some OEM builds.
-        // -------------------------------------------------------------
-
-        @Suppress("unused")
-        fun rpcCall(method: String, args: String?, callback: Long, user: Long) {
-            main.post {
-                try {
-                    systemPlugins.dispatch(method, args ?: "{}") { result, error ->
-                        nativeRpcDone(result, error, callback, user)
+            @Suppress("unused")
+            fun spawnWindow(configJson: String) {
+                // Launch a fresh MainActivity instance with the config
+                // JSON in an intent extra. The new Activity's onCreate
+                // reads the extra, recognises it as a secondary, loads
+                // the configured URL into its own WebView, and skips the
+                // Swift runtime spawn. No special flags — the secondary
+                // pushes onto the current task's back stack so the system
+                // back button returns to the originating Activity, which
+                // is the platform-native "open detail / settings view"
+                // UX. Multi-instance launching across tasks (separate
+                // entries in recents) would need
+                // `FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_MULTIPLE_TASK`
+                // plus `documentLaunchMode` on the manifest — out of
+                // scope for the v0.5.x multi-window cut.
+                main.post {
+                    val intent = Intent(activity, activity.javaClass)
+                        .putExtra("swift-pwa.config-json", configJson)
+                    try {
+                        activity.startActivity(intent)
+                    } catch (t: Throwable) {
+                        android.util.Log.e(
+                            "swift-pwa",
+                            "spawnWindow failed: ${t.javaClass.simpleName}: ${t.message}"
+                        )
                     }
-                } catch (t: Throwable) {
-                    val msg = "swift-pwa: rpc $method threw ${t.javaClass.simpleName}: ${t.message}"
-                    android.util.Log.e("swift-pwa", msg, t)
-                    nativeRpcDone(null, msg, callback, user)
                 }
             }
-        }
 
-        // -------------------------------------------------------------
-        // Inbound: JS -> Java -> Swift
-        // -------------------------------------------------------------
-
-        private class JsBridge(private val outer: SwiftPWABridge) {
-            @JavascriptInterface
-            fun postMessage(json: String) {
-                outer.nativeIngest(json)
+            @Suppress("unused")
+            fun setFullscreen(on: Boolean) {
+                // Toggles immersive / edge-to-edge layout. The
+                // `WindowInsetsControllerCompat` flavour is the
+                // forward-compatible replacement for the deprecated
+                // `View.setSystemUiVisibility` flag set; it works on every
+                // supported API (28+) and adapts to the new behaviour on
+                // API 30+ without per-version branching.
+                main.post {
+                    val window = activity.window ?: return@post
+                    WindowCompat.setDecorFitsSystemWindows(window, !on)
+                    val controller = WindowInsetsControllerCompat(window, window.decorView)
+                    if (on) {
+                        controller.hide(WindowInsetsCompat.Type.systemBars())
+                        // Transient bars on swipe: matches the platform
+                        // default for media / game immersive flows and
+                        // keeps system gestures reachable.
+                        controller.systemBarsBehavior =
+                            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                    } else {
+                        controller.show(WindowInsetsCompat.Type.systemBars())
+                    }
+                }
             }
+
+            @Suppress("unused")
+            fun evaluateJs(snippet: String, callback: Long, user: Long) {
+                main.post {
+                    webView.evaluateJavascript(snippet) { result ->
+                        // result is a JSON-encoded string or "null"; pass
+                        // it through to the C side which forwards to the
+                        // Swift continuation.
+                        nativeEvalDone(result, null, callback, user)
+                    }
+                }
+            }
+
+            @Suppress("unused")
+            fun openDevTools() {
+                // Android WebView doesn't expose a programmatic DevTools
+                // window; remote debugging is the only path. We surface
+                // the URL the developer should visit on their host so the
+                // call has a visible effect even though we can't open a
+                // window from here.
+                main.post {
+                    val msg = "swift-pwa: open chrome://inspect on a connected host to debug this WebView"
+                    android.util.Log.i("swift-pwa", msg)
+                }
+            }
+
+            @Suppress("unused")
+            fun runOnMain(box: Long) {
+                main.post { nativeRunMain(box) }
+            }
+
+            // -------------------------------------------------------------
+            // Generic Swift -> Kotlin RPC for the System* plugins.
+            //
+            // The C shim (`swiftpwa_android_rpc`) packs a method name +
+            // JSON args and calls this method. The Swift side gets the
+            // result back through `nativeRpcDone`. All dispatch hops to
+            // the UI thread first because most of the underlying Android
+            // APIs (ClipboardManager, AlertDialog, BiometricPrompt) are
+            // documented as UI-thread-only on at least some OEM builds.
+            // -------------------------------------------------------------
+
+            @Suppress("unused")
+            fun rpcCall(method: String, args: String?, callback: Long, user: Long) {
+                main.post {
+                    try {
+                        systemPlugins.dispatch(method, args ?: "{}") { result, error ->
+                            nativeRpcDone(result, error, callback, user)
+                        }
+                    } catch (t: Throwable) {
+                        val msg = "swift-pwa: rpc $method threw ${t.javaClass.simpleName}: ${t.message}"
+                        android.util.Log.e("swift-pwa", msg, t)
+                        nativeRpcDone(null, msg, callback, user)
+                    }
+                }
+            }
+
+            // -------------------------------------------------------------
+            // Inbound: JS -> Java -> Swift
+            // -------------------------------------------------------------
+
+            private class JsBridge(private val outer: SwiftPWABridge) {
+                @JavascriptInterface
+                fun postMessage(json: String) {
+                    outer.nativeIngest(json)
+                }
+            }
+
+            // -------------------------------------------------------------
+            // JNI
+            // -------------------------------------------------------------
+
+            private external fun nativeAttach(self: SwiftPWABridge)
+            private external fun nativeDetach()
+            private external fun nativeIngest(json: String)
+            private external fun nativeEvalDone(
+                result: String?,
+                error: String?,
+                callback: Long,
+                user: Long
+            )
+            private external fun nativeRunMain(box: Long)
+            private external fun nativeRpcDone(
+                result: String?,
+                error: String?,
+                callback: Long,
+                user: Long
+            )
+            // Host events (Kotlin -> Swift, one-way) — for asynchronous
+            // pushes that don't fit the request/response RPC shape:
+            // PackageInstaller status broadcasts and (future) lifecycle
+            // hooks. Payload is a JSON string with a `channel` field the
+            // Swift `AndroidHostEventRouter` dispatches on.
+            external fun nativeHostEvent(json: String)
+            @Suppress("unused")
+            private external fun nativeQuit(exitCode: Int)
         }
-
-        // -------------------------------------------------------------
-        // JNI
-        // -------------------------------------------------------------
-
-        private external fun nativeAttach(self: SwiftPWABridge)
-        private external fun nativeDetach()
-        private external fun nativeIngest(json: String)
-        private external fun nativeEvalDone(
-            result: String?,
-            error: String?,
-            callback: Long,
-            user: Long
-        )
-        private external fun nativeRunMain(box: Long)
-        private external fun nativeRpcDone(
-            result: String?,
-            error: String?,
-            callback: Long,
-            user: Long
-        )
-        // Host events (Kotlin -> Swift, one-way) — for asynchronous
-        // pushes that don't fit the request/response RPC shape:
-        // PackageInstaller status broadcasts and (future) lifecycle
-        // hooks. Payload is a JSON string with a `channel` field the
-        // Swift `AndroidHostEventRouter` dispatches on.
-        external fun nativeHostEvent(json: String)
-        @Suppress("unused")
-        private external fun nativeQuit(exitCode: Int)
+        """#
     }
-    """#
 
     // MARK: - System plugins (clipboard, dialog, notifications, biometric, updater)
 

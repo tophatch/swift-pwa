@@ -202,6 +202,14 @@ struct Build: AsyncParsableCommand {
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
+        // The web bundle must exist *now* — after any prebuild that generates
+        // it, before we hand off to a bundler that would otherwise copy
+        // nothing. A prebuild "ran" only if one is configured and not skipped;
+        // that tunes the failure hint.
+        let prebuildRan = !skipPrebuild
+            && (pwa.build?.prebuild?.trimmingCharacters(in: .whitespaces).isEmpty == false)
+        try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
+
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
         let artifact: URL
@@ -728,6 +736,82 @@ struct Build: AsyncParsableCommand {
                 SwiftPM target name (the value after `name:` in Package.swift), which can't contain \
                 spaces. Drop the spaces (e.g. "\(suggestion)"), or remove `executable_name` entirely \
                 to let swift-pwa read the target name from the package.
+                """
+            )
+        }
+    }
+
+    /// Fail the build up front when the web bundle the app will load is
+    /// missing, empty, or lacks its entry file — instead of letting the
+    /// bundler silently copy nothing (every bundler's web-copy is a bare
+    /// `if fileExists { copyItem }` with no else) and the app `fatalError`
+    /// at runtime with "web bundle not found", or worse hand the user a
+    /// blank window. This bites anyone who forgets `npm run build`, misnames
+    /// `web.directory`, or has a prebuild that doesn't write where expected.
+    ///
+    /// Runs *after* `build.prebuild`, since that step is the declared place
+    /// to *generate* `web/`; `prebuildRan` tunes the failure hint toward the
+    /// likely cause. Applies to every target — even a Windows `--single-file`
+    /// build reads `web/` off disk to embed it.
+    static func checkWebBundle(manifest: PWAManifest, projectRoot: URL, prebuildRan: Bool) throws {
+        let fm = FileManager.default
+        let dir = manifest.web.directory
+        let webDir = projectRoot.appendingPathComponent(dir)
+
+        // The "how do I fix this" tail, tuned to whether a prebuild is in play
+        // (the usual way `web/` gets generated).
+        let hint = prebuildRan
+            ? """
+            A `build.prebuild` ran but didn't produce it — check that the command actually writes into \
+            this directory, and that `web.directory` names its output dir.
+            """
+            : """
+            Build your web assets into it first (e.g. `npm run build`), or point `web.directory` at the \
+            right output dir. To run the build automatically on every `swift-pwa build`, declare it as \
+            `build.prebuild` in pwa.json.
+            """
+
+        var isDir: ObjCBool = false
+        guard fm.fileExists(atPath: webDir.path, isDirectory: &isDir) else {
+            throw ValidationError(
+                """
+                web bundle not found: \(webDir.path)
+                pwa.json's `web.directory` is "\(dir)", but nothing exists there — the app would ship \
+                with no web assets and fail to launch.
+                \(hint)
+                """
+            )
+        }
+        guard isDir.boolValue else {
+            throw ValidationError(
+                """
+                web bundle is not a directory: \(webDir.path)
+                pwa.json's `web.directory` ("\(dir)") must be a directory of your built web assets, not a file.
+                """
+            )
+        }
+
+        // Ignore dotfiles (a lone `.gitkeep` doesn't make a bundle) so an
+        // otherwise-empty dir reports the clearer "empty" message.
+        let contents = (try? fm.contentsOfDirectory(atPath: webDir.path))?.filter { !$0.hasPrefix(".") } ?? []
+        guard !contents.isEmpty else {
+            throw ValidationError(
+                """
+                web bundle is empty: \(webDir.path)
+                pwa.json's `web.directory` ("\(dir)") has no files, so the app would ship with no web assets.
+                \(hint)
+                """
+            )
+        }
+
+        let entry = manifest.web.entry
+        guard fm.fileExists(atPath: webDir.appendingPathComponent(entry).path) else {
+            throw ValidationError(
+                """
+                web entry file not found: \(webDir.appendingPathComponent(entry).path)
+                pwa.json's `web.entry` is "\(entry)", but that file isn't in `web.directory` ("\(dir)"). \
+                The window opens this file on launch; without it it loads blank. Check the entry filename, \
+                or set `web.entry` to your real entry point.
                 """
             )
         }

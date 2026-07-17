@@ -24,10 +24,10 @@
             // need it. We set up the handler before creating the
             // adapter so it gets baked into the configuration.
             let cfg = WKWebViewConfiguration()
-            if case let .bundled(directory, _) = config.content {
+            if case let .bundled(directory, entry, spaFallback) = config.content {
                 // Share the context-level router so runtime `serveDirectory`
                 // mounts are visible to this window's scheme handler.
-                app.assetProvider.setBundleRoot(directory)
+                app.assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
                 WKWebViewAdapter.registerScheme("pwa", on: cfg, assetProvider: app.assetProvider)
             }
             let adapter = try WKWebViewAdapter(configuration: cfg)

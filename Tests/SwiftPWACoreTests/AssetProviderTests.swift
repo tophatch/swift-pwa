@@ -196,4 +196,104 @@ struct AssetProviderTests {
         provider.unmount(at: "/")
         #expect(try provider.resolve(#require(URL(string: "pwa://localhost/index.html"))) != nil)
     }
+
+    // MARK: - SPA history-routing fallback
+
+    @Test("without spa fallback, a client-side route 404s")
+    func noFallbackByDefault() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider(root: dir) // spaFallback defaults off
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/settings"))) == nil)
+    }
+
+    @Test("with spa fallback, a client-side route serves the entry document")
+    func fallbackServesEntry() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider()
+        provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "index.html")
+        // A top-level route and a nested one both fall back to index.html.
+        for route in ["pwa://localhost/settings", "pwa://localhost/users/42"] {
+            let resolved = try provider.resolve(#require(URL(string: route)))
+            #expect(resolved?.fileURL.lastPathComponent == "index.html")
+            #expect(resolved?.mimeType == "text/html; charset=utf-8")
+        }
+    }
+
+    @Test("with spa fallback, an existing file is still served directly")
+    func fallbackDoesNotShadowRealFiles() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider()
+        provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "index.html")
+        let css = try provider.resolve(#require(URL(string: "pwa://localhost/style.css")))
+        #expect(css?.fileURL.lastPathComponent == "style.css")
+        #expect(css?.mimeType == "text/css; charset=utf-8")
+    }
+
+    @Test("with spa fallback, a missing asset (has extension) still 404s")
+    func fallbackDoesNotMaskMissingAssets() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider()
+        provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "index.html")
+        // A missing JS chunk / image must not be masked by an HTML body.
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/assets/app.abc123.js"))) == nil)
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/missing.png"))) == nil)
+    }
+
+    @Test("spa fallback honors a custom entry document")
+    func fallbackCustomEntry() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        try Data("<html>app</html>".utf8).write(to: dir.appendingPathComponent("app.html"))
+        let provider = AssetProvider()
+        provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "app.html")
+        let resolved = try provider.resolve(#require(URL(string: "pwa://localhost/dashboard")))
+        #expect(resolved?.fileURL.lastPathComponent == "app.html")
+    }
+
+    @Test("spa fallback with a missing entry document resolves nil (no crash)")
+    func fallbackMissingEntry() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider()
+        provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "nope.html")
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/settings"))) == nil)
+    }
+
+    @Test("spaFallback(for:) returns the entry only for a route with no file (native-serving backends)")
+    func spaFallbackForURL() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider(scheme: "https", host: "swift-pwa.local")
+        provider.setBundleRoot(dir, spaFallback: true, fallbackDocument: "index.html")
+        // A client-side route → the entry document.
+        let route = try provider.spaFallback(for: #require(URL(string: "https://swift-pwa.local/settings")))
+        #expect(route?.fileURL.lastPathComponent == "index.html")
+        // A real file → nil (the native mapping serves it directly).
+        #expect(try provider.spaFallback(for: #require(URL(string: "https://swift-pwa.local/style.css"))) == nil)
+        // A missing asset with an extension → nil (honest 404).
+        #expect(try provider.spaFallback(for: #require(URL(string: "https://swift-pwa.local/missing.js"))) == nil)
+    }
+
+    @Test("spaFallback(for:) returns nil when the mount didn't opt in")
+    func spaFallbackForURLOptOut() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let provider = AssetProvider(scheme: "https", host: "swift-pwa.local")
+        provider.setBundleRoot(dir) // spaFallback defaults off
+        #expect(try provider.spaFallback(for: #require(URL(string: "https://swift-pwa.local/settings"))) == nil)
+    }
+
+    @Test("looksLikeNavigation: no-extension paths are routes, extensioned ones are assets")
+    func looksLikeNavigationHeuristic() {
+        for nav in ["/settings", "/users/42", "/app/", "/some.dir/page"] {
+            #expect(AssetProvider.looksLikeNavigation(nav), "\(nav) should read as a route")
+        }
+        for asset in ["/app.js", "/logo.png", "/data.json", "/assets/a.b.css"] {
+            #expect(!AssetProvider.looksLikeNavigation(asset), "\(asset) should read as an asset")
+        }
+    }
 }

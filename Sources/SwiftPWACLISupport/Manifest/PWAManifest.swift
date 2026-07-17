@@ -30,6 +30,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var macos: MacOSSection?
     public var ios: IOSSection?
     public var linux: LinuxSection?
+    public var windows: WindowsSection?
     public var android: AndroidSection?
     public var updater: UpdaterSection?
     public var build: BuildSection?
@@ -46,9 +47,19 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public struct WebSection: Codable, Sendable, Equatable {
         public var directory: String // path relative to project root
         public var entry: String // default "index.html"
-        public init(directory: String, entry: String = "index.html") {
+        /// Opt into single-page-app history routing (JSON key `spa_fallback`).
+        /// When `true`, `swift-pwa init` seeds the generated window's
+        /// `WindowContent.bundled(spaFallback:)` so a hard reload / deep-link
+        /// of a client-side route (e.g. `/settings` under a `BrowserRouter`)
+        /// is served `entry` instead of 404ing under the custom scheme.
+        /// Omit / `false` for a non-SPA app (strict 404s). Seeds build
+        /// metadata only — editing it later requires re-running `init` or
+        /// updating the generated `main.swift` by hand, like `web.entry`.
+        public var spaFallback: Bool?
+        public init(directory: String, entry: String = "index.html", spaFallback: Bool? = nil) {
             self.directory = directory
             self.entry = entry
+            self.spaFallback = spaFallback
         }
     }
 
@@ -318,6 +329,69 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public struct LinuxSection: Codable, Sendable, Equatable {
         public var desktopCategories: [String]? // e.g. ["Utility"]
         public var executableName: String? // defaults to top-level `id` last component
+        /// File types this app opens, declared in the generated `.desktop`
+        /// entry so the desktop environment associates the app with them
+        /// ("Open with"). The Linux counterpart to Apple's
+        /// `CFBundleDocumentTypes` / Android's `android.document_types`. Linux
+        /// associates by **MIME type**, so each entry lists MIME types; they
+        /// become the `.desktop` `MimeType=` list, and the `Exec=` line gains a
+        /// `%F` field code so the opened file's path is passed as an argument
+        /// (which the runtime forwards to the `app.openFile` JS channel). Unset
+        /// → no `MimeType=` line and a bare `Exec=` (launcher-only), byte-for-
+        /// byte as before.
+        ///
+        /// ```json
+        /// "linux": { "document_types": [{ "mime_types": ["image/png", "application/pdf"] }] }
+        /// ```
+        public var documentTypes: [MimeDocumentType]?
+    }
+
+    /// One MIME-based document-type entry (Linux / Android share the shape).
+    public struct MimeDocumentType: Codable, Sendable, Equatable {
+        public var mimeTypes: [String]
+        public init(mimeTypes: [String]) { self.mimeTypes = mimeTypes }
+    }
+
+    /// Windows-specific configuration.
+    public struct WindowsSection: Codable, Sendable, Equatable {
+        /// File types this app opens. Windows associates by **file extension**
+        /// (not MIME type), so each entry lists extensions. For an **MSIX**
+        /// build they become a `<uap:FileTypeAssociation>` extension in the
+        /// generated `AppxManifest.xml` (the OS registers the association on
+        /// install); for a **portable** `.exe` the bundler emits
+        /// `register-file-types.cmd` / `unregister-file-types.cmd` next to the
+        /// exe (a portable app has no installer, so the user runs the script
+        /// once to write the `HKCU\Software\Classes` entries pointing at the
+        /// exe's current location). Either way an opened file's path reaches
+        /// the `app.openFile` JS channel via the launch-argv scan. Unset → no
+        /// association (launcher-only), output byte-for-byte as before.
+        ///
+        /// ```json
+        /// "windows": { "document_types": [{ "extensions": [".foo", ".bar"], "name": "MyApp Document" }] }
+        /// ```
+        public var documentTypes: [ExtensionDocumentType]?
+        public init(documentTypes: [ExtensionDocumentType]? = nil) {
+            self.documentTypes = documentTypes
+        }
+    }
+
+    /// One extension-based document-type entry (Windows).
+    public struct ExtensionDocumentType: Codable, Sendable, Equatable {
+        /// Extensions to associate — with or without the leading dot
+        /// (`".foo"` or `"foo"`); the generators normalize to a lowercase,
+        /// dot-prefixed form.
+        public var extensions: [String]
+        /// Optional human-readable name for the file type (the MSIX
+        /// association group name is derived from it, and it seeds the
+        /// portable-exe ProgID description). Defaults derived from the app.
+        public var name: String?
+        /// Optional MIME content type recorded on the association.
+        public var contentType: String?
+        public init(extensions: [String], name: String? = nil, contentType: String? = nil) {
+            self.extensions = extensions
+            self.name = name
+            self.contentType = contentType
+        }
     }
 
     /// Android-specific configuration. Defaults are aggressive — the

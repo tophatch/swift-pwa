@@ -142,7 +142,7 @@ struct AndroidBundlerUnitTests {
         // promise hung forever. The fix delivers a double-quoted, JSON-escaped
         // string literal instead (org.json.JSONObject.quote), where `${…}` is
         // inert.
-        let bridge = AndroidTemplates.swiftPWABridgeKt
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
         // The payload is quoted safely, and __deliver is not fed a template literal.
         #expect(bridge.contains("org.json.JSONObject.quote(json)"))
         #expect(bridge.contains("__SWIFT_PWA__.__deliver($arg)"))
@@ -501,12 +501,31 @@ struct AndroidBundlerUnitTests {
 
     @Test("SwiftPWABridge declares the nativeHostEvent JNI symbol")
     func bridgeKtDeclaresHostEvent() {
-        let kt = AndroidTemplates.swiftPWABridgeKt
+        let kt = AndroidTemplates.swiftPWABridgeKt()
         // The symbol the BroadcastReceiver path calls and the JNI shim
         // dispatches into `AndroidHostEventRouter`. Pinned here so a
         // rename on either side gets caught before the cross-compile
         // step that links the JNI symbols by name.
         #expect(kt.contains("external fun nativeHostEvent(json: String)"))
+    }
+
+    @Test("SwiftPWABridge SPA fallback: off by default, wired when enabled")
+    func bridgeKtSpaFallback() {
+        // Default (no opt-in): the fallback constant is false and the
+        // interception path still delegates to the asset loader.
+        let off = AndroidTemplates.swiftPWABridgeKt()
+        #expect(off.contains("private val spaFallback = false"))
+        #expect(off.contains("assetLoader.shouldInterceptRequest(request.url)"))
+
+        // Opted in with a custom entry: the constant flips and the entry is
+        // baked in for the main-frame route re-request.
+        let on = AndroidTemplates.swiftPWABridgeKt(spaFallback: true, entry: "app.html")
+        #expect(on.contains("private val spaFallback = true"))
+        #expect(on.contains("private val spaEntry = \"app.html\""))
+        // The fallback only fires for a main-frame route with no matching asset.
+        #expect(on.contains("request.isForMainFrame"))
+        #expect(on.contains("response?.data == null"))
+        #expect(on.contains("https://swift-pwa.local/web/"))
     }
 
     @Test("SwiftPWASystemPlugins maps PackageInstaller status codes to stable names")
@@ -532,7 +551,7 @@ struct AndroidBundlerUnitTests {
 
     @Test("SwiftPWABridge declares a setFullscreen entry point wired to WindowInsetsControllerCompat")
     func bridgeKtDeclaresFullscreen() {
-        let kt = AndroidTemplates.swiftPWABridgeKt
+        let kt = AndroidTemplates.swiftPWABridgeKt()
         #expect(kt.contains("fun setFullscreen(on: Boolean)"))
         // The body must reach the modern AndroidX API; the deprecated
         // `View.setSystemUiVisibility` flag set would compile but
@@ -544,7 +563,7 @@ struct AndroidBundlerUnitTests {
 
     @Test("SwiftPWABridge declares spawnWindow + MainActivity reads the secondary intent extra")
     func bridgeKtDeclaresSpawnWindow() {
-        let bridge = AndroidTemplates.swiftPWABridgeKt
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
         // The Swift `AndroidAppContext.createWindow` JNI-calls this
         // entry on 2nd+ window creations; renaming either side
         // silently breaks multi-window.

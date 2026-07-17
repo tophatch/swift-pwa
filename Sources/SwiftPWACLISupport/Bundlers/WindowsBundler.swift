@@ -168,6 +168,7 @@ struct WindowsBundler {
                 // "single-file" build emits onnxruntime.dll alongside when
                 // ai.local_onnx_runtime is on.
                 try await stageOnnxRuntimeDLLIfNeeded(nextTo: outputDir)
+                try writeFileAssociationScripts(into: outputDir, exeName: exeName)
                 print("swift-pwa: single-file build — web/ embedded into \(exeName)")
                 return singleExe
             }
@@ -203,11 +204,34 @@ struct WindowsBundler {
 
             switch packageFormat {
             case .portable:
+                // MSIX declares file associations in its manifest; the portable
+                // folder has no installer, so it ships opt-in registration scripts.
+                try writeFileAssociationScripts(into: bundleDir, exeName: exeName)
                 return bundleDir
             case .msix:
                 return try await buildMSIX(stagingDir: bundleDir)
             }
         #endif
+    }
+
+    /// Emit `register-file-types.cmd` / `unregister-file-types.cmd` into `dir`
+    /// when `windows.document_types` declares any. A portable app has no
+    /// installer, so these opt-in scripts write the per-user
+    /// `HKCU\Software\Classes` association pointing at the exe *at its current
+    /// location* (`%~dp0`). No-op when no types are declared.
+    func writeFileAssociationScripts(into dir: URL, exeName: String) throws {
+        guard let scripts = FileAssociationSupport.registrationScripts(
+            docTypes: manifest.windows?.documentTypes ?? [],
+            exeName: exeName,
+            appID: manifest.id,
+            appName: manifest.name
+        ) else { return }
+        // Batch files want CRLF line endings.
+        try scripts.register.joined(separator: "\r\n")
+            .write(to: dir.appendingPathComponent("register-file-types.cmd"), atomically: true, encoding: .utf8)
+        try scripts.unregister.joined(separator: "\r\n")
+            .write(to: dir.appendingPathComponent("unregister-file-types.cmd"), atomically: true, encoding: .utf8)
+        print("swift-pwa: wrote register-file-types.cmd (\(scripts.register.count) lines) for file associations")
     }
 
     /// Append the project's `web/` directory to the exe as an

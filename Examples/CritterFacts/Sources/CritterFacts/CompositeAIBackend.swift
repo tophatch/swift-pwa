@@ -49,6 +49,14 @@
         private let imagenKeyPresent: (@Sendable () async -> Bool)?
         /// The Imagen model ids, for routing `generateImage` / `ensureModel`.
         private let imagenModelIDs: Set<String>
+        /// An on-device text→speech backend (`QwenTTSBackend`), kept as a plain
+        /// `any AIBackend` so this file needs no `SwiftPWAQwenTTS` import — the
+        /// caller supplies it only where that target is in the build. Routes all
+        /// `generateAudio` here; `ensureModel` for its model id downloads it.
+        private let audio: (any AIBackend)?
+        /// The TTS model id (`QwenTTSBackend.modelID`), matched for `ensureModel`
+        /// routing without importing the type.
+        private static let ttsModelID = "qwen-tts"
 
         init(
             text: (any AIBackend)?,
@@ -56,7 +64,8 @@
             imageGen: (any AIBackend)? = nil,
             comfy: RemoteImageBackend? = nil,
             imagen: RemoteImageBackend? = nil,
-            imagenKeyPresent: (@Sendable () async -> Bool)? = nil
+            imagenKeyPresent: (@Sendable () async -> Bool)? = nil,
+            audio: (any AIBackend)? = nil
         ) {
             self.text = text
             self.image = image
@@ -64,6 +73,7 @@
             self.comfy = comfy
             self.imagen = imagen
             self.imagenKeyPresent = imagenKeyPresent
+            self.audio = audio
             imagenModelIDs = Set((imagen?.models ?? []).map(\.id))
         }
 
@@ -111,25 +121,32 @@
             // The on-device switcher's catalog (LCM / SD-Turbo) plus the ComfyUI
             // instance's discovered checkpoints — local + remote in one picker.
             let discovered = await comfyCatalog()
+            // The on-device text→speech model + its availability (downloadable /
+            // ready), so a page can drive its download and voice picker.
+            let aud = await audio?.info()
             // On-device switcher (LCM / SD-Turbo) + discovered ComfyUI checkpoints
-            // + the cloud Imagen models (needsSetup/ready per the stored key).
-            let catalog = (gen?.models ?? []) + discovered + (await imagenCatalog())
+            // + the cloud Imagen models (needsSetup/ready per the stored key) +
+            // the TTS model.
+            let catalog = (gen?.models ?? []) + discovered + (await imagenCatalog()) + (aud?.models ?? [])
             let models = catalog.isEmpty ? nil : catalog
             let hasImageGen = (gen?.imageGeneration ?? false) || (comfy != nil) || (imagen != nil)
+            let hasAudioGen = aud?.audioGeneration ?? false
             guard let text else {
-                // Image-only: still advertise editing (+ generation if present).
+                // Image-only: still advertise editing (+ generation / audio if present).
                 return AICapabilities(
-                    available: img.available || (gen?.available ?? false) || (comfy != nil) || (imagen != nil),
+                    available: img.available || (gen?.available ?? false) || (comfy != nil)
+                        || (imagen != nil) || (aud?.available ?? false),
                     backend: img.backend,
                     imageGeneration: hasImageGen,
                     imageEditing: img.imageEditing,
+                    audioGeneration: hasAudioGen,
                     models: models
                 )
             }
             let txt = await text.info()
             return AICapabilities(
                 available: txt.available || img.available || (gen?.available ?? false)
-                    || (comfy != nil) || (imagen != nil),
+                    || (comfy != nil) || (imagen != nil) || (aud?.available ?? false),
                 backend: txt.backend,
                 model: txt.model,
                 streaming: txt.streaming,
@@ -138,10 +155,24 @@
                 imageGeneration: hasImageGen,
                 imageEditing: img.imageEditing,
                 audioInput: txt.audioInput,
-                audioGeneration: txt.audioGeneration,
+                audioGeneration: txt.audioGeneration || hasAudioGen,
                 voiceCloning: txt.voiceCloning,
                 models: models
             )
+        }
+
+        func generateAudio(_ request: AIGenerateAudioRequest) async throws -> AIGenerateAudioResult {
+            guard let audio else { throw AIError.unsupportedPlatform("no audio backend in this build") }
+            return try await audio.generateAudio(request)
+        }
+
+        nonisolated func generateAudioStream(_ request: AIGenerateAudioRequest)
+            -> AsyncThrowingStream<AIAudioChunk, any Error>
+        {
+            guard let audio else {
+                return AsyncThrowingStream { $0.finish(throwing: AIError.unsupportedPlatform("no audio backend")) }
+            }
+            return audio.generateAudioStream(request)
         }
 
         func generate(_ request: AIGenerateRequest) async throws -> AIGenerateResult {
@@ -193,10 +224,31 @@
             return image.generateImageStream(request)
         }
 
+        /// Forward `ai.unload` to every wrapped backend so a page can free the
+        /// resident on-device pipeline (SD ~2 GB, TTS ~2.5 GB) after use — the
+        /// composite is what `AIPlugin` holds, so without this the per-backend
+        /// `unload()` (which `MultiModelImageBackend` / `QwenTTSBackend` /
+        /// `StableDiffusionBackend` implement) is unreachable from JS. Remote
+        /// arms cache nothing, so their default no-op is harmless.
+        func unload() async {
+            await text?.unload()
+            await image.unload()
+            await imageGen?.unload()
+            await comfy?.unload()
+            await imagen?.unload()
+            await audio?.unload()
+        }
+
         nonisolated func ensureModel(_ request: AIEnsureModelRequest)
             -> AsyncThrowingStream<AIDownloadEvent, any Error>
         {
             switch request.model {
+            case Self.ttsModelID:
+                // The on-device TTS pipeline (~2.5 GB) — download it.
+                guard let audio else {
+                    return AsyncThrowingStream { $0.finish(throwing: AIError.unsupportedPlatform("no audio backend")) }
+                }
+                return audio.ensureModel(request)
             case "inpaint", "lama":
                 return image.ensureModel(request)
             case let .some(id) where imagenModelIDs.contains(id):

@@ -47,6 +47,9 @@ if onnxRuntimeEnabled {
     // StableDiffusionBackend (`ai.generateImage` text→image) — same gate,
     // composed alongside LaMa behind the one `ai.*` surface (prompt-to-image).
     appDependencies.append(.product(name: "SwiftPWAStableDiffusion", package: "swift-pwa"))
+    // QwenTTSBackend (`ai.generateAudio` text→speech) — same gate, composed
+    // alongside text + image behind the one `ai.*` surface (speak a fact).
+    appDependencies.append(.product(name: "SwiftPWAQwenTTS", package: "swift-pwa"))
 }
 
 // Opt-in build flag for the headless on-device LaMa inpaint smoke (Android

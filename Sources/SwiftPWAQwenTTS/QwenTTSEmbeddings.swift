@@ -79,7 +79,10 @@ public final class QwenTTSEmbeddings: @unchecked Sendable {
     /// token `id` — a row of `cp_codec_embedding_{group}`.
     public func cpCodec(_ group: Int, _ id: Int) -> [Float] { cpCodecTables[group].row(id) }
 
-    private func silu(_ x: Float) -> Float { x / (1 + Foundation.exp(-x)) }
+    /// `Foundation.exp` has no `Float` overload on the Android NDK (only
+    /// `exp(Double)` / `exp(CGFloat)`), so compute through `Double` for a
+    /// cross-platform `silu`.
+    private func silu(_ x: Float) -> Float { x / (1 + Float(Foundation.exp(Double(-x)))) }
 }
 
 /// Elementwise vector add (`a + b`), a small helper the prefill/decode input

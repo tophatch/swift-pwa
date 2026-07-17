@@ -75,6 +75,11 @@
             download = (ModelDownloader(directory: cacheDirectory), source.files)
         }
 
+        /// The model id this backend advertises in `info().models` — the id a
+        /// page (or a composite router) passes to `ai.ensureModel` to fetch the
+        /// downloadable pipeline.
+        public static let modelID = "qwen-tts"
+
         // MARK: AIBackend
 
         public func info() async -> AICapabilities {
@@ -83,7 +88,36 @@
                 available: true,
                 backend: AIBackendID.qwenTTS,
                 model: "qwen3-tts-12hz-0.6b-customvoice",
-                audioGeneration: true
+                audioGeneration: true,
+                models: [modelInfo()]
+            )
+        }
+
+        /// A single-entry catalog describing the TTS model + its availability, so
+        /// a page can show a download bar (`.downloadable`) and flip to enabled
+        /// once present (`.ready`) — mirrors `MultiModelImageBackend`. On the
+        /// download tier, availability is derived from whether every source file
+        /// is already on disk (a cheap existence check, not a re-hash); the
+        /// fixed-path init is always `.ready`.
+        private func modelInfo() -> AIModelInfo {
+            let availability: AIModelAvailability
+            if let download {
+                let present = download.files.allSatisfy {
+                    FileManager.default.fileExists(
+                        atPath: modelDirectory.appendingPathComponent($0.fileName).path
+                    )
+                }
+                availability = present ? .ready : .downloadable(bytes: download.files.reduce(0) { $0 + $1.sizeBytes })
+            } else {
+                availability = .ready
+            }
+            return AIModelInfo(
+                id: Self.modelID,
+                label: "Qwen3-TTS (0.6B CustomVoice)",
+                capabilities: [.textToSpeech],
+                availability: availability,
+                offlineCapable: true,
+                license: "Apache-2.0"
             )
         }
 

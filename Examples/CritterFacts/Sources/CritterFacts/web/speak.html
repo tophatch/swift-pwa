@@ -1,0 +1,250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Text-to-speech · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
+            --accent-ink: #06231a; --line: #232a35; --card: #171c24;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f4f6f9; --card: #ffffff; --ink: #1b2330; --muted: #5c6775;
+                --accent: #1f9d70; --accent-ink: #ffffff; --line: #dce2ea;
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; overflow: hidden; }
+        body {
+            background: var(--bg); color: var(--ink);
+            font: 15px/1.5 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column;
+        }
+        .bar {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            border-bottom: 1px solid var(--line); background: #131820;
+            padding-top: calc(12px + env(safe-area-inset-top));
+        }
+        @media (prefers-color-scheme: light) { .bar, .controls { background: #eef1f6; } }
+        .back {
+            text-decoration: none; color: var(--ink); font-weight: 700;
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+        }
+        .back:active { transform: translateY(1px); }
+        .hint { color: var(--muted); font-size: 13px; flex: 1; }
+        .hint b { color: var(--accent); }
+        select.voice {
+            font: inherit; font-size: 13px; color: var(--ink); background: var(--bg);
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; max-width: 40vw;
+        }
+        select.voice:focus { outline: none; border-color: var(--accent); }
+
+        .stage {
+            position: relative; flex: 1; min-height: 0; display: flex;
+            align-items: center; justify-content: center; padding: 20px;
+        }
+        .frame {
+            width: min(460px, 90vw); border-radius: 16px;
+            border: 1px solid var(--line); background: var(--card);
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 16px; padding: 32px 24px;
+        }
+        .frame .icon { font-size: 56px; line-height: 1; }
+        .frame .caption { color: var(--muted); text-align: center; max-width: 34ch; }
+        audio { width: 100%; }
+
+        .controls {
+            display: flex; gap: 10px; padding: 12px 16px; align-items: flex-end;
+            border-top: 1px solid var(--line); background: #131820;
+            padding-bottom: calc(12px + env(safe-area-inset-bottom));
+        }
+        textarea {
+            flex: 1; font: inherit; color: var(--ink); background: var(--bg);
+            border: 1px solid var(--line); border-radius: 12px; padding: 12px 14px;
+            resize: none; height: 52px; max-height: 30vh;
+        }
+        textarea:focus { outline: none; border-color: var(--accent); }
+        button {
+            appearance: none; border: 0; cursor: pointer; font: inherit; font-weight: 700;
+            background: var(--accent); color: var(--accent-ink);
+            padding: 12px 20px; border-radius: 12px; transition: transform .06s ease, opacity .2s;
+        }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.5; cursor: progress; }
+
+        .overlay {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 14px; padding: 24px;
+            background: rgba(14,17,22,0.82); text-align: center;
+        }
+        @media (prefers-color-scheme: light) { .overlay { background: rgba(244,246,249,0.86); } }
+        .overlay small { color: var(--muted); max-width: 44ch; }
+        progress { width: min(320px, 70vw); height: 8px; accent-color: var(--accent); }
+        .spinner {
+            width: 34px; height: 34px; border-radius: 50%;
+            border: 3px solid var(--line); border-top-color: var(--accent);
+            animation: spin 0.9s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .err { color: #f0c9c9; max-width: 44ch; }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="back" href="index.html">← Back</a>
+        <select class="voice" id="voice" title="Voice"></select>
+        <div class="hint" id="hint">Type something and hear it spoken — <b>on-device</b>.</div>
+    </div>
+
+    <div class="stage">
+        <div class="frame">
+            <div class="icon" id="icon">🗣️</div>
+            <div class="caption" id="caption">Pick a voice, enter text, and tap Speak.</div>
+            <audio id="player" controls hidden></audio>
+        </div>
+        <div class="overlay" id="overlay" hidden>
+            <div class="spinner" id="spinner" hidden></div>
+            <div id="status">Loading…</div>
+            <progress id="bar" max="1" value="0" hidden></progress>
+            <small id="sub"></small>
+        </div>
+    </div>
+
+    <form class="controls" id="form">
+        <textarea id="prompt" placeholder="The mantis shrimp can throw a punch fast enough to boil water."
+            autocomplete="off">The mantis shrimp can throw a punch fast enough to boil the water around its claw.</textarea>
+        <button type="submit" id="go" disabled>Speak</button>
+    </form>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+        const MODEL_ID = "qwen-tts";
+        // The 0.6B CustomVoice preset voices (speaker_ids.json), with friendly labels.
+        const VOICES = [
+            ["ryan", "Ryan"], ["serena", "Serena"], ["vivian", "Vivian"],
+            ["aiden", "Aiden"], ["sohee", "Sohee"], ["ono_anna", "Anna"],
+            ["uncle_fu", "Uncle Fu"], ["eric", "Eric"], ["dylan", "Dylan"],
+        ];
+        let busy = false;
+        let downloaded = false;   // model weights fetched this session
+        let model = null;         // the TTS model entry from ai.info
+
+        function showSpinner(text, sub = "") {
+            $("overlay").hidden = false; $("spinner").hidden = false;
+            $("bar").hidden = true; $("status").textContent = text; $("sub").textContent = sub;
+        }
+        function showProgress(text, sub = "") {
+            $("overlay").hidden = false; $("spinner").hidden = true;
+            $("bar").hidden = false; $("status").textContent = text; $("sub").textContent = sub;
+        }
+        function hideOverlay() { $("overlay").hidden = true; }
+        function showError(msg) {
+            $("overlay").hidden = false; $("spinner").hidden = true; $("bar").hidden = true;
+            $("status").innerHTML = '<div class="err">⚠️ ' + msg + "</div>"; $("sub").textContent = "";
+        }
+        const mb = (n) => (n / 1048576).toFixed(0);
+
+        // First use downloads the ~2.5 GB pipeline from the qwen-tts-vendor
+        // release; the composite routes model "qwen-tts" to QwenTTSBackend's
+        // ai.ensureModel. Later runs are a cache hit (availability flips to ready).
+        function ensureModel() {
+            if (downloaded || (model && (model.availability || {}).kind === "ready")) {
+                downloaded = true;
+                return Promise.resolve();
+            }
+            return new Promise((resolve, reject) => {
+                showProgress("Preparing voice…", "Downloading the speech model (first run only)…");
+                const unsub = bridge.subscribe("ai.ensureModel", { model: MODEL_ID }, (e) => {
+                    if (e.type === "progress") {
+                        if (e.totalBytes) {
+                            $("bar").value = e.bytesDone / e.totalBytes;
+                            $("sub").textContent = `Downloading… ${mb(e.bytesDone)} / ${mb(e.totalBytes)} MB`;
+                        } else {
+                            $("sub").textContent = `Downloading… ${mb(e.bytesDone)} MB`;
+                        }
+                    } else if (e.type === "done") {
+                        downloaded = true; unsub(); resolve();
+                    } else if (e.type === "error") {
+                        unsub(); reject(new Error(e.message || "model download failed"));
+                    }
+                });
+            });
+        }
+
+        async function speak(text) {
+            if (busy) return;
+            busy = true; $("go").disabled = true; $("voice").disabled = true;
+            const voice = $("voice").value;
+            try {
+                await ensureModel();
+
+                showSpinner("Synthesizing…", `Speaking as ${$("voice").selectedOptions[0].textContent} — a moment on CPU.`);
+                const t0 = Date.now();
+                const { audio } = await bridge.invoke("ai.generateAudio", { prompt: text, voice });
+                const secs = ((Date.now() - t0) / 1000).toFixed(1);
+                if (!audio || !audio.dataBase64) throw new Error("no audio returned");
+
+                const player = $("player");
+                player.src = "data:" + (audio.mimeType || "audio/wav") + ";base64," + audio.dataBase64;
+                player.hidden = false;
+                $("icon").textContent = "🔊";
+                $("caption").textContent = `Spoken in ${secs}s${audio.durationMs ? ` · ${(audio.durationMs / 1000).toFixed(1)}s of audio` : ""}.`;
+                hideOverlay();
+                player.play().catch(() => {}); // autoplay may be blocked; the controls still work
+
+                // Free the resident ~2.5 GB pipeline now the clip is ready — on a
+                // memory-constrained device this returns it to the OS rather than
+                // holding it until the next call. Fire-and-forget.
+                bridge.invoke("ai.unload", {}).catch(() => {});
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            } finally {
+                busy = false; $("go").disabled = false; $("voice").disabled = false;
+            }
+        }
+
+        $("form").addEventListener("submit", (e) => {
+            e.preventDefault();
+            const t = $("prompt").value.trim();
+            if (t) speak(t);
+        });
+
+        // Populate the voice picker + read the model's availability (download size).
+        async function start() {
+            for (const [id, label] of VOICES) {
+                const opt = document.createElement("option");
+                opt.value = id; opt.textContent = label;
+                $("voice").appendChild(opt);
+            }
+            try {
+                const info = await bridge.invoke("ai.info", {});
+                if (!info || !info.audioGeneration) {
+                    showError("On-device text-to-speech isn't available in this build. " +
+                        "Build with ai.local_onnx_runtime set (see the CritterFacts README).");
+                    return;
+                }
+                model = (info.models || []).find(
+                    (m) => Array.isArray(m.capabilities) && m.capabilities.includes("text-to-speech")
+                );
+                const av = (model || {}).availability || {};
+                if (av.kind === "downloadable" && av.bytes) {
+                    $("hint").innerHTML = `Type text, pick a voice, and <b>Speak</b>. ` +
+                        `<span style="color:var(--muted)">first run downloads ~${mb(av.bytes)} MB · Apache-2.0</span>`;
+                } else if (av.kind === "ready") {
+                    downloaded = true;
+                }
+                $("go").disabled = false;
+                hideOverlay();
+            } catch (e) {
+                showError((e && e.message) || String(e));
+            }
+        }
+
+        start();
+    </script>
+</body>
+</html>

@@ -68,6 +68,12 @@ private let demoComfyURL = URL(string: "http://comfyui.local:8188")!
 #if canImport(SwiftPWAImageEdit)
     import SwiftPWAImageEdit
 #endif
+// The on-device text→speech backend (QwenTTSBackend, `ai.generateAudio`) — same
+// `ai.local_onnx_runtime` gate. Composed alongside text + image behind the one
+// `ai.*` surface (see CompositeAIBackend / web/speak.html).
+#if canImport(SwiftPWAQwenTTS)
+    import SwiftPWAQwenTTS
+#endif
 // The on-device text→image backend (StableDiffusionBackend, `ai.generateImage`
 // with a bare prompt) — same `ai.local_onnx_runtime` gate. Composed alongside
 // LaMa behind the one `ai.*` surface (see CompositeAIBackend / web/generate.html).
@@ -217,6 +223,20 @@ func configure(_ ctx: any AppContext) throws {
         // its first `ai.generateImage`. See web/erase.html.
         let lamaDir = ctx.dataDirectory().appendingPathComponent("lama", isDirectory: true)
         let lama = LaMaBackend(cacheDirectory: lamaDir)
+
+        // On-device text→speech (Qwen3-TTS) rides the same composite when the
+        // SwiftPWAQwenTTS target is in the build — `ai.generateAudio` routes
+        // here. The ~2.5 GB pipeline is fetched on first use from the
+        // `qwen-tts-vendor` release; web/speak.html reads its availability from
+        // `ai.info().models`, calls `ai.ensureModel({ model: "qwen-tts" })` with
+        // a progress bar, then `ai.generateAudio`. (Same `ai.local_onnx_runtime`
+        // gate as LaMa above, so ONNX is guaranteed present in this block.)
+        #if canImport(SwiftPWAQwenTTS)
+            let ttsDir = ctx.dataDirectory().appendingPathComponent("qwen-tts", isDirectory: true)
+            let tts: (any AIBackend)? = QwenTTSBackend(cacheDirectory: ttsDir)
+        #else
+            let tts: (any AIBackend)? = nil
+        #endif
         // Text→image (Stable Diffusion) rides the same composite when the SD
         // target is in the build — a bare prompt routes here, a prompt+image to
         // LaMa (see CompositeAIBackend). We offer **two** models the user picks
@@ -294,7 +314,8 @@ func configure(_ ctx: any AppContext) throws {
             ctx.use(AIPlugin(CompositeAIBackend(
                 text: textBackend, image: lama, imageGen: imageModels, comfy: comfy,
                 imagen: imagen,
-                imagenKeyPresent: { (try? await secretStore.get(imagenAPIKeyName)) != nil }
+                imagenKeyPresent: { (try? await secretStore.get(imagenAPIKeyName)) != nil },
+                audio: tts
             )))
             // Phase 2: expose the same backends through the runtime workflow
             // surface. Imagen conforms to `AIWorkflowProvider` directly (a
@@ -309,7 +330,7 @@ func configure(_ ctx: any AppContext) throws {
             // exercisable directly). Opt-in, so registered explicitly here.
             ctx.use(NetPlugin(makeNetworkClient()))
         #else
-            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama)))
+            ctx.use(AIPlugin(CompositeAIBackend(text: textBackend, image: lama, audio: tts)))
             // No SD in this build, but LaMa (pure inpaint, `imageEditing` only)
             // still demonstrates a fixed-schema on-device workflow provider.
             workflowProviders.append(AIBackendWorkflowProvider(providerID: "on-device", backend: lama))

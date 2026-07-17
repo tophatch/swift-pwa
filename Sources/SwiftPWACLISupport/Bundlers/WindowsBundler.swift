@@ -499,14 +499,19 @@ struct WindowsBundler {
             // not-a-PNG rather than claiming success.
             return .notPNG(source: icon, placeholder: false)
         }
-        let groupDir = WindowsIcon.groupIconDirectory(
-            pngByteCount: pngData.count, width: width, height: height, iconID: WindowsIcon.groupID
-        )
+        // Pre-render the small shell sizes (16/32/48) alongside the source so
+        // the taskbar / Explorer small-icon view stay crisp instead of the
+        // shell down-sampling the one big image. `buildImages` down-renders
+        // only the sizes smaller than the source, embedding the source itself
+        // verbatim for the largest slot.
+        let images = WindowsIcon.buildImages(source: pngData, width: width, height: height)
+        let groupDir = WindowsIcon.groupIconDirectory(images: images)
         do {
             try WindowsIcon.embed(
-                pngData: pngData, groupDirectory: groupDir, iconID: WindowsIcon.groupID, into: exe
+                images: images, groupDirectory: groupDir, groupID: WindowsIcon.groupID, into: exe
             )
-            return .bundled(source: icon, detail: "\(width)×\(height)")
+            let sizes = images.map { "\($0.width)" }.joined(separator: "/")
+            return .bundled(source: icon, detail: "\(width)×\(height) → \(sizes) px")
         } catch {
             return .toolFailed(source: icon, reason: "\(error)")
         }

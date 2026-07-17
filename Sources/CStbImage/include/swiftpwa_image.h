@@ -15,6 +15,14 @@ unsigned char *swiftpwa_decode_image_rgb(const unsigned char *data, int len,
 // Free a buffer returned by swiftpwa_decode_image_rgb.
 void swiftpwa_free_image(unsigned char *pixels);
 
+// Like swiftpwa_decode_image_rgb, but keeps the alpha channel: decodes into a
+// tightly-packed RGBA8 buffer (`*width * *height * 4` bytes, row-major). Sources
+// without alpha decode with alpha = 255. Used by the Windows multi-size icon
+// builder, which must preserve transparency when down-rendering the app icon.
+// Free the result with swiftpwa_free_image.
+unsigned char *swiftpwa_decode_image_rgba(const unsigned char *data, int len,
+                                          int *width, int *height);
+
 // Encode tightly-packed RGB8 pixels (`width * height * 3` bytes, row-major) to
 // an in-memory PNG. Returns a freshly allocated buffer (free with
 // swiftpwa_free_png) and writes its byte length to *out_len; returns NULL on
@@ -25,5 +33,11 @@ unsigned char *swiftpwa_encode_png_rgb(const unsigned char *pixels, int width,
 
 // Free a buffer returned by swiftpwa_encode_png_rgb.
 void swiftpwa_free_png(unsigned char *data);
+
+// Like swiftpwa_encode_png_rgb, but for tightly-packed RGBA8 pixels
+// (`width * height * 4` bytes, row-major) — preserves the alpha channel. Used by
+// the Windows multi-size icon builder. Free the result with swiftpwa_free_png.
+unsigned char *swiftpwa_encode_png_rgba(const unsigned char *pixels, int width,
+                                        int height, int *out_len);
 
 #endif

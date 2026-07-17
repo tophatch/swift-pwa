@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-07-17
+
 ### Added
 
 - **Qwen3-TTS downloadable-model tier (`ai.ensureModel`).** The `SwiftPWAQwenTTS` backend shipped fixed-path only (stage the model directory yourself); it now has a checksum-pinned **download tier** matching the Stable-Diffusion / LaMa backends. `QwenTTSBackend(cacheDirectory:source:)` fetches the ~2.5 GB pipeline (resumable, per-file SHA-256-verified) from the `qwen-tts-vendor` GitHub release into the cache directory on first `ai.ensureModel` (Android routes through the Kotlin `net.downloadFile` RPC, as the image backends do); generation then loads from there. Because GitHub release asset names can't contain `/`, the new **`QwenTTSModelSource`** maps each flat asset back to its **subdir-qualified local path** (`embeddings/…`, `tokenizer/…`), so a fetch lands directly in the layout the fixed-path backend reads — enabled by a small `ModelDownloader` change that now creates each file's parent directory (a plain, non-subpath `fileName` is unaffected). Assembly + re-hosting is `Scripts/vendor-qwen-tts.sh` + `.github/workflows/qwen-tts-vendor.yml` (fetch the Apache-2.0 elbruno ONNX export → convert talker + text-embedding to fp16 → collect + checksum), mirroring `vendor-lama.sh` / `lama-vendor.yml`. **Verified end-to-end**: the full 30-file, ~2.58 GB fetch downloads + checksum-verifies against a local server and then synthesizes speech from the downloaded files (a test that also cross-checks the committed pins against the served bytes). Additive.

@@ -173,7 +173,7 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 swift-pwa dev                      # serves web/ with live reload, launches the app
 ```
 
-`swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed (macOS / Linux; on Windows pass `--server`). Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
+`swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed (macOS / Linux / Windows). Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
 
 The built-in server binds a **fixed port** (`4321`) so the dev origin is stable across launches — that's what lets OPFS / localStorage / IndexedDB **persist between runs** (an OS-assigned port would mint a fresh origin each launch and wipe storage). Override with `--port <n>`, or `--port 0` for the old ephemeral behavior.
 
@@ -336,8 +336,7 @@ Shipped work lives in [`CHANGELOG.md`](CHANGELOG.md) — a per-release breakdown
 2. **On-device AI: audio backend follow-ups.** The `ai.*` contract is complete and the **text**, **image**, and now **audio** backends have shipped — text on every OS (Apple Foundation Models / Android Gemini Nano / Windows Phi Silica + portable **llama.cpp**), on-device **image** generation + editing via the ONNX Runtime tier (Stable Diffusion text→image, LaMa inpainting), and on-device **text→speech** via `SwiftPWAQwenTTS` (Qwen3-TTS on the same ONNX tier; see `CHANGELOG.md`). Still open on audio: a hosted model + `ai.ensureModel` download tier for the TTS backend (fixed-path today), on-device (Android) verification, and arbitrary-reference voice cloning — plus exercising Windows Phi Silica generation end-to-end once a Microsoft LAF token lands. Context: [docs/ai-plugin.md](docs/ai-plugin.md).
 3. **Platform audio (capture / playback).** Native microphone capture and audio playback / device routing behind a plugin — lower-latency and more capable than the WebView's `getUserMedia` / `MediaRecorder`, which already cover the in-page cases (including feeding recordings to the `ai.*` audio input). Pairs with the on-device AI audio backend.
 4. **Typed JS↔Swift codegen layer** — generate typed client bindings (TS + Swift) for `invoke` / `subscribe` / `session` from the registered command set, replacing the stringly-typed envelope at the call site. Its precursor — duplex bridge sessions, so the codegen can model the two-way `session` shape — has shipped (see [`CHANGELOG.md`](CHANGELOG.md)). Design: [docs/proposals/typed-bridge-codegen.md](docs/proposals/typed-bridge-codegen.md).
-5. **Built-in live reload on Windows** — the `swift-pwa dev` server is POSIX-only today (macOS / Linux); Windows still needs `--server <url>`.
-6. **Homebrew tap** — `brew install tophatch/tap/swift-pwa` as the idiomatic macOS / Linux install + upgrade story. `swift-pwa self-update` already covers the no-brew and Windows cases.
+5. **Homebrew tap** — `brew install tophatch/tap/swift-pwa` as the idiomatic macOS / Linux install + upgrade story. `swift-pwa self-update` already covers the no-brew and Windows cases.
 
 Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.md](docs/) cover the long tail.
 

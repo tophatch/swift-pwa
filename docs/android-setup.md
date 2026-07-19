@@ -881,13 +881,22 @@ sha1-verifies it (against Maven's own published sidecar) and vendors:
 
 Cross-compiling anything against the installed Android Swift SDK on this
 toolchain **requires the matching Swift 6.2 host toolchain**, not Xcode's
-newer default — set `TOOLCHAINS=org.swift.6200202509111a` (or whatever id
-`~/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain` resolves to
-on your machine) before `swift build`, or you'll hit "module compiled with
-Swift 6.2 cannot be imported by the Swift 6.3.x compiler" errors. This is
-the same requirement `swift-pwa build --cross-compile-android` already
-satisfies internally; it only bites when invoking `swift build
---swift-sdk` by hand, as the spike's verification did:
+newer default, or you'll hit "module compiled with Swift 6.2 cannot be
+imported by the Swift 6.3.x compiler" errors.
+
+`swift-pwa build --cross-compile-android` (and `swift-pwa deploy --target
+android`) **selects it for you** on a macOS host: it reads the Swift release
+the installed Android SDK bundle needs and exports the matching
+`~/Library/Developer/Toolchains/swift-<version>-RELEASE.xctoolchain` bundle id
+as `TOOLCHAINS` for the cross-build (printing which one it picked). An explicit
+`TOOLCHAINS` in your environment still wins, so you can override it.
+
+You only need to set `TOOLCHAINS` by hand when invoking `swift build
+--swift-sdk` **directly** (the CLI's auto-selection doesn't reach a raw
+`swift build`), as the spike's verification did — set
+`TOOLCHAINS=org.swift.6200202509111a` (or whatever id
+`~/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain` resolves to on
+your machine):
 
 ```bash
 export TOOLCHAINS=org.swift.6200202509111a

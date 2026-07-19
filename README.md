@@ -191,6 +191,8 @@ open ./build/MyApp.app
 
 `--target` defaults to the desktop platform you're building on, so you can omit it for a host build; pass it explicitly for cross-targets (`--target ios`, `--target android`) or to bundle for another desktop OS.
 
+**One-command device loop — `swift-pwa deploy`.** Building an artifact is only half of testing on a device; `deploy` runs the whole last mile — `build` → package → install → launch — in one step. `swift-pwa deploy --target android` cross-compiles, assembles the APK, and `adb install`s + launches it on the connected device (`--device <serial|ip:port>` to choose one, with wireless `adb connect` handled for you); `--target ios --simulator` builds and boots + installs on a simulator; `--target macos` opens the `.app`. `--no-build` reuses the last artifact for a fast re-install. See [docs/deploy.md](docs/deploy.md).
+
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 
 ## Feature matrix
@@ -326,6 +328,8 @@ swift run swift-pwa build --target windows --package-format msix --arch arm64 --
 swift run swift-pwa build --target windows --bootstrap-webview2       # bundle the Evergreen Bootstrapper
 swift run swift-pwa build --target android                            # → MyApp-android/ Gradle project
 swift run swift-pwa build --target android --cross-compile-android --android-abis arm64-v8a,x86_64
+swift run swift-pwa deploy --target android --device 10.0.0.2:5555    # build → APK → install → launch
+swift run swift-pwa deploy --target ios --simulator                  # build → boot sim → install → launch
 ```
 
 `pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup). If `pwa.json` declares a [`build.prebuild`](#configuring-pwajson) command, every `build` runs it first.

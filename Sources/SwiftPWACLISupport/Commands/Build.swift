@@ -173,6 +173,12 @@ struct Build: AsyncParsableCommand {
     var androidKeyAlias: String?
 
     @Flag(
+        name: .long,
+        help: .hidden // set by `deploy`, which runs gradlew itself, so the "Next: ./gradlew …" hint would mislead
+    )
+    var noNextSteps: Bool = false
+
+    @Flag(
         help: """
         Prune the bundled Swift runtime stdlib `.so` set to only what the app's `.so` actually \
         depends on (transitive `DT_NEEDED` walk via `readelf -d`). Drops 10 unused stdlib \
@@ -309,6 +315,12 @@ struct Build: AsyncParsableCommand {
             } else {
                 ["arm64-v8a", "x86_64"]
             }
+            // The cross-compiler must match the Android SDK's Swift release
+            // exactly, or the build fails deep with a "module compiled with
+            // Swift X cannot be imported by the Swift Y compiler" error. When
+            // cross-compiling, pick the matching xctoolchain automatically so
+            // the user doesn't have to `export TOOLCHAINS=…` by hand.
+            if crossCompileAndroid { Self.selectAndroidToolchainIfNeeded() }
             let bundler = AndroidBundler(
                 manifest: pwa,
                 projectRoot: cwd,
@@ -330,7 +342,7 @@ struct Build: AsyncParsableCommand {
         )
 
         print("Built: \(artifact.path)")
-        if target == .android {
+        if target == .android, !noNextSteps {
             print("Next: cd '\(artifact.path)' && ./gradlew assembleDebug")
         }
     }
@@ -697,6 +709,123 @@ struct Build: AsyncParsableCommand {
         print("swift-pwa: missing required tool(s) for \(target.rawValue): \(names).")
         print("           Run `swift-pwa doctor --target \(target.rawValue)` for the fixes.")
     }
+
+    /// Select the Swift toolchain that matches the installed Android SDK, by
+    /// exporting `TOOLCHAINS` for the child `swift build --swift-sdk …` the
+    /// `AndroidBundler` runs. The Swift Android SDK's modules are built with
+    /// one specific Swift release, and the compiler enforces an exact match —
+    /// cross-compiling a 6.2 SDK with the host's 6.3 default toolchain fails
+    /// with `module compiled with Swift 6.2 cannot be imported by the Swift
+    /// 6.3 compiler`. The fix is to run the cross-build under the matching
+    /// release toolchain; today the adopter does that by hand
+    /// (`export TOOLCHAINS=<bundle id>`, or wrapping in `swiftly run +6.2.0`).
+    /// The CLI can do it itself: derive the needed release from the installed
+    /// Android SDK bundle, then find the like-versioned `.xctoolchain` and use
+    /// its bundle id.
+    ///
+    /// macOS-only — this is the xctoolchain / `TOOLCHAINS` mechanism, which is
+    /// an Apple-toolchain concept. On a Linux host the matching is done via
+    /// `swiftly` (see docs/android-setup.md), so this is a no-op there.
+    ///
+    /// Non-fatal by design: an explicit `TOOLCHAINS` (or a swiftly-pinned run)
+    /// always wins, and when the SDK/toolchain can't be resolved we print a
+    /// hint and continue rather than block — the host's default toolchain may
+    /// already match.
+    static func selectAndroidToolchainIfNeeded() {
+        #if os(macOS)
+            let env = ProcessInfo.processInfo.environment
+            // An explicit override (or a `swiftly run +X` wrapper, which pins
+            // the compiler a different way) wins — don't second-guess it.
+            if let existing = env["TOOLCHAINS"], !existing.isEmpty {
+                print("swift-pwa: cross-compile toolchain: TOOLCHAINS=\(existing) (from the environment)")
+                return
+            }
+            let home = FileManager.default.homeDirectoryForCurrentUser
+            guard let version = installedAndroidSDKSwiftVersion(home: home) else {
+                // No installed Android SDK bundle found to key off — say
+                // nothing (the bundler's own `swift sdk list` preflight will
+                // give the real diagnostic if none is installed).
+                return
+            }
+            guard let toolchain = releaseToolchain(matchingSwiftVersion: version, home: home) else {
+                print(
+                    "swift-pwa: note — the installed Android SDK needs the Swift \(version) toolchain, but no "
+                        + "swift-\(version)-RELEASE*.xctoolchain is installed. If the build fails with a "
+                        + "\"module compiled with Swift \(version)\" error, install it "
+                        + "(e.g. `swiftly install \(version).0`) or set TOOLCHAINS by hand — see docs/android-setup.md."
+                )
+                return
+            }
+            setenv("TOOLCHAINS", toolchain.bundleID, 1)
+            print(
+                "swift-pwa: cross-compile toolchain: \(toolchain.bundleID) "
+                    + "(\(toolchain.name), matched to the Swift \(version) Android SDK)"
+            )
+        #endif
+    }
+
+    #if os(macOS)
+        /// The Swift release (`"6.2"`) an installed Android SDK bundle was
+        /// built with, read from the SwiftPM swift-sdks directory. Bundles are
+        /// named `swift-<version>-RELEASE-android-<n>.artifactbundle`.
+        private static func installedAndroidSDKSwiftVersion(home: URL) -> String? {
+            let sdksDir = home
+                .appendingPathComponent("Library/org.swift.swiftpm/swift-sdks")
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: sdksDir, includingPropertiesForKeys: nil
+            ) else { return nil }
+            for entry in entries.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
+                if let v = swiftReleaseVersion(in: entry.lastPathComponent, marker: "-RELEASE-android") {
+                    return v
+                }
+            }
+            return nil
+        }
+
+        /// The installed release `.xctoolchain` whose version matches
+        /// `version` (e.g. `"6.2"`), as `(bundleID, name)`. Prefers the exact
+        /// `swift-<version>-RELEASE.xctoolchain`; falls back to any
+        /// `swift-<version>-RELEASE*.xctoolchain` (snapshot dev toolchains of
+        /// the same release line). Returns `nil` if none is installed or the
+        /// `Info.plist` has no `CFBundleIdentifier`.
+        private static func releaseToolchain(
+            matchingSwiftVersion version: String, home: URL
+        ) -> (bundleID: String, name: String)? {
+            let dir = home.appendingPathComponent("Library/Developer/Toolchains")
+            guard let entries = try? FileManager.default.contentsOfDirectory(
+                at: dir, includingPropertiesForKeys: nil
+            ) else { return nil }
+            let candidates = entries.filter {
+                $0.pathExtension == "xctoolchain"
+                    && $0.lastPathComponent.hasPrefix("swift-\(version)-RELEASE")
+            }
+            // Exact `swift-<v>-RELEASE.xctoolchain` first, then anything else.
+            let exact = "swift-\(version)-RELEASE.xctoolchain"
+            let ordered = candidates.sorted { a, _ in a.lastPathComponent == exact }
+            for toolchain in ordered {
+                let plist = toolchain.appendingPathComponent("Info.plist")
+                guard let data = try? Data(contentsOf: plist),
+                      let obj = try? PropertyListSerialization.propertyList(from: data, format: nil),
+                      let dict = obj as? [String: Any],
+                      let id = dict["CFBundleIdentifier"] as? String
+                else { continue }
+                return (id, toolchain.lastPathComponent)
+            }
+            return nil
+        }
+
+        /// Extract a `major.minor` Swift version that immediately precedes
+        /// `marker` in a `swift-<version>-…` string, e.g. `"6.2"` from
+        /// `swift-6.2-RELEASE-android-0.1`. Ignores any patch component.
+        /// (internal, not private, so it's unit-testable on macOS.)
+        static func swiftReleaseVersion(in name: String, marker: String) -> String? {
+            guard name.hasPrefix("swift-"), let markerRange = name.range(of: marker) else { return nil }
+            let versionPart = name[name.index(name.startIndex, offsetBy: "swift-".count) ..< markerRange.lowerBound]
+            let comps = versionPart.split(separator: ".")
+            guard comps.count >= 2, comps.allSatisfy({ $0.allSatisfy(\.isNumber) }) else { return nil }
+            return "\(comps[0]).\(comps[1])"
+        }
+    #endif
 
     /// swift-pwa-level checks that run before any bundler shells out to
     /// `swift build` / `xcodebuild`, so failures surface as actionable

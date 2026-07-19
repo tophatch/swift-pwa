@@ -72,6 +72,58 @@ struct DeployTests {
         #expect(deploy.noBuild == false)
     }
 
+    @Test("parses the iOS device signing pass-through flags")
+    func parsesIOSFlags() throws {
+        let deploy = try Deploy.parse([
+            "--target", "ios", "--team", "ABCDE12345", "--device", "My iPhone"
+        ])
+        #expect(deploy.target == .ios)
+        #expect(deploy.team == "ABCDE12345")
+        #expect(deploy.device == "My iPhone")
+        #expect(deploy.simulator == false)
+    }
+
+    // MARK: - devicectl list devices parsing
+
+    @Test("keeps physical iOS/iPadOS devices, drops watchOS/other, derives connected state")
+    func devicectlParsing() {
+        // Synthetic `devicectl list devices --json-output -` (v3 shape).
+        let json = """
+        {
+          "result": {
+            "devices": [
+              {
+                "deviceProperties": { "name": "Test iPhone" },
+                "hardwareProperties": { "platform": "iOS", "deviceType": "iPhone", "udid": "00001111-AAAA" },
+                "connectionProperties": { "tunnelState": "connected" }
+              },
+              {
+                "deviceProperties": { "name": "Test iPad" },
+                "hardwareProperties": { "platform": "iPadOS", "deviceType": "iPad", "udid": "00002222-BBBB" },
+                "connectionProperties": { "tunnelState": "disconnected" }
+              },
+              {
+                "deviceProperties": { "name": "Test Watch" },
+                "hardwareProperties": { "platform": "watchOS", "deviceType": "appleWatch", "udid": "00003333-CCCC" },
+                "connectionProperties": { "tunnelState": "disconnected" }
+              }
+            ]
+          }
+        }
+        """
+        #expect(Deploy.parseDevicectlDevices(json) == [
+            Deploy.IOSDevice(udid: "00001111-AAAA", name: "Test iPhone", connected: true),
+            Deploy.IOSDevice(udid: "00002222-BBBB", name: "Test iPad", connected: false)
+        ])
+    }
+
+    @Test("malformed / empty devicectl output → empty")
+    func devicectlEmpty() {
+        #expect(Deploy.parseDevicectlDevices("").isEmpty)
+        #expect(Deploy.parseDevicectlDevices("not json").isEmpty)
+        #expect(Deploy.parseDevicectlDevices(#"{"result":{"devices":[]}}"#).isEmpty)
+    }
+
     // MARK: - Android SDK → Swift version extraction (drives toolchain auto-select)
 
     #if os(macOS)

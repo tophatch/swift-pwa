@@ -191,7 +191,7 @@ open ./build/MyApp.app
 
 `--target` defaults to the desktop platform you're building on, so you can omit it for a host build; pass it explicitly for cross-targets (`--target ios`, `--target android`) or to bundle for another desktop OS.
 
-**One-command device loop — `swift-pwa deploy`.** Building an artifact is only half of testing on a device; `deploy` runs the whole last mile — `build` → package → install → launch — in one step. `swift-pwa deploy --target android` cross-compiles, assembles the APK, and `adb install`s + launches it on the connected device (`--device <serial|ip:port>` to choose one, with wireless `adb connect` handled for you); `--target ios --simulator` builds and boots + installs on a simulator; `--target macos` opens the `.app`. `--no-build` reuses the last artifact for a fast re-install. See [docs/deploy.md](docs/deploy.md).
+**One-command device loop — `swift-pwa deploy`.** Building an artifact is only half of testing on a device; `deploy` runs the whole last mile — `build` → package → install → launch — in one step. `swift-pwa deploy --target android` cross-compiles, assembles the APK, and `adb install`s + launches it on the connected device (`--device <serial|ip:port>` to choose one, with wireless `adb connect` handled for you); `--target ios --simulator` builds, boots, and installs on a simulator; `--target ios --team <TEAMID>` builds a signed app and installs it on a physical device via `devicectl`; `--target macos` opens the `.app`. `--no-build` reuses the last artifact for a fast re-install. See [docs/deploy.md](docs/deploy.md).
 
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 

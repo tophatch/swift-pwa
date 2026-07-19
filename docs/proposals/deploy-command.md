@@ -1,13 +1,18 @@
 # Proposal: a `deploy` command (build → package → install → launch)
 
-> **Status: proposal, not yet implemented.** Adds `swift-pwa deploy` as a
-> first-class verb alongside `build`. Scoped as two work items that land in one
-> release: **Cut 1** (android + macos + ios-simulator + linux + windows, plus the
-> cross-compile toolchain auto-discovery and doctor-preflight reuse) and **Cut 2**
-> (ios *physical device*, on top of the device-targeting + signing groundwork in
-> [`ios-free-team-provisioning.md`](ios-free-team-provisioning.md)). The two are
-> separable to build and review, but the release ships **both** — a `deploy` that
-> silently omits on-device iOS would surprise Apple-first adopters. Origin: real
+> **Status: implemented (both cuts).** `swift-pwa deploy` ships as a first-class
+> verb alongside `build`. **Cut 1** (android + macos + ios-simulator + linux +
+> windows + the cross-compile toolchain auto-discovery + doctor-preflight reuse)
+> and **Cut 2** (ios *physical device* via `devicectl`, signing passed through to
+> `build`) both landed. Device-verified: real Android tablet (full
+> build→install→launch over wireless adb, `--no-build`, `--device ip:port`,
+> `ANDROID_SERIAL`, multi-device error), iOS Simulator, macOS `open`; the iOS
+> device path is verified up to the `devicectl install` call against a real paired
+> device — a full on-device install additionally needs a provisioning profile for
+> the bundle id, the one prerequisite deploy doesn't mint (the free-team-provisioning
+> follow-up, [`ios-free-team-provisioning.md`](ios-free-team-provisioning.md),
+> automates it, and its `--device`/`devicectl list devices` resolver is the one
+> `deploy` implements here). User doc: [`../deploy.md`](../deploy.md). Origin: real
 > consumer handoff notes (see [`deploy.md`](deploy.md), the untracked scratch this
 > supersedes).
 

@@ -375,20 +375,32 @@ struct Deploy: AsyncParsableCommand {
         if launch {
             let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
             print("→ launching \(bundleID)")
-            try await Shell.run(
-                "/usr/bin/env",
-                [
-                    "xcrun",
-                    "devicectl",
-                    "device",
-                    "process",
-                    "launch",
-                    "--terminate-existing",
-                    "--device",
-                    target.udid,
-                    bundleID
-                ]
-            )
+            do {
+                try await Shell.run(
+                    "/usr/bin/env",
+                    [
+                        "xcrun",
+                        "devicectl",
+                        "device",
+                        "process",
+                        "launch",
+                        "--terminate-existing",
+                        "--device",
+                        target.udid,
+                        bundleID
+                    ]
+                )
+            } catch {
+                // The app is installed; a first launch under a development /
+                // free-team profile is refused until the developer is trusted on
+                // the device. That's a one-time manual step deploy can't do — so
+                // don't fail the whole deploy, just point at it.
+                print("""
+                swift-pwa: installed, but the launch was refused — a development/free-team app must \
+                be trusted on the device once before it will run: Settings → General → VPN & Device \
+                Management → (your Apple account) → Trust. Then tap the app, or re-run with --no-build.
+                """)
+            }
         }
         print("Deployed to \(target.name) (\(target.udid)).")
     }

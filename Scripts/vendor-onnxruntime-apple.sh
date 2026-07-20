@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Repackage Microsoft's official ONNX Runtime Apple distribution into the
-# flat static-lib + headers xcframework shape `SwiftPWAONNXRuntimeSmoke`
-# (and, later, a real segmentation backend) consumes via `.binaryTarget` —
-# the SWIFT_PWA_ONNXRUNTIME-gated block in Package.swift. Mirrors
-# Scripts/build-llama-xcframework.sh's role for llama.cpp.
+# framework-style xcframework shape the ONNX Runtime backends consume via
+# `.binaryTarget` — a static `ONNXRuntime.framework` per slice, module map
+# inside the bundle (the SWIFT_PWA_ONNXRUNTIME-gated block in Package.swift).
+# Mirrors Scripts/build-llama-xcframework.sh's role for llama.cpp.
 #
 # Why repackage instead of vendoring Microsoft's zip as-is: their artifact
 # ships each platform slice as a versioned `.framework` *bundle*
@@ -13,11 +13,13 @@
 # wrapping, the actual `onnxruntime` binary inside is a plain static
 # archive (`ar` format, confirmed via `file`/`otool -D`), not a dylib. So
 # rather than hand-patch Microsoft's bundle layout, we extract the static
-# lib + headers from each slice and hand them to `xcodebuild
-# -create-xcframework -library -headers` — the same library-type
-# xcframework shape llama.cpp already uses, with our own `module.modulemap`
-# (named `ONNXRuntime`, matching the SwiftPM target) covering the C API
-# headers a segmentation backend needs (core + CPU + CoreML EP).
+# lib + headers from each slice and re-wrap them in a **framework-style**
+# xcframework (a static `ONNXRuntime.framework` per slice, with our own
+# `Modules/module.modulemap` named `ONNXRuntime` covering the C API headers a
+# segmentation backend needs — core + CPU + CoreML EP). Framework style (not
+# `-library -headers`) so this can coexist with llama's `CLlama` xcframework in
+# one iOS build — see docs/proposals/dual-xcframework-ios-collision.md and the
+# make_framework note below.
 #
 # Usage:
 #   Scripts/vendor-onnxruntime-apple.sh [version]
@@ -58,20 +60,58 @@ EXTRACT="$WORK/extracted"
 rm -rf "$EXTRACT" && mkdir -p "$EXTRACT"
 unzip -q "$POD_ZIP" -d "$EXTRACT"
 
-# --- headers: flatten once (identical across slices), write our own module map ---
+# --- headers: flatten once (identical across slices) ---
 HEADERS="$WORK/headers"
 rm -rf "$HEADERS" && mkdir -p "$HEADERS"
 cp "$EXTRACT"/Headers/*.h "$HEADERS/"
-cat > "$HEADERS/module.modulemap" <<'EOF'
-module ONNXRuntime {
+
+# Assemble a **framework-style** slice: a static `ONNXRuntime.framework` whose
+# module map lives *inside* the bundle (Modules/module.modulemap). This matters
+# when an app links BOTH this and llama's `CLlama` xcframework for iOS: a plain
+# `-library -headers` xcframework drops its `module.modulemap` at the shared
+# `Build/Products/<cfg>/include/` root, and two of them collide with
+# "Multiple commands produce include/module.modulemap". Framework xcframeworks
+# are never flattened into that shared include/, so they coexist. The module map
+# lists the C-API headers explicitly (an `umbrella` map would drag in the C++
+# headers — onnxruntime_float16.h → <cmath> — and fail to compile as a C module).
+# See docs/proposals/dual-xcframework-ios-collision.md.
+make_framework() {
+    local lib="$1"
+    local fw="$2"
+    rm -rf "$fw"
+    mkdir -p "$fw/Headers" "$fw/Modules"
+    cp "$HEADERS"/*.h "$fw/Headers/"
+    cp "$lib" "$fw/ONNXRuntime"
+    cat > "$fw/Modules/module.modulemap" <<'EOF'
+framework module ONNXRuntime {
     header "onnxruntime_c_api.h"
     header "cpu_provider_factory.h"
     header "coreml_provider_factory.h"
     export *
 }
 EOF
+    # One template for all slices (incl. macOS). MinimumOSVersion is inert here
+    # — for a *statically-linked* binaryTarget the consumer's own deployment
+    # target governs, and the xcframework's top-level Info.plist is what declares
+    # each slice's SupportedPlatform/variant. We keep a single placeholder rather
+    # than branch iOS (MinimumOSVersion) vs macOS (LSMinimumSystemVersion).
+    cat > "$fw/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>ONNXRuntime</string>
+  <key>CFBundleIdentifier</key><string>ai.onnxruntime.ONNXRuntime</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>ONNXRuntime</string>
+  <key>CFBundlePackageType</key><string>FMWK</string>
+  <key>CFBundleShortVersionString</key><string>${ONNXRUNTIME_VERSION}</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>MinimumOSVersion</key><string>13.0</string>
+</dict></plist>
+EOF
+}
 
-# --- extract each slice's static archive out of its .framework bundle ---
+# --- extract each slice's static archive, wrap it in a framework ---
 CREATE_ARGS=()
 for slice in "${SLICES[@]}"; do
     fw="$EXTRACT/onnxruntime.xcframework/$slice/onnxruntime.framework"
@@ -89,7 +129,8 @@ for slice in "${SLICES[@]}"; do
 
     mkdir -p "$WORK/lib-$slice"
     cp "$bin" "$WORK/lib-$slice/libonnxruntime.a"
-    CREATE_ARGS+=(-library "$WORK/lib-$slice/libonnxruntime.a" -headers "$HEADERS")
+    make_framework "$WORK/lib-$slice/libonnxruntime.a" "$WORK/fw-$slice/ONNXRuntime.framework"
+    CREATE_ARGS+=(-framework "$WORK/fw-$slice/ONNXRuntime.framework")
 done
 
 rm -rf "$OUT/onnxruntime.xcframework"

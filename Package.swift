@@ -751,7 +751,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
                 // moves with the pin. (Local dev / swift-pwa CI use the
                 // Vendor/llama path branch above, built by the same script.)
                 url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
-                checksum: "b88b4797978bc566c63b15a44151b02c8a66245e5cf034dcbb1ace31bc9fbbc5"
+                checksum: "32dc23c097d6786c73cf77e4f5c696c04c4487916e4db7c8642bb598d35f750b"
             )
         llamaLinkerSettings = [
             // The combined static lib carries its C++ runtime + Metal /
@@ -800,10 +800,16 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
 // inside is a plain static archive (`ar` format), not a dylib.
 // `Scripts/vendor-onnxruntime-apple.sh` extracts the static lib + headers
 // from each slice and re-packages them via `xcodebuild -create-xcframework
-// -library -headers` into the same flat-library-plus-headers shape
-// `Vendor/llama-headers` already uses. Verified end-to-end: the script's
-// output actually links and its C API is callable
-// (`SwiftPWAONNXRuntimeSmokeTests`).
+// -framework` as a **framework-style** xcframework (a static
+// `ONNXRuntime.framework` per slice carrying its own `Modules/module.modulemap`
+// inside the bundle) — the same shape `build-llama-xcframework.sh` now emits.
+// Framework style (not `-library -headers`) is required so both the CLlama and
+// ONNXRuntime xcframeworks can be linked into one **iOS** build: a
+// `-library -headers` xcframework drops its `module.modulemap` at the shared
+// `Build/Products/<cfg>/include/` root, and two of them collide with "Multiple
+// commands produce include/module.modulemap". See
+// docs/proposals/dual-xcframework-ios-collision.md. Verified end-to-end: the
+// script's output links and its C API is callable (`SwiftPWAONNXRuntimeSmokeTests`).
 //
 // **Android** has a real prebuilt artifact too (unlike llama.cpp, which has
 // no Android backend at all in this repo): the `onnxruntime-android` AAR on
@@ -850,7 +856,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             : .binaryTarget(
                 name: "ONNXRuntime",
                 url: "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor/onnxruntime.xcframework.zip",
-                checksum: "81ba4127ecf3ebfc713275e8b36a6692f16a58e6d147f0e99ff58af1cdc74794"
+                checksum: "1f9bbc51b73e9c3c996f68002ad4aabcbb5fd94f8ebf540da8e2c5f2877b2cd9"
             )
 
         package.targets.append(contentsOf: [

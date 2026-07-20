@@ -845,8 +845,13 @@ struct Build: AsyncParsableCommand {
                     && $0.lastPathComponent.hasPrefix("swift-\(version)-RELEASE")
             }
             // Exact `swift-<v>-RELEASE.xctoolchain` first, then anything else.
+            // Rank exact=0/other=1 so the comparator is a real strict-weak
+            // ordering (a bare `a == exact` predicate isn't, and yields
+            // undefined results when several candidates exist).
             let exact = "swift-\(version)-RELEASE.xctoolchain"
-            let ordered = candidates.sorted { a, _ in a.lastPathComponent == exact }
+            let ordered = candidates.sorted { a, b in
+                (a.lastPathComponent == exact ? 0 : 1) < (b.lastPathComponent == exact ? 0 : 1)
+            }
             for toolchain in ordered {
                 let plist = toolchain.appendingPathComponent("Info.plist")
                 guard let data = try? Data(contentsOf: plist),

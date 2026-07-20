@@ -255,7 +255,17 @@ struct Deploy: AsyncParsableCommand {
     private func resolveAndroidSerial() async throws -> String {
         if let device, device.contains(":") {
             print("→ adb connect \(device)")
-            try? await Shell.run("adb", ["connect", device])
+            // `adb connect` exits 0 even when it can't reach the device (it just
+            // prints "failed to connect …" / "cannot connect …"), so capture and
+            // validate rather than pressing on and failing later in `adb install`
+            // with a more confusing message.
+            let out = await (try? Shell.capture("adb", ["connect", device])) ?? ""
+            let lower = out.lowercased()
+            if lower.contains("failed to connect") || lower.contains("cannot connect") {
+                throw ValidationError(
+                    "adb could not connect to \(device): \(out.trimmingCharacters(in: .whitespacesAndNewlines))"
+                )
+            }
             return device
         }
         if let device { return device }
@@ -511,10 +521,19 @@ struct Deploy: AsyncParsableCommand {
         let fm = FileManager.default
         switch target {
         case .linux:
+            // Newest by modification date — a fresh `build` may leave an older
+            // AppImage alongside the new one, and lexicographic order can pick
+            // the wrong (stale) file when versions aren't zero-padded.
             let images = ((try? fm.contentsOfDirectory(atPath: outputDir.path)) ?? [])
                 .filter { $0.hasSuffix(".AppImage") }
-                .sorted()
-            return images.last.map { outputDir.appendingPathComponent($0) }
+                .map { outputDir.appendingPathComponent($0) }
+            return images.max {
+                let a = (try? $0.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                let b = (try? $1.resourceValues(forKeys: [.contentModificationDateKey]))?
+                    .contentModificationDate ?? .distantPast
+                return a < b
+            }
         case .windows:
             let exe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: pwa)
             let singleFile = outputDir.appendingPathComponent("\(exe).exe")

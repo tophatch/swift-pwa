@@ -1,4 +1,9 @@
 import Foundation
+#if canImport(FoundationXML)
+    // On non-Apple platforms swift-corelibs keeps XMLDocument/XMLElement in a
+    // separate FoundationXML module; on Apple they're part of Foundation.
+    import FoundationXML
+#endif
 @testable import SwiftPWACLISupport
 import Testing
 

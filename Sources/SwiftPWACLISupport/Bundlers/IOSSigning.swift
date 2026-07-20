@@ -1,4 +1,7 @@
 import Foundation
+#if canImport(CryptoKit)
+    import CryptoKit
+#endif
 
 /// Resolves iOS signing inputs from a `--team` id, so `swift-pwa build
 /// --target ios --team <TEAMID>` can fill in the signing identity,
@@ -98,6 +101,51 @@ enum IOSSigning {
         plist["Entitlements"] as? [String: Any]
     }
 
+    /// The signing identity to use *for a specific profile* — matched by the
+    /// profile's own embedded `DeveloperCertificates` rather than by the team id
+    /// in the cert's common name. This is what makes **free personal teams**
+    /// work: their "Apple Development" cert's CN carries a *different* 10-char id
+    /// than the team id you pass as `--team` (the profile's `TeamIdentifier` and
+    /// the id in the authorized cert's `Apple Development: … (XXXXXXXXXX)` name
+    /// don't match), so `selectIdentity(team:)` can't find it — but the profile
+    /// lists the exact cert that may sign it, so we match on the cert's SHA-1
+    /// (which is what `security find-identity` prints as the identity hash).
+    static func identityForProfile(
+        plist: [String: Any], identities: [(hash: String, name: String)]
+    ) -> String? {
+        #if canImport(CryptoKit)
+            guard let certs = plist["DeveloperCertificates"] as? [Data] else { return nil }
+            let profileCertHashes = Set(certs.map(sha1Hex))
+            return identities.first { profileCertHashes.contains($0.hash.uppercased()) }?.name
+        #else
+            return nil
+        #endif
+    }
+
+    #if canImport(CryptoKit)
+        private static func sha1Hex(_ data: Data) -> String {
+            Insecure.SHA1.hash(data: data).map { String(format: "%02X", $0) }.joined()
+        }
+    #endif
+
+    /// Resolve the signing identity for a profile *on disk* — decodes it and
+    /// matches its certs against the installed identities. Used after minting a
+    /// fresh profile (which `resolve`'s team-string match won't cover for a free
+    /// team). Returns `nil` if nothing matches.
+    static func identity(forProfileAt url: URL) async -> String? {
+        guard let out = try? await Shell.capture(
+            "/usr/bin/env", ["security", "find-identity", "-v", "-p", "codesigning"], discardStderr: true
+        ),
+            let xml = try? await Shell.capture(
+                "/usr/bin/env", ["security", "cms", "-D", "-i", url.path], discardStderr: true
+            ),
+            let plist = try? PropertyListSerialization.propertyList(
+                from: Data(xml.utf8), format: nil
+            ) as? [String: Any]
+        else { return nil }
+        return identityForProfile(plist: plist, identities: parseIdentities(out))
+    }
+
     // MARK: - IO
 
     /// Directories Xcode stores provisioning profiles in (the path moved in
@@ -117,10 +165,12 @@ enum IOSSigning {
     static func resolve(team: String, bundleID: String, scratch: URL, now: Date = Date()) async -> Resolved {
         var resolved = Resolved()
 
+        var parsedIdentities: [(hash: String, name: String)] = []
         if let out = try? await Shell.capture(
             "/usr/bin/env", ["security", "find-identity", "-v", "-p", "codesigning"], discardStderr: true
         ) {
-            resolved.identity = selectIdentity(team: team, from: parseIdentities(out))
+            parsedIdentities = parseIdentities(out)
+            resolved.identity = selectIdentity(team: team, from: parsedIdentities)
         }
 
         var candidates: [(url: URL, plist: [String: Any])] = []
@@ -141,15 +191,19 @@ enum IOSSigning {
 
         if let best = bestProfile(bundleID: bundleID, team: team, candidates: candidates, now: now) {
             resolved.profile = best
-            if let plist = candidates.first(where: { $0.url == best })?.plist,
-               let ent = entitlements(from: plist)
-            {
+            let bestPlist = candidates.first(where: { $0.url == best })?.plist
+            if let plist = bestPlist, let ent = entitlements(from: plist) {
                 let entURL = scratch.appendingPathComponent("swift-pwa-\(bundleID).entitlements")
                 if let data = try? PropertyListSerialization.data(fromPropertyList: ent, format: .xml, options: 0) {
                     try? fm.createDirectory(at: scratch, withIntermediateDirectories: true)
                     try? data.write(to: entURL)
                     resolved.entitlements = entURL
                 }
+            }
+            // Free-team fallback: the team-string identity match missed, but the
+            // profile names the cert that may sign it — use that.
+            if resolved.identity == nil, let plist = bestPlist {
+                resolved.identity = identityForProfile(plist: plist, identities: parsedIdentities)
             }
         }
 

@@ -191,6 +191,8 @@ open ./build/MyApp.app
 
 `--target` defaults to the desktop platform you're building on, so you can omit it for a host build; pass it explicitly for cross-targets (`--target ios`, `--target android`) or to bundle for another desktop OS.
 
+**One-command device loop — `swift-pwa deploy`.** Building an artifact is only half of testing on a device; `deploy` runs the whole last mile — `build` → package → install → launch — in one step. `swift-pwa deploy --target android` cross-compiles, assembles the APK, and `adb install`s + launches it on the connected device (`--device <serial|ip:port>` to choose one, with wireless `adb connect` handled for you); `--target ios --simulator` builds, boots, and installs on a simulator; `--target ios --team <TEAMID>` builds a signed app and installs it on a physical device via `devicectl` (add `--allow-provisioning-registration` and a free personal Apple team mints its own profile — no Xcode round-trip); `--target macos` opens the `.app`. `--no-build` reuses the last artifact for a fast re-install. See [docs/deploy.md](docs/deploy.md).
+
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 
 ## Feature matrix
@@ -326,6 +328,8 @@ swift run swift-pwa build --target windows --package-format msix --arch arm64 --
 swift run swift-pwa build --target windows --bootstrap-webview2       # bundle the Evergreen Bootstrapper
 swift run swift-pwa build --target android                            # → MyApp-android/ Gradle project
 swift run swift-pwa build --target android --cross-compile-android --android-abis arm64-v8a,x86_64
+swift run swift-pwa deploy --target android --device 10.0.0.2:5555    # build → APK → install → launch
+swift run swift-pwa deploy --target ios --simulator                  # build → boot sim → install → launch
 ```
 
 `pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup). If `pwa.json` declares a [`build.prebuild`](#configuring-pwajson) command, every `build` runs it first.
@@ -348,7 +352,7 @@ Per-platform "Known limitations" sections in each [docs/&lt;platform&gt;-setup.m
 Per-platform walkthroughs (toolchain, build, codesign, device install, known caveats):
 
 - **macOS** — [docs/macos-setup.md](docs/macos-setup.md): Xcode 26+, `.app` bundling, Developer ID signing, notarization.
-- **iOS** — [docs/ios-setup.md](docs/ios-setup.md): Simulator runtime install, `.app` install via `simctl`, device run via Xcode.
+- **iOS** — [docs/ios-setup.md](docs/ios-setup.md): Simulator runtime install, `.app` install via `simctl`, and on-device install + launch via `swift-pwa deploy` (with free-team profile minting).
 - **Linux** — [docs/linux-setup.md](docs/linux-setup.md): Ubuntu 24.04+ + Swift 6.0, GTK3 + WebKitGTK 4.1 by default or GTK4 + WebKitGTK 6.0 via `SWIFT_PWA_GTK4=1`, AppImage builds.
 - **Windows** — [docs/windows-setup.md](docs/windows-setup.md): Swift 6 on Windows, Visual Studio Build Tools, the WebView2 SDK / static loader, and the portable `.exe` bundler.
 - **Android** — [docs/android-setup.md](docs/android-setup.md): Swift 6.2.0 + swift-android-sdk 6.2, NDK r27d, JDK 17 + AGP 8.5, the `@_cdecl` entry-point boilerplate, and the Gradle scaffold the `swift-pwa build --target android` bundler emits. [docs/android-on-device-testing.md](docs/android-on-device-testing.md) covers driving the page from the host over `adb forward` + Chrome DevTools Protocol.

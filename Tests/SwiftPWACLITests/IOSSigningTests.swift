@@ -1,6 +1,9 @@
 import Foundation
 @testable import SwiftPWACLISupport
 import Testing
+#if canImport(CryptoKit)
+    import CryptoKit
+#endif
 
 @Suite("iOS device signing")
 struct IOSSigningTests {
@@ -65,4 +68,33 @@ struct IOSSigningTests {
         #expect(cmd.provisioningProfile == "/tmp/app.mobileprovision")
         #expect(cmd.entitlements == "/tmp/app.entitlements")
     }
+
+    // The free-team fix: match the signing identity to the profile's embedded
+    // cert (by SHA-1) rather than the team id in the cert's name — because a
+    // free personal team's cert CN carries a *different* 10-char id than the
+    // profile's TeamIdentifier, so the team-string match misses.
+    #if canImport(CryptoKit)
+        @Test("identityForProfile matches an identity whose cert the profile authorizes")
+        func identityMatchedByProfileCert() {
+            let cert = Data("a-fake-DER-cert".utf8)
+            let hash = Insecure.SHA1.hash(data: cert).map { String(format: "%02X", $0) }.joined()
+            let plist: [String: Any] = ["DeveloperCertificates": [cert]]
+            let identities = [
+                (hash: "0000000000000000000000000000000000000000", name: "Apple Development: other (AAA)"),
+                (hash: hash.lowercased(), name: "Apple Development: me (ABCDE12345)")
+            ]
+            // find-identity prints the hash uppercase; ours here is lowercase —
+            // the match must be case-insensitive (it uppercases both sides).
+            #expect(IOSSigning.identityForProfile(plist: plist, identities: identities)
+                == "Apple Development: me (ABCDE12345)")
+        }
+
+        @Test("identityForProfile returns nil when no installed cert is authorized")
+        func identityNoMatch() {
+            let plist: [String: Any] = ["DeveloperCertificates": [Data("cert-A".utf8)]]
+            let identities = [(hash: "DEADBEEF", name: "Apple Development: unrelated (BBB)")]
+            #expect(IOSSigning.identityForProfile(plist: plist, identities: identities) == nil)
+            #expect(IOSSigning.identityForProfile(plist: [:], identities: identities) == nil)
+        }
+    #endif
 }

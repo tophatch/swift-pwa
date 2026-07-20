@@ -1,21 +1,52 @@
 # Proposal: `build --team` for free personal Apple Developer accounts (+ Xcode 16 scheme regression)
 
-> **Status: design decisions resolved, ready to implement.** The provisioning +
-> entitlements signing story was landed in 0.7.0–0.7.1 (`--provisioning-profile`,
-> `--entitlements`, `--team`). This proposal covers the remaining gap: **`--team`
-> does not work for free personal-team accounts** because no portal profile
-> exists for it to find, and separately documents an **Xcode 16 regression**
-> that breaks the throwaway-project workaround apps have been using in the
-> interim.
+> **Status: implemented.** `--allow-provisioning-registration` on `build`
+> (forwarded by `deploy --target ios`) internalises the free-team minter:
+> `PersonalTeamProfileMinter` generates the throwaway app project (with the
+> explicit Xcode-16 `.xcscheme`), builds it against the device resolved through
+> the shared `IOSDeviceResolver`, and hands the minted profile + entitlements to
+> the existing embed + re-sign path. The pure project-file generation is
+> unit-tested (the pbxproj parses as an OpenStep plist; the scheme's
+> `BlueprintIdentifier` resolves to the target) and the generated project loads
+> in real `xcodebuild` (`-list` / `-showBuildSettings`); the live
+> device-registration/mint step is left to the adopter (it needs a connected
+> free-team device and mutates the Apple account). Docs:
+> [../ios-setup.md](../ios-setup.md) (Free personal teams) + [../deploy.md](../deploy.md).
+> The sections below are kept as the design record.
+>
+> The provisioning + entitlements signing story was landed in 0.7.0–0.7.1
+> (`--provisioning-profile`, `--entitlements`, `--team`). This proposal covered
+> the remaining gap: **`--team` did not work for free personal-team accounts**
+> because no portal profile exists for it to find, and separately documents an
+> **Xcode 16 regression** that breaks the throwaway-project workaround apps had
+> been using in the interim.
 >
 > A code-level review against the current `Sources/SwiftPWACLISupport` found
-> one gap the original draft didn't account for: **there is no device-UDID
-> concept anywhere in the CLI today** (`IPABundler` always builds against the
+> one gap the original draft didn't account for: there was no device-UDID
+> concept anywhere in the CLI (`IPABundler` always builds against the
 > untethered `generic/platform=iOS`, and `docs/ios-setup.md` already admits
 > "the CLI's device path is incomplete"). The minter needs a concrete device
-> to register, so shipping this also means adding a `--device` flag / device
-> auto-detection first — scoped out below. The four open questions from the
-> original draft are answered in **Design decisions**.
+> to register. The four open questions from the original draft are answered in
+> **Design decisions**.
+>
+> **Update (deploy Cut 2 shipped this prerequisite).** `swift-pwa deploy`
+> ([docs/deploy.md](../deploy.md), proposal
+> [deploy-command.md](deploy-command.md)) now **implements the device-targeting
+> layer this proposal scoped out** — the physical-iOS-device resolver over
+> `xcrun devicectl list devices --json-output -` (sole *connected* device by
+> default, `--device <udid|name>` to choose, fail-fast listing paired devices on
+> none/several) lives in `Deploy.swift` (`parseDevicectlDevices` /
+> `resolveIOSDevice`, unit-tested), and the on-device **install + launch**
+> plumbing (`devicectl device install app` / `process launch
+> --terminate-existing`) ships there too. So the remaining work here is *only*
+> the minter (§ Proposed fix), and it should **reuse** deploy's resolver rather
+> than re-add a `--device` auto-detect to `build` — see the reframed
+> **Prerequisite gap** section. The gating fact that motivates the whole
+> proposal is now concretely visible in deploy: a free-team machine has a valid
+> "Apple Development" identity but **no provisioning profile** for the bundle
+> id, so `deploy --target ios --team …` gets as far as the `devicectl install`
+> call and then can't produce an installable signed `.app` — exactly what the
+> minter closes.
 
 ## Background: what landed in 0.7.x
 
@@ -113,36 +144,54 @@ the `project.pbxproj`. The required minimal scheme:
 Anyone running the minter pattern on Xcode 16+ without this file will see a
 silent failure where `xcodebuild` exits 0 but produces no `embedded.mobileprovision`.
 
-## Prerequisite gap: no device targeting exists today
+## Prerequisite: device targeting (now shipped in `deploy`)
 
 The manual minter script takes `$DEVICE_UDID` as a given — the developer looks
 it up once (Xcode's Devices window, `xcrun devicectl list devices`, or
-`idevice_id -l`) and exports it. Internalising the minter means swift-pwa has
-to obtain that UDID itself, and **nothing in the CLI resolves a device UDID
-today**: `Build.swift` has no `--device` option, and `IPABundler` always builds
-against `generic/platform=iOS` (`IPABundler.swift:54-56`) — deliberately
-untethered, since the existing build phase signs nothing and re-signs the
-assembled `.app` afterward regardless of which device it ends up on.
+`idevice_id -l`) and exports it. Internalising the minter means swift-pwa has to
+obtain that UDID itself.
 
-This is scoped narrowly: a `--device <UDID>` flag is needed *only* to feed the
-minter's own `xcodebuild -destination "id=…"` invocation. It does not change
-`IPABundler`'s main build phase or its signing model.
+**This is now done** — `deploy` (Cut 2) resolves a physical iOS device exactly as
+the original draft of this section proposed:
 
-- **`--device <UDID>`** (new `@Option` in `Build.swift`, alongside `--team`):
-  explicit UDID, iOS device builds only.
-- **Auto-detection when `--device` is omitted**: shell out to
-  `xcrun devicectl list devices --json-output -` (following the existing
-  `Shell.capture` pattern in `IOSSigning.resolve`, `IOSSigning.swift:117-140`).
-  If exactly one physical device is present, use it and print a status line
-  (`swift-pwa: using device "<name>" (<udid>)`, matching the existing
-  `--team → …` status-line style at `Build.swift:230-238`). Zero or multiple
-  devices found → fail fast with a message listing what was found and asking
-  for `--device` explicitly (mirrors the existing `iosDeviceUnsigned` fail-fast
-  pattern in `IPABundler.swift`, tested in `IOSSigningTests.swift`).
+- The resolver shells out to `xcrun devicectl list devices --json-output -`
+  (following the existing `Shell.capture` idiom), keeps physical iOS/iPadOS
+  devices, and derives connected state from `connectionProperties.tunnelState`.
+  It lives in `Deploy.swift` as `parseDevicectlDevices` (pure, unit-tested) +
+  `resolveIOSDevice`.
+- Selection: the sole *connected* device by default; `--device <udid|name>` to
+  choose (passed through even when currently disconnected — `devicectl` brings
+  the tunnel up); zero or several connected → fail-fast listing what's paired,
+  asking for `--device`. This is the same no-silent-pick rule the draft
+  specified, mirroring the Android selection in the same file.
+
+So the minter no longer needs to *add* device targeting — it needs to **reuse
+it**. Two things follow for the implementation:
+
+1. **Share the resolver, don't duplicate it.** Extract `parseDevicectlDevices` /
+   `resolveIOSDevice` from `Deploy` into a small shared helper (e.g.
+   `IOSDeviceResolver`) that both `deploy` and the minter call. Re-adding a
+   separate `--device` auto-detect to `Build.swift` would fork the exact logic
+   this file argued should be shared.
+2. **Decide where the minter is driven from.** The minter must run *before* the
+   `IPABundler` build so a profile exists to sign with. Cleanest given deploy:
+   `deploy --target ios --team … --allow-provisioning-registration` resolves the
+   device (it already does), mints against that UDID, then runs the signed
+   build + `devicectl` install it already runs. `build --target ios --team …
+   --allow-provisioning-registration` should keep working standalone (not
+   everyone uses deploy), so `Build` still needs the `--allow-provisioning-registration`
+   flag and a `--device` (feeding the minter's `xcodebuild -destination "id=…"`)
+   — but both resolve through the shared helper above, and `deploy` forwards its
+   already-resolved UDID to `build` via that `--device`.
+
+`IPABundler` still builds against the untethered `generic/platform=iOS`
+(`IPABundler.swift:54-56`); the minter's `-destination "id=…"` is on its own
+throwaway project, so none of this changes `IPABundler`'s main build phase or
+signing model.
 
 This keeps the common case — one phone plugged in over USB, `--team` +
-`--allow-provisioning-registration` — a two-flag invocation with no manual UDID
-lookup, which is strictly better DX than the hand-rolled script it replaces.
+`--allow-provisioning-registration` — a no-manual-UDID-lookup invocation,
+strictly better DX than the hand-rolled script it replaces.
 
 ## Proposed fix
 
@@ -152,7 +201,9 @@ a separate flag rather than automatic under `--team` alone). When `--team` and
 `--allow-provisioning-registration` are both given and no matching installed
 profile is found, fall through to the automatic-minter path:
 
-1. **Resolve the target device** — `--device`, or auto-detect per above.
+1. **Resolve the target device** — via the shared resolver already shipped in
+   `deploy` (`resolveIOSDevice`; see the Prerequisite section), not a new
+   auto-detect in `build`.
 2. **Synthesise a throwaway app project** in a temp directory — the same
    `project.pbxproj` + explicit `xcscheme` (required for Xcode 16+) that apps
    currently write by hand — using the app's bundle ID from `pwa.json` and
@@ -183,7 +234,10 @@ if let team, !simulator {
     var resolved = await IOSSigning.resolve(team: team, bundleID: bundleID, scratch: outputDir)
 
     if resolved.profile == nil, allowProvisioningRegistration {
-        let deviceUDID = try await ResolveDevice.udid(explicit: device)
+        // Shared with deploy — the resolver `deploy` already ships (extract
+        // `resolveIOSDevice`/`parseDevicectlDevices` from Deploy into a shared
+        // `IOSDeviceResolver` rather than re-implementing here).
+        let deviceUDID = try await IOSDeviceResolver.resolve(explicit: device).udid
         let minter = PersonalTeamProfileMinter(
             bundleID: bundleID,
             teamID: team,
@@ -224,14 +278,19 @@ today.
 - Free-team profiles expire in 7 days. No change needed here — users already
   must re-run the build weekly; with this change they just run `swift-pwa build`
   rather than a separate minting script.
-- New public surface: `--device <UDID>` and `--allow-provisioning-registration`
-  flags on `swift-pwa build`. Per the docs convention in `CLAUDE.md`
-  ("Anything affecting the public Swift API or `pwa.json` schema →
-  README.md's API / configuration sections"), both need a line in
-  [README.md](../../README.md) and a `## [Unreleased]` CHANGELOG entry
+- New public surface: `--allow-provisioning-registration` (and `--device`,
+  which already exists on `deploy` and would be added to `build` for the
+  standalone `build --team …` path) on `swift-pwa build`. Per the docs
+  convention in `CLAUDE.md` ("Anything affecting the public Swift API or
+  `pwa.json` schema → README.md's API / configuration sections"), both need a
+  line in [README.md](../../README.md) and a `## [Unreleased]` CHANGELOG entry
   alongside the implementation, plus updates to
   [docs/ios-setup.md](../ios-setup.md) — including striking or narrowing its
-  existing "the CLI's device path is incomplete" caveat once `--device` lands.
+  existing "the CLI's device path is incomplete" caveat.
+- Refactor: extract `deploy`'s `resolveIOSDevice` / `parseDevicectlDevices`
+  (currently in `Deploy.swift`) into a shared `IOSDeviceResolver` so the minter
+  and `deploy` share one implementation (they already agree on the selection
+  rules — this just makes them one code path).
 
 ## Design decisions
 

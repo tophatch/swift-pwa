@@ -134,12 +134,49 @@ swift-pwa build --target ios --team ABCDE12345
 ```
 
 It only fills the inputs you didn't pass — any explicit `--sign` /
-`--provisioning-profile` / `--entitlements` wins. It does **not** create a
-profile from nothing (a SwiftPM package has no app-target Xcode project for
-`xcodebuild` to auto-provision); if no installed profile matches, it says so
-and you fall back to the explicit flags. Find your Team ID with
-`security find-identity -v -p codesigning` (the `(……)` suffix) or in the Apple
-Developer portal.
+`--provisioning-profile` / `--entitlements` wins. For a **paid** team it finds an
+installed portal profile; if none matches it says so and you fall back to the
+explicit flags. Find your Team ID with `security find-identity -v -p codesigning`
+(the `(……)` suffix) or in the Apple Developer portal.
+
+#### Free personal teams
+
+A **free personal team** has no portal profile to find. Add
+`--allow-provisioning-registration` and swift-pwa mints one for you:
+
+```bash
+swift-pwa build --target ios --team ABCDE12345 --allow-provisioning-registration
+# or, in one step onto the device:
+swift-pwa deploy --target ios --team ABCDE12345 --allow-provisioning-registration
+```
+
+When `--team` finds no installed profile, this builds a **throwaway one-file app
+project** with your app's bundle id against a target device (the sole connected
+one, or `--device <udid|name>`) using `xcodebuild -allowProvisioningUpdates
+-allowProvisioningDeviceRegistration` — so Xcode registers the device, creates
+the App ID, and emits a profile — then signs your real app with it. The flag name
+echoes `xcodebuild`'s own consent flag; it's the one step that touches Apple's
+portal, so it's opt-in. macOS-only. First time on a new Apple ID, you may need to
+accept the free-team agreement by building any app to the device from Xcode once.
+
+Find your free team's 10-char Team ID in Xcode → Settings → Accounts (select the
+Apple ID → the Personal Team row), or read it from
+`defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier` (the entry
+with `isFreeProvisioningTeam = 1`).
+
+Two Apple constraints on **free** teams (not swift-pwa limits) worth knowing:
+
+- **7-day profile expiry.** The minted profile lasts a week; re-run when it
+  lapses (the app stops launching).
+- **3 apps per device.** A device can hold at most **three** apps signed with a
+  free profile at once. A fourth install fails with `ApplicationVerificationFailed`
+  / "reached the maximum number of installed apps using a free developer profile"
+  — delete a free-provisioned app from the device and retry.
+
+> **Note on the signing identity.** A free team's "Apple Development" certificate
+> often shows a *different* 10-char id in its name than the team id you pass —
+> swift-pwa matches the identity to the profile's embedded certificate (not the
+> name), so `--team <freeTeamID>` resolves the right one automatically.
 
 ### Getting a profile + entitlements
 
@@ -149,20 +186,17 @@ won't auto-provision it. Two ways to obtain the profile:
 - **Paid team / CI:** download a profile from the Apple Developer portal (or
   `fastlane sigh`), and extract its entitlements:
   `security cms -D -i app.mobileprovision > p.plist && /usr/libexec/PlistBuddy -x -c 'Print :Entitlements' p.plist > app.entitlements`.
-- **Personal (free) team:** build a one-file throwaway app target with the
-  **same bundle id** in Xcode once with *Automatically manage signing* —
-  Xcode registers the device and emits a 7-day
-  `embedded.mobileprovision` you can reuse with the flags above. After
-  installing, trust the developer profile on the device once (Settings →
-  General → VPN & Device Management).
+- **Personal (free) team:** let swift-pwa mint the profile —
+  `--team <TEAMID> --allow-provisioning-registration` (see
+  [Free personal teams](#free-personal-teams) above). After the first install, trust the developer profile on the device
+  once (Settings → General → VPN & Device Management). If you'd rather do it by
+  hand, build a one-file throwaway app target with the **same bundle id** in
+  Xcode once with *Automatically manage signing* and reuse the emitted
+  `embedded.mobileprovision` with the explicit flags.
 
 Then install with `xcrun devicectl device install app build/MyApp.ipa` (or
-`ideviceinstaller`). Alternatively, just run from Xcode (`xed Package.swift`
-→ pick your device → *Run*) and let it manage signing.
-
-> **Coming in 0.7.1:** `--team <TEAMID>` for automatic signing — the bundler
-> will generate a thin app-target project so `xcodebuild` provisions and
-> embeds the profile for you, removing the manual steps above.
+`swift-pwa deploy --target ios …`). Alternatively, just run from Xcode
+(`xed Package.swift` → pick your device → *Run*) and let it manage signing.
 
 For TestFlight / App Store distribution, `xcodebuild archive` →
 `xcodebuild -exportArchive -exportOptionsPlist ...` is still the canonical
@@ -288,15 +322,14 @@ must be HTTPS — iOS rejects http manifests outright.
 
 ## Known limitations on iOS
 
-- **The CLI's device path is incomplete.** `swift-pwa build --target
-  ios --sign <identity>` runs `codesign` but doesn't embed
-  `embedded.mobileprovision` or pass entitlements, so its `.ipa`
-  output won't install on a real device. Use Xcode for device runs
-  for now; full pipeline support is queued.
-- **No `--entitlements` flag for iOS.** macOS bundling accepts one;
-  iOS doesn't yet. Most apps don't need extra entitlements, but
-  things like camera / network extensions / push will require manual
-  re-signing for now.
+- **On-device install needs a provisioning profile — the CLI can mint one for
+  free teams.** `swift-pwa build --target ios --sign <identity>` alone runs
+  `codesign` but embeds no profile, so its `.ipa` won't install on a device.
+  Provide a profile (`--provisioning-profile` + `--entitlements`), let `--team`
+  find an installed one (paid teams), or add
+  `--allow-provisioning-registration` to mint one for a free personal team (see
+  [Free personal teams](#free-personal-teams)). `swift-pwa deploy --target ios`
+  then installs + launches via `devicectl`.
 - **No automated TestFlight / App Store upload.** `xcrun altool` and
   `xcrun notarytool` aren't wrapped by the CLI; bring your own
   release script.

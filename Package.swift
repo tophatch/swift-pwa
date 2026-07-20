@@ -800,10 +800,16 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
 // inside is a plain static archive (`ar` format), not a dylib.
 // `Scripts/vendor-onnxruntime-apple.sh` extracts the static lib + headers
 // from each slice and re-packages them via `xcodebuild -create-xcframework
-// -library -headers` into the same flat-library-plus-headers shape
-// `Vendor/llama-headers` already uses. Verified end-to-end: the script's
-// output actually links and its C API is callable
-// (`SwiftPWAONNXRuntimeSmokeTests`).
+// -framework` as a **framework-style** xcframework (a static
+// `ONNXRuntime.framework` per slice carrying its own `Modules/module.modulemap`
+// inside the bundle) — the same shape `build-llama-xcframework.sh` now emits.
+// Framework style (not `-library -headers`) is required so both the CLlama and
+// ONNXRuntime xcframeworks can be linked into one **iOS** build: a
+// `-library -headers` xcframework drops its `module.modulemap` at the shared
+// `Build/Products/<cfg>/include/` root, and two of them collide with "Multiple
+// commands produce include/module.modulemap". See
+// docs/proposals/dual-xcframework-ios-collision.md. Verified end-to-end: the
+// script's output links and its C API is callable (`SwiftPWAONNXRuntimeSmokeTests`).
 //
 // **Android** has a real prebuilt artifact too (unlike llama.cpp, which has
 // no Android backend at all in this repo): the `onnxruntime-android` AAR on

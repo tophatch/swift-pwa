@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **An app that enables both `ai.local_llama` and `ai.local_onnx_runtime` can now build for iOS.** With both on-device AI tiers on, an iOS (`xcodebuild`) build failed at `ProcessXCFramework` with `error: Multiple commands produce '…/include/module.modulemap'`. Root cause: the `llama.xcframework` and `onnxruntime.xcframework` were `-library -headers` xcframeworks, and each shipped a `Headers/module.modulemap`; xcodebuild flattens every `-library -headers` slice's headers into one **shared** `Build/Products/<cfg>/include/`, so the two identically-named `module.modulemap` files collided (only that file collides — the `.h` names differ). `swift build` and single-tier apps never hit it (only the xcodebuild path flattens, and one xcframework alone is fine). Fix: both `Scripts/build-llama-xcframework.sh` and `Scripts/vendor-onnxruntime-apple.sh` now emit **framework-style** xcframeworks — a static `CLlama.framework` / `ONNXRuntime.framework` per slice carrying its own `Modules/module.modulemap` **inside the bundle**, which is never flattened into the shared `include/`, so the two coexist. The module maps stay `framework module` with the **explicit C-API headers** (an `umbrella` map would drag the C++ headers — `ggml-cpp.h` → `<memory>`, `onnxruntime_float16.h` → `<cmath>` — into the C module and fail). Module names (`CLlama`, `ONNXRuntime`) and every Swift `import` are unchanged; the re-vendored xcframework `.zip` assets are re-hosted and the `Package.swift` checksums re-pinned. Verified: a two-target package linking both framework xcframeworks builds for iOS (`BUILD SUCCEEDED`); `Examples/CritterFacts` (both tiers) now builds + installs on-device. Diagnosis + proof: [docs/proposals/dual-xcframework-ios-collision.md](docs/proposals/dual-xcframework-ios-collision.md).
+
 ## [0.9.2] - 2026-07-18
 
 ### Added

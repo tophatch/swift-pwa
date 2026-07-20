@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Four on-device iOS papercuts in the sample apps, surfaced running them on a real device.** (1) **Biometric auth crashed the app** on `ai`/biometric `authenticate` when the bundle declared no `NSFaceIDUsageDescription` — a Face ID probe with the key missing is an uncatchable OS abort, not a throwable error. `SystemBiometricAuth` now **pre-checks** on iOS (`biometryType == .faceID` with no `NSFaceIDUsageDescription` in the bundle) and throws a clean `BridgeError` the JS side can handle, instead of letting the OS kill the process; `Examples/HelloPWA/pwa.json` declares the usage string so the real prompt appears. (2) **`dialog.saveFile` logged an immediate "cancel"** on iOS — HelloPWA's save button now routes to `dialog.exportFile` (the content-first save that actually presents a picker) on iOS, matching the v0.7.9 guidance that `saveFile` is a no-op there. (3) **Native-only demo buttons were enabled on iOS** — the tray and Windows-toast cards now carry `data-only-on` allowlists so they render disabled on platforms that don't have those capabilities. (4) **Content was top-aligned** on tall screens — both `Examples/HelloPWA` and `Examples/CritterFacts` now vertically center their content (`min-height: 100dvh` + `justify-content: center`) so a short deck sits centered on an iPad instead of hugging the top.
+
 ## [0.9.2] - 2026-07-18
 
 ### Added

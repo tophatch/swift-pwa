@@ -751,7 +751,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
                 // moves with the pin. (Local dev / swift-pwa CI use the
                 // Vendor/llama path branch above, built by the same script.)
                 url: "https://github.com/tophatch/swift-pwa/releases/download/llama-vendor/llama.xcframework.zip",
-                checksum: "b88b4797978bc566c63b15a44151b02c8a66245e5cf034dcbb1ace31bc9fbbc5"
+                checksum: "32dc23c097d6786c73cf77e4f5c696c04c4487916e4db7c8642bb598d35f750b"
             )
         llamaLinkerSettings = [
             // The combined static lib carries its C++ runtime + Metal /

@@ -286,6 +286,13 @@ struct Build: AsyncParsableCommand {
                     profileURL = minted.profile
                     print("swift-pwa: minted provisioning profile \(minted.profile.lastPathComponent)")
                     if entitlementsURL == nil, let ent = minted.entitlements { entitlementsURL = ent }
+                    // The minted free-team profile names the cert that may sign
+                    // it; the team-string identity match above won't have found
+                    // it (free-team cert CN carries a different id).
+                    if signIdentity == nil, let id = await IOSSigning.identity(forProfileAt: minted.profile) {
+                        signIdentity = id
+                        print("swift-pwa: signing identity \"\(id)\" (from the minted profile)")
+                    }
                 }
                 if signIdentity == nil || profileURL == nil {
                     let hint = profileURL == nil && !allowProvisioningRegistration

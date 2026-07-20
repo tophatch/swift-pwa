@@ -156,9 +156,27 @@ one, or `--device <udid|name>`) using `xcodebuild -allowProvisioningUpdates
 -allowProvisioningDeviceRegistration` — so Xcode registers the device, creates
 the App ID, and emits a profile — then signs your real app with it. The flag name
 echoes `xcodebuild`'s own consent flag; it's the one step that touches Apple's
-portal, so it's opt-in. Free-team profiles expire after 7 days, so re-run when it
-lapses. macOS-only. First time on a new Apple ID, you may need to accept the
-free-team agreement by building any app to the device from Xcode once.
+portal, so it's opt-in. macOS-only. First time on a new Apple ID, you may need to
+accept the free-team agreement by building any app to the device from Xcode once.
+
+Find your free team's 10-char Team ID in Xcode → Settings → Accounts (select the
+Apple ID → the Personal Team row), or read it from
+`defaults read com.apple.dt.Xcode IDEProvisioningTeamByIdentifier` (the entry
+with `isFreeProvisioningTeam = 1`).
+
+Two Apple constraints on **free** teams (not swift-pwa limits) worth knowing:
+
+- **7-day profile expiry.** The minted profile lasts a week; re-run when it
+  lapses (the app stops launching).
+- **3 apps per device.** A device can hold at most **three** apps signed with a
+  free profile at once. A fourth install fails with `ApplicationVerificationFailed`
+  / "reached the maximum number of installed apps using a free developer profile"
+  — delete a free-provisioned app from the device and retry.
+
+> **Note on the signing identity.** A free team's "Apple Development" certificate
+> often shows a *different* 10-char id in its name than the team id you pass —
+> swift-pwa matches the identity to the profile's embedded certificate (not the
+> name), so `--team <freeTeamID>` resolves the right one automatically.
 
 ### Getting a profile + entitlements
 

@@ -115,6 +115,16 @@ struct Deploy: AsyncParsableCommand {
     @Option(help: "iOS device: path to an entitlements plist signed into the app (pair with --provisioning-profile).")
     var entitlements: String?
 
+    @Flag(
+        name: .long,
+        help: """
+        iOS device: allow --team to mint a provisioning profile for a free personal Apple team \
+        (builds a throwaway project against the target device, registering it). Passed through to \
+        the build; echoes xcodebuild's -allowProvisioningDeviceRegistration.
+        """
+    )
+    var allowProvisioningRegistration: Bool = false
+
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
@@ -142,7 +152,7 @@ struct Deploy: AsyncParsableCommand {
     /// Constructed through `Build.parse(_:)` rather than `Build()`: an
     /// ArgumentParser command's `@Option`/`@Flag` properties are only bound by
     /// its parser, so a plain init leaves them unbound and accessing one traps.
-    private func runBuild(crossCompileAndroid: Bool) async throws {
+    private func runBuild(crossCompileAndroid: Bool, iosDeviceUDID: String? = nil) async throws {
         var args = ["--target", target.rawValue, "--manifest", manifest, "--output", output]
         if simulator { args.append("--simulator") }
         if crossCompileAndroid { args.append("--cross-compile-android") }
@@ -152,6 +162,8 @@ struct Deploy: AsyncParsableCommand {
         if let sign { args += ["--sign", sign] }
         if let provisioningProfile { args += ["--provisioning-profile", provisioningProfile] }
         if let entitlements { args += ["--entitlements", entitlements] }
+        if let iosDeviceUDID { args += ["--device", iosDeviceUDID] }
+        if allowProvisioningRegistration { args.append("--allow-provisioning-registration") }
         // deploy runs gradlew / the launch itself, so build's "Next: …" hint would mislead.
         args.append("--no-next-steps")
         let build = try Build.parse(args)
@@ -331,7 +343,7 @@ struct Deploy: AsyncParsableCommand {
         // Resolve the device first — fail fast before a (signed, minutes-long)
         // build if nothing's connected. The build then produces a signed .app
         // that `devicectl` installs.
-        let device = try await resolveIOSDevice()
+        let target = try await IOSDeviceResolver.resolve(explicit: device)
 
         if !noBuild {
             if team == nil, sign == nil {
@@ -342,7 +354,10 @@ struct Deploy: AsyncParsableCommand {
                         + "(or --sign + --provisioning-profile + --entitlements). See docs/ios-setup.md."
                 )
             }
-            try await runBuild(crossCompileAndroid: false)
+            // Forward the resolved device so the free-team minter (in `build`)
+            // registers this exact device when --allow-provisioning-registration
+            // is set.
+            try await runBuild(crossCompileAndroid: false, iosDeviceUDID: target.udid)
         }
 
         // The device build signs the .app in place (embedded profile) before
@@ -352,9 +367,9 @@ struct Deploy: AsyncParsableCommand {
             throw ValidationError("built app not found at \(app.path) — run without --no-build.")
         }
 
-        print("→ installing to \(device.name) (\(device.udid))")
+        print("→ installing to \(target.name) (\(target.udid))")
         try await Shell.run(
-            "/usr/bin/env", ["xcrun", "devicectl", "device", "install", "app", "--device", device.udid, app.path]
+            "/usr/bin/env", ["xcrun", "devicectl", "device", "install", "app", "--device", target.udid, app.path]
         )
 
         if launch {
@@ -370,79 +385,12 @@ struct Deploy: AsyncParsableCommand {
                     "launch",
                     "--terminate-existing",
                     "--device",
-                    device.udid,
+                    target.udid,
                     bundleID
                 ]
             )
         }
-        print("Deployed to \(device.name) (\(device.udid)).")
-    }
-
-    struct IOSDevice: Equatable {
-        let udid: String
-        let name: String
-        let connected: Bool
-    }
-
-    /// Choose the physical iOS/iPadOS device to target. An explicit `--device`
-    /// (UDID or name) wins and is passed through even if `devicectl` currently
-    /// lists it as disconnected (it can bring the connection up). Otherwise pick
-    /// the sole *connected* device, erroring clearly on none or several — never a
-    /// silent pick, matching the Android rule.
-    private func resolveIOSDevice() async throws -> IOSDevice {
-        let devices = try await Self.listIOSDevices()
-        if let device {
-            if let match = devices.first(where: { $0.udid == device || $0.name == device }) {
-                return match
-            }
-            // Not in the list — trust the user; devicectl resolves udid/name/dns.
-            return IOSDevice(udid: device, name: device, connected: false)
-        }
-        let connected = devices.filter(\.connected)
-        switch connected.count {
-        case 1:
-            return connected[0]
-        case 0:
-            let paired = devices.isEmpty
-                ? "none paired"
-                : "paired but not connected: " + devices.map { "\($0.name) (\($0.udid))" }.joined(separator: ", ")
-            throw ValidationError(
-                "no connected iOS device found (\(paired)). Plug in and unlock a device (trust this Mac), "
-                    + "or pass --device <udid|name>."
-            )
-        default:
-            throw ValidationError(
-                "\(connected.count) iOS devices are connected: "
-                    + connected.map { "\($0.name) (\($0.udid))" }.joined(separator: ", ")
-                    + ". Pass --device <udid|name> to choose one."
-            )
-        }
-    }
-
-    private static func listIOSDevices() async throws -> [IOSDevice] {
-        let json = try await Shell.capture(
-            "/usr/bin/env", ["xcrun", "devicectl", "list", "devices", "--json-output", "-"], discardStderr: true
-        )
-        return parseDevicectlDevices(json)
-    }
-
-    /// Pure parse of `devicectl list devices --json-output -` → the physical
-    /// iOS/iPadOS devices. Extracted for unit-testing without a device.
-    /// `connected` is derived from `connectionProperties.tunnelState`.
-    static func parseDevicectlDevices(_ json: String) -> [IOSDevice] {
-        guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
-              let result = obj["result"] as? [String: Any],
-              let devices = result["devices"] as? [[String: Any]]
-        else { return [] }
-        return devices.compactMap { dev in
-            let hw = dev["hardwareProperties"] as? [String: Any]
-            let platform = (hw?["platform"] as? String) ?? ""
-            guard platform == "iOS" || platform == "iPadOS" else { return nil }
-            guard let udid = hw?["udid"] as? String else { return nil }
-            let name = (dev["deviceProperties"] as? [String: Any])?["name"] as? String ?? udid
-            let tunnel = (dev["connectionProperties"] as? [String: Any])?["tunnelState"] as? String
-            return IOSDevice(udid: udid, name: name, connected: tunnel == "connected")
-        }
+        print("Deployed to \(target.name) (\(target.udid)).")
     }
 
     private struct SimDevice {

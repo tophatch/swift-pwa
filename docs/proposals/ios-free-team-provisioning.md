@@ -1,12 +1,25 @@
 # Proposal: `build --team` for free personal Apple Developer accounts (+ Xcode 16 scheme regression)
 
-> **Status: design decisions resolved, ready to implement.** The provisioning +
-> entitlements signing story was landed in 0.7.0–0.7.1 (`--provisioning-profile`,
-> `--entitlements`, `--team`). This proposal covers the remaining gap: **`--team`
-> does not work for free personal-team accounts** because no portal profile
-> exists for it to find, and separately documents an **Xcode 16 regression**
-> that breaks the throwaway-project workaround apps have been using in the
-> interim.
+> **Status: implemented.** `--allow-provisioning-registration` on `build`
+> (forwarded by `deploy --target ios`) internalises the free-team minter:
+> `PersonalTeamProfileMinter` generates the throwaway app project (with the
+> explicit Xcode-16 `.xcscheme`), builds it against the device resolved through
+> the shared `IOSDeviceResolver`, and hands the minted profile + entitlements to
+> the existing embed + re-sign path. The pure project-file generation is
+> unit-tested (the pbxproj parses as an OpenStep plist; the scheme's
+> `BlueprintIdentifier` resolves to the target) and the generated project loads
+> in real `xcodebuild` (`-list` / `-showBuildSettings`); the live
+> device-registration/mint step is left to the adopter (it needs a connected
+> free-team device and mutates the Apple account). Docs:
+> [../ios-setup.md](../ios-setup.md) (Free personal teams) + [../deploy.md](../deploy.md).
+> The sections below are kept as the design record.
+>
+> The provisioning + entitlements signing story was landed in 0.7.0–0.7.1
+> (`--provisioning-profile`, `--entitlements`, `--team`). This proposal covered
+> the remaining gap: **`--team` did not work for free personal-team accounts**
+> because no portal profile exists for it to find, and separately documents an
+> **Xcode 16 regression** that breaks the throwaway-project workaround apps had
+> been using in the interim.
 >
 > A code-level review against the current `Sources/SwiftPWACLISupport` found
 > one gap the original draft didn't account for: there was no device-UDID

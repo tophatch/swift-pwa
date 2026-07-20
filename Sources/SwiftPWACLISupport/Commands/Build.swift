@@ -95,6 +95,27 @@ struct Build: AsyncParsableCommand {
     @Flag(help: "Build for the iOS simulator (skips signing).")
     var simulator: Bool = false
 
+    @Option(
+        help: """
+        iOS device UDID (device builds only). Used by --allow-provisioning-registration to target \
+        the device the throwaway minter project registers. When omitted, the sole connected device \
+        is auto-detected (`xcrun devicectl list devices`).
+        """
+    )
+    var device: String?
+
+    @Flag(
+        name: .long,
+        help: """
+        iOS device: let --team mint a provisioning profile for a free personal Apple team. When \
+        --team resolves no installed profile for the bundle id, build a throwaway app project \
+        against the target device (--device, or the sole connected one) with \
+        -allowProvisioningUpdates -allowProvisioningDeviceRegistration, then sign with the profile \
+        Xcode mints. Echoes xcodebuild's own flag; macOS-only. See docs/ios-setup.md.
+        """
+    )
+    var allowProvisioningRegistration: Bool = false
+
     @Flag(
         help: """
         Skip the pwa.json `build.prebuild` command. For fast local iteration when you know \
@@ -252,10 +273,27 @@ struct Build: AsyncParsableCommand {
                     entitlementsURL = ent
                     print("swift-pwa: --team \(team) → entitlements derived from the profile")
                 }
+                // Free personal team: no installed profile to find. With the
+                // opt-in flag, mint one by building a throwaway app project
+                // against the target device (registering it). See
+                // PersonalTeamProfileMinter / docs/ios-setup.md.
+                if profileURL == nil, allowProvisioningRegistration {
+                    let target = try await IOSDeviceResolver.resolve(explicit: device)
+                    print("swift-pwa: --team \(team) found no installed profile — minting one on \(target.name).")
+                    let minted = try await PersonalTeamProfileMinter.mint(
+                        bundleID: bundleID, team: team, deviceUDID: target.udid, scratch: outputDir
+                    )
+                    profileURL = minted.profile
+                    print("swift-pwa: minted provisioning profile \(minted.profile.lastPathComponent)")
+                    if entitlementsURL == nil, let ent = minted.entitlements { entitlementsURL = ent }
+                }
                 if signIdentity == nil || profileURL == nil {
+                    let hint = profileURL == nil && !allowProvisioningRegistration
+                        ? " (for a free personal team, add --allow-provisioning-registration to mint one)"
+                        : ""
                     print("""
                     swift-pwa: --team \(team) couldn't resolve \
-                    \(signIdentity == nil ? "a signing identity" : "a provisioning profile") — \
+                    \(signIdentity == nil ? "a signing identity" : "a provisioning profile")\(hint) — \
                     pass it explicitly, or create one once in Xcode (see docs/ios-setup.md).
                     """)
                 }

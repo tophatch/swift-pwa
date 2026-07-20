@@ -193,6 +193,7 @@ enum BundlerError: Error, CustomStringConvertible {
     case iosSimulatorRuntimeMissing
     case notarizeUnsigned
     case iosDeviceUnsigned
+    case profileMintFailed(bundleID: String, team: String)
 
     var description: String {
         switch self {
@@ -223,6 +224,14 @@ enum BundlerError: Error, CustomStringConvertible {
             """
         case let .toolMissing(name): "required tool not on PATH: \(name)"
         case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
+        case let .profileMintFailed(bundleID, team):
+            """
+            --allow-provisioning-registration: the throwaway build for team \(team) / bundle id \
+            \(bundleID) finished but produced no embedded.mobileprovision. Common causes: the target \
+            device wasn't reachable to register, the Apple ID needs its free-team agreement accepted \
+            in Xcode once, or the bundle id is already taken by another team. Try building any app to \
+            the device from Xcode once to clear the first-run consent, then retry. See docs/ios-setup.md.
+            """
         case .iosSimulatorRuntimeMissing:
             """
             no iOS Simulator runtime installed.

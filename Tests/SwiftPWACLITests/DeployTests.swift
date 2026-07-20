@@ -111,17 +111,17 @@ struct DeployTests {
           }
         }
         """
-        #expect(Deploy.parseDevicectlDevices(json) == [
-            Deploy.IOSDevice(udid: "00001111-AAAA", name: "Test iPhone", connected: true),
-            Deploy.IOSDevice(udid: "00002222-BBBB", name: "Test iPad", connected: false)
+        #expect(IOSDeviceResolver.parse(json) == [
+            IOSDeviceResolver.Device(udid: "00001111-AAAA", name: "Test iPhone", connected: true),
+            IOSDeviceResolver.Device(udid: "00002222-BBBB", name: "Test iPad", connected: false)
         ])
     }
 
     @Test("malformed / empty devicectl output → empty")
     func devicectlEmpty() {
-        #expect(Deploy.parseDevicectlDevices("").isEmpty)
-        #expect(Deploy.parseDevicectlDevices("not json").isEmpty)
-        #expect(Deploy.parseDevicectlDevices(#"{"result":{"devices":[]}}"#).isEmpty)
+        #expect(IOSDeviceResolver.parse("").isEmpty)
+        #expect(IOSDeviceResolver.parse("not json").isEmpty)
+        #expect(IOSDeviceResolver.parse(#"{"result":{"devices":[]}}"#).isEmpty)
     }
 
     // MARK: - Android SDK → Swift version extraction (drives toolchain auto-select)

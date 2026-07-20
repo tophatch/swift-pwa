@@ -119,9 +119,9 @@ An on-device install needs a **signed** build, so pass the same signing inputs
 `swift-pwa build --target ios` takes — `--team <TEAMID>` (the convenience path:
 it selects that team's "Apple Development" identity and finds an installed
 provisioning profile for the app's bundle id), or the pieces explicitly
-(`--sign` + `--provisioning-profile` + `--entitlements`). The profile must
-already exist for the bundle id and list the target device's UDID; see
-[ios-setup.md](ios-setup.md).
+(`--sign` + `--provisioning-profile` + `--entitlements`). For a **free personal
+team** with no profile yet, add `--allow-provisioning-registration` and deploy
+mints one against the resolved device (see below). See [ios-setup.md](ios-setup.md).
 
 deploy then:
 
@@ -130,15 +130,19 @@ deploy then:
    and a clear error (listing what's paired) when none is connected or several
    are. An explicit `--device` is passed through even if it currently shows
    disconnected (`devicectl` brings the connection up).
-2. Runs the signed `build`, then **installs** the resulting `.app` with `xcrun
-   devicectl device install app`.
+2. Runs the signed `build` (with `--allow-provisioning-registration`, it first
+   **mints a profile** for a free personal team against the resolved device —
+   see [ios-setup.md](ios-setup.md)), then **installs** the resulting `.app`
+   with `xcrun devicectl device install app`.
 3. **Launches** it with `xcrun devicectl device process launch
    --terminate-existing` (unless `--no-launch`).
 
-> **No provisioning profile for the bundle id yet?** That's the one manual
-> prerequisite deploy doesn't create — open the app once in Xcode with automatic
-> signing (or create a profile at developer.apple.com) so a profile matching the
-> bundle id and listing your device exists, then `deploy --team …` finds it.
+> **No provisioning profile for the bundle id yet?** For a **paid** team, create
+> one once (open the app in Xcode with automatic signing, or at
+> developer.apple.com) so `deploy --team …` finds it. For a **free personal
+> team**, add `--allow-provisioning-registration` and deploy mints it for you
+> (the first time on a new Apple ID, you may need to accept the free-team
+> agreement by building any app to the device from Xcode once).
 
 ## The fast re-test loop
 

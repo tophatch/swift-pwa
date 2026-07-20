@@ -47,6 +47,14 @@
                 max(1.25rem, env(safe-area-inset-left));
             max-width: 1080px;
             margin: 0 auto;
+            /* Vertically center the content when it's shorter than the screen
+               (common on a tall phone/tablet), while still scrolling normally
+               when it isn't. `dvh` tracks the visible viewport as browser chrome
+               shows/hides. */
+            min-height: 100dvh;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
         }
         /* Centered header, matching CritterFacts: emoji + title, muted tagline. */
         header { text-align: center; }
@@ -329,8 +337,8 @@
                 on iOS, and <code>libayatana-appindicator3</code> can't
                 be reused from a GTK4 process.</p>
                 <div class="actions">
-                    <button id="cycle-tray" data-requires="tray.setMenu">Cycle tray menu</button>
-                    <button id="toggle-tray" data-requires="tray.setVisible">Hide tray</button>
+                    <button id="cycle-tray" data-requires="tray.setMenu" data-only-on="macos,windows,linux">Cycle tray menu</button>
+                    <button id="toggle-tray" data-requires="tray.setVisible" data-only-on="macos,windows,linux">Hide tray</button>
                 </div>
             </section>
 
@@ -421,7 +429,7 @@
                 a regular notification.</p>
                 <div class="actions">
                     <button id="notify" data-requires="notifications.send">Send notification</button>
-                    <button id="toast" data-requires="notifications.send">Send Windows toast</button>
+                    <button id="toast" data-requires="notifications.send" data-only-on="windows">Send Windows toast</button>
                 </div>
             </section>
 
@@ -519,11 +527,22 @@
                         .split(",")
                         .map((s) => s.trim())
                         .filter(Boolean);
+                    // `data-only-on` is the allowlist counterpart of
+                    // `data-disable-on`: for a button that's only meaningful on
+                    // specific OSes even though its command is registered
+                    // everywhere (e.g. the Windows-toast button, or tray on the
+                    // desktops that actually have one), disable it elsewhere.
+                    const onlyOn = (btn.dataset.onlyOn || "")
+                        .split(",")
+                        .map((s) => s.trim())
+                        .filter(Boolean);
                     let reason = null;
                     if (!have.has(need)) {
                         reason = `${need} not registered on ${os}`;
                     } else if (disableOn.includes(os)) {
                         reason = `${need} is a no-op on ${os}`;
+                    } else if (onlyOn.length && !onlyOn.includes(os)) {
+                        reason = `only applies on ${onlyOn.join(" / ")} (not ${os})`;
                     }
                     if (reason) {
                         btn.disabled = true;
@@ -788,6 +807,20 @@
                 log(r.paths.length ? "openFile → " + r.paths.join(", ") : "openFile → cancel");
             },
             dialogSave: async () => {
+                // iOS has no "return a path to write later" panel, so
+                // `dialog.saveFile` is a no-op there (returns null) — using it
+                // would just log an instant "cancel". `dialog.exportFile` is the
+                // content-first equivalent that presents the real iOS document
+                // picker, so demo that instead on iOS.
+                if (platformInfo?.os === "ios") {
+                    const body = "swift-pwa saved this at " + new Date().toISOString() + "\n";
+                    const r = await __SWIFT_PWA__.invoke("dialog.exportFile", {
+                        defaultName: "untitled.txt",
+                        dataBase64: btoa(body),
+                    });
+                    log(r.path == null ? "exportFile → cancel" : "exportFile → " + r.path);
+                    return;
+                }
                 const r = await __SWIFT_PWA__.invoke("dialog.saveFile", {
                     title: "Save as",
                     defaultName: "untitled.txt",

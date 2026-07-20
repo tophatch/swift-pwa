@@ -27,7 +27,10 @@
   },
   "ios": {
     "bundle_identifier": "com.swiftpwa.hello",
-    "minimum_system_version": "18.0"
+    "minimum_system_version": "18.0",
+    "info_plist": {
+      "NSFaceIDUsageDescription": "Authenticate to verify the swift-pwa biometrics demo."
+    }
   },
   "linux": {
     "desktop_categories": [

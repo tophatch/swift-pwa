@@ -113,6 +113,55 @@ combine_slice() {
     libtool -static -o "$WORK/combined-$slice/libllama.a" "${libs[@]}" 2>/dev/null
 }
 
+# --- headers (llama + ggml public headers, flattened) — built before the
+# per-slice frameworks that embed them ---
+rm -rf "$WORK/headers" && mkdir -p "$WORK/headers"
+cp "$SRC/include/llama.h" "$SRC/include/llama-cpp.h" "$SRC"/ggml/include/*.h "$WORK/headers/"
+
+# Wrap each slice's static archive in a static `CLlama.framework` whose module
+# map lives *inside* the bundle (Modules/module.modulemap). Framework style (not
+# `-library -headers`) so CLlama can coexist with the ONNXRuntime xcframework in
+# one iOS build: a `-library -headers` xcframework drops its `module.modulemap`
+# at the shared `Build/Products/<cfg>/include/` root, and two of them collide
+# ("Multiple commands produce include/module.modulemap"). Framework xcframeworks
+# are never flattened into that shared include/. The module map lists the C
+# header explicitly (llama.h); an `umbrella` map would drag in the C++ headers
+# (ggml-cpp.h → <memory>) and fail to compile as a C module. See
+# docs/proposals/dual-xcframework-ios-collision.md.
+make_framework() {
+    local slice="$1"
+    local fw="$WORK/fw-$slice/CLlama.framework"
+    rm -rf "$fw"
+    mkdir -p "$fw/Headers" "$fw/Modules"
+    cp "$WORK/headers"/*.h "$fw/Headers/"
+    cp "$WORK/combined-$slice/libllama.a" "$fw/CLlama"
+    cat > "$fw/Modules/module.modulemap" <<'EOF'
+framework module CLlama {
+    header "llama.h"
+    export *
+}
+EOF
+    # One template for all slices (incl. macOS). MinimumOSVersion is inert here
+    # — for a *statically-linked* binaryTarget the consumer's own deployment
+    # target governs, and the xcframework's top-level Info.plist is what declares
+    # each slice's SupportedPlatform/variant. We keep a single placeholder rather
+    # than branch iOS (MinimumOSVersion) vs macOS (LSMinimumSystemVersion).
+    cat > "$fw/Info.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+  <key>CFBundleExecutable</key><string>CLlama</string>
+  <key>CFBundleIdentifier</key><string>org.ggml.CLlama</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundleName</key><string>CLlama</string>
+  <key>CFBundlePackageType</key><string>FMWK</string>
+  <key>CFBundleShortVersionString</key><string>1.0</string>
+  <key>CFBundleVersion</key><string>1</string>
+  <key>MinimumOSVersion</key><string>$IOS_MIN</string>
+</dict></plist>
+EOF
+}
+
 CREATE_ARGS=()
 for slice in "${PLATFORMS[@]}"; do
     echo "=== building slice: $slice ==="
@@ -120,18 +169,9 @@ for slice in "${PLATFORMS[@]}"; do
     configure_slice "$slice" $(case_for "$slice")
     cmake --build "$WORK/build-$slice" --config Release -j "$(sysctl -n hw.logicalcpu)" -- -quiet
     combine_slice "$slice"
-    CREATE_ARGS+=(-library "$WORK/combined-$slice/libllama.a" -headers "$WORK/headers")
+    make_framework "$slice"
+    CREATE_ARGS+=(-framework "$WORK/fw-$slice/CLlama.framework")
 done
-
-# --- headers (llama + ggml public headers, flattened, with a module map) ---
-rm -rf "$WORK/headers" && mkdir -p "$WORK/headers"
-cp "$SRC/include/llama.h" "$SRC/include/llama-cpp.h" "$SRC"/ggml/include/*.h "$WORK/headers/"
-cat > "$WORK/headers/module.modulemap" <<'EOF'
-module CLlama {
-    header "llama.h"
-    export *
-}
-EOF
 
 # --- assemble the xcframework ---
 rm -rf "$OUT/llama.xcframework"

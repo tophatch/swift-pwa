@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
 # Repackage Microsoft's official ONNX Runtime Apple distribution into the
-# flat static-lib + headers xcframework shape `SwiftPWAONNXRuntimeSmoke`
-# (and, later, a real segmentation backend) consumes via `.binaryTarget` —
-# the SWIFT_PWA_ONNXRUNTIME-gated block in Package.swift. Mirrors
-# Scripts/build-llama-xcframework.sh's role for llama.cpp.
+# framework-style xcframework shape the ONNX Runtime backends consume via
+# `.binaryTarget` — a static `ONNXRuntime.framework` per slice, module map
+# inside the bundle (the SWIFT_PWA_ONNXRUNTIME-gated block in Package.swift).
+# Mirrors Scripts/build-llama-xcframework.sh's role for llama.cpp.
 #
 # Why repackage instead of vendoring Microsoft's zip as-is: their artifact
 # ships each platform slice as a versioned `.framework` *bundle*
@@ -90,6 +90,11 @@ framework module ONNXRuntime {
     export *
 }
 EOF
+    # One template for all slices (incl. macOS). MinimumOSVersion is inert here
+    # — for a *statically-linked* binaryTarget the consumer's own deployment
+    # target governs, and the xcframework's top-level Info.plist is what declares
+    # each slice's SupportedPlatform/variant. We keep a single placeholder rather
+    # than branch iOS (MinimumOSVersion) vs macOS (LSMinimumSystemVersion).
     cat > "$fw/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

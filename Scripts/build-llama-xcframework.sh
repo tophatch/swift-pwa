@@ -141,6 +141,11 @@ framework module CLlama {
     export *
 }
 EOF
+    # One template for all slices (incl. macOS). MinimumOSVersion is inert here
+    # — for a *statically-linked* binaryTarget the consumer's own deployment
+    # target governs, and the xcframework's top-level Info.plist is what declares
+    # each slice's SupportedPlatform/variant. We keep a single placeholder rather
+    # than branch iOS (MinimumOSVersion) vs macOS (LSMinimumSystemVersion).
     cat > "$fw/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

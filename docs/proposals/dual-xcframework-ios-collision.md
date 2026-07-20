@@ -63,7 +63,7 @@ framework xcframeworks and `import`s both for iOS Simulator:
       export *
   }
   ```
-- Result: **`** BUILD SUCCEEDED **`** — both modules compile, import, and link
+- Result: **`BUILD SUCCEEDED`** — both modules compile, import, and link
   together on iOS. `import CLlama` / `import ONNXRuntime` in Swift are unchanged.
 
 ## Implementation

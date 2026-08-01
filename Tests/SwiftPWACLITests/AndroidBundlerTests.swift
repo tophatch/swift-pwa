@@ -220,6 +220,25 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "android-sdk-no-version") == nil)
     }
 
+    @Test("swiftly lookup: env vars first, then ~/.swiftly — swiftly 1.x's own default home")
+    func swiftlyLookupOrder() throws {
+        let withEnv = AndroidBundler.swiftlyCandidates(
+            env: ["HOME": "/Users/x", "SWIFTLY_HOME_DIR": "/opt/swiftly", "SWIFTLY_BIN_DIR": "/opt/swiftly/bin"]
+        )
+        #expect(withEnv.first == "/opt/swiftly/bin/swiftly")
+
+        // No env: `~/.swiftly/bin` must be checked, and before the pre-1.0
+        // XDG-style paths. A Homebrew swiftly keeps its home (and the
+        // config.json that makes `swiftly run +6.2` resolve) there; missing it
+        // fell back to the ambient `swift`, whose version mismatch fails the
+        // cross-compile deep in the build.
+        let bare = AndroidBundler.swiftlyCandidates(env: ["HOME": "/Users/x"])
+        #expect(bare.first == "/Users/x/.swiftly/bin/swiftly")
+        let dotSwiftly = try #require(bare.firstIndex(of: "/Users/x/.swiftly/bin/swiftly"))
+        let xdg = try #require(bare.firstIndex(of: "/Users/x/.local/share/swiftly/bin/swiftly"))
+        #expect(dotSwiftly < xdg)
+    }
+
     @Test("swiftPWAThemeXml is DayNight, fills window + bars, and picks icon luminance per mode")
     func themeXmlLuminance() throws {
         // A near-white surface wants dark (light-bar) status/navigation icons.

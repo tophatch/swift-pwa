@@ -555,16 +555,29 @@ struct AndroidBundler {
 
     /// Absolute path to the `swiftly` binary, resolved without relying on
     /// `PATH`. Checks `SWIFTLY_BIN_DIR`, `SWIFTLY_HOME_DIR/bin`, then the
-    /// per-platform default install location.
+    /// default home directories swiftly itself uses.
     static func locateSwiftly() -> String? {
-        let env = ProcessInfo.processInfo.environment
+        swiftlyCandidates(env: ProcessInfo.processInfo.environment)
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Ordered `swiftly` candidates. `~/.swiftly` first among the defaults:
+    /// that's where swiftly 1.x puts its home (and its `config.json`, which is
+    /// what makes `swiftly run +6.2` resolve a toolchain) unless
+    /// `SWIFTLY_HOME_DIR` says otherwise — including a Homebrew install, whose
+    /// binary lives on `PATH` but whose home doesn't. Missing it meant a
+    /// perfectly normal setup silently fell back to the ambient `swift` and
+    /// failed the cross-compile with a Swift-version mismatch. The two older
+    /// XDG-style locations stay for pre-1.0 installs.
+    static func swiftlyCandidates(env: [String: String]) -> [String] {
         let home = env["HOME"] ?? NSHomeDirectory()
         var candidates: [String] = []
         if let bin = env["SWIFTLY_BIN_DIR"] { candidates.append("\(bin)/swiftly") }
         if let root = env["SWIFTLY_HOME_DIR"] { candidates.append("\(root)/bin/swiftly") }
-        candidates.append("\(home)/.local/share/swiftly/bin/swiftly") // Linux default
-        candidates.append("\(home)/Library/Application Support/swiftly/bin/swiftly") // macOS default
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        candidates.append("\(home)/.swiftly/bin/swiftly")
+        candidates.append("\(home)/.local/share/swiftly/bin/swiftly")
+        candidates.append("\(home)/Library/Application Support/swiftly/bin/swiftly")
+        return candidates
     }
 
     /// Parse the `major.minor` Swift version from a Swift Android SDK bundle id,

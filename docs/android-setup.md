@@ -76,6 +76,7 @@ standard install. The CLI locates each piece itself — environment variable fir
 | **Android SDK** | `$ANDROID_HOME` · `$ANDROID_SDK_ROOT` · `~/Library/Android/sdk` (macOS) · `~/Android/Sdk` (Linux) · `%LOCALAPPDATA%\Android\Sdk` · `/usr/local/lib/android/sdk` (GitHub runners) |
 | **NDK** | `$ANDROID_NDK_HOME` · `$ANDROID_NDK_ROOT` · `$NDK_HOME` · `<sdk>/ndk/<version>` (newest) · `<sdk>/ndk-bundle` |
 | **JDK** | `$JAVA_HOME` · a working `java` on `PATH` · `/Library/Java/JavaVirtualMachines/*` · Homebrew's keg-only `openjdk*` · `/usr/lib/jvm/*` · Android Studio's bundled JBR · `%ProgramFiles%` vendors |
+| **swiftly** (for the toolchain pin, §2) | `$SWIFTLY_BIN_DIR` · `$SWIFTLY_HOME_DIR/bin` · `~/.swiftly/bin` (swiftly 1.x's default home) · `~/.local/share/swiftly/bin` · `~/Library/Application Support/swiftly/bin` |
 
 Notes on the two that bite:
 

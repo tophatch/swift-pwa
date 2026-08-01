@@ -104,6 +104,18 @@ struct AndroidBundler {
             to: project.appendingPathComponent("gradle.properties"),
             atomically: true, encoding: .utf8
         )
+        // `local.properties` is where Gradle reads the SDK (and NDK) location
+        // from. Writing the discovered paths here means the staged project
+        // assembles by hand (`cd <out> && ./gradlew assembleDebug`) and opens
+        // in Android Studio on a machine that never exported ANDROID_HOME —
+        // otherwise the first thing the developer meets is AGP's "SDK location
+        // not found" pointing at a file we could have written.
+        if let properties = AndroidToolchain.localProperties(sdk: AndroidToolchain.sdk()) {
+            try properties.write(
+                to: project.appendingPathComponent("local.properties"),
+                atomically: true, encoding: .utf8
+            )
+        }
 
         // App module.
         let app = project.appendingPathComponent("app")
@@ -861,21 +873,26 @@ struct AndroidBundler {
         // Prefer the NDK's `llvm-*` over anything on PATH. macOS's
         // `/usr/bin/strip` and `/usr/bin/readelf` (when present) are
         // Mach-O-only and choke on ELF input — `llvm-strip` /
-        // `llvm-readelf` from the NDK handle ELF on every host.
-        if let ndk = env["ANDROID_NDK_HOME"], !ndk.isEmpty {
-            for host in ["darwin-x86_64", "darwin-arm64", "linux-x86_64", "windows-x86_64"] {
-                let path = "\(ndk)/toolchains/llvm/prebuilt/\(host)/bin/\(llvmName)"
-                if FileManager.default.isExecutableFile(atPath: path) {
-                    return path
-                }
-            }
+        // `llvm-readelf` from the NDK handle ELF on every host. The NDK
+        // is located by `AndroidToolchain`, so an SDK-manager install
+        // (`<sdk>/ndk/<version>`) works with no `ANDROID_NDK_HOME` set.
+        if let ndk = AndroidToolchain.ndk(env: env),
+           let tool = AndroidToolchain.ndkTool(llvmName, ndk: ndk.path)
+        {
+            return tool
         }
         let pathDirs = (env["PATH"] ?? "").split(separator: ":").map(String.init)
-        // Then prefer `llvm-<tool>` on PATH over the bare name — same
-        // ELF-vs-Mach-O reasoning. A bare `strip` / `readelf` on a
-        // Linux host is binutils and handles ELF, so this falls
-        // through to it correctly there.
-        for candidate in [llvmName, name] {
+        // Then `llvm-<tool>` on PATH — same ELF-vs-Mach-O reasoning.
+        var candidates = [llvmName]
+        #if !os(macOS)
+            // A bare `strip` / `readelf` is binutils on Linux/Windows and
+            // handles ELF. On macOS it is *always* Xcode's Mach-O strip,
+            // which exits 1 on `--strip-unneeded` for every file — the APK
+            // then ships ~130 MB of unstripped `.so` with nothing but a
+            // `note:` per library to say so. Never accept it there.
+            candidates.append(name)
+        #endif
+        for candidate in candidates {
             for dir in pathDirs {
                 let path = "\(dir)/\(candidate)"
                 if FileManager.default.isExecutableFile(atPath: path) {
@@ -895,28 +912,39 @@ struct AndroidBundler {
     private func stripELFs(in dir: URL) async throws {
         guard let tool = stripTool() else {
             print(
-                "note: no `strip` / `llvm-strip` found on PATH or under ANDROID_NDK_HOME; APK will ship unstripped .so files (~40% larger). Install the NDK and set ANDROID_NDK_HOME to enable."
+                "warning: no `llvm-strip` found under the Android NDK or on PATH; APK will ship unstripped .so files (~40% larger). Install the NDK (or set ANDROID_NDK_HOME) to enable."
             )
             return
         }
         let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         var before: Int64 = 0
         var after: Int64 = 0
+        var stripped = 0
         for name in entries where name.hasSuffix(".so") {
             let path = dir.appendingPathComponent(name).path
             let beforeSize = fileSize(path)
             before += beforeSize
             do {
-                _ = try await Shell.capture(tool, ["--strip-unneeded", path])
+                _ = try await Shell.capture(tool, ["--strip-unneeded", path], discardStderr: true)
             } catch {
-                // A failed strip on one file isn't fatal — the file
-                // just stays unstripped in the APK. Log and continue
-                // so a single corrupt input doesn't take the whole
-                // build down.
-                print("note: strip failed on \(name): \(error)")
                 after += beforeSize
+                // One failure means the *tool* is wrong far more often
+                // than the file is (a Mach-O `strip` rejecting
+                // `--strip-unneeded` fails identically on all ~30
+                // libraries). Bail on the first one with a warning that
+                // names the tool, rather than emitting a per-file `note:`
+                // and a "saved 0 MB, 0%" line that reads like success.
+                if stripped == 0 {
+                    print(
+                        "warning: `\(tool)` failed on \(name) (\(error)); skipping the strip pass — "
+                            + "the APK will ship unstripped .so files (~40% larger)."
+                    )
+                    return
+                }
+                print("note: strip failed on \(name): \(error)")
                 continue
             }
+            stripped += 1
             after += fileSize(path)
         }
         if before > 0 {

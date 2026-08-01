@@ -172,18 +172,9 @@ struct Doctor: AsyncParsableCommand {
             #endif
         case .android:
             var checks: [Check] = await [
-                envDir(
-                    "ANDROID_NDK_HOME",
-                    label: "Android NDK",
-                    required: true,
-                    fix: "Install NDK r27+ and: export ANDROID_NDK_HOME=/path/to/android-ndk"
-                ),
-                tool(
-                    "java",
-                    label: "JDK (Gradle)",
-                    required: true,
-                    fix: "Install JDK 17 (e.g. Temurin) so ./gradlew can run."
-                ),
+                androidNDK(),
+                androidSDK(),
+                androidJDK(),
                 androidSwiftSDK()
             ]
             if let drift = androidEntryDriftCheck() { checks.append(drift) }
@@ -377,6 +368,67 @@ struct Doctor: AsyncParsableCommand {
             required: false,
             fix: hasIdentity ? nil : fix
         )
+    }
+
+    // The three host-toolchain pieces an Android build needs, reported through
+    // `AndroidToolchain`'s discovery — so a standard install with no env vars
+    // exported reads as ✓ (it builds), and the detail line says *where* each
+    // piece was found, which is what you actually want on a machine carrying
+    // three JDKs.
+
+    private static func androidNDK() async -> Check {
+        guard let ndk = AndroidToolchain.ndk() else {
+            return Check(
+                name: "Android NDK", ok: false, detail: "not found",
+                required: true,
+                fix: "Install NDK r27+ (Android Studio → SDK Manager, or the standalone download) "
+                    + "and, if it isn't under the SDK, set ANDROID_NDK_HOME."
+            )
+        }
+        // Missing `llvm-strip` isn't fatal, but it's the difference between a
+        // 74 MB and a 130 MB APK — worth naming here rather than in a build log.
+        let strip = AndroidToolchain.ndkTool("llvm-strip", ndk: ndk.path)
+        let detail = strip == nil ? "\(ndk.origin) — no llvm-strip; .so files ship unstripped" : ndk.origin
+        return Check(name: "Android NDK", ok: true, detail: detail, required: true, fix: nil)
+    }
+
+    private static func androidSDK() async -> Check {
+        guard let sdk = AndroidToolchain.sdk() else {
+            return Check(
+                name: "Android SDK (Gradle)", ok: false, detail: "not found",
+                required: true,
+                fix: "Install the SDK (Android Studio, or the command-line tools) and set ANDROID_HOME, "
+                    + "or put it in the standard location (macOS: ~/Library/Android/sdk, Linux: ~/Android/Sdk)."
+            )
+        }
+        return Check(name: "Android SDK (Gradle)", ok: true, detail: sdk.origin, required: true, fix: nil)
+    }
+
+    /// Not a PATH probe: macOS ships a `/usr/bin/java` stub that satisfies
+    /// `which java` with no JDK installed, which made this check pass on a
+    /// machine where Gradle then died with "Unable to locate a Java Runtime".
+    private static func androidJDK() async -> Check {
+        let label = "JDK (Gradle)"
+        switch await AndroidToolchain.resolveJava() {
+        case .ambient:
+            let detail = AndroidToolchain.jdk().map(\.origin) ?? "on PATH"
+            return Check(name: label, ok: true, detail: detail, required: true, fix: nil)
+        case let .discovered(jdk):
+            // Usable — `deploy` points Gradle at it — but a by-hand
+            // `./gradlew` in the staged project would still fail, so say so.
+            return Check(
+                name: label, ok: true,
+                detail: "\(jdk.path) (not on PATH; deploy sets JAVA_HOME for Gradle)",
+                required: true, fix: nil
+            )
+        case .missing:
+            return Check(
+                name: label, ok: false, detail: "no Java runtime found",
+                required: true,
+                fix: "Install JDK 17 so ./gradlew can run — macOS: `brew install openjdk@17`; "
+                    + "Linux: `apt install openjdk-17-jdk`. Android Studio's bundled JBR counts too."
+            )
+        }
     }
 
     private static func androidSwiftSDK() async -> Check {

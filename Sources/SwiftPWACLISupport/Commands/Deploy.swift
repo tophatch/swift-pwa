@@ -185,9 +185,13 @@ struct Deploy: AsyncParsableCommand {
 
         let project = Self.androidProjectDir(outputDir: outputDir, pwa: pwa)
         if !noBuild {
+            // Resolve Gradle's toolchain *before* the (minutes-long)
+            // cross-compile: a missing JDK or SDK is otherwise discovered at
+            // the very end, as a raw Gradle error, with the whole build wasted.
+            let gradle = try await Self.resolveGradleToolchain()
             // runBuild → Build.run() already emits the doctor heads-up preflight.
             try await runBuild(crossCompileAndroid: true)
-            try await assembleAPK(project: project)
+            try await assembleAPK(project: project, envOverrides: gradle)
         }
 
         let apk = try Self.resolveAPK(project: project, release: release)
@@ -211,7 +215,7 @@ struct Deploy: AsyncParsableCommand {
 
     /// Invoke the staged Gradle project's `gradlew` — the step `build`
     /// deliberately leaves to the caller.
-    private func assembleAPK(project: URL) async throws {
+    private func assembleAPK(project: URL, envOverrides: [String: String]) async throws {
         let gradlew = project.appendingPathComponent("gradlew")
         guard FileManager.default.fileExists(atPath: gradlew.path) else {
             throw ValidationError(
@@ -221,7 +225,37 @@ struct Deploy: AsyncParsableCommand {
         }
         let task = release ? "assembleRelease" : "assembleDebug"
         print("→ assembling the \(release ? "release" : "debug") APK (./gradlew \(task))")
-        try await Shell.run(gradlew.path, [task], cwd: project)
+        try await Shell.run(gradlew.path, [task], cwd: project, envOverrides: envOverrides.isEmpty ? nil : envOverrides)
+    }
+
+    /// Locate the JDK and Android SDK Gradle needs, returning the env
+    /// overrides that point `gradlew` at them (empty when the ambient
+    /// environment already has both).
+    ///
+    /// Throws with the fix rather than letting Gradle fail: its own messages
+    /// for these two gaps are `Unable to locate a Java Runtime` (from macOS's
+    /// `/usr/bin/java` stub — so a PATH check doesn't catch it) and `SDK
+    /// location not found`, neither of which mentions swift-pwa or how a
+    /// working install is normally laid out.
+    private static func resolveGradleToolchain() async throws -> [String: String] {
+        let java = await AndroidToolchain.resolveJava()
+        if java == .missing {
+            throw ValidationError(
+                "no JDK found — Gradle can't assemble the APK without one. Install JDK 17 and either "
+                    + "put `java` on PATH or set JAVA_HOME (macOS: `brew install openjdk@17`, which is "
+                    + "keg-only — swift-pwa finds it there; Linux: `apt install openjdk-17-jdk`). "
+                    + "Android Studio's bundled JBR counts too."
+            )
+        }
+        guard let sdk = AndroidToolchain.sdk() else {
+            throw ValidationError(
+                "no Android SDK found — Gradle needs one to build the APK. Install it (Android Studio, "
+                    + "or the command-line tools) and set ANDROID_HOME, or put it in the standard location "
+                    + "(macOS: ~/Library/Android/sdk, Linux: ~/Android/Sdk)."
+            )
+        }
+        if case let .discovered(jdk) = java { print("→ JDK: \(jdk.path)") }
+        return AndroidToolchain.gradleEnvironment(java: java, sdk: sdk)
     }
 
     private static func androidProjectDir(outputDir: URL, pwa: PWAManifest) -> URL {

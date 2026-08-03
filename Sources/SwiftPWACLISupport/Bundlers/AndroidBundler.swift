@@ -397,20 +397,23 @@ struct AndroidBundler {
         // and the SDK's version is parseable we wrap the build in
         // `swiftly run +<major.minor>`, which overrides `.swift-version`.
         let buildTool = Self.androidBuildTool(sdkBundleID: sdk)
+        // Resolved once for the whole loop: what the cached modules under
+        // `.build/<triple>` were compiled against (see
+        // `cleanStaleCrossCompileCacheIfNeeded`).
+        let toolchainIdentity = Self.crossCompileToolchainIdentity(
+            ndk: AndroidToolchain.ndk()?.path, sdkBundleID: sdk
+        )
         var failures: [String] = []
         for abi in abis {
             let triple = tripleFor(abi: abi)
             do {
-                // Guard the stale-incremental-cross-compile hazard: if the
-                // swift-pwa runtime sources changed since this triple was last
-                // built, SwiftPM's Android incremental build can leave a caller
-                // module compiled against an *old* struct layout while core uses
-                // the new one — producing a startup SIGSEGV (a value-witness
-                // retain on a garbage field, e.g. after a field is inserted mid
-                // `WindowConfig`). Fingerprint the runtime sources and wipe the
-                // triple's build dir on a mismatch so the next `swift build`
-                // recompiles everything against one consistent layout.
-                Self.cleanStaleCrossCompileCacheIfNeeded(projectRoot: projectRoot, triple: triple)
+                // Guard the two stale-incremental-cross-compile hazards — a
+                // changed runtime ABI (startup SIGSEGV) and a moved/upgraded NDK
+                // (duplicate `_Builtin_stddef` .pcm) — by wiping the triple's
+                // build dir when either fingerprint moved.
+                Self.cleanStaleCrossCompileCacheIfNeeded(
+                    projectRoot: projectRoot, triple: triple, toolchain: toolchainIdentity
+                )
 
                 // `ai.local_onnx_runtime` needs `libonnxruntime.so` on
                 // `LIBRARY_PATH` *for this ABI's* link step — resolved here
@@ -590,38 +593,94 @@ struct AndroidBundler {
         return String(id[range].dropFirst("swift-".count))
     }
 
-    /// Wipe `.build/<triple>` when the swift-pwa runtime sources (the shared-ABI
-    /// surface) have changed since this triple was last cross-compiled, so the
-    /// next `swift build` recompiles caller and library modules against one
-    /// consistent struct layout.
+    /// What `.build/<triple>` was last cross-compiled against: the swift-pwa
+    /// runtime's ABI surface, and the host toolchain that produced the cached
+    /// modules. Stored one field per line, human-readable on purpose — this
+    /// file is what you read when you want to know why a clean was (or wasn't)
+    /// forced.
+    struct CrossCompileStamp: Equatable {
+        let runtime: String
+        let toolchain: String
+
+        var serialized: String {
+            "runtime:\(runtime)\ntoolchain:\(toolchain)\n"
+        }
+
+        static func parse(_ text: String) -> CrossCompileStamp? {
+            var runtime: String?
+            var toolchain: String?
+            for line in text.split(whereSeparator: \.isNewline) {
+                if line.hasPrefix("runtime:") { runtime = String(line.dropFirst("runtime:".count)) }
+                if line.hasPrefix("toolchain:") { toolchain = String(line.dropFirst("toolchain:".count)) }
+            }
+            guard let runtime, let toolchain else { return nil }
+            return CrossCompileStamp(runtime: runtime, toolchain: toolchain)
+        }
+
+        /// Why the cache must be dropped, or `nil` when it's still valid.
+        /// Names the actual culprit — "the NDK moved" and "you bumped
+        /// swift-pwa" want different follow-up from the reader.
+        func reasonToClean(comparedTo previous: CrossCompileStamp?) -> String? {
+            guard let previous else { return "no fingerprint from a previous build" }
+            switch (previous.runtime != runtime, previous.toolchain != toolchain) {
+            case (true, true): return "the swift-pwa runtime and the Android toolchain both changed"
+            case (true, false): return "the swift-pwa runtime changed"
+            case (false, true): return "the Android toolchain changed: \(previous.toolchain) → \(toolchain)"
+            case (false, false): return nil
+            }
+        }
+    }
+
+    /// Wipe `.build/<triple>` when either the swift-pwa runtime sources (the
+    /// shared-ABI surface) or the host Android toolchain has changed since this
+    /// triple was last cross-compiled, so the next `swift build` recompiles
+    /// everything against one consistent set of headers and struct layouts.
     ///
-    /// Rationale: a stored-property change in a core type (e.g. inserting a
-    /// field mid-`WindowConfig`) shifts the struct's layout, but SwiftPM's
-    /// Android incremental build doesn't always recompile a *caller* module that
-    /// constructs the type — leaving old and new layouts linked together. The
-    /// symptom is a `swift_retain` SIGSEGV in the type's value-witness copy at
-    /// runtime (seen after PR #49). This is advisory-free self-healing: the
-    /// common trigger — bumping the swift-pwa dependency to a version with a
-    /// changed core type — is caught by the source fingerprint below, and a
-    /// clean cross-compile is only forced when something actually changed.
-    static func cleanStaleCrossCompileCacheIfNeeded(projectRoot: URL, triple: String) {
+    /// Two distinct hazards, one guard:
+    ///
+    /// - **Runtime ABI.** A stored-property change in a core type (e.g.
+    ///   inserting a field mid-`WindowConfig`) shifts the struct's layout, but
+    ///   SwiftPM's Android incremental build doesn't always recompile a
+    ///   *caller* module that constructs the type — leaving old and new layouts
+    ///   linked together. The symptom is a `swift_retain` SIGSEGV in the type's
+    ///   value-witness copy at runtime (seen after PR #49).
+    /// - **Toolchain.** The cached clang module (`.pcm`) files embed the NDK's
+    ///   header paths. Move or upgrade the NDK and the same module resolves
+    ///   through a second path, so the build dies with `module
+    ///   '_Builtin_stddef' is defined in both …-12XADZNGFAU7K.pcm and
+    ///   …-SRKHNJT8UHKO.pcm` — a message that names nothing you can act on.
+    ///
+    /// Self-healing either way, and a clean is only forced when something
+    /// actually changed.
+    static func cleanStaleCrossCompileCacheIfNeeded(projectRoot: URL, triple: String, toolchain: String) {
         let fm = FileManager.default
         let tripleDir = projectRoot.appendingPathComponent(".build/\(triple)")
-        // Nothing cached yet → the upcoming build is already clean.
-        guard fm.fileExists(atPath: tripleDir.path) else { return }
         let stampFile = tripleDir.appendingPathComponent(".swiftpwa-abi-fingerprint")
-        let current = runtimeABIFingerprint(projectRoot: projectRoot)
-        let previous = try? String(contentsOf: stampFile, encoding: .utf8)
-        guard previous != current else { return }
-        // Changed (or a pre-guard cache with no stamp): force a clean so no
-        // stale caller object survives against the new layout.
+        let current = CrossCompileStamp(
+            runtime: runtimeABIFingerprint(projectRoot: projectRoot), toolchain: toolchain
+        )
+        // Nothing cached yet → the upcoming build is already clean. Still lay
+        // the stamp down, or the *next* build sees an unstamped cache and wipes
+        // a perfectly good one (a needless full rebuild on every second run).
+        guard fm.fileExists(atPath: tripleDir.path) else {
+            try? fm.createDirectory(at: tripleDir, withIntermediateDirectories: true)
+            try? current.serialized.write(to: stampFile, atomically: true, encoding: .utf8)
+            return
+        }
+        let previous = (try? String(contentsOf: stampFile, encoding: .utf8)).flatMap(CrossCompileStamp.parse)
+        guard let reason = current.reasonToClean(comparedTo: previous) else { return }
         try? fm.removeItem(at: tripleDir)
         try? fm.createDirectory(at: tripleDir, withIntermediateDirectories: true)
-        try? current.write(to: stampFile, atomically: true, encoding: .utf8)
-        print(
-            "note: swift-pwa runtime changed since the last \(triple) build — "
-                + "cleaned .build/\(triple) to avoid a stale-layout crash"
-        )
+        try? current.serialized.write(to: stampFile, atomically: true, encoding: .utf8)
+        print("note: cleaned .build/\(triple) — \(reason)")
+    }
+
+    /// The host toolchain identity baked into a triple's cached modules: the
+    /// NDK (whose header paths the `.pcm` files embed) and the Swift Android
+    /// SDK bundle. Short and readable rather than hashed — it goes into the
+    /// stamp file and into the "cleaned because…" note.
+    static func crossCompileToolchainIdentity(ndk: String?, sdkBundleID: String) -> String {
+        "ndk=\(ndk ?? "none") sdk=\(sdkBundleID)"
     }
 
     /// A stable digest of the swift-pwa runtime sources plus the CLI version.

@@ -306,15 +306,26 @@ re-stage by hand.
 One more automatic safeguard runs on the way in:
 
 > **Stale-cache guard (automatic).** Before each ABI's `swift build`, the
-> bundler fingerprints the swift-pwa runtime sources and, if they changed since
-> that triple was last built, wipes `.build/<triple>` so the build recompiles
-> against one consistent struct layout. This heads off a class of startup
-> `SIGSEGV` (a `swift_retain` fault in a type's value-witness copy) that
-> SwiftPM's incremental Android build can otherwise produce when a core type's
-> stored fields change — most commonly after you bump the swift-pwa dependency.
-> You'll see a one-line `note: … cleaned .build/<triple> …` when it fires; an
-> unchanged tree keeps the fast incremental path. If you ever hit that crash on
-> a build predating this guard, `rm -rf .build/*android*` and rebuild.
+> bundler fingerprints two things — the swift-pwa runtime sources and the host
+> toolchain (resolved NDK path + Swift Android SDK bundle id) — and wipes
+> `.build/<triple>` when either moved since that triple was last built. It
+> covers two failure modes that both present as something other than their
+> cause:
+>
+> - a **changed runtime ABI** → a startup `SIGSEGV` (a `swift_retain` fault in a
+>   type's value-witness copy), which SwiftPM's incremental Android build can
+>   produce when a core type's stored fields change — most commonly after you
+>   bump the swift-pwa dependency;
+> - a **moved or upgraded NDK** → `error: module '_Builtin_stddef' is defined in
+>   both …-12XADZNGFAU7K.pcm and …-SRKHNJT8UHKO.pcm`, because the cached clang
+>   modules embed the NDK's header paths and the same module then resolves
+>   through two of them.
+>
+> When it fires you get one line naming the culprit — `note: cleaned
+> .build/<triple> — the Android toolchain changed: ndk=<old> → ndk=<new>` — and
+> an unchanged tree keeps the fast incremental path. The fingerprint lives in
+> `.build/<triple>/.swiftpwa-abi-fingerprint` (two readable lines). On a build
+> predating this guard, `rm -rf .build/*android*` and rebuild.
 
 The bundler also drops a vendored Gradle 8.10.2 wrapper into the
 generated project (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`) so

@@ -401,6 +401,55 @@
             }
         }
 
+        // MARK: - Snapshot
+
+        public var supportsSnapshot: Bool {
+            true
+        }
+
+        /// `ICoreWebView2.CapturePreview` renders through WebView2's own
+        /// compositor, so the driver gets the app's pixels whether or not the
+        /// window is frontmost — and without the system-wide screen capture
+        /// the alternative would need.
+        ///
+        /// The C shim writes the PNG to a temp file (see the shim for why);
+        /// we read and delete it here.
+        public func captureSnapshot() async throws -> Data {
+            let path = NSTemporaryDirectory()
+                .appending("\\swift-pwa-snapshot-\(UUID().uuidString).png")
+
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, any Error>) in
+                let box = SnapshotBox(continuation: cont)
+                let target = path
+                Task { [self] in
+                    await MainThread.run {
+                        guard let v = self.view else {
+                            box.continuation.resume(throwing: BridgeError(
+                                code: BridgeError.handler,
+                                message: "the web view went away before the snapshot ran"
+                            ))
+                            return
+                        }
+                        let boxPtr = Unmanaged.passRetained(box).toOpaque()
+                        target.withCString(encodedAs: UTF16.self) { wcs in
+                            swiftpwa_w2_view_capture_preview(
+                                v, wcs, captureCompleteTrampoline, boxPtr
+                            )
+                        }
+                    }
+                }
+            }
+
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            guard let data = FileManager.default.contents(atPath: path) else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "the snapshot reported success but wrote nothing to \(path)"
+                )
+            }
+            return data
+        }
+
         public func deliver(_ frame: OutboundFrame) async throws {
             // Two ways to send a string into the page from the host:
             // (a) `PostWebMessageAsString`, which surfaces as a
@@ -522,6 +571,31 @@
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_execute_script`.
+    /// Heap box carrying a `CheckedContinuation` across the C boundary for
+    /// `swiftpwa_w2_view_capture_preview`. Same ownership rule as ``EvalBox``.
+    final class SnapshotBox: @unchecked Sendable {
+        let continuation: CheckedContinuation<Void, any Error>
+        init(continuation: CheckedContinuation<Void, any Error>) {
+            self.continuation = continuation
+        }
+    }
+
+    /// `@convention(c)` callback for `swiftpwa_w2_view_capture_preview`.
+    let captureCompleteTrampoline: @convention(c) (
+        UnsafePointer<CChar>?, UnsafeMutableRawPointer?
+    ) -> Void = { errorPtr, userData in
+        guard let userData else { return }
+        let box = Unmanaged<SnapshotBox>.fromOpaque(userData).takeRetainedValue()
+        if let errorPtr {
+            box.continuation.resume(throwing: BridgeError(
+                code: BridgeError.handler,
+                message: String(cString: errorPtr)
+            ))
+        } else {
+            box.continuation.resume()
+        }
+    }
+
     let evalCompleteTrampoline: @convention(c) (
         UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafeMutableRawPointer?
     ) -> Void = { jsonPtr, errorPtr, userData in

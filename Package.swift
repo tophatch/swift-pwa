@@ -6,8 +6,24 @@ import PackageDescription
 // only opt in to features that aren't yet baseline. The Linux toolchain
 // treats `enableUpcomingFeature("StrictConcurrency")` under Swift 6 as
 // an error rather than a warning, which broke `swift build` on Ubuntu.
+// App-driver gate (Track A). The driver is a loopback control socket that
+// evaluates arbitrary JS inside the running app, so a **release** build must
+// not contain it: the default below compiles it into debug builds only, which
+// is where `swift-pwa drive` and the test suite want it, and no flag is needed
+// for the normal case.
+//
+// Set `SWIFT_PWA_DRIVER=1` at build time to force it into release builds too —
+// for driving an optimized build. That's a deliberate act with a real cost, so
+// it's an explicit env var rather than something a manifest can turn on
+// quietly.
+let driverInReleaseBuilds = ProcessInfo.processInfo.environment["SWIFT_PWA_DRIVER"] != nil
+let driverSetting: SwiftSetting = driverInReleaseBuilds
+    ? .define("SWIFT_PWA_DRIVER")
+    : .define("SWIFT_PWA_DRIVER", .when(configuration: .debug))
+
 let swiftSettings: [SwiftSetting] = [
-    .enableUpcomingFeature("ExistentialAny")
+    .enableUpcomingFeature("ExistentialAny"),
+    driverSetting
 ]
 
 /// Linux backend selection. The default is GTK3 + WebKitGTK 4.1, which

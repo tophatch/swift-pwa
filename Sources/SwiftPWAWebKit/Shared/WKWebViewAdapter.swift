@@ -115,7 +115,20 @@
         /// snippets, which evaluate to `undefined`.
         @MainActor private func evaluateOnMain(_ js: String) async throws -> String? {
             let value: Any? = try await webView.evaluateJavaScript(js)
-            return value.map { String(describing: $0) }
+            guard let value, !(value is NSNull) else { return nil }
+            // WKWebView hands back a bridged Objective-C object graph, not
+            // JSON. `String(describing:)` of that is Swift's *debug*
+            // description — `1` for a JS `true`, an unparseable dump for an
+            // object — whereas the protocol (and WebKitGTK's
+            // `jsc_value_to_json`) promise a JSON serialization. Serialize
+            // properly so the contract holds on Apple too, and fall back to
+            // the description for the rare value JSON can't represent.
+            if let data = try? JSONSerialization.data(
+                withJSONObject: value, options: [.fragmentsAllowed]
+            ), let json = String(data: data, encoding: .utf8) {
+                return json
+            }
+            return String(describing: value)
         }
 
         public nonisolated func deliver(_ frame: OutboundFrame) async throws {
@@ -132,6 +145,51 @@
             _ = stream // ensure continuation is captured
             return stream
         }
+
+        // MARK: - Snapshot
+
+        public nonisolated var supportsSnapshot: Bool {
+            true
+        }
+
+        /// `WKWebView.takeSnapshot` renders through WebKit's own compositor
+        /// rather than reading the framebuffer, which is the whole reason the
+        /// driver can screenshot an app that is backgrounded, occluded or on
+        /// another Space — and without the Screen Recording TCC grant that
+        /// `CGWindowListCreateImage` / `screencapture` demand.
+        public nonisolated func captureSnapshot() async throws -> Data {
+            try await snapshotOnMain()
+        }
+
+        @MainActor private func snapshotOnMain() async throws -> Data {
+            let config = WKSnapshotConfiguration()
+            // Flush pending layout/paint first, so a snapshot taken right
+            // after an `eval` that mutated the DOM shows the mutation.
+            config.afterScreenUpdates = true
+            let image = try await webView.takeSnapshot(configuration: config)
+            guard let png = Self.encodePNG(image) else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "couldn't PNG-encode the webview snapshot"
+                )
+            }
+            return png
+        }
+
+        #if os(macOS)
+            @MainActor private static func encodePNG(_ image: NSImage) -> Data? {
+                // Via CGImage rather than `tiffRepresentation` so the output
+                // keeps the backing store's pixel dimensions — on a Retina
+                // display an `NSImage`'s point size is half of them.
+                guard let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+                else { return nil }
+                return NSBitmapImageRep(cgImage: cgImage).representation(using: .png, properties: [:])
+            }
+        #else
+            @MainActor private static func encodePNG(_ image: UIImage) -> Data? {
+                image.pngData()
+            }
+        #endif
 
         public nonisolated func openDevTools() {
             #if os(macOS)

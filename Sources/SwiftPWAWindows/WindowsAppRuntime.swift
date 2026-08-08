@@ -102,6 +102,12 @@
             // matching the macOS/iOS Launch Services path.
             OpenFile.emit(OpenFile.launchFilePaths(), on: context.events)
 
+            // Opt-in dev/test control socket. After `configure` so the app's
+            // first window already exists when a driver connects; a no-op
+            // unless SWIFT_PWA_DRIVE names a port (and absent entirely from
+            // release builds).
+            AppDriver.startIfRequested(context, backend: "windows")
+
             var msg = MSG()
             // Swift's WinSDK overlay imports `GetMessageW` as
             // returning `Bool` rather than the C `BOOL` (Int32). We

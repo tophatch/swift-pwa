@@ -397,6 +397,55 @@ extern "C" void swiftpwa_w2_view_execute_script(
     }
 }
 
+extern "C" void swiftpwa_w2_view_capture_preview(
+    swiftpwa_w2_view *view, const wchar_t *path,
+    swiftpwa_w2_capture_complete_cb cb, void *user) {
+    if (!cb) return;
+    if (!view || !view->raw || !path) {
+        cb("view or path is null", user);
+        return;
+    }
+
+    // A file stream rather than an HGLOBAL one: the capture can be several
+    // megabytes, and the Swift side wants the bytes on disk anyway.
+    IStream *stream = nullptr;
+    HRESULT hr = SHCreateStreamOnFileEx(
+        path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
+        FILE_ATTRIBUTE_NORMAL, TRUE, nullptr, &stream);
+    if (FAILED(hr) || !stream) {
+        char buf[80];
+        snprintf(buf, sizeof(buf), "couldn't open the snapshot file: 0x%08X",
+                 static_cast<unsigned int>(hr));
+        cb(buf, user);
+        return;
+    }
+
+    hr = view->raw->CapturePreview(
+        COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, stream,
+        Callback<ICoreWebView2CapturePreviewCompletedHandler>(
+            [cb, user, stream](HRESULT inner_hr) -> HRESULT {
+                // Releasing here (rather than on the Swift side) is what
+                // flushes and closes the file before the caller reads it.
+                stream->Release();
+                if (FAILED(inner_hr)) {
+                    char buf[64];
+                    snprintf(buf, sizeof(buf), "CapturePreview failed: 0x%08X",
+                             static_cast<unsigned int>(inner_hr));
+                    cb(buf, user);
+                    return S_OK;
+                }
+                cb(nullptr, user);
+                return S_OK;
+            }).Get());
+    if (FAILED(hr)) {
+        stream->Release();
+        char buf[80];
+        snprintf(buf, sizeof(buf), "CapturePreview dispatch failed: 0x%08X",
+                 static_cast<unsigned int>(hr));
+        cb(buf, user);
+    }
+}
+
 extern "C" void swiftpwa_w2_view_post_web_message_string(
     swiftpwa_w2_view *view, const wchar_t *message) {
     if (!view || !view->raw || !message) return;
@@ -800,6 +849,7 @@ extern "C" swiftpwa_w2_view *swiftpwa_w2_controller_view(swiftpwa_w2_controller 
 extern "C" void swiftpwa_w2_view_navigate(swiftpwa_w2_view *, const wchar_t *) {}
 extern "C" void swiftpwa_w2_view_add_script_on_document_created(swiftpwa_w2_view *, const wchar_t *) {}
 extern "C" void swiftpwa_w2_view_execute_script(swiftpwa_w2_view *, const wchar_t *, swiftpwa_w2_eval_complete_cb, void *) {}
+extern "C" void swiftpwa_w2_view_capture_preview(swiftpwa_w2_view *, const wchar_t *, swiftpwa_w2_capture_complete_cb, void *) {}
 extern "C" void swiftpwa_w2_view_post_web_message_string(swiftpwa_w2_view *, const wchar_t *) {}
 extern "C" void swiftpwa_w2_view_open_devtools(swiftpwa_w2_view *) {}
 extern "C" void swiftpwa_w2_view_set_web_message_handler(swiftpwa_w2_view *, swiftpwa_w2_message_cb, void *) {}

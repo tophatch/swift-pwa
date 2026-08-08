@@ -1,10 +1,29 @@
 # Proposal: an app-driver channel, and an agent-callable tool surface
 
-> **Status: adopter request + maintainer review.** The problem statement and the
-> `PWA_DEV_SERVER` findings come from an adopter building a desktop app on
-> swift-pwa 0.7.7, measured on their machine. The per-platform API choices,
-> the capability tiering, and Track B were revised after checking each claim
-> against this repo. Nothing here is implemented.
+> **Status: Track A Cut 1 has shipped** (`swift-pwa drive` — see
+> [docs/app-driver.md](../app-driver.md) and `CHANGELOG.md`). The rest —
+> Cut 2 (native input), Cut 3 (`swift-pwa mcp`), `SWIFT_PWA_INITIAL_ROUTE`, and
+> all of Track B — is still design.
+>
+> The problem statement and the `PWA_DEV_SERVER` findings come from an adopter
+> building a desktop app on swift-pwa 0.7.7, measured on their machine. The
+> per-platform API choices, the capability tiering, and Track B were revised
+> after checking each claim against this repo.
+>
+> Two things changed on contact with the code, both recorded here so the plan
+> and the shipped thing agree:
+>
+> - **The build gate is the build *configuration*, not a `pwa.json` key.** The
+>   driver compiles into debug builds only, with `SWIFT_PWA_DRIVER=1` as the
+>   deliberate release override. That delivers "a release build cannot contain
+>   the code at all" without a manifest key that would have to be plumbed
+>   through all five bundlers for a rare case — and the common path then needs
+>   no configuration at all.
+> - **`eval` uncovered a real bug the moment it ran.** The Apple adapter's
+>   `evaluateJavaScript` returned Swift's debug description rather than the JSON
+>   the protocol promises, so a JS `true` came back as `1`. Fixed in the same
+>   change (see `CHANGELOG.md`) — the first thing the driver found was a defect
+>   in the seam it depends on.
 
 Two related deliverables, deliberately separated because they have different
 audiences, different risk profiles, and different release gates:

@@ -228,6 +228,59 @@
             }
         }
 
+        // MARK: - Snapshot
+
+        public var supportsSnapshot: Bool {
+            true
+        }
+
+        /// `webkit_web_view_get_snapshot` renders through WebKit's own
+        /// compositor, so the driver can screenshot a window that is
+        /// unmapped, occluded or on another workspace — and without an X11
+        /// screen grab, which Wayland refuses outright.
+        ///
+        /// The C shim writes the PNG to a temp file (see the shim for why);
+        /// we read and delete it here.
+        public func captureSnapshot() async throws -> Data {
+            let path = NSTemporaryDirectory()
+                .appending("/swift-pwa-snapshot-\(UUID().uuidString).png")
+            let viewRaw = UInt(bitPattern: viewWidget)
+
+            try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, any Error>) in
+                let boxRaw = UInt(bitPattern: Unmanaged.passRetained(
+                    SnapshotBox(continuation: cont)
+                ).toOpaque())
+                let target = path
+                Task {
+                    await MainThread.run {
+                        guard let boxPtr = UnsafeMutableRawPointer(bitPattern: boxRaw) else { return }
+                        guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: viewRaw) else {
+                            Unmanaged<SnapshotBox>.fromOpaque(boxPtr).takeRetainedValue()
+                                .continuation.resume(throwing: BridgeError(
+                                    code: BridgeError.handler,
+                                    message: "the web view went away before the snapshot ran"
+                                ))
+                            return
+                        }
+                        let webView = UnsafeMutableRawPointer(view)
+                            .assumingMemoryBound(to: WebKitWebView.self)
+                        target.withCString { cstr in
+                            swiftpwa_webview_snapshot_png(webView, cstr, snapshotCallback, boxPtr)
+                        }
+                    }
+                }
+            }
+
+            defer { try? FileManager.default.removeItem(atPath: path) }
+            guard let data = FileManager.default.contents(atPath: path) else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "the snapshot reported success but wrote nothing to \(path)"
+                )
+            }
+            return data
+        }
+
         /// Called by the C-side signal handler trampoline whenever JS
         /// posts a frame via `mh.postMessage(...)`. Always invoked on
         /// the GTK main thread, but the continuation is thread-safe so
@@ -265,6 +318,39 @@
         let continuation: CheckedContinuation<String?, any Error>
         init(continuation: CheckedContinuation<String?, any Error>) {
             self.continuation = continuation
+        }
+    }
+
+    /// Heap box carrying a `CheckedContinuation` across the C boundary for
+    /// `swiftpwa_webview_snapshot_png`. Same ownership rule as ``EvalBox``:
+    /// exactly one party holds it at a time.
+    final class SnapshotBox: @unchecked Sendable {
+        let continuation: CheckedContinuation<Void, any Error>
+        init(continuation: CheckedContinuation<Void, any Error>) {
+            self.continuation = continuation
+        }
+    }
+
+    /// `@convention(c)` callback for `swiftpwa_webview_snapshot_png`.
+    /// Fires on the GTK main thread once the snapshot has been written.
+    let snapshotCallback: @convention(c) (
+        Int32,
+        UnsafeMutablePointer<CChar>?,
+        UnsafeMutableRawPointer?
+    ) -> Void = { ok, errorPtr, userData in
+        guard let userData else { return }
+        let box = Unmanaged<SnapshotBox>.fromOpaque(userData).takeRetainedValue()
+        var message = "snapshot failed"
+        if let errorPtr {
+            message = String(cString: errorPtr)
+            g_free(UnsafeMutableRawPointer(errorPtr))
+        }
+        if ok == 1 {
+            box.continuation.resume()
+        } else {
+            box.continuation.resume(throwing: BridgeError(
+                code: BridgeError.handler, message: message
+            ))
         }
     }
 

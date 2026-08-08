@@ -96,6 +96,87 @@ static inline void swiftpwa_evaluate_javascript(
     );
 }
 
+// ---------------------------------------------------------------------
+// Webview snapshot (the app driver's `screenshot` verb)
+// ---------------------------------------------------------------------
+
+/// Snapshot callback. `ok` is 1 when the PNG was written to the path
+/// handed to `swiftpwa_webview_snapshot_png`, 0 otherwise. `error` is a
+/// freshly-allocated message on failure and NULL on success; the callee
+/// must `g_free` it.
+typedef void (*swiftpwa_snapshot_callback)(int ok, char *error, void *user_data);
+
+typedef struct {
+    swiftpwa_snapshot_callback cb;
+    void *user_data;
+    char *path;
+} swiftpwa_snapshot_box;
+
+/// GAsyncReadyCallback trampoline for `swiftpwa_webview_snapshot_png`.
+static inline void swiftpwa_snapshot_finish(
+    GObject *source,
+    GAsyncResult *result,
+    gpointer user_data
+) {
+    swiftpwa_snapshot_box *box = (swiftpwa_snapshot_box *)user_data;
+    swiftpwa_snapshot_callback cb = box->cb;
+    void *swift_ud = box->user_data;
+    char *path = box->path;
+    g_free(box);
+
+    GError *error = NULL;
+    cairo_surface_t *surface = webkit_web_view_get_snapshot_finish(
+        WEBKIT_WEB_VIEW(source), result, &error
+    );
+
+    int ok = 0;
+    char *err_msg = NULL;
+    if (error) {
+        err_msg = g_strdup(error->message);
+        g_error_free(error);
+    } else if (surface) {
+        cairo_status_t status = cairo_surface_write_to_png(surface, path);
+        if (status == CAIRO_STATUS_SUCCESS) {
+            ok = 1;
+        } else {
+            err_msg = g_strdup(cairo_status_to_string(status));
+        }
+        cairo_surface_destroy(surface);
+    } else {
+        err_msg = g_strdup("snapshot produced no surface");
+    }
+    g_free(path);
+    cb(ok, err_msg, swift_ud);
+}
+
+/// Asynchronously snapshot the web view's **visible region** and write it
+/// to `path` as a PNG.
+///
+/// Via a file rather than a buffer because cairo's in-memory PNG encoder is
+/// a write-callback stream API, and the GTK4 sibling shim's `GdkTexture`
+/// has a file-based saver too — one temp file keeps both backends on the
+/// same shape, and the driver deletes it as soon as it's read.
+static inline void swiftpwa_webview_snapshot_png(
+    WebKitWebView *web_view,
+    const char *path,
+    swiftpwa_snapshot_callback cb,
+    void *user_data
+) {
+    swiftpwa_snapshot_box *box =
+        (swiftpwa_snapshot_box *)g_malloc0(sizeof(swiftpwa_snapshot_box));
+    box->cb = cb;
+    box->user_data = user_data;
+    box->path = g_strdup(path);
+    webkit_web_view_get_snapshot(
+        web_view,
+        WEBKIT_SNAPSHOT_REGION_VISIBLE,
+        WEBKIT_SNAPSHOT_OPTIONS_NONE,
+        NULL,
+        swiftpwa_snapshot_finish,
+        box
+    );
+}
+
 /// Set the web view's base background colour (painted before/under the
 /// page), so the surface matches the app background instead of flashing
 /// opaque white before first paint. Components are 0...1.

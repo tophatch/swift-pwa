@@ -28,6 +28,9 @@
             if let configure = runtime.pendingConfigure {
                 runtime.pendingConfigure = nil
                 try? configure(context)
+                // Opt-in dev/test control socket — see `AppDriver`. Only the
+                // first scene starts it; a second one would fail to bind.
+                AppDriver.startIfRequested(context, backend: "ios")
             }
             attachNextPendingWindow(to: windowScene)
 

@@ -114,6 +114,82 @@ static inline void swiftpwa_register_script_message_handler(
     webkit_user_content_manager_register_script_message_handler(ucm, name, NULL);
 }
 
+// ---------------------------------------------------------------------
+// Webview snapshot (the app driver's `screenshot` verb)
+// ---------------------------------------------------------------------
+
+/// Snapshot callback. `ok` is 1 when the PNG was written to the path
+/// handed to `swiftpwa_webview_snapshot_png`, 0 otherwise. `error` is a
+/// freshly-allocated message on failure and NULL on success; the callee
+/// must `g_free` it.
+typedef void (*swiftpwa_snapshot_callback)(int ok, char *error, void *user_data);
+
+typedef struct {
+    swiftpwa_snapshot_callback cb;
+    void *user_data;
+    char *path;
+} swiftpwa_snapshot_box;
+
+/// GAsyncReadyCallback trampoline for `swiftpwa_webview_snapshot_png`.
+///
+/// The WebKitGTK 6.0 ABI difference from the 4.1 shim: `get_snapshot_finish`
+/// hands back a `GdkTexture*`, not a `cairo_surface_t*`, so the PNG write
+/// goes through GDK rather than cairo.
+static inline void swiftpwa_snapshot_finish(
+    GObject *source,
+    GAsyncResult *result,
+    gpointer user_data
+) {
+    swiftpwa_snapshot_box *box = (swiftpwa_snapshot_box *)user_data;
+    swiftpwa_snapshot_callback cb = box->cb;
+    void *swift_ud = box->user_data;
+    char *path = box->path;
+    g_free(box);
+
+    GError *error = NULL;
+    GdkTexture *texture = webkit_web_view_get_snapshot_finish(
+        WEBKIT_WEB_VIEW(source), result, &error
+    );
+
+    int ok = 0;
+    char *err_msg = NULL;
+    if (error) {
+        err_msg = g_strdup(error->message);
+        g_error_free(error);
+    } else if (texture) {
+        ok = gdk_texture_save_to_png(texture, path) ? 1 : 0;
+        if (!ok) err_msg = g_strdup("gdk_texture_save_to_png failed");
+        g_object_unref(texture);
+    } else {
+        err_msg = g_strdup("snapshot produced no texture");
+    }
+    g_free(path);
+    cb(ok, err_msg, swift_ud);
+}
+
+/// Asynchronously snapshot the web view's **visible region** and write it
+/// to `path` as a PNG. See the 4.1 shim for why this goes via a file.
+static inline void swiftpwa_webview_snapshot_png(
+    WebKitWebView *web_view,
+    const char *path,
+    swiftpwa_snapshot_callback cb,
+    void *user_data
+) {
+    swiftpwa_snapshot_box *box =
+        (swiftpwa_snapshot_box *)g_malloc0(sizeof(swiftpwa_snapshot_box));
+    box->cb = cb;
+    box->user_data = user_data;
+    box->path = g_strdup(path);
+    webkit_web_view_get_snapshot(
+        web_view,
+        WEBKIT_SNAPSHOT_REGION_VISIBLE,
+        WEBKIT_SNAPSHOT_OPTIONS_NONE,
+        NULL,
+        swiftpwa_snapshot_finish,
+        box
+    );
+}
+
 /// Set the web view's base background colour (painted before/under the
 /// page), so the surface matches the app background instead of flashing
 /// opaque white before first paint. Components are 0...1.

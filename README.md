@@ -193,6 +193,8 @@ open ./build/MyApp.app
 
 **One-command device loop — `swift-pwa deploy`.** Building an artifact is only half of testing on a device; `deploy` runs the whole last mile — `build` → package → install → launch — in one step. `swift-pwa deploy --target android` cross-compiles, assembles the APK, and `adb install`s + launches it on the connected device (`--device <serial|ip:port>` to choose one, with wireless `adb connect` handled for you); `--target ios --simulator` builds, boots, and installs on a simulator; `--target ios --team <TEAMID>` builds a signed app and installs it on a physical device via `devicectl` (add `--allow-provisioning-registration` and a free personal Apple team mints its own profile — no Xcode round-trip); `--target macos` opens the `.app`. `--no-build` reuses the last artifact for a fast re-install. See [docs/deploy.md](docs/deploy.md).
 
+**Script a running app — `swift-pwa drive`.** `swift-pwa drive eval "document.title"` and `swift-pwa drive shot out.png` evaluate JS in the page and screenshot the webview of a running app, over an opt-in loopback socket that's compiled into debug builds only. The capture is the app's own pixels, so the window can stay backgrounded or occluded while you keep working — no frontmost requirement, no screen-recording grant, nothing a CI runner can't do. See [docs/app-driver.md](docs/app-driver.md).
+
 For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#platform-setup).
 
 ## Feature matrix

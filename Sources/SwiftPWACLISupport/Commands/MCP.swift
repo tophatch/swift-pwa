@@ -15,20 +15,27 @@ import SwiftPWACore
 /// event queue, so a driven session runs in the background while you keep
 /// working.
 ///
-/// **Dev-only, and gated the same three ways as `swift-pwa drive`**: the driver
-/// isn't compiled into release builds, doesn't listen without `SWIFT_PWA_DRIVE`,
-/// and requires a per-launch token. This is not the shipping "expose your app to
-/// an agent" feature — that one needs *runtime* consent from the end user, since
-/// they're the party exposed, and is tracked separately as Track B in
-/// `docs/proposals/swift-pwa-app-driver.md`.
+/// **Dev-only by default, and gated the same three ways as `swift-pwa drive`**:
+/// the driver isn't compiled into release builds, doesn't listen without
+/// `SWIFT_PWA_DRIVE`, and requires a per-launch token.
+///
+/// `--agent` serves the *other* surface — a shipped app's own declared commands
+/// (see [docs/agent-tools.md](../../../docs/agent-tools.md)). Same transport,
+/// entirely different trust story: the driver can do anything to any debug
+/// build, while the agent surface is an allowlist the developer wrote and the
+/// user switched on for this session.
 struct MCP: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "mcp",
-        abstract: "Serve the driver's verbs to an agent as MCP tools (stdio).",
+        abstract: "Serve an app's tools to an agent over MCP (stdio).",
         discussion: """
         Add to an MCP host's config as a stdio server whose command is `swift-pwa mcp`, with the \
-        app's directory as the working directory. The app is built and launched on the first tool \
-        call and torn down when the session ends.
+        app's directory as the working directory. By default it serves the *driver's* verbs \
+        (screenshot / eval / click) against a debug build it launches on the first tool call.
+
+        With `--agent --attach <port> --token <token>` it instead serves a running app's own \
+        declared commands, which is what the app shows you when a user turns agent access on. \
+        Nothing is launched in that mode — the app is already running.
 
         Everything the server logs goes to stderr: stdout carries the protocol stream and must \
         contain nothing else.
@@ -37,9 +44,18 @@ struct MCP: AsyncParsableCommand {
 
     @OptionGroup var options: DriveOptions
 
+    @Flag(help: "Serve a running app's own declared tools instead of the driver's verbs. Needs --attach/--token.")
+    var agent: Bool = false
+
     func run() async throws {
+        if agent, options.attach == nil {
+            throw ValidationError("""
+            --agent serves a running app, so it needs --attach <port> --token <token>. The app shows \
+            both when a user turns agent access on.
+            """)
+        }
         // The driver's own lifecycle logging must not touch stdout.
-        let server = MCPServer(options: options, log: .standardError)
+        let server = MCPServer(options: options, agentMode: agent, log: .standardError)
         try await server.serve()
     }
 }
@@ -60,12 +76,21 @@ final class MCPServer {
     static let preferredProtocolVersion = "2025-06-18"
 
     private let options: DriveOptions
+    /// `true` serves a running app's own declared tools; `false` serves the
+    /// driver's verbs. The transport is identical — same newline-delimited
+    /// frames, same token — so only the verb set and the tool catalogue differ.
+    private let agentMode: Bool
     private let log: FileHandle
     private var app: LaunchedApp?
     private var client: DriverClient?
+    /// Agent mode only: the app's tools, fetched once per session. The list is
+    /// fixed at launch (it's compiled in), so re-asking per `tools/list` would
+    /// buy nothing.
+    private var agentTools: [AgentMCPTool]?
 
-    init(options: DriveOptions, log: FileHandle) {
+    init(options: DriveOptions, agentMode: Bool = false, log: FileHandle) {
         self.options = options
+        self.agentMode = agentMode
         self.log = log
     }
 
@@ -114,6 +139,17 @@ final class MCPServer {
         case "ping":
             return Self.result(id: id, .object([:]))
         case "tools/list":
+            if agentMode {
+                do {
+                    let tools = try await loadAgentTools()
+                    return Self.result(id: id, .object(["tools": .array(tools.map(\.descriptor))]))
+                } catch {
+                    // Listing is the first thing a host does, so a connection
+                    // failure here is what the user will actually see — say what
+                    // went wrong rather than returning an empty toolbox.
+                    return Self.error(id: id, code: -32603, message: "\(error)")
+                }
+            }
             return Self.result(id: id, .object(["tools": .array(MCPTools.all.map(\.descriptor))]))
         case "tools/call":
             return await callTool(id: id, params: request["params"])
@@ -140,33 +176,54 @@ final class MCPServer {
             "capabilities": .object(["tools": .object([:])]),
             "serverInfo": .object([
                 "name": .string("swift-pwa"),
-                "title": .string("swift-pwa app driver"),
+                "title": .string(agentMode ? "swift-pwa app tools" : "swift-pwa app driver"),
                 "version": .string(SwiftPWAVersion.current)
             ]),
-            "instructions": .string("""
-            Drives a locally built swift-pwa app: evaluate JavaScript in its page, take a \
-            screenshot of the webview, click, type, scroll, and read window geometry. The app is \
-            built and launched on the first tool call and torn down when this session ends.
-
-            Screenshots are of the app's own rendered contents, not the screen, so the window can \
-            stay in the background — you are not taking over the user's machine, and you should \
-            not need to ask them to bring anything to the front.
-
-            Not every backend can synthesize input. Call `app_capabilities` first if you intend to \
-            click or type; where it isn't available, dispatch DOM events through `app_eval` \
-            instead, bearing in mind those are untrusted events that skip default behaviour.
-            """)
+            "instructions": .string(agentMode ? Self.agentInstructions : Self.driverInstructions)
         ])
     }
+
+    static let driverInstructions = """
+    Drives a locally built swift-pwa app: evaluate JavaScript in its page, take a \
+    screenshot of the webview, click, type, scroll, and read window geometry. The app is \
+    built and launched on the first tool call and torn down when this session ends.
+
+    Screenshots are of the app's own rendered contents, not the screen, so the window can \
+    stay in the background — you are not taking over the user's machine, and you should \
+    not need to ask them to bring anything to the front.
+
+    Not every backend can synthesize input. Call `app_capabilities` first if you intend to \
+    click or type; where it isn't available, dispatch DOM events through `app_eval` \
+    instead, bearing in mind those are untrusted events that skip default behaviour.
+    """
+
+    static let agentInstructions = """
+    These are one running app's own commands, offered by its developer and switched on by \
+    its user for this session only. They are not general computer control: this is the whole \
+    surface, and anything not listed is refused.
+
+    Read each tool's annotations before calling it. `readOnlyHint` means it only reads; \
+    `destructiveHint` means it can remove or overwrite something the user cares about, and is \
+    worth confirming with them first. The annotations are the app author's description of \
+    their own commands, so treat them as a guide rather than a guarantee.
+
+    Access can be revoked at any moment from the app — if calls start failing with an auth \
+    error, the user has closed the door rather than something being broken.
+    """
 
     private func callTool(id: BridgeJSON, params: BridgeJSON?) async -> BridgeJSON {
         guard case let .string(name)? = params?["name"] else {
             return Self.error(id: id, code: -32602, message: "tools/call needs a tool name")
         }
+        let arguments = params?["arguments"] ?? .object([:])
+
+        if agentMode {
+            return await callAgentTool(id: id, name: name, arguments: arguments)
+        }
+
         guard let tool = MCPTools.all.first(where: { $0.name == name }) else {
             return Self.error(id: id, code: -32602, message: "Unknown tool: \(name)")
         }
-        let arguments = params?["arguments"] ?? .object([:])
 
         do {
             let client = try await connectedClient()
@@ -183,10 +240,91 @@ final class MCPServer {
         }
     }
 
+    // MARK: - Agent mode
+
+    /// Ask the running app what it offers, and lower each entry into an MCP
+    /// tool descriptor.
+    ///
+    /// The app returns argument shapes as `BridgeSchema`; the JSON Schema
+    /// lowering happens here rather than in the runtime, so fixing a mapping
+    /// bug is a CLI update instead of an app rebuild.
+    private func loadAgentTools() async throws -> [AgentMCPTool] {
+        if let agentTools { return agentTools }
+        let client = try await connectedClient()
+        let result = try client.invoke("describe")
+        guard case let .array(entries)? = result["tools"] else {
+            throw DriveError.launch("the app didn't describe any tools")
+        }
+
+        var tools: [AgentMCPTool] = []
+        for entry in entries {
+            guard case let .string(name)? = entry["name"],
+                  case let .string(description)? = entry["description"]
+            else { continue }
+            // `args` absent means a no-argument command.
+            let schema: BridgeSchema = if let args = entry["args"], let data = try? args.encoded(),
+                                          let decoded = try? JSONDecoder().decode(BridgeSchema.self, from: data)
+            {
+                decoded
+            } else {
+                .void
+            }
+            guard let inputSchema = JSONSchemaGenerator.toolInputSchema(for: schema) else {
+                // `swift-pwa build` refuses these, but an app assembled without
+                // that check can still reach here. Skipping is the honest
+                // option: an agent can't call what we can't describe.
+                log.writeQuietly(Data("swift-pwa: skipping '\(name)' — its arguments aren't describable\n".utf8))
+                continue
+            }
+            tools.append(AgentMCPTool(
+                name: name,
+                description: description,
+                inputSchema: inputSchema,
+                annotations: entry["annotations"]
+            ))
+        }
+        agentTools = tools
+        return tools
+    }
+
+    private func callAgentTool(id: BridgeJSON, name: String, arguments: BridgeJSON) async -> BridgeJSON {
+        do {
+            let tools = try await loadAgentTools()
+            guard tools.contains(where: { $0.name == name }) else {
+                return Self.error(id: id, code: -32602, message: "Unknown tool: \(name)")
+            }
+            let client = try await connectedClient()
+            // The app checks the allowlist again on its side; this one is just
+            // so an unknown name is a protocol error rather than a round trip.
+            let result = try client.invoke("call", [
+                "name": .string(name),
+                "arguments": arguments
+            ])
+            return Self.result(id: id, .object([
+                "content": .array([.object([
+                    "type": .string("text"),
+                    "text": .string(result.prettyPrinted)
+                ])]),
+                "isError": .bool(false)
+            ]))
+        } catch {
+            // A refusal or a handler failure is a *result*, so the agent can
+            // read it and try something else instead of losing the session.
+            return Self.result(id: id, .object([
+                "content": .array([.object(["type": .string("text"), "text": .string("\(error)")])]),
+                "isError": .bool(true)
+            ]))
+        }
+    }
+
     /// Launch the app on first use and keep it for the session. Lazily, because
     /// an MCP host spawns its servers when it connects — building and opening a
     /// window at that moment, before the agent has asked for anything, would be
     /// a surprise.
+    ///
+    /// In agent mode nothing is ever launched: the app is already running, and
+    /// starting a second copy would be both surprising and useless (its agent
+    /// surface would be off).
     private func connectedClient() async throws -> DriverClient {
         if let client { return client }
         let client: DriverClient
@@ -195,6 +333,13 @@ final class MCPServer {
                 throw DriveError.launch("--attach needs the --token the app printed at launch")
             }
             client = try DriverClient(port: UInt16(port), token: token)
+            if agentMode {
+                // No page-ready wait: `eval` isn't a verb on this channel, and
+                // a shipped app is already up by the time a user has turned
+                // access on and pasted the config.
+                self.client = client
+                return client
+            }
         } else {
             let app = try await LaunchedApp.build(options, log: log)
             self.app = app
@@ -229,6 +374,32 @@ final class MCPServer {
             "id": id,
             "error": .object(["code": .number(Double(code)), "message": .string(message)])
         ])
+    }
+}
+
+// MARK: - Agent tools
+
+/// One of a running app's own tools, as the app described it.
+///
+/// Separate from ``MCPTool`` because it carries no `run` closure: the CLI
+/// doesn't know what these commands do, and doesn't need to — it forwards the
+/// call and the app decides.
+struct AgentMCPTool: Equatable {
+    let name: String
+    let description: String
+    let inputSchema: BridgeJSON
+    /// The developer's risk annotations, passed through so a host can decide
+    /// what to confirm. They're the app's claim, not something the CLI checks.
+    let annotations: BridgeJSON?
+
+    var descriptor: BridgeJSON {
+        var fields: [String: BridgeJSON] = [
+            "name": .string(name),
+            "description": .string(description),
+            "inputSchema": inputSchema
+        ]
+        if let annotations { fields["annotations"] = annotations }
+        return .object(fields)
     }
 }
 

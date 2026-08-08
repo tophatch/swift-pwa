@@ -1,3 +1,4 @@
+import ArgumentParser
 import Foundation
 @testable import SwiftPWACLISupport
 import SwiftPWACore
@@ -91,6 +92,59 @@ struct MCPServerTests {
         ] {
             #expect(names.contains(expected), "missing \(expected)")
         }
+    }
+
+    // MARK: - Agent mode
+
+    @Test("an app tool's descriptor carries what a host needs to call it")
+    func agentToolDescriptor() {
+        let tool = AgentMCPTool(
+            name: "book_open",
+            description: "Open a book by id.",
+            inputSchema: .object(["type": .string("object")]),
+            annotations: .object(["readOnlyHint": .bool(true)])
+        )
+        let descriptor = tool.descriptor
+        #expect(descriptor["name"] == .string("book_open"))
+        #expect(descriptor["description"] == .string("Open a book by id."))
+        #expect(descriptor["inputSchema"]?["type"] == .string("object"))
+        // Passed through untouched: they're the app author's claim about their
+        // own commands, and a host uses them to decide what to confirm.
+        #expect(descriptor["annotations"]?["readOnlyHint"] == .bool(true))
+    }
+
+    @Test("a tool with no annotations doesn't get an empty annotations object")
+    func annotationsAreOmittedWhenAbsent() {
+        let tool = AgentMCPTool(name: "x", description: "y", inputSchema: .object([:]), annotations: nil)
+        #expect(tool.descriptor["annotations"] == nil)
+    }
+
+    @Test("the two modes tell an agent different things about what it's holding")
+    func instructionsDifferByMode() {
+        // The driver can do anything to a debug build; the agent surface is an
+        // allowlist someone switched on. An agent shouldn't have to guess which.
+        #expect(MCPServer.agentInstructions.contains("own commands"))
+        #expect(MCPServer.agentInstructions.contains("revoked"))
+        #expect(MCPServer.driverInstructions.contains("screenshot"))
+        #expect(MCPServer.agentInstructions != MCPServer.driverInstructions)
+    }
+
+    @Test("agent mode refuses to run without something to attach to")
+    func agentModeNeedsAttach() async throws {
+        // It serves a *running* app, so there's nothing sensible to do without
+        // a port — and launching one would produce a second copy with its agent
+        // surface switched off.
+        var command = try MCP.parse(["--agent"])
+        await #expect(throws: ValidationError.self) { try await command.run() }
+    }
+
+    @Test("driver mode is still happy without --attach: it launches the app itself")
+    func driverModeDoesNotRequireAttach() throws {
+        // Guards the check above from over-reaching — it must be specific to
+        // --agent, not a blanket requirement.
+        let command = try MCP.parse([])
+        #expect(command.agent == false)
+        #expect(command.options.attach == nil)
     }
 
     // MARK: - Screenshot scaling

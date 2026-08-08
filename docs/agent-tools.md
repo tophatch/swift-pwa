@@ -11,10 +11,9 @@ development tool for driving *any* build from the outside and is compiled out
 of release builds. What's described here ships in release binaries, so it's
 gated much more carefully.
 
-> **Status: both gates work; the MCP relay is the last cut.** An app can
-> declare its ceiling, a user can turn access on, and a client can speak the
-> control protocol below to list and call tools. What's still to come is
-> `swift-pwa mcp --attach` translating that into MCP for an agent host. See
+> **Status: complete end to end.** An app declares its ceiling, a user turns
+> access on, and `swift-pwa mcp --agent` serves the result to any MCP host.
+> Desktop only. Design notes:
 > [docs/proposals/swift-pwa-app-driver.md](proposals/swift-pwa-app-driver.md).
 
 ## Two gates, two owners
@@ -246,10 +245,58 @@ ordinary local process and can't be trusted to filter on the runtime's behalf.
 Calls are looked up by *tool* name; passing a raw command name that was never
 declared is refused with `E_AGENT_NOT_ALLOWED` either way.
 
-## What's next
+## Connecting an agent
 
-**Serving the tools** over `swift-pwa mcp --attach`, which is already a
-stdio↔loopback relay, so no shipped app needs to stand up its own HTTP server.
+The app doesn't speak MCP; a CLI relay does. When a user turns access on, the
+app shows the host configuration to paste:
+
+```jsonc
+{
+  "mcpServers": {
+    "myapp": {
+      "command": "swift-pwa",
+      "args": ["mcp", "--agent", "--attach", "51423", "--token", "…"]
+    }
+  }
+}
+```
+
+The host spawns `swift-pwa mcp --agent`, which connects to the running app,
+asks it what it offers, and serves that as MCP tools. Each `tools/call` is
+forwarded to the app, which checks its allowlist again — the relay is an
+ordinary local process, and nothing about the security story depends on it
+behaving.
+
+**No app ships an HTTP server for this.** The relay already existed for the
+driver, and the spec notes that a local HTTP server needs `Origin` validation
+and localhost binding to resist DNS rebinding — real attack surface in every
+shipped binary, to save one CLI. Streamable HTTP stays available later if
+hostless operation ever justifies it.
+
+Two things the relay does *not* do, on purpose: it never launches the app
+(a second copy would have its agent surface switched off), and it doesn't cache
+across sessions — the token changes every time access is turned on, so a stale
+config fails cleanly with an auth error rather than half-working.
+
+The tool names an agent sees are the ones you declared (`book.open` →
+`book_open`). A host merges tools from every connected server, so pick names
+that read unambiguously alongside other apps'; the build refuses a name that
+collides with a built-in driver tool.
+
+### What an agent is told
+
+The relay's `initialize` instructions describe *this* surface rather than the
+driver's: that it's one app's own commands, switched on for a session; that
+`readOnlyHint` and `destructiveHint` are worth reading before calling, and are
+the author's claim rather than a guarantee; and that access can be revoked
+mid-session, so an auth error means the user closed the door rather than
+something breaking.
+
+A failed call comes back as a tool result with `isError: true`, not a JSON-RPC
+error, so an agent can read what went wrong and try something else instead of
+losing the session.
+
+---
 
 Consent can't be *enforced* — the app is native code, and a developer who wants
 to skip asking will. The design goal is narrower and achievable: make the

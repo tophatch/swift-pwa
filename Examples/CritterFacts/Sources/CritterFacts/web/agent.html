@@ -182,7 +182,7 @@
                 mcpServers: {
                     critterfacts: {
                         command: "swift-pwa",
-                        args: ["mcp", "--attach", String(state.port), "--token", state.token]
+                        args: ["mcp", "--agent", "--attach", String(state.port), "--token", state.token]
                     }
                 }
             }, null, 2);

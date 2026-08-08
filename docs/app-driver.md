@@ -120,7 +120,7 @@ best-effort `setPosition`.
 | **iOS** | Yes | Yes | Same adapter as macOS; Simulator is the practical target. Not yet exercised on device |
 | **Linux GTK3** | Yes | Yes | `webkit_web_view_get_snapshot` → cairo PNG |
 | **Linux GTK4** | Yes | Yes | `webkit_web_view_get_snapshot` → `GdkTexture` → PNG. Wayland has no screen-grab fallback, so the renderer snapshot is the only option |
-| **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Implemented and compiled; not yet exercised on a running Windows app |
+| **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Compiles in CI (shim + adapter); **not yet exercised against a running Windows app** |
 | **Android** | — | — | Already scriptable over CDP — see [android-on-device-testing.md](android-on-device-testing.md) |
 
 **Synthetic input (`input.mouse` / `input.key`) is not implemented on any

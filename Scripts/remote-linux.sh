@@ -186,10 +186,20 @@ ssh "$HOST" "$REMOTE_ENV $XML_ENV cd ~/$REMOTE_DIR && $SWIFT build $BUILD_ARGS \
 # headless noise, not failures.
 WEBKIT_ENV='export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1;'
 echo "→ testing on $HOST under Xvfb"
+# Delegate to ci-test-linux.sh rather than `swift test`. On Linux the test
+# process intermittently crashes *at exit*, after every test has run, and that
+# truncates swift-testing's block-buffered output — so `swift test` reports a
+# fully passing run as `exited with unexpected signal code 6` with the passing
+# tail missing. ci-test-linux.sh reads the verdict from the structured event
+# stream instead of stdout, which is the only way to tell that apart from a
+# real failure. It runs the already-built bundle directly, so the linker flags
+# stay on the build step above (passing them here would forward them into the
+# test binary's own argv).
+#
 # A suite name can contain spaces, so the filter has to survive a second round
 # of word-splitting on the remote shell — quote it there, not just here.
 REMOTE_FILTER=""
 if [[ -n "$FILTER" ]]; then
-    REMOTE_FILTER="--filter $(printf '%q' "$FILTER")"
+    REMOTE_FILTER="$(printf '%q' "$FILTER")"
 fi
-ssh "$HOST" "$REMOTE_ENV $WEBKIT_ENV $XML_ENV export SWIFT_PWA_LINUX_GUI=1; cd ~/$REMOTE_DIR && xvfb-run -a $SWIFT test $REMOTE_FILTER \$XMLFLAGS"
+ssh "$HOST" "$REMOTE_ENV $WEBKIT_ENV $XML_ENV export SWIFT_PWA_LINUX_GUI=1; cd ~/$REMOTE_DIR && xvfb-run -a bash Scripts/ci-test-linux.sh $REMOTE_FILTER"

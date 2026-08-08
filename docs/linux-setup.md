@@ -637,7 +637,15 @@ recrashes and fails the job.
 
 If you hit the hang locally, build once (`swift build --build-tests`) then
 invoke the wrapper (`bash Scripts/ci-test-linux.sh`), or just re-run `swift
-test`. See issue #39 for the full investigation, including the dead ends
+test`. The wrapper takes swift-testing filters as arguments — with none it
+uses CI's two backend-agnostic targets — so a **backend** suite gets the same
+handling: `bash Scripts/ci-test-linux.sh GTKFullscreenStateTests`. That isn't
+optional for the GUI-gated GTK suites. They're short enough that the
+crash-at-exit lands squarely on the buffered tail, so a plain `swift test`
+reports a fully passing run as `exited with unexpected signal code 6` with the
+passing lines missing — observed taking three attempts to get a clean verdict
+on a GTK3 box. `Scripts/remote-linux.sh test` routes through the wrapper for
+this reason. See issue #39 for the full investigation, including the dead ends
 (stdout `stdbuf`, `--xunit-output`, `| tee`, SIGCONT-nudging) and the one
 documented caveat: a test that hung *mid-run* with no output would be
 indistinguishable from the post-run park — the suite has no such test.

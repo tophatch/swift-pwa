@@ -47,7 +47,14 @@
 # fast and event-dense); a real failing assertion or crash is still caught.
 #
 # Requires the bundle to be built first (CI's "Build test targets" step runs
-# `swift build --build-tests`). Extra args are ignored.
+# `swift build --build-tests`).
+#
+# Args are swift-testing filters. With none — how CI invokes it — the two
+# backend-agnostic CI targets are used, so CI behavior is unchanged. Passing
+# filters lets the same verdict logic cover a GUI-gated backend suite run under
+# Xvfb (see Scripts/remote-linux.sh), which needs this exact retry handling:
+# the crash-at-exit truncates swift-testing's block-buffered tail, so a plain
+# `swift test` reports a passing run as a signal-6 failure.
 set -uo pipefail
 
 ATTEMPTS="${CI_TEST_ATTEMPTS:-4}"
@@ -58,6 +65,13 @@ BUNDLE=$(find .build -maxdepth 4 -name '*PackageTests.xctest' -type f 2>/dev/nul
 if [ -z "${BUNDLE:-}" ]; then
     echo "::error::test bundle not found under .build — run 'swift build --build-tests' first."
     exit 1
+fi
+
+FILTERS=()
+if [ "$#" -gt 0 ]; then
+    for f in "$@"; do FILTERS+=(--filter "$f"); done
+else
+    FILTERS=(--filter SwiftPWACoreTests --filter SwiftPWACLITests)
 fi
 
 ev=$(mktemp)
@@ -73,7 +87,7 @@ run_once() {
     # structured verdict comes from the event file, never from stdout.
     "$BUNDLE" --testing-library swift-testing \
         --event-stream-version 0 --event-stream-output-path "$ev" \
-        --filter SwiftPWACoreTests --filter SwiftPWACLITests >"$log" 2>&1 &
+        "${FILTERS[@]}" >"$log" 2>&1 &
     local pid=$! last=-1 stable=0 sz end=$(( SECONDS + HARD_TIMEOUT ))
     while [ "$SECONDS" -lt "$end" ]; do
         if grep -q '"symbol":"fail"' "$ev" 2>/dev/null; then VERDICT=fail; break; fi

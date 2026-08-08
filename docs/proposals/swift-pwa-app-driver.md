@@ -1,9 +1,9 @@
 # Proposal: an app-driver channel, and an agent-callable tool surface
 
-> **Status: Track A Cut 1 has shipped** (`swift-pwa drive` — see
-> [docs/app-driver.md](../app-driver.md) and `CHANGELOG.md`). The rest —
-> Cut 2 (native input), Cut 3 (`swift-pwa mcp`), `SWIFT_PWA_INITIAL_ROUTE`, and
-> all of Track B — is still design.
+> **Status: all of Track A has shipped** — Cut 1 (`swift-pwa drive`), Cut 2
+> (synthetic input), Cut 3 (`swift-pwa mcp`) and `SWIFT_PWA_INITIAL_ROUTE`. See
+> [docs/app-driver.md](../app-driver.md) and `CHANGELOG.md`. **Track B is design**,
+> revised below after building Track A.
 >
 > The problem statement and the `PWA_DEV_SERVER` findings come from an adopter
 > building a desktop app on swift-pwa 0.7.7, measured on their machine. The
@@ -24,6 +24,16 @@
 >   the protocol promises, so a JS `true` came back as `1`. Fixed in the same
 >   change (see `CHANGELOG.md`) — the first thing the driver found was a defect
 >   in the seam it depends on.
+> - **Input is modelled on `PointerEvent`, not a mouse.** Stylus and touch are
+>   their own input paths, so the contract carries `pointerType` / `pressure` /
+>   `tiltX` / `tiltY` and a backend **refuses** what it can't express rather than
+>   flattening it to a click — a stylus test that silently ran as a mouse click
+>   would pass while proving nothing. No shipped backend produces `pen` yet; the
+>   wire format won't have to break when one does.
+> - **Track B's gate is two gates.** See [Two gates, two owners](#two-gates-two-owners):
+>   the developer bounds what *could* be exposed at build time, the user decides
+>   whether anything *is* exposed at runtime. The earlier "runtime consent, not a
+>   build flag" framing collapsed two decisions that have different owners.
 
 Two related deliverables, deliberately separated because they have different
 audiences, different risk profiles, and different release gates:
@@ -297,7 +307,7 @@ can click your buttons."
 The two tracks compose: when a driver-enabled build is running, the driver verbs
 appear as an additional (dev-only, token-gated) tool group in the same server.
 
-### Consent, not a build flag
+### Two gates, two owners
 
 **The tempting shortcut is to ship a subset of the *driver* under a build flag —
 "basic window driving is marketable by itself, just don't expose `eval`."** That
@@ -314,43 +324,128 @@ Shipping "screenshot + input, no `eval`" hands over substantially all of `eval`'
 power with worse ergonomics. Only the geometry tier is safe to expose without
 asking, and it isn't worth shipping on its own.
 
-Track B ships in release binaries, so the gate has to be a **runtime** one:
+An earlier draft of this document concluded from that "runtime consent, *not* a
+build flag". That was half right, and the half it got wrong matters: it collapsed
+two decisions with **different owners** into one.
 
-- off by default;
-- a visible affordance for the user to turn it on;
-- a visible indicator while a client is attached;
-- a per-session token the app displays.
+- **The developer decides the ceiling**, at build time, in `pwa.json`: which of
+  the app's own commands are *eligible* to be exposed at all. Off by default —
+  an app that says nothing exposes nothing, and the driver verbs are never in
+  this set (they stay dev-only, behind Track A's three gates).
+- **The user decides the door**, at runtime: whether anything is exposed *right
+  now*. Off by default, per-session, revocable.
 
-A build flag is the developer's decision about the developer's risk. The person
-exposed here is the end user, and only they can grant it.
+Neither substitutes for the other. A build flag alone is the developer consenting
+on the user's behalf. Runtime consent alone gives the user a yes/no over a
+surface nobody bounded — and "allow agent access?" with no ceiling is not a
+question anyone can answer well.
 
-### Transport
+### What swift-pwa owns, and what it can't
 
-`swift-pwa mcp` over stdio works for Track A because the CLI owns the app's
-lifecycle. It does **not** work for a shipped app: an MCP host connects to a
-stdio server by *spawning* it, and a running GUI app can't be spawned. Track B
-wants either an HTTP-based MCP transport on loopback, or a small stdio shim
-binary in the bundle that the host spawns and that relays to the app's loopback
-socket. Either way `DevNet` covers the socket layer, so the choice doesn't
-change the plan — but the exact transport shape needs checking against the
-current MCP spec before implementation.
+The honest limit first: **consent cannot be enforced.** The app is native code;
+a developer who wants to call `enable()` at launch will. Anything framed as
+enforcement is theatre. What swift-pwa can do is make the honest path the easy
+one and the dishonest one *visible*:
+
+- **swift-pwa owns the state** — off by default, per-session, revocable, with a
+  per-launch token. Turning it on requires an explicit runtime call; there is no
+  `pwa.json` key that makes an app exposed from launch.
+- **swift-pwa owns the indicator.** While a client is attached the runtime shows
+  it, and the app can't suppress it. That is the part that survives a developer
+  cutting the corner: they can skip asking, but they can't make it invisible.
+- **The app owns the asking.** The consent UI belongs to the app — it knows its
+  own vocabulary, and a swift-pwa-drawn dialog would look foreign on five
+  platforms at once (see the platform-conventions rule in `CLAUDE.md`).
+
+### The allowlist is validated against the real catalog
+
+`pwa.json` naming commands as strings has a failure mode worth designing out: a
+typo exposes nothing and a rename silently *un*-exposes, both quietly. For a
+security surface, failing quiet is the worst option.
+
+We already have the catalog. `HeadlessDescribe` dumps every registered command
+without opening a window — it is how `swift-pwa codegen` works today. So
+`swift-pwa build` can resolve the allowlist against the live catalog and **fail
+loud** when it names a command that doesn't exist, giving a declarative,
+reviewable list (a reader can audit `pwa.json`) without the stringly-typed
+hazard.
+
+```jsonc
+"agent": {
+  "expose": [
+    { "command": "book.open",   "readOnly": true },
+    { "command": "book.search", "readOnly": true },
+    { "command": "book.delete", "destructive": true }
+  ]
+}
+```
+
+### Risk annotations drive the consent copy
+
+MCP's tool definitions carry `readOnlyHint` / `destructiveHint` /
+`idempotentHint` / `openWorldHint`. Mapping the allowlist's annotations onto them
+does two jobs at once: MCP hosts use them to decide what to confirm, and the
+app's own consent sheet can say *"4 read-only tools, 1 that can delete"* rather
+than "allow agent access?". That is the difference between consent and a dialog
+people click through — and it's the same observe-vs-act axis as the table above,
+surfaced where the decision is actually made.
+
+Annotations are the developer's claim about their own commands, so they're only
+as trustworthy as the app — which the MCP spec says explicitly of annotations in
+general. They inform the user; they don't constrain the runtime.
+
+### Transport — smaller than it looked
+
+The earlier draft flagged this as unresolved: an MCP host connects to a stdio
+server by *spawning* it, and a running GUI app can't be spawned, so Track B
+looked like it needed a loopback HTTP server in every app.
+
+It doesn't, because **Cut 3 already built the relay**. `swift-pwa mcp --attach
+<port> --token <token>` is a stdio↔loopback bridge: the host spawns the CLI, the
+CLI talks to the running app. A shipped app displays its port and token when the
+user turns exposure on, they paste a host config once, done.
+
+That avoids standing up an HTTP server inside every app — which the MCP spec
+warns needs `Origin` validation and localhost binding to resist DNS rebinding,
+i.e. a real attack surface added to every shipped binary for the sake of skipping
+one CLI. Streamable HTTP stays available later if hostless operation is ever
+worth that cost; it isn't the v1.
 
 ---
 
 ## Sequencing
 
-| # | Deliverable | Gate |
-| --- | --- | --- |
-| 1 | `SWIFT_PWA_INITIAL_ROUTE` | none — small, useful on its own |
-| 2 | Track A Cut 1 (`eval` + `screenshot` + `window.*`) | build flag + env + token, dev-only |
-| 3 | Track A Cut 3 (`swift-pwa mcp` stdio) | same |
-| 4 | Track A Cut 2 (native input, macOS/GTK3/Android) | same |
-| 5 | Track B (app-declared tools, runtime consent, loopback HTTP) | runtime consent |
+| # | Deliverable | Gate | Status |
+| --- | --- | --- | --- |
+| 1 | `SWIFT_PWA_INITIAL_ROUTE` | none — small, useful on its own | **shipped** |
+| 2 | Track A Cut 1 (`eval` + `screenshot` + `window.*`) | build config + env + token, dev-only | **shipped** |
+| 3 | Track A Cut 3 (`swift-pwa mcp` stdio) | same | **shipped** |
+| 4 | Track A Cut 2 (native input, macOS + GTK3) | same | **shipped** |
+| 5 | Track B (app-declared tools, two gates, CLI relay) | dev allowlist + runtime consent | design |
+
+Track B splits along the same "smallest thing that's actually useful" line the
+Track A cuts did:
+
+| | Deliverable |
+| --- | --- |
+| **B1** | `BridgeSchema` → JSON Schema, the `pwa.json` allowlist, build-time validation against the catalog. No exposure yet — this is the *ceiling* and it's independently testable. |
+| **B2** | The runtime consent state (off by default, per-session, revocable, token) + the non-suppressible attached indicator, with a `CritterFacts` consent UI as the reference. |
+| **B3** | Serving the allowlist through `swift-pwa mcp --attach`, with annotations mapped onto MCP's hints. |
 
 ## Verification
 
-The adopter can validate the Apple path against a real app on macOS 15 (Apple
-silicon), including the "does a posted `NSEvent` reach an occluded WKWebView"
-question, and swap their shell driver for the real thing as a first adopter.
-Between their fleet and this repo's, Cut 1 can be verified on every desktop
-backend — GTK3, GTK4, both Windows architectures, macOS — before it ships.
+Track A shipped verified on **macOS** and **both Linux backends** — including the
+load-bearing claims: a screenshot of a window at `(-984, -768)` returning a
+complete viewport, and synthetic input arriving as `isTrusted: true` and driving
+an app end to end. GTK3's input path works under **Xvfb**, on a display server
+with no input device, which is what makes it usable in CI.
+
+**Windows compiles in CI but has never been driven against a live app**, and CI
+structurally can't close that: its `windows` job can't execute swift-testing
+tests. That needs a real box, and the support table in
+[docs/app-driver.md](../app-driver.md) says so rather than implying coverage.
+
+For Track B the thing most worth verifying early is **B1's build-time
+validation** — that a renamed or mistyped command fails the build rather than
+silently changing what's exposed. It's a pure function over the catalog, so it
+tests without a window.

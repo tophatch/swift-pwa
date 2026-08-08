@@ -35,6 +35,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var updater: UpdaterSection?
     public var build: BuildSection?
     public var ai: AISection?
+    public var agent: AgentSection?
 
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
@@ -323,6 +324,93 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.phiSilica = phiSilica
             self.localOnnxRuntime = localOnnxRuntime
             self.onnxGpu = onnxGpu
+        }
+    }
+
+    /// The **ceiling** on what this app may ever surface to an AI agent —
+    /// the developer's half of the two-gate design in
+    /// [docs/proposals/swift-pwa-app-driver.md]. Absent (the default) means the
+    /// app exposes nothing, ever.
+    ///
+    /// This section alone exposes nothing at runtime: it declares which of the
+    /// app's own commands are *eligible*. The user still has to turn exposure
+    /// on, per session, inside the app. A build flag on its own would be the
+    /// developer consenting on the user's behalf; a runtime toggle on its own
+    /// would be a yes/no over a surface nobody bounded.
+    ///
+    /// `swift-pwa build` resolves every entry against the app's live command
+    /// catalog (the same headless dump `swift-pwa codegen` uses) and **fails
+    /// the build** on a name that doesn't exist — a typo would otherwise expose
+    /// nothing and a rename would silently *un*-expose, both quietly. Run it on
+    /// its own with `swift-pwa agent check`.
+    ///
+    /// ```json
+    /// "agent": {
+    ///   "expose": [
+    ///     { "command": "book.open",   "description": "Open a book by id.", "read_only": true },
+    ///     { "command": "book.delete", "description": "Delete a book.",     "destructive": true }
+    ///   ]
+    /// }
+    /// ```
+    public struct AgentSection: Codable, Sendable, Equatable {
+        /// The eligible commands. An empty list is the same as omitting the
+        /// section — nothing is eligible.
+        public var expose: [ExposedCommand]?
+
+        public init(expose: [ExposedCommand]? = nil) {
+            self.expose = expose
+        }
+    }
+
+    /// One command an app is willing to offer an agent, plus the risk
+    /// annotations that drive both the MCP tool hints and the wording of the
+    /// app's own consent UI ("4 read-only tools, 1 that can delete" beats
+    /// "allow agent access?").
+    ///
+    /// The annotations are the developer's claim about their own commands, so
+    /// they're exactly as trustworthy as the app — the MCP spec says as much of
+    /// tool annotations in general. They inform the user; they don't constrain
+    /// the runtime.
+    public struct ExposedCommand: Codable, Sendable, Equatable {
+        /// The registered command name, e.g. `book.open`. Must exist in the
+        /// app's catalog at build time.
+        public var command: String
+        /// What the command does, in one line. Required: this is what the agent
+        /// reads to decide whether to call it, so an undocumented tool is an
+        /// unusable one.
+        public var description: String
+        /// The command only reads state. Maps to MCP's `readOnlyHint`.
+        public var readOnly: Bool?
+        /// The command can destroy or overwrite something the user cares about.
+        /// Maps to MCP's `destructiveHint`.
+        public var destructive: Bool?
+        /// Calling it twice with the same arguments is the same as calling it
+        /// once. Maps to MCP's `idempotentHint`.
+        public var idempotent: Bool?
+        /// The command touches the outside world (network, other people's
+        /// data) rather than a closed local domain. Maps to MCP's
+        /// `openWorldHint`.
+        public var openWorld: Bool?
+        /// The name the agent sees, if the derived one (`book.open` →
+        /// `book_open`) isn't what you want. Must be unique across the list.
+        public var toolName: String?
+
+        public init(
+            command: String,
+            description: String,
+            readOnly: Bool? = nil,
+            destructive: Bool? = nil,
+            idempotent: Bool? = nil,
+            openWorld: Bool? = nil,
+            toolName: String? = nil
+        ) {
+            self.command = command
+            self.description = description
+            self.readOnly = readOnly
+            self.destructive = destructive
+            self.idempotent = idempotent
+            self.openWorld = openWorld
+            self.toolName = toolName
         }
     }
 

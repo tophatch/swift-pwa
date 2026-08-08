@@ -60,6 +60,15 @@
                     Data("swift-pwa: configure threw: \(error)\n".utf8)
                 )
             }
+            // Opt-in dev/test control socket. After `configure` so the app's
+            // first window already exists when a driver connects; a no-op
+            // unless SWIFT_PWA_DRIVE names a port (and absent entirely from
+            // release builds).
+            // The agent surface's indicator: a runtime-owned status item, so a user
+            // can see access is open (and close it) without the app's cooperation.
+            AgentIndicator.installTray { SystemTray() }
+            AppDriver.startIfRequested(context, backend: "macos")
+
             NSApp.activate(ignoringOtherApps: true)
         }
 

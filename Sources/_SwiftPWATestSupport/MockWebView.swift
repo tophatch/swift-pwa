@@ -32,6 +32,22 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         set { lock.withLock { _evaluationResults = newValue } }
     }
 
+    /// What this mock claims it can synthesize. Defaults to nothing — the same
+    /// answer a backend without event synthesis gives — so a test that wants
+    /// the input path has to opt in and say what it's pretending to support.
+    public var stubbedInputCapabilities: InputCapabilities {
+        get { lock.withLock { _inputCapabilities } }
+        set { lock.withLock { _inputCapabilities = newValue } }
+    }
+
+    /// Events handed to ``send(_:)``, in order.
+    public var receivedInput: [SyntheticInput] {
+        lock.withLock { _receivedInput }
+    }
+
+    private var _inputCapabilities: InputCapabilities = .none
+    private var _receivedInput: [SyntheticInput] = []
+
     private var inboundContinuation: AsyncStream<InboundFrame>.Continuation?
     private lazy var inboundStream: AsyncStream<InboundFrame> = AsyncStream { continuation in
         self.inboundContinuation = continuation
@@ -84,5 +100,13 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
 
     public func inboundFrames() -> AsyncStream<InboundFrame> {
         inboundStream
+    }
+
+    public var inputCapabilities: InputCapabilities {
+        stubbedInputCapabilities
+    }
+
+    public func send(_ input: SyntheticInput) async throws {
+        lock.withLock { _receivedInput.append(input) }
     }
 }

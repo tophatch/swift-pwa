@@ -162,11 +162,22 @@
             // WKWebView returns the literal "<null>" string (or nil) when
             // the value is null/undefined.
             if let value, value != "<null>", value != "(null)" {
-                return value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+                return unwrapJSONString(value)
             }
             try await Task.sleep(for: .milliseconds(50))
         }
         return nil
+    }
+
+    /// `evaluateJavaScript` returns the **JSON serialization** of the result,
+    /// so a JS string arrives quoted and escaped (`"{\"a\":1}"`), matching
+    /// WebKitGTK's `jsc_value_to_json`. These tests set `window.__result` to a
+    /// stringified envelope, so decode one level to get the payload back.
+    private func unwrapJSONString(_ value: String) -> String {
+        guard value.hasPrefix("\""),
+              let decoded = try? JSONDecoder().decode(String.self, from: Data(value.utf8))
+        else { return value }
+        return decoded
     }
 
     /// Poll an arbitrary JS expression until it evaluates to a non-empty,
@@ -182,8 +193,8 @@
         while ContinuousClock.now < deadline {
             let value = try await adapter.evaluateJavaScript(expr)
             if let value, value != "<null>", value != "(null)" {
-                let trimmed = value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
-                if !trimmed.isEmpty { return trimmed }
+                let unwrapped = unwrapJSONString(value)
+                if !unwrapped.isEmpty { return unwrapped }
             }
             try await Task.sleep(for: .milliseconds(50))
         }

@@ -53,3 +53,24 @@ public extension JSONValue {
         try JSONEncoder().encode(self)
     }
 }
+
+public extension JSONValue {
+    /// Read a key off an object value, so payload access reads as
+    /// `payload?["js"]` instead of a `case .object` dance at every call.
+    ///
+    /// Lives here rather than beside the driver that first needed it: the agent
+    /// surface uses it too and ships in **release** builds, where the driver is
+    /// compiled out entirely.
+    subscript(key: String) -> JSONValue? {
+        guard case let .object(fields) = self else { return nil }
+        return fields[key]
+    }
+
+    /// The string members of an array value; anything else is empty. Used for
+    /// things like `modifiers`, where a malformed value should mean "none"
+    /// rather than failing the whole request.
+    var stringArray: [String] {
+        guard case let .array(items) = self else { return [] }
+        return items.compactMap { if case let .string(value) = $0 { value } else { nil } }
+    }
+}

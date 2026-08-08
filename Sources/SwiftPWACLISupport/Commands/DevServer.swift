@@ -1,4 +1,5 @@
 import Foundation
+import SwiftPWACore
 
 #if canImport(Darwin) || canImport(Glibc) || canImport(WinSDK)
 
@@ -11,7 +12,7 @@ import Foundation
     /// required — point `swift-pwa dev` at a plain `web/` folder and edits
     /// show up live.
     ///
-    /// The socket layer goes through `DevNet` (BSD sockets on Darwin/Glibc,
+    /// The socket layer goes through `LoopbackSocket` (BSD sockets on Darwin/Glibc,
     /// Winsock on Windows) so this file carries no platform `#if`; the file
     /// watcher is plain Foundation and already portable. `@unchecked Sendable`
     /// + an `NSLock` guard the shared client list across the accept /
@@ -21,8 +22,8 @@ import Foundation
         private let entry: String
         private let requestedPort: UInt16
         private let lock = NSLock()
-        private var clientFds: [DevSocket] = []
-        private var listenFd: DevSocket = DevNet.invalid
+        private var clientFds: [SocketHandle] = []
+        private var listenFd: SocketHandle = LoopbackSocket.invalid
         private var running = true
 
         /// `port` is the loopback port to bind. A fixed, non-zero port gives
@@ -39,13 +40,13 @@ import Foundation
         /// Bind the loopback port, start the accept + watch threads, and
         /// return the URL the app should load.
         func start() throws -> URL {
-            DevNet.startup() // Winsock init (no-op on POSIX)
-            let fd = DevNet.makeStreamSocket()
-            guard DevNet.isValid(fd) else { throw DevServerError.socket("socket() failed") }
-            DevNet.setReuseAddr(fd)
+            LoopbackSocket.startup() // Winsock init (no-op on POSIX)
+            let fd = LoopbackSocket.makeStreamSocket()
+            guard LoopbackSocket.isValid(fd) else { throw DevServerError.socket("socket() failed") }
+            LoopbackSocket.setReuseAddr(fd)
 
-            guard DevNet.bindLoopback(fd, port: requestedPort) else {
-                DevNet.closeSocket(fd)
+            guard LoopbackSocket.bindLoopback(fd, port: requestedPort) else {
+                LoopbackSocket.closeSocket(fd)
                 if requestedPort != 0 {
                     throw DevServerError.socket(
                         "port \(requestedPort) is already in use — pass `--port <n>` to pick another, "
@@ -54,12 +55,12 @@ import Foundation
                 }
                 throw DevServerError.socket("bind() failed")
             }
-            guard DevNet.startListening(fd, backlog: 16) else {
-                DevNet.closeSocket(fd)
+            guard LoopbackSocket.startListening(fd, backlog: 16) else {
+                LoopbackSocket.closeSocket(fd)
                 throw DevServerError.socket("listen() failed")
             }
 
-            let port = DevNet.boundPort(fd)
+            let port = LoopbackSocket.boundPort(fd)
             listenFd = fd
             Thread.detachNewThread { [self] in acceptLoop() }
             Thread.detachNewThread { [self] in watchLoop() }
@@ -73,11 +74,11 @@ import Foundation
         func stop() {
             lock.lock()
             running = false
-            let fds = clientFds + (DevNet.isValid(listenFd) ? [listenFd] : [])
+            let fds = clientFds + (LoopbackSocket.isValid(listenFd) ? [listenFd] : [])
             clientFds = []
-            listenFd = DevNet.invalid
+            listenFd = LoopbackSocket.invalid
             lock.unlock()
-            for fd in fds { DevNet.closeSocket(fd) }
+            for fd in fds { LoopbackSocket.closeSocket(fd) }
         }
 
         // MARK: - Accept + dispatch
@@ -85,7 +86,7 @@ import Foundation
         private func acceptLoop() {
             while true {
                 lock.lock(); let fd = listenFd; let go = running; lock.unlock()
-                guard go, DevNet.isValid(fd) else { return }
+                guard go, LoopbackSocket.isValid(fd) else { return }
                 // Poll with a timeout rather than blocking in `accept()`
                 // indefinitely: on Linux, `stop()` closing `listenFd` from
                 // another thread does NOT wake a thread already blocked in
@@ -93,24 +94,24 @@ import Foundation
                 // leaves this thread — and thus the whole process — alive after
                 // `stop()`. That's what hung `swift test` on exit in CI. The
                 // 300 ms timeout means we re-check `running` promptly and exit.
-                let pr = DevNet.pollReadable(fd, timeoutMs: 300)
+                let pr = LoopbackSocket.pollReadable(fd, timeoutMs: 300)
                 if pr <= 0 { continue } // timeout / error → re-check `running`
-                let client = DevNet.acceptOne(fd)
-                if !DevNet.isValid(client) { continue }
+                let client = LoopbackSocket.acceptOne(fd)
+                if !LoopbackSocket.isValid(client) { continue }
                 Thread.detachNewThread { [self] in handle(client) }
             }
         }
 
-        private func handle(_ fd: DevSocket) {
+        private func handle(_ fd: SocketHandle) {
             var buf = [UInt8](repeating: 0, count: 8192)
-            let n = DevNet.recvInto(fd, &buf)
-            guard n > 0 else { DevNet.closeSocket(fd); return }
+            let n = LoopbackSocket.recvInto(fd, &buf)
+            guard n > 0 else { LoopbackSocket.closeSocket(fd); return }
             let request = String(decoding: buf[0 ..< n], as: UTF8.self)
             // First line: "GET /path HTTP/1.1"
             guard let line = request.split(separator: "\r\n", maxSplits: 1).first
-            else { DevNet.closeSocket(fd); return }
+            else { LoopbackSocket.closeSocket(fd); return }
             let parts = line.split(separator: " ")
-            guard parts.count >= 2 else { DevNet.closeSocket(fd); return }
+            guard parts.count >= 2 else { LoopbackSocket.closeSocket(fd); return }
             let rawPath = String(parts[1])
             let path = String(rawPath.split(separator: "?").first ?? "")
 
@@ -119,12 +120,12 @@ import Foundation
                 return // keep the socket open; the watcher writes to it
             }
             serveFile(path: path, fd: fd)
-            DevNet.closeSocket(fd)
+            LoopbackSocket.closeSocket(fd)
         }
 
         // MARK: - Static files
 
-        private func serveFile(path: String, fd: DevSocket) {
+        private func serveFile(path: String, fd: SocketHandle) {
             let rel = (path == "/" || path.isEmpty) ? entry : String(path.dropFirst())
             // Block path-traversal: the resolved file must stay under root.
             let fileURL = root.appendingPathComponent(rel).standardizedFileURL
@@ -160,7 +161,7 @@ import Foundation
 
         // MARK: - SSE live reload
 
-        private func startSSE(fd: DevSocket) {
+        private func startSSE(fd: SocketHandle) {
             let header = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n" +
                 "Cache-Control: no-cache\r\nConnection: keep-alive\r\n\r\nretry: 1000\n\n"
             writeAll(fd, Array(header.utf8))
@@ -170,11 +171,11 @@ import Foundation
         private func broadcastReload() {
             lock.lock(); let fds = clientFds; lock.unlock()
             let event = Array("event: reload\ndata: 1\n\n".utf8)
-            var dead: [DevSocket] = []
+            var dead: [SocketHandle] = []
             for fd in fds where !writeAll(fd, event) { dead.append(fd) }
             if !dead.isEmpty {
                 lock.lock(); clientFds.removeAll { dead.contains($0) }; lock.unlock()
-                for fd in dead { DevNet.closeSocket(fd) }
+                for fd in dead { LoopbackSocket.closeSocket(fd) }
             }
         }
 
@@ -212,8 +213,8 @@ import Foundation
         // MARK: - Helpers
 
         @discardableResult
-        private func writeAll(_ fd: DevSocket, _ bytes: [UInt8]) -> Bool {
-            DevNet.sendAll(fd, bytes, offset: 0, count: bytes.count)
+        private func writeAll(_ fd: SocketHandle, _ bytes: [UInt8]) -> Bool {
+            LoopbackSocket.sendAll(fd, bytes, offset: 0, count: bytes.count)
         }
 
         private static let livereloadPath = "/__swift_pwa_livereload__"

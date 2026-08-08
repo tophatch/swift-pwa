@@ -62,7 +62,10 @@
         static func resolveURL(for content: WindowContent) -> String {
             switch content {
             case let .bundled(_, entry, _):
-                "https://swift-pwa.local/web/\(entry)"
+                // `SWIFT_PWA_INITIAL_ROUTE` can send the first window somewhere
+                // other than the entry; the entry itself stays the SPA-fallback
+                // document.
+                "https://swift-pwa.local/web/\(InitialRoute.take(declared: entry))"
             case let .remote(url):
                 url.absoluteString
             }

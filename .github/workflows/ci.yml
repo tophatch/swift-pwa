@@ -17,6 +17,14 @@ jobs:
       - run: swift --version
       - name: Build
         run: swift build -v
+      # `swift test` only ever builds debug, so a symbol that exists only in a
+      # debug build — anything behind `#if SWIFT_PWA_DRIVER` — can be depended
+      # on by shipping code and still go green. That happened: the agent
+      # surface, which ships in release, used a helper defined in the driver's
+      # own file. ~1 min, and it covers Core + the Apple backend + the CLI,
+      # which is where every driver-gated file lives today.
+      - name: Build (release — catches debug-only gating)
+        run: swift build -c release -v
       - name: Test (Core + WKWebView + CLI)
         run: swift test -v
 

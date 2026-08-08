@@ -12,6 +12,25 @@
       { "mount": "/packs", "from": "data/packs" }
     ]
   },
+  "agent": {
+    "expose": [
+      {
+        "command": "now",
+        "description": "The current time on the device, as an ISO-8601 string.",
+        "read_only": true
+      },
+      {
+        "command": "demo.importDest",
+        "description": "Where an imported content pack would be written.",
+        "read_only": true
+      },
+      {
+        "command": "demo.stageSamplePack",
+        "description": "Write the bundled sample content pack to a temporary file, ready to import.",
+        "idempotent": true
+      }
+    ]
+  },
   "window": {
     "title": "Hello, swift-pwa",
     "width": 1024,

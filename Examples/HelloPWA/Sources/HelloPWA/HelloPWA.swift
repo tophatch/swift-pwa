@@ -33,6 +33,28 @@ func configure(_ ctx: any AppContext) throws {
         NowResult(iso: ISO8601DateFormatter().string(from: Date()))
     })
 
+    // The ceiling on what this app could ever offer an AI agent. It exposes
+    // nothing on its own — the demo's "Agent access" card is where a *user*
+    // turns it on, per session. This list has to match `agent.expose` in
+    // pwa.json, and `swift-pwa build` fails if the two drift apart.
+    ctx.use(AgentPlugin(tools: [
+        AgentTool(
+            command: "now",
+            description: "The current time on the device, as an ISO-8601 string.",
+            readOnly: true
+        ),
+        AgentTool(
+            command: "demo.importDest",
+            description: "Where an imported content pack would be written.",
+            readOnly: true
+        ),
+        AgentTool(
+            command: "demo.stageSamplePack",
+            description: "Write the bundled sample content pack to a temporary file, ready to import.",
+            idempotent: true
+        )
+    ]))
+
     // Tray — only registered where a real surface exists. Android
     // has no system-tray analogue (foreground-service notifications
     // are a heavy and Android-specific UX), so we skip it there

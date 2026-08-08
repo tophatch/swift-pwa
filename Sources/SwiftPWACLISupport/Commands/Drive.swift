@@ -340,7 +340,14 @@ struct DriveInfo: AsyncParsableCommand {
 enum DriveSession {
     /// Get a connected client into `body`'s hands, then clean up — launching
     /// and tearing down the app unless `--attach` says one is already running.
-    static func run(_ options: DriveOptions, _ body: (DriverClient) throws -> Void) async throws {
+    /// `log` is where lifecycle chatter (and the build's own output) goes.
+    /// Defaults to stdout for the CLI; the MCP server passes stderr, because
+    /// its stdout carries the protocol stream and must contain nothing else.
+    static func run(
+        _ options: DriveOptions,
+        log: FileHandle = .standardOutput,
+        _ body: (DriverClient) throws -> Void
+    ) async throws {
         if let port = options.attach {
             guard let token = options.token else {
                 throw ValidationError("--attach needs the --token the app printed at launch.")
@@ -351,7 +358,7 @@ enum DriveSession {
             return
         }
 
-        let app = try await LaunchedApp.build(options)
+        let app = try await LaunchedApp.build(options, log: log)
         defer { app.terminate() }
         let client = try DriverClient(port: app.port, token: app.token)
         try prepare(client, options)
@@ -361,7 +368,7 @@ enum DriveSession {
     /// Both waits are client-side (see `DriverClient.wait`): a page-ready poll
     /// so `drive shot` doesn't photograph a blank window straight after launch,
     /// then the caller's own `--wait` expression.
-    private static func prepare(_ client: DriverClient, _ options: DriveOptions) throws {
+    static func prepare(_ client: DriverClient, _ options: DriveOptions) throws {
         if !options.noPageWait {
             // `location.href !== 'about:blank'` is load-bearing, not belt and
             // braces: a window's content is loaded from a task scheduled onto
@@ -392,7 +399,7 @@ struct LaunchedApp {
     /// Builds and launches as two steps rather than one `swift run`: the app has
     /// to be a direct child so terminating it actually terminates it, and it
     /// keeps compiler output from interleaving with the handshake line.
-    static func build(_ options: DriveOptions) async throws -> LaunchedApp {
+    static func build(_ options: DriveOptions, log: FileHandle = .standardOutput) async throws -> LaunchedApp {
         guard ["debug", "release"].contains(options.configuration) else {
             throw ValidationError("--configuration must be 'debug' or 'release', got '\(options.configuration)'.")
         }
@@ -409,11 +416,12 @@ struct LaunchedApp {
         }
         let exe = await ExecutableNameResolver.resolve(projectRoot: cwd, manifest: pwa)
 
-        print("Building \(exe) (\(options.configuration))…")
+        log.writeQuietly(Data("Building \(exe) (\(options.configuration))…\n".utf8))
         try await Shell.run(
             "/usr/bin/env",
             ["swift", "build", "-c", options.configuration, "--product", exe],
-            cwd: cwd
+            cwd: cwd,
+            stdoutTo: log
         )
         let binPath = try await Shell.capture(
             "/usr/bin/env",

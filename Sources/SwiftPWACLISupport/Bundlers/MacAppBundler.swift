@@ -253,13 +253,19 @@ enum Shell {
     /// apply them with case-insensitive collision detection (`INCLUDE`
     /// wins over a pre-existing `Include`, etc.). Pass `nil` to inherit
     /// the parent env unchanged.
+    /// `stdoutTo` redirects the child's stdout, which normally passes straight
+    /// through to ours. The MCP server needs it: its own stdout carries the
+    /// protocol stream, and a stray line of compiler progress there would
+    /// corrupt the session.
     static func run(
         _ executable: String, _ arguments: [String],
-        cwd: URL? = nil, envOverrides: [String: String]? = nil
+        cwd: URL? = nil, envOverrides: [String: String]? = nil,
+        stdoutTo: FileHandle? = nil
     ) async throws {
         let task = Process()
         task.executableURL = try resolveExecutable(executable)
         task.arguments = arguments
+        if let stdoutTo { task.standardOutput = stdoutTo }
         if let cwd { task.currentDirectoryURL = cwd }
         if let envOverrides {
             task.environment = mergeEnv(envOverrides)

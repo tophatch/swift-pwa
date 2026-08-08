@@ -186,6 +186,46 @@ Coordinates in `window.setSize` / `window.setPosition` are read back rather than
 echoed, because both are best-effort: macOS clamps a window to keep part of it
 on screen, and GTK4 / Wayland refuse to position a window at all.
 
+## Handing the app to an agent — `swift-pwa mcp`
+
+`swift-pwa mcp` serves the same verbs to an agent as **MCP tools** over stdio,
+so it can change a stylesheet, screenshot the webview, and *look at the result*
+without a human present. Today that loop costs a screen takeover and two TCC
+grants, which is why nobody runs it and why UI regressions land unverified.
+
+Register it with an MCP host as a stdio server, with your app's directory as the
+working directory:
+
+```jsonc
+{
+  "mcpServers": {
+    "my-app": { "command": "swift-pwa", "args": ["mcp"], "cwd": "/path/to/my-app" }
+  }
+}
+```
+
+| Tool | |
+| --- | --- |
+| `app_screenshot` | PNG of the webview — `maxWidth` downscales it, which matters because a full-resolution Retina capture is megabytes of base64 in the agent's context |
+| `app_eval` | run JS in the page, get JSON back |
+| `app_click` / `app_type` / `app_press_key` / `app_scroll` | trusted input, where the backend supports it |
+| `app_windows` / `app_capabilities` | geometry, and what this backend can actually do |
+
+The app is built and launched on the **first tool call** — not when the host
+connects, since an MCP host spawns its servers eagerly and a window appearing
+before the agent asked for anything would be a surprise — and torn down when the
+session ends.
+
+Everything the server logs, including build output, goes to **stderr**: stdout
+carries the protocol stream and the spec requires it contain nothing else.
+
+> **This is the dev-only door, not the shipping one.** It inherits the driver's
+> three gates, so it only reaches a debug build you launched yourself. Exposing a
+> *shipped* app's own commands to an agent is a different feature with a
+> different gate — runtime consent from the end user, who is the party actually
+> exposed — and is tracked as Track B in
+> [proposals/swift-pwa-app-driver.md](proposals/swift-pwa-app-driver.md).
+
 ## Wire protocol
 
 You don't need this to use `swift-pwa drive`; it's here so you can write your

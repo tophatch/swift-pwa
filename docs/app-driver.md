@@ -223,8 +223,9 @@ carries the protocol stream and the spec requires it contain nothing else.
 > three gates, so it only reaches a debug build you launched yourself. Exposing a
 > *shipped* app's own commands to an agent is a different feature with a
 > different gate — runtime consent from the end user, who is the party actually
-> exposed — and is tracked as Track B in
-> [proposals/swift-pwa-app-driver.md](proposals/swift-pwa-app-driver.md).
+> exposed — and lives in [agent-tools.md](agent-tools.md), where the developer's
+> half (a `pwa.json` allowlist, checked against the app's real command catalog)
+> has landed and the runtime consent gate is next.
 
 ## Wire protocol
 
@@ -287,6 +288,7 @@ arrive as objects and arrays, and `undefined` arrives as `null`.
 
 - [android-on-device-testing.md](android-on-device-testing.md) — driving the
   page over CDP on Android, which the driver doesn't replace.
+- [agent-tools.md](agent-tools.md) — the shipping counterpart: exposing an app's
+  *own* commands to an agent, which this transport is meant to carry.
 - [proposals/swift-pwa-app-driver.md](proposals/swift-pwa-app-driver.md) — the
-  design, including the agent-callable tool surface (Track B) this transport is
-  meant to carry.
+  design behind both.

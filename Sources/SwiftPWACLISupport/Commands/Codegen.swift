@@ -75,19 +75,9 @@ struct Codegen: AsyncParsableCommand {
 
     private func loadDescriptors() async throws -> [CommandDescriptor] {
         if let catalog {
-            return try Self.decodeCatalog(at: URL(fileURLWithPath: catalog))
+            return try CommandCatalog.decode(at: URL(fileURLWithPath: catalog))
         }
-        return try await dumpCatalogHeadlessly()
-    }
-
-    /// Build the app and run it once with `SWIFT_PWA_DESCRIBE` pointed at a temp
-    /// file, then decode the catalog it wrote.
-    private func dumpCatalogHeadlessly() async throws -> [CommandDescriptor] {
-        guard ["debug", "release"].contains(configuration) else {
-            throw ValidationError("--configuration must be 'debug' or 'release', got '\(configuration)'.")
-        }
-        let fm = FileManager.default
-        let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
+        let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
         let pwa: PWAManifest
         do {
@@ -98,43 +88,6 @@ struct Codegen: AsyncParsableCommand {
                     + "--catalog <json> to skip the build."
             )
         }
-        let exe = await ExecutableNameResolver.resolve(projectRoot: cwd, manifest: pwa)
-
-        let catalogURL = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("swift-pwa-catalog-\(exe).json")
-        try? fm.removeItem(at: catalogURL)
-
-        print("Building \(exe) (\(configuration)) for a headless catalog dump…")
-        // `swift run` builds then runs in one step. The app writes the catalog to
-        // SWIFT_PWA_DESCRIBE and exits before opening a window; build/run output
-        // is inherited so the user sees progress. Nothing we need rides stdout —
-        // the catalog is the file.
-        try await Shell.run(
-            "/usr/bin/env",
-            ["swift", "run", "-c", configuration, exe],
-            cwd: cwd,
-            envOverrides: [HeadlessDescribe.environmentVariable: catalogURL.path]
-        )
-
-        guard fm.fileExists(atPath: catalogURL.path) else {
-            throw ValidationError("""
-            The app ran but didn't write a catalog to \(catalogURL.path).
-            The backend must call `HeadlessDescribe.dumpIfRequested` in `run` — it's built in for the \
-            shipped backends, so this usually means a custom runtime, or the app exited in `configure` \
-            before registration. Pass --catalog <json> to supply the catalog directly.
-            """)
-        }
-        return try Self.decodeCatalog(at: catalogURL)
-    }
-
-    private static func decodeCatalog(at url: URL) throws -> [CommandDescriptor] {
-        guard let data = FileManager.default.contents(atPath: url.path) else {
-            throw ValidationError("Catalog not found: \(url.path)")
-        }
-        do {
-            return try JSONDecoder().decode([CommandDescriptor].self, from: data)
-        } catch {
-            throw ValidationError("Couldn't parse \(url.path) as a [CommandDescriptor] JSON array: \(error)")
-        }
+        return try await CommandCatalog.dump(projectRoot: cwd, manifest: pwa, configuration: configuration)
     }
 }

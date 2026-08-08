@@ -421,14 +421,15 @@ worth that cost; it isn't the v1.
 | 2 | Track A Cut 1 (`eval` + `screenshot` + `window.*`) | build config + env + token, dev-only | **shipped** |
 | 3 | Track A Cut 3 (`swift-pwa mcp` stdio) | same | **shipped** |
 | 4 | Track A Cut 2 (native input, macOS + GTK3) | same | **shipped** |
-| 5 | Track B (app-declared tools, two gates, CLI relay) | dev allowlist + runtime consent | design |
+| 5 | Track B1 (the `pwa.json` ceiling + build-time validation) | none — declares eligibility, exposes nothing | **shipped** |
+| 6 | Track B2/B3 (runtime consent, indicator, CLI relay) | dev allowlist + runtime consent | design |
 
 Track B splits along the same "smallest thing that's actually useful" line the
 Track A cuts did:
 
 | | Deliverable |
 | --- | --- |
-| **B1** | `BridgeSchema` → JSON Schema, the `pwa.json` allowlist, build-time validation against the catalog. No exposure yet — this is the *ceiling* and it's independently testable. |
+| **B1** | `BridgeSchema` → JSON Schema, the `pwa.json` allowlist, build-time validation against the catalog. No exposure yet — this is the *ceiling* and it's independently testable. **Shipped**; see [docs/agent-tools.md](../agent-tools.md). |
 | **B2** | The runtime consent state (off by default, per-session, revocable, token) + the non-suppressible attached indicator, with a `CritterFacts` consent UI as the reference. |
 | **B3** | Serving the allowlist through `swift-pwa mcp --attach`, with annotations mapped onto MCP's hints. |
 

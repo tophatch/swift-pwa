@@ -236,6 +236,7 @@ struct Build: AsyncParsableCommand {
         let prebuildRan = !skipPrebuild
             && (pwa.build?.prebuild?.trimmingCharacters(in: .whitespaces).isEmpty == false)
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
+        try await Self.validateAgentSurface(manifest: pwa, projectRoot: cwd, target: target)
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
@@ -653,6 +654,33 @@ struct Build: AsyncParsableCommand {
                 + "(Windows DirectML / Linux CUDA) — ignoring it for \(target); "
                 + "the CPU ONNX Runtime tier still ships."
         )
+    }
+
+    /// Resolve `pwa.json`'s `agent.expose` allowlist against the app's real
+    /// command catalog, and fail the build if it names something that isn't
+    /// there. See ``PWAManifest/AgentSection``.
+    ///
+    /// The catalog comes from a headless run of the app itself, so this can
+    /// only happen when the built binary runs on the build host — a
+    /// cross-compiled Android / iOS / foreign-desktop artifact can't be asked
+    /// what it registered. Rather than silently skip, say so and point at
+    /// `swift-pwa agent check`, which does the host build on its own.
+    ///
+    /// Uses the release configuration the bundlers build with, so the dump
+    /// warms the same build products instead of adding a second one.
+    static func validateAgentSurface(manifest: PWAManifest, projectRoot: URL, target: BuildTarget) async throws {
+        guard let expose = manifest.agent?.expose, !expose.isEmpty else { return }
+        guard target == .host else {
+            print("""
+            swift-pwa: agent.expose not checked for --target \(target.rawValue) — validating it means running \
+            the app, and this build is cross-compiled. Run `swift-pwa agent check` on a host that can run it.
+            """)
+            return
+        }
+        let catalog = try await CommandCatalog.dump(
+            projectRoot: projectRoot, manifest: manifest, configuration: "release", quiet: true
+        )
+        try AgentCheck.report(AgentPolicy.resolve(manifest.agent, against: catalog), appName: manifest.name)
     }
 
     /// Run `pwa.json`'s `build.prebuild` command (if any) from the project

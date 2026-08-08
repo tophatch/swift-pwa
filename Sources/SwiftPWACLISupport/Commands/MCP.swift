@@ -97,8 +97,8 @@ final class MCPServer {
 
     // MARK: - Dispatch
 
-    private func handle(line: Data) async -> DriverJSON? {
-        guard let request = try? DriverJSON.decode(line) else {
+    private func handle(line: Data) async -> BridgeJSON? {
+        guard let request = try? BridgeJSON.decode(line) else {
             return Self.error(id: .null, code: -32700, message: "parse error")
         }
         let id = request["id"] ?? .null
@@ -133,7 +133,7 @@ final class MCPServer {
         return requested
     }
 
-    private func initializeResult(_ params: DriverJSON?) -> DriverJSON {
+    private func initializeResult(_ params: BridgeJSON?) -> BridgeJSON {
         let version = Self.negotiate(protocolVersion: params?["protocolVersion"]?.stringValue)
         return .object([
             "protocolVersion": .string(version),
@@ -159,7 +159,7 @@ final class MCPServer {
         ])
     }
 
-    private func callTool(id: DriverJSON, params: DriverJSON?) async -> DriverJSON {
+    private func callTool(id: BridgeJSON, params: BridgeJSON?) async -> BridgeJSON {
         guard case let .string(name)? = params?["name"] else {
             return Self.error(id: id, code: -32602, message: "tools/call needs a tool name")
         }
@@ -211,7 +211,7 @@ final class MCPServer {
 
     // MARK: - Wire
 
-    private func send(_ message: DriverJSON) {
+    private func send(_ message: BridgeJSON) {
         guard var data = try? message.encoded() else { return }
         // Messages are newline-delimited and must not contain embedded
         // newlines — so never pretty-print here.
@@ -219,11 +219,11 @@ final class MCPServer {
         FileHandle.standardOutput.writeQuietly(data)
     }
 
-    private static func result(id: DriverJSON, _ value: DriverJSON) -> DriverJSON {
+    private static func result(id: BridgeJSON, _ value: BridgeJSON) -> BridgeJSON {
         .object(["jsonrpc": .string("2.0"), "id": id, "result": value])
     }
 
-    private static func error(id: DriverJSON, code: Int, message: String) -> DriverJSON {
+    private static func error(id: BridgeJSON, code: Int, message: String) -> BridgeJSON {
         .object([
             "jsonrpc": .string("2.0"),
             "id": id,
@@ -238,10 +238,10 @@ struct MCPTool {
     let name: String
     let title: String
     let description: String
-    let inputSchema: DriverJSON
-    let run: @Sendable (DriverClient, DriverJSON, DriveOptions) throws -> [DriverJSON]
+    let inputSchema: BridgeJSON
+    let run: @Sendable (DriverClient, BridgeJSON, DriveOptions) throws -> [BridgeJSON]
 
-    var descriptor: DriverJSON {
+    var descriptor: BridgeJSON {
         .object([
             "name": .string(name),
             "title": .string(title),
@@ -274,7 +274,7 @@ enum MCPTools {
             """)
         ]),
         run: { client, arguments, options in
-            var payload: [String: DriverJSON] = [:]
+            var payload: [String: BridgeJSON] = [:]
             if let window = options.window { payload["window"] = .string(window) }
             let result = try client.invoke("screenshot", payload)
             guard let base64 = result["pngBase64"]?.stringValue,
@@ -309,7 +309,7 @@ enum MCPTools {
             guard let js = arguments["js"]?.stringValue else {
                 throw DriveError.remote(code: "E_ARGS", message: "app_eval needs `js`")
             }
-            var payload: [String: DriverJSON] = ["js": .string(js)]
+            var payload: [String: BridgeJSON] = ["js": .string(js)]
             if let window = options.window { payload["window"] = .string(window) }
             return try [text(client.invoke("eval", payload).prettyPrinted)]
         }
@@ -357,7 +357,7 @@ enum MCPTools {
             var count = 1.0
             if case let .number(value)? = arguments["clickCount"] { count = max(1, value) }
             for phase in ["down", "up"] {
-                var payload: [String: DriverJSON] = [
+                var payload: [String: BridgeJSON] = [
                     "type": .string(phase), "x": .number(point.x), "y": .number(point.y),
                     "clickCount": .number(count)
                 ]
@@ -389,7 +389,7 @@ enum MCPTools {
             if arguments["selector"]?.stringValue != nil {
                 let point = try resolvePoint(client, arguments, options)
                 for phase in ["down", "up"] {
-                    var payload: [String: DriverJSON] = [
+                    var payload: [String: BridgeJSON] = [
                         "type": .string(phase), "x": .number(point.x), "y": .number(point.y)
                     ]
                     if let window = options.window { payload["window"] = .string(window) }
@@ -448,7 +448,7 @@ enum MCPTools {
                 let viewport = try client.viewportSize(window: options.window)
                 point = (viewport.width / 2, viewport.height / 2)
             }
-            var payload: [String: DriverJSON] = [
+            var payload: [String: BridgeJSON] = [
                 "x": .number(point.x), "y": .number(point.y),
                 "deltaX": .number(dx), "deltaY": .number(amount)
             ]
@@ -464,7 +464,7 @@ enum MCPTools {
         _ client: DriverClient, key: String, text: String?, _ options: DriveOptions
     ) throws {
         for phase in ["down", "up"] {
-            var payload: [String: DriverJSON] = ["type": .string(phase), "key": .string(key)]
+            var payload: [String: BridgeJSON] = ["type": .string(phase), "key": .string(key)]
             if let text { payload["text"] = .string(text) }
             if let window = options.window { payload["window"] = .string(window) }
             try client.invoke("input.key", payload)
@@ -472,7 +472,7 @@ enum MCPTools {
     }
 
     private static func resolvePoint(
-        _ client: DriverClient, _ arguments: DriverJSON, _ options: DriveOptions
+        _ client: DriverClient, _ arguments: BridgeJSON, _ options: DriveOptions
     ) throws -> (x: Double, y: Double) {
         if let selector = arguments["selector"]?.stringValue {
             return try client.center(of: selector, window: options.window)
@@ -486,19 +486,19 @@ enum MCPTools {
         return (x, y)
     }
 
-    private static func text(_ value: String) -> DriverJSON {
+    private static func text(_ value: String) -> BridgeJSON {
         .object(["type": .string("text"), "text": .string(value)])
     }
 
-    private static func schema(_ type: String, _ description: String) -> DriverJSON {
+    private static func schema(_ type: String, _ description: String) -> BridgeJSON {
         .object(["type": .string(type), "description": .string(description)])
     }
 
     private static func object(
-        properties: [String: DriverJSON] = [:],
+        properties: [String: BridgeJSON] = [:],
         required: [String] = []
-    ) -> DriverJSON {
-        var schema: [String: DriverJSON] = [
+    ) -> BridgeJSON {
+        var schema: [String: BridgeJSON] = [
             "type": .string("object"),
             "properties": .object(properties)
         ]

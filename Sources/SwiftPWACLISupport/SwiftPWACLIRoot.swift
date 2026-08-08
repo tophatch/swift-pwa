@@ -33,7 +33,7 @@ public struct SwiftPWACLIRoot: AsyncParsableCommand {
         version: SwiftPWAVersion.current,
         subcommands: [
             Init.self, Dev.self, Build.self, Deploy.self, Drive.self, MCP.self, Updater.self, GenerateCI.self,
-            Codegen.self,
+            Codegen.self, Agent.self,
             Doctor.self, SelfUpdate.self
         ],
         defaultSubcommand: nil

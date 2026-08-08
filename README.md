@@ -157,6 +157,12 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 "build": { "postbuild": "./scripts/sign-extra.sh \"$SWIFT_PWA_ARTIFACT\"" }
 ```
 
+**Optional `agent.expose`** — the *ceiling* on what your app may ever offer an AI agent: a reviewable list of your own commands (`book.open`, not "click at 400,300"), each with a one-line description and MCP risk annotations. Off by default — an app that says nothing exposes nothing. It grants nothing on its own; the user still has to turn exposure on at runtime. `swift-pwa build` resolves the list against the app's live command catalog and **fails loud** on a name that doesn't exist, so a typo can't quietly expose nothing and a rename can't quietly un-expose. Run it on its own with `swift-pwa agent check` (`--json` prints the tools as an agent would see them). See [docs/agent-tools.md](docs/agent-tools.md).
+
+```json
+"agent": { "expose": [ { "command": "book.open", "description": "Open a book by id.", "read_only": true } ] }
+```
+
 **Optional `macos.info_plist` / `ios.info_plist`** — arbitrary keys merged into the generated `Info.plist` (after swift-pwa's own, so they override on collision). The escape hatch for anything the schema doesn't model: App Transport Security, usage strings, custom URL schemes. Use the exact Info.plist key names; nested objects/arrays work.
 
 ```json
@@ -338,7 +344,7 @@ swift run swift-pwa deploy --target ios --simulator                  # build →
 
 `pwa.json` is the source of truth — `Info.plist`, `.desktop`, `AppxManifest.xml`, and icon assets all generate from it. Per-target setup (toolchain, codesign, device install) lives under [Platform setup](#platform-setup). If `pwa.json` declares a [`build.prebuild`](#configuring-pwajson) command, every `build` runs it first.
 
-The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md). `swift-pwa codegen` generates a typed TypeScript client for the bridge from the `__bridge.describe` command catalog (typed `invoke` / `subscribe` / `session` call sites; `--check` guards drift in CI). To update the CLI itself, run `swift-pwa self-update`.
+The `swift-pwa updater` subcommand publishes auto-update manifests (`keygen`, `sign`, `manifest`) — see [docs/auto-updates.md](docs/auto-updates.md). `swift-pwa codegen` generates a typed TypeScript client for the bridge from the `__bridge.describe` command catalog (typed `invoke` / `subscribe` / `session` call sites; `--check` guards drift in CI). `swift-pwa agent check` validates the [`agent.expose`](#configuring-pwajson) allowlist against the app's real command catalog — see [docs/agent-tools.md](docs/agent-tools.md). To update the CLI itself, run `swift-pwa self-update`.
 
 ## Roadmap
 

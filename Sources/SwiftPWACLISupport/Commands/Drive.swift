@@ -86,7 +86,7 @@ struct DriveEval: AsyncParsableCommand {
 
     func run() async throws {
         try await DriveSession.run(options) { client in
-            var payload: [String: DriverJSON] = ["js": .string(script)]
+            var payload: [String: BridgeJSON] = ["js": .string(script)]
             if let window = options.window { payload["window"] = .string(window) }
             try print(client.invoke("eval", payload).prettyPrinted)
         }
@@ -110,7 +110,7 @@ struct DriveShot: AsyncParsableCommand {
 
     func run() async throws {
         try await DriveSession.run(options) { client in
-            var payload: [String: DriverJSON] = [:]
+            var payload: [String: BridgeJSON] = [:]
             if let window = options.window { payload["window"] = .string(window) }
             let result = try client.invoke("screenshot", payload)
             guard let base64 = result["pngBase64"]?.stringValue,
@@ -164,7 +164,7 @@ struct DriveClick: AsyncParsableCommand {
         try await DriveSession.run(options) { client in
             let point = try resolvePoint(client)
             for phase in ["down", "up"] {
-                var payload: [String: DriverJSON] = [
+                var payload: [String: BridgeJSON] = [
                     "type": .string(phase),
                     "x": .number(point.x),
                     "y": .number(point.y),
@@ -239,8 +239,8 @@ struct DriveType: AsyncParsableCommand {
         }
     }
 
-    private func pointerPayload(phase: String, point: (x: Double, y: Double)) -> [String: DriverJSON] {
-        var payload: [String: DriverJSON] = [
+    private func pointerPayload(phase: String, point: (x: Double, y: Double)) -> [String: BridgeJSON] {
+        var payload: [String: BridgeJSON] = [
             "type": .string(phase), "x": .number(point.x), "y": .number(point.y)
         ]
         if let window = options.window { payload["window"] = .string(window) }
@@ -249,7 +249,7 @@ struct DriveType: AsyncParsableCommand {
 
     private func press(_ client: DriverClient, key: String, text: String?) throws {
         for phase in ["down", "up"] {
-            var payload: [String: DriverJSON] = ["type": .string(phase), "key": .string(key)]
+            var payload: [String: BridgeJSON] = ["type": .string(phase), "key": .string(key)]
             if let text { payload["text"] = .string(text) }
             if let window = options.window { payload["window"] = .string(window) }
             try client.invoke("input.key", payload)
@@ -290,7 +290,7 @@ struct DriveScroll: AsyncParsableCommand {
                     return (viewport.width / 2, viewport.height / 2)
                 }()
             }
-            var payload: [String: DriverJSON] = [
+            var payload: [String: BridgeJSON] = [
                 "x": .number(point.x), "y": .number(point.y),
                 "deltaX": .number(dx), "deltaY": .number(amount)
             ]

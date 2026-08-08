@@ -4,7 +4,7 @@ import SwiftPWACore
 /// This module has its own `JSONValue` — the `pwa.json` `info_plist`
 /// passthrough — so the bridge's is named explicitly rather than left to
 /// lookup order.
-typealias DriverJSON = SwiftPWACore.JSONValue
+typealias BridgeJSON = SwiftPWACore.JSONValue
 
 #if canImport(Darwin) || canImport(Glibc) || canImport(WinSDK)
 
@@ -39,8 +39,8 @@ typealias DriverJSON = SwiftPWACore.JSONValue
         /// Send one verb and return its result, turning an error response into
         /// a thrown `DriveError` so callers read as straight-line code.
         @discardableResult
-        func invoke(_ cmd: String, _ payload: [String: DriverJSON] = [:]) throws -> DriverJSON {
-            var frame: [String: DriverJSON] = [
+        func invoke(_ cmd: String, _ payload: [String: BridgeJSON] = [:]) throws -> BridgeJSON {
+            var frame: [String: BridgeJSON] = [
                 "id": .number(Double(nextID)),
                 "token": .string(token),
                 "cmd": .string(cmd)
@@ -48,13 +48,13 @@ typealias DriverJSON = SwiftPWACore.JSONValue
             if !payload.isEmpty { frame["payload"] = .object(payload) }
             nextID += 1
 
-            var line = try [UInt8](DriverJSON.object(frame).encoded())
+            var line = try [UInt8](BridgeJSON.object(frame).encoded())
             line.append(UInt8(ascii: "\n"))
             guard LoopbackSocket.sendAll(socket, line, offset: 0, count: line.count) else {
                 throw DriveError.connect("the app closed the control socket")
             }
 
-            let response = try DriverJSON.decode(readLine())
+            let response = try BridgeJSON.decode(readLine())
             if case .bool(true) = response["ok"] {
                 return response["result"] ?? .null
             }
@@ -73,7 +73,7 @@ typealias DriverJSON = SwiftPWACore.JSONValue
             var lastError: String?
             repeat {
                 do {
-                    var payload: [String: DriverJSON] = ["js": .string("!!(\(expression))")]
+                    var payload: [String: BridgeJSON] = ["js": .string("!!(\(expression))")]
                     if let window { payload["window"] = .string(window) }
                     if try invoke("eval", payload).isTruthy { return }
                     lastError = nil
@@ -103,7 +103,7 @@ typealias DriverJSON = SwiftPWACore.JSONValue
             // backslash in it can't break out of the snippet.
             let encoder = JSONEncoder()
             let literal = try String(data: encoder.encode(selector), encoding: .utf8) ?? "\"\""
-            var payload: [String: DriverJSON] = ["js": .string("""
+            var payload: [String: BridgeJSON] = ["js": .string("""
             (() => {
               const el = document.querySelector(\(literal));
               if (!el) return null;
@@ -132,7 +132,7 @@ typealias DriverJSON = SwiftPWACore.JSONValue
 
         /// The viewport's CSS-pixel size, for `--fraction` coordinates.
         func viewportSize(window: String?) throws -> (width: Double, height: Double) {
-            var payload: [String: DriverJSON] = ["js": .string("({w: innerWidth, h: innerHeight})")]
+            var payload: [String: BridgeJSON] = ["js": .string("({w: innerWidth, h: innerHeight})")]
             if let window { payload["window"] = .string(window) }
             let result = try invoke("eval", payload)
             guard case let .number(width)? = result["w"], case let .number(height)? = result["h"] else {
@@ -158,40 +158,43 @@ typealias DriverJSON = SwiftPWACore.JSONValue
         }
     }
 
-    extension SwiftPWACore.JSONValue {
-        subscript(key: String) -> DriverJSON? {
-            guard case let .object(fields) = self else { return nil }
-            return fields[key]
-        }
+#endif
 
-        var stringValue: String? {
-            guard case let .string(value) = self else { return nil }
-            return value
-        }
+/// Outside the platform gate above: the socket client needs Darwin / Glibc /
+/// WinSDK, but reading and printing JSON doesn't, and the agent-surface commands
+/// use these wherever the CLI builds.
+extension SwiftPWACore.JSONValue {
+    subscript(key: String) -> BridgeJSON? {
+        guard case let .object(fields) = self else { return nil }
+        return fields[key]
+    }
 
-        /// JS truthiness, applied to whatever the backend's `eval` handed
-        /// back. Lenient on purpose: a backend that reports a JS `true` as the
-        /// number `1` should still satisfy a `--wait`.
-        var isTruthy: Bool {
-            switch self {
-            case let .bool(value): value
-            case let .number(value): value != 0
-            case let .string(value): !value.isEmpty
-            case let .array(items): !items.isEmpty
-            case .object: true
-            case .null: false
-            }
-        }
+    var stringValue: String? {
+        guard case let .string(value) = self else { return nil }
+        return value
+    }
 
-        /// Pretty JSON for printing a verb's result to a terminal.
-        var prettyPrinted: String {
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-            guard let data = try? encoder.encode(self),
-                  let text = String(data: data, encoding: .utf8)
-            else { return "<unprintable>" }
-            return text
+    /// JS truthiness, applied to whatever the backend's `eval` handed
+    /// back. Lenient on purpose: a backend that reports a JS `true` as the
+    /// number `1` should still satisfy a `--wait`.
+    var isTruthy: Bool {
+        switch self {
+        case let .bool(value): value
+        case let .number(value): value != 0
+        case let .string(value): !value.isEmpty
+        case let .array(items): !items.isEmpty
+        case .object: true
+        case .null: false
         }
     }
 
-#endif
+    /// Pretty JSON for printing a verb's result to a terminal.
+    var prettyPrinted: String {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(self),
+              let text = String(data: data, encoding: .utf8)
+        else { return "<unprintable>" }
+        return text
+    }
+}

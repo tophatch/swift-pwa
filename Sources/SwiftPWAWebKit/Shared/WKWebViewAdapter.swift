@@ -90,7 +90,16 @@
             Task { @MainActor in
                 switch content {
                 case let .bundled(_, entry, _):
-                    let url = URL(string: "pwa://localhost/\(entry)")!
+                    // `SWIFT_PWA_INITIAL_ROUTE` can send the first window
+                    // somewhere other than the entry; the entry itself stays
+                    // the SPA-fallback document.
+                    let path = InitialRoute.take(declared: entry)
+                    guard let url = URL(string: "pwa://localhost/\(path)") else {
+                        FileHandle.standardError.writeQuietly(Data(
+                            "swift-pwa: '\(path)' isn't a loadable bundle path\n".utf8
+                        ))
+                        return
+                    }
                     webView.load(URLRequest(url: url))
                 case let .remote(url):
                     webView.load(URLRequest(url: url))

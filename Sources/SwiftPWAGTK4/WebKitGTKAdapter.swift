@@ -147,7 +147,10 @@
                         .assumingMemoryBound(to: WebKitWebView.self)
                     switch content {
                     case let .bundled(_, entry, _):
-                        let url = "pwa://localhost/\(entry)"
+                        // `SWIFT_PWA_INITIAL_ROUTE` can send the first window
+                        // somewhere other than the entry; the entry itself stays
+                        // the SPA-fallback document.
+                        let url = "pwa://localhost/\(InitialRoute.take(declared: entry))"
                         url.withCString { webkit_web_view_load_uri(webView, $0) }
                     case let .remote(url):
                         url.absoluteString.withCString { webkit_web_view_load_uri(webView, $0) }

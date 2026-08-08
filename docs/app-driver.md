@@ -52,6 +52,22 @@ swift-pwa drive eval "app.state.count" --wait "window.app?.ready" --timeout 60
 `--wait` together. A cold WebKitGTK start under Xvfb on a software renderer can
 take longer than that; raise it rather than assuming a hang.
 
+### Starting on a specific screen
+
+`--route` opens the app's first window at a path inside the bundle rather than
+its declared entry, so a test can land on the screen it's about without
+navigating there by hand — and without the usual hack of patching
+`location.replace(…)` into the built bundle, which mutates the artifact under
+test:
+
+```bash
+swift-pwa drive shot reader.png --route "/doc.html?id=42"
+```
+
+It's a thin wrapper over `SWIFT_PWA_INITIAL_ROUTE`, which works on any launch
+(`SWIFT_PWA_INITIAL_ROUTE=/doc.html?id=42 ./MyApp`) and is useful well outside
+testing. First window only, bundled content only; see the README.
+
 ### Driving an app you launched yourself
 
 For a session of several commands against one app — or to drive an app started

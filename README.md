@@ -177,6 +177,8 @@ swift-pwa dev                      # serves web/ with live reload, launches the 
 
 `swift-pwa dev` serves your `web/` directory itself, injects a live-reload client, and refreshes the app whenever you save a file — no JS framework or external server needed (macOS / Linux / Windows). Already using a bundler with its own hot-reload (Vite, etc.)? Point at it instead: `swift-pwa dev --server http://localhost:5173`. (The generated `App.swift` loads the dev URL when `PWA_DEV_SERVER` is set, falling back to the bundled assets in a real build.)
 
+**Start somewhere other than the front door.** `SWIFT_PWA_INITIAL_ROUTE=/doc.html?id=42` opens the app's first window at that path inside the bundle (query and fragment included), instead of `web.entry` — for reproducing a bug report, demoing mid-flow, or landing a test on the screen it's about. It applies to the first window only, and the declared entry stays the SPA-fallback document, so a router-only route still resolves. `swift-pwa drive --route <path>` sets it for you.
+
 The built-in server binds a **fixed port** (`4321`) so the dev origin is stable across launches — that's what lets OPFS / localStorage / IndexedDB **persist between runs** (an OS-assigned port would mint a fresh origin each launch and wipe storage). Override with `--port <n>`, or `--port 0` for the old ephemeral behavior.
 
 ### Build and run

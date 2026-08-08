@@ -320,6 +320,11 @@
                 // (both the embedded and disk branches consult it below).
                 spaFallbackEnabled = spaFallback
                 spaFallbackDocument = entry
+                // `SWIFT_PWA_INITIAL_ROUTE` can send the first window somewhere
+                // other than the entry. Only the navigation target changes —
+                // `entry` stays the SPA-fallback document and the bundle root's
+                // fallback, which is exactly what a router-only route needs.
+                let route = InitialRoute.take(declared: entry)
                 // Single-file build: the web bundle is an overlay in our own
                 // exe, not a folder on disk. Serve it from memory through the
                 // resource-interception hook (set up in `_onControllerReady`)
@@ -328,7 +333,7 @@
                 // (absent) `directory` is simply ignored.
                 if let embedded = EmbeddedWebAssets.current {
                     embeddedAssets = embedded
-                    let urlString = "https://swift-pwa.local/\(entry)"
+                    let urlString = "https://swift-pwa.local/\(route)"
                     urlString.withCString(encodedAs: UTF16.self) { urlW in
                         swiftpwa_w2_view_navigate(view, urlW)
                     }
@@ -344,7 +349,7 @@
                     rep.map { String(cString: $0) } ?? directory.path
                 }
                 let host = "swift-pwa.local"
-                let urlString = "https://\(host)/\(entry)"
+                let urlString = "https://\(host)/\(route)"
                 folderPath.withCString(encodedAs: UTF16.self) { folder in
                     host.withCString(encodedAs: UTF16.self) { hostW in
                         swiftpwa_w2_view_map_virtual_host(view, hostW, folder, 2)

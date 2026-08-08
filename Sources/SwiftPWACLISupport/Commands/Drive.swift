@@ -57,6 +57,9 @@ struct DriveOptions: ParsableArguments {
     @Option(name: .long, help: "Seconds to wait for the app, the page, and --wait. Default 30.")
     var timeout: Double = 30
 
+    @Option(name: .long, help: "Open the app's first window at this bundle path, e.g. /doc.html?id=42.")
+    var route: String?
+
     @Option(name: .long, help: "Target window id (from `drive windows`). Defaults to the only open window.")
     var window: String?
 
@@ -246,16 +249,30 @@ struct LaunchedApp {
             throw DriveError.launch("built \(exe) but found no executable at \(executable.path)")
         }
 
-        return try launch(executable: executable, cwd: cwd, timeout: options.timeout)
+        return try launch(
+            executable: executable,
+            cwd: cwd,
+            timeout: options.timeout,
+            route: options.route
+        )
     }
 
-    private static func launch(executable: URL, cwd: URL, timeout: TimeInterval) throws -> LaunchedApp {
+    private static func launch(
+        executable: URL,
+        cwd: URL,
+        timeout: TimeInterval,
+        route: String?
+    ) throws -> LaunchedApp {
         let process = Process()
         process.executableURL = executable
         process.currentDirectoryURL = cwd
         var env = ProcessInfo.processInfo.environment
         // 0 = let the OS pick a free port, which it then tells us about.
         env[AppDriver.environmentVariable] = "0"
+        // Land on a specific screen without navigating there by hand — and
+        // without the usual hack of patching `location.replace` into the built
+        // bundle, which mutates the artifact under test.
+        if let route { env[InitialRoute.environmentVariable] = route }
         process.environment = env
 
         let stdout = Pipe()

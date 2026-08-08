@@ -61,14 +61,22 @@ struct AgentCheck: AsyncParsableCommand {
             return
         }
 
-        let descriptors: [CommandDescriptor] = if let catalog {
-            try CommandCatalog.decode(at: URL(fileURLWithPath: catalog))
+        let dump: CommandCatalog.Dump = if let catalog {
+            // A pre-captured catalog carries no compiled surface, so the drift
+            // check is skipped rather than reported as "the app has none".
+            try CommandCatalog.Dump(
+                commands: CommandCatalog.decode(at: URL(fileURLWithPath: catalog)),
+                agentTools: nil
+            )
         } else {
-            try await CommandCatalog.dump(projectRoot: cwd, manifest: pwa, configuration: configuration)
+            try await CommandCatalog.dumpAll(projectRoot: cwd, manifest: pwa, configuration: configuration)
         }
 
-        let resolution = AgentPolicy.resolve(pwa.agent, against: descriptors)
+        let resolution = AgentPolicy.resolve(pwa.agent, against: dump.commands)
         try AgentCheck.report(resolution, appName: pwa.name)
+        if catalog == nil {
+            try AgentCheck.reportDrift(AgentPolicy.drift(declared: pwa.agent, compiled: dump.agentTools))
+        }
 
         if json {
             let tools = BridgeJSON.array(resolution.tools.map(\.descriptor))
@@ -95,9 +103,22 @@ struct AgentCheck: AsyncParsableCommand {
         """)
     }
 
+    /// Fail when the reviewable declaration and the compiled surface disagree.
+    static func reportDrift(_ problems: [String]) throws {
+        guard !problems.isEmpty else { return }
+        throw ValidationError("""
+        pwa.json's agent.expose and the app's compiled AgentPlugin disagree:
+
+        \(problems.map { "  • \($0)" }.joined(separator: "\n"))
+
+        pwa.json is the copy a reviewer reads; the compiled list is the one the runtime enforces. They \
+        have to say the same thing.
+        """)
+    }
+
     /// The same risk breakdown an app's consent sheet should show the user, so
     /// the developer sees at build time what they'll be asking people to allow.
-    private static func summary(of tools: [AgentTool]) -> String {
+    private static func summary(of tools: [ResolvedAgentTool]) -> String {
         var readOnly = 0
         var destructive = 0
         for tool in tools {

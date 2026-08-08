@@ -2,7 +2,7 @@ import Foundation
 import SwiftPWACore
 
 /// One of the app's own commands, resolved into the tool an agent would see.
-struct AgentTool: Equatable {
+struct ResolvedAgentTool: Equatable {
     /// The name the agent calls (`book.open` → `book_open`).
     let name: String
     /// The bridge command it maps onto.
@@ -39,7 +39,7 @@ enum AgentPolicy {
     struct Resolution: Equatable {
         /// The tools an agent would be offered, in declaration order. Empty
         /// whenever `errors` isn't — a partial surface is not a safe one.
-        var tools: [AgentTool]
+        var tools: [ResolvedAgentTool]
         /// Reasons the build should stop.
         var errors: [String]
         /// Things worth a second look that don't stop the build.
@@ -71,7 +71,11 @@ enum AgentPolicy {
     /// any other command and this can't see through it. It stops the careless
     /// case and makes intent explicit: doing the wrong thing takes deliberate
     /// code, not one string in a JSON file.
-    private static let forbiddenPrefixes = ["secrets."]
+    ///
+    /// `agent.*` is the other one, for a plainer reason: a tool that could call
+    /// `agent.enable` would be able to widen its own access, which makes the
+    /// user's gate decorative.
+    private static let forbiddenPrefixes = ["secrets.", "agent."]
 
     /// Built-in system capabilities. Exposing one isn't wrong — it's the
     /// developer's app — but it's rarely what they meant: these are general
@@ -85,7 +89,7 @@ enum AgentPolicy {
         }
         let commands = Dictionary(catalog.map { ($0.name, $0) }, uniquingKeysWith: { first, _ in first })
 
-        var tools: [AgentTool] = []
+        var tools: [ResolvedAgentTool] = []
         var errors: [String] = []
         var warnings: [String] = []
         var seenCommands: Set<String> = []
@@ -188,7 +192,7 @@ enum AgentPolicy {
                 """)
             }
 
-            tools.append(AgentTool(
+            tools.append(ResolvedAgentTool(
                 name: toolName,
                 command: command,
                 description: description,
@@ -200,6 +204,75 @@ enum AgentPolicy {
         // A partial surface is worse than none: the developer would see a build
         // that "worked" and ship an allowlist missing whatever failed.
         return Resolution(tools: errors.isEmpty ? tools : [], errors: errors, warnings: warnings)
+    }
+
+    // MARK: - Drift between the declaration and the binary
+
+    /// Compare `pwa.json`'s declaration against the tool list actually compiled
+    /// into the app (`AgentPlugin(tools:)`), which is what the runtime
+    /// enforces.
+    ///
+    /// Two sources for one fact is normally a smell, and this is the price of
+    /// the split that makes it worth it: `pwa.json` is *reviewable* — someone
+    /// auditing what an app offers reads one JSON block, not a Swift file — and
+    /// the compiled list is *enforceable*, since the runtime can't consult a
+    /// manifest that isn't in the bundle. Drift between them would mean the
+    /// reviewable copy stopped describing reality, so it fails the build.
+    ///
+    /// `nil` for `compiled` means the app installs no `AgentPlugin` at all,
+    /// which is its own error when `pwa.json` declares tools: the developer
+    /// wrote the ceiling and never wired it up.
+    static func drift(declared: PWAManifest.AgentSection?, compiled: [AgentTool]?) -> [String] {
+        let declaredEntries = declared?.expose ?? []
+        guard !declaredEntries.isEmpty || !(compiled ?? []).isEmpty else { return [] }
+
+        guard let compiled else {
+            return ["""
+            pwa.json declares \(declaredEntries.count) command\(declaredEntries.count == 1 ? "" : "s") under \
+            `agent.expose`, but the app installs no AgentPlugin, so nothing is exposable at runtime. Add \
+            `ctx.use(AgentPlugin(tools: [...]))` in configure with the same list.
+            """]
+        }
+
+        var problems: [String] = []
+        let declaredByCommand = Dictionary(
+            declaredEntries.map { ($0.command, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+        let compiledByCommand = Dictionary(
+            compiled.map { ($0.command, $0) }, uniquingKeysWith: { first, _ in first }
+        )
+
+        for command in Set(compiledByCommand.keys).subtracting(declaredByCommand.keys).sorted() {
+            problems.append("""
+            the app compiles in an agent tool for '\(command)', which pwa.json's agent.expose doesn't \
+            declare. Anything the app can offer an agent has to be reviewable in pwa.json.
+            """)
+        }
+        for command in Set(declaredByCommand.keys).subtracting(compiledByCommand.keys).sorted() {
+            problems.append("""
+            pwa.json's agent.expose declares '\(command)', which the app doesn't pass to AgentPlugin — so \
+            it would never actually be offered. Add it to the tools list in configure.
+            """)
+        }
+        for command in Set(declaredByCommand.keys).intersection(compiledByCommand.keys).sorted() {
+            guard let declared = declaredByCommand[command], let built = compiledByCommand[command] else { continue }
+            // The description and the risk annotations are what a user reads
+            // before allowing access, so a mismatch there is exactly the kind
+            // that matters: the reviewed copy would be describing something
+            // else.
+            if declared.description.trimmingCharacters(in: .whitespacesAndNewlines) != built.description {
+                problems.append("'\(command)' is described differently in pwa.json and in the app's AgentPlugin.")
+            }
+            if declared.readOnly != built.readOnly || declared.destructive != built.destructive
+                || declared.idempotent != built.idempotent || declared.openWorld != built.openWorld
+            {
+                problems.append("'\(command)' carries different risk annotations in pwa.json and in the app.")
+            }
+            if declared.toolName != built.toolName {
+                problems.append("'\(command)' is named differently for the agent in pwa.json and in the app.")
+            }
+        }
+        return problems
     }
 
     // MARK: - Tool naming

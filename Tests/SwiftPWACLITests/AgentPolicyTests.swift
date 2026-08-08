@@ -270,6 +270,78 @@ struct AgentPolicyTests {
         )
     }
 
+    // MARK: - Drift between pwa.json and the compiled surface
+
+    @Test("a matching declaration and binary is not drift")
+    func noDriftWhenTheyAgree() {
+        let section = Self.section(Self.expose("book.open", description: "Open a book.", readOnly: true))
+        let compiled = [AgentTool(command: "book.open", description: "Open a book.", readOnly: true)]
+        #expect(AgentPolicy.drift(declared: section, compiled: compiled).isEmpty)
+    }
+
+    @Test("declaring a surface but never installing the plugin fails")
+    func declaredButNotWiredUp() {
+        let problems = AgentPolicy.drift(declared: Self.section(Self.expose("book.open")), compiled: nil)
+        #expect(problems.count == 1)
+        #expect(problems[0].contains("installs no AgentPlugin"))
+    }
+
+    @Test("a tool compiled in but not declared fails — pwa.json must stay reviewable")
+    func compiledButNotDeclared() {
+        let problems = AgentPolicy.drift(
+            declared: Self.section(Self.expose("book.open")),
+            compiled: [
+                AgentTool(command: "book.open", description: "Does a thing."),
+                AgentTool(command: "book.delete", description: "Deletes.")
+            ]
+        )
+        #expect(problems.contains { $0.contains("book.delete") && $0.contains("doesn't declare") })
+    }
+
+    @Test("a declared tool the app never passes to AgentPlugin fails")
+    func declaredButNotCompiled() {
+        let problems = AgentPolicy.drift(
+            declared: Self.section(Self.expose("book.open"), Self.expose("book.delete")),
+            compiled: [AgentTool(command: "book.open", description: "Does a thing.")]
+        )
+        #expect(problems.contains { $0.contains("book.delete") && $0.contains("never actually be offered") })
+    }
+
+    @Test("a description that differs between the two fails")
+    func descriptionDrift() {
+        let problems = AgentPolicy.drift(
+            declared: Self.section(Self.expose("book.open", description: "Open a book.")),
+            compiled: [AgentTool(command: "book.open", description: "Open anything at all.")]
+        )
+        // The description is what a user reads before allowing access, so the
+        // reviewed copy describing something else is exactly the bad case.
+        #expect(problems.contains { $0.contains("described differently") })
+    }
+
+    @Test("risk annotations that differ between the two fail")
+    func annotationDrift() {
+        let problems = AgentPolicy.drift(
+            declared: Self.section(Self.expose("book.delete", destructive: true)),
+            compiled: [AgentTool(command: "book.delete", description: "Does a thing.", readOnly: true)]
+        )
+        #expect(problems.contains { $0.contains("different risk annotations") })
+    }
+
+    @Test("neither side declaring anything is fine")
+    func noSurfaceAtAll() {
+        #expect(AgentPolicy.drift(declared: nil, compiled: nil).isEmpty)
+        #expect(AgentPolicy.drift(declared: nil, compiled: []).isEmpty)
+    }
+
+    @Test("the agent namespace can't be exposed — it would widen its own access")
+    func agentNamespaceIsForbidden() {
+        let resolution = AgentPolicy.resolve(Self.section(Self.expose("agent.enable")), against: [
+            CommandDescriptor(name: "agent.enable", kind: .unary, args: .void, result: .void)
+        ])
+        #expect(resolution.tools.isEmpty)
+        #expect(resolution.errors.contains { $0.contains("agent.") })
+    }
+
     // MARK: - Manifest decoding
 
     @Test("the section round-trips through pwa.json's snake_case keys")

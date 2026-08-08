@@ -25,6 +25,11 @@ public enum HeadlessDescribe {
     /// convention. Unset (the normal case) ⇒ ``dumpIfRequested(_:)`` is a no-op.
     public static let environmentVariable = "SWIFT_PWA_DESCRIBE"
 
+    /// Appended to the requested path for the compiled `AgentPlugin` tool list,
+    /// written only when the app installs one. `swift-pwa build` reads it to
+    /// check the binary's agent surface against `pwa.json`'s declaration.
+    public static let agentCatalogSuffix = ".agent.json"
+
     /// The requested output path, or `nil` when no dump was requested. Apps can
     /// read this in `configure` to skip side-effectful work during codegen.
     public static var requestedPath: String? {
@@ -71,6 +76,19 @@ public enum HeadlessDescribe {
             fail("couldn't write catalog to \(path): \(error)")
         }
 
+        // The compiled agent surface goes to a sibling path rather than into
+        // the catalog: the catalog's shape is `__bridge.describe`'s and is
+        // consumed by pre-captured files and generated clients, so widening it
+        // would break readers for something only the build cares about.
+        if let agent = context.installedAgentTools {
+            do {
+                let data = try encoder.encode(agent)
+                try data.write(to: URL(fileURLWithPath: path + agentCatalogSuffix))
+            } catch {
+                fail("couldn't write the agent surface to \(path + agentCatalogSuffix): \(error)")
+            }
+        }
+
         // Success. Never fall through to the UI loop.
         exit(0)
     }
@@ -104,6 +122,12 @@ public final class HeadlessAppContext: AppContext {
     public private(set) var windows: [WindowID: any Window] = [:]
     private var installedPlugins: Set<String> = []
 
+    /// The tool list of an installed ``AgentPlugin``, or `nil` if the app
+    /// installs none. Captured during `use` rather than read back off the
+    /// registry, because the registry holds command *shapes* and the agent
+    /// surface is data.
+    public private(set) var installedAgentTools: [AgentTool]?
+
     public init() {
         use(WindowPlugin())
         use(PlatformInfoPlugin())
@@ -123,6 +147,9 @@ public final class HeadlessAppContext: AppContext {
     public func use(_ plugin: any Plugin) {
         let name = type(of: plugin).pluginName
         guard installedPlugins.insert(name).inserted else { return }
+        if let agent = plugin as? AgentPlugin {
+            installedAgentTools = agent.agentSurface.tools
+        }
         plugin.register(into: registry, app: self)
     }
 

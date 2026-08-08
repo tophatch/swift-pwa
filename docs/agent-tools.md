@@ -11,10 +11,10 @@ development tool for driving *any* build from the outside and is compiled out
 of release builds. What's described here ships in release binaries, so it's
 gated much more carefully.
 
-> **Status: the ceiling only.** Today `pwa.json` declares which commands are
-> *eligible* and `swift-pwa build` checks that declaration against reality.
-> Nothing is exposed to anything yet — the runtime consent gate and the MCP
-> server that serves these tools are the next two cuts. See
+> **Status: both gates work; the MCP relay is the last cut.** An app can
+> declare its ceiling, a user can turn access on, and a client can speak the
+> control protocol below to list and call tools. What's still to come is
+> `swift-pwa mcp --attach` translating that into MCP for an agent host. See
 > [docs/proposals/swift-pwa-app-driver.md](proposals/swift-pwa-app-driver.md).
 
 ## Two gates, two owners
@@ -167,15 +167,73 @@ TypeScript output is the same information in a different grammar. Worth knowing:
   type, but an agent that sends `1.5` for an `Int` would otherwise only find
   out at the decoder.
 
+## The runtime gate
+
+The declared list is compiled in with `AgentPlugin`, which is what the runtime
+enforces — a manifest isn't reachable from inside a shipped bundle, and a
+reviewer shouldn't have to read Swift. The two are checked against each other
+at build time, so they can't drift apart:
+
+```swift
+ctx.use(AgentPlugin(tools: [
+    AgentTool(command: "book.open", description: "Open a book by id.", readOnly: true)
+]))
+```
+
+That still exposes nothing. `AgentPlugin` registers four commands for the app's
+*own* page to drive a consent UI with:
+
+| Command | |
+| --- | --- |
+| `agent.status` | current state, including the declared tools and their risk annotations — what a consent sheet is built from |
+| `agent.enable` | user says yes: binds a loopback port, mints a token, returns both |
+| `agent.disable` | user says no: closes the listener **and drops a connected client** |
+| `agent.state` | a subscription, so the UI updates when a client attaches or drops |
+
+The properties that matter:
+
+- **Off at launch, always.** No configuration key makes an app exposed from
+  startup; something has to call `enable()`.
+- **Per session.** Nothing is persisted. A user who allowed an agent once
+  hasn't allowed it forever.
+- **Revocation reaches a connected client**, not just the next one. Someone
+  turning access off means now.
+- **A fresh token per enable**, so one written down doesn't outlive its session.
+- **One client at a time.** A second connection waits in the accept backlog
+  until the first disconnects.
+
+`agent.*` is itself a refused prefix in `agent.expose` — a tool that could call
+`agent.enable` would widen its own access, which makes the user's gate
+decorative.
+
+### The control protocol
+
+Newline-delimited JSON on `127.0.0.1`, one request per line. Every frame
+carries the token from `agent.enable`.
+
+```text
+→ {"id":1,"token":"…","cmd":"describe"}
+← {"id":1,"ok":true,"result":{"protocolVersion":1,"tools":[
+    {"name":"book_open","command":"book.open","description":"…",
+     "args":{…BridgeSchema…},"annotations":{"readOnlyHint":true}}]}}
+
+→ {"id":2,"token":"…","cmd":"call","payload":{"name":"book_open","arguments":{"id":"7"}}}
+← {"id":2,"ok":true,"result":{…}}
+```
+
+`describe` returns each tool's arguments as a `BridgeSchema` rather than JSON
+Schema: the lowering is a pure function the CLI owns, so fixing a
+schema-mapping bug doesn't need an app rebuild.
+
+**The allowlist is enforced in the app**, not in the relay — a relay is an
+ordinary local process and can't be trusted to filter on the runtime's behalf.
+Calls are looked up by *tool* name; passing a raw command name that was never
+declared is refused with `E_AGENT_NOT_ALLOWED` either way.
+
 ## What's next
 
-- **Runtime consent** — the user-facing gate: off by default, per session,
-  revocable, with an attached-indicator the app can't suppress. The consent UI
-  belongs to the app (a swift-pwa-drawn dialog would look foreign across five
-  platforms); swift-pwa owns the state and the indicator.
-- **Serving the tools** — over `swift-pwa mcp --attach`, which is already a
-  stdio↔loopback relay, so no shipped app needs to stand up its own HTTP
-  server.
+**Serving the tools** over `swift-pwa mcp --attach`, which is already a
+stdio↔loopback relay, so no shipped app needs to stand up its own HTTP server.
 
 Consent can't be *enforced* — the app is native code, and a developer who wants
 to skip asking will. The design goal is narrower and achievable: make the

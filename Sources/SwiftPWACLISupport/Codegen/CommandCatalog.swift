@@ -17,12 +17,30 @@ enum CommandCatalog {
     /// named commands get captured), so it must be pure up to registration —
     /// `createWindow` is inert, but other side effects still fire. Apps guard
     /// such work with `HeadlessDescribe.isDumping`.
+    /// A headless dump: the command catalog, plus the agent tool list the app
+    /// compiled in (`nil` when it installs no `AgentPlugin`).
+    struct Dump {
+        let commands: [CommandDescriptor]
+        let agentTools: [AgentTool]?
+    }
+
     static func dump(
         projectRoot: URL,
         manifest: PWAManifest,
         configuration: String = "debug",
         quiet: Bool = false
     ) async throws -> [CommandDescriptor] {
+        try await dumpAll(
+            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: quiet
+        ).commands
+    }
+
+    static func dumpAll(
+        projectRoot: URL,
+        manifest: PWAManifest,
+        configuration: String = "debug",
+        quiet: Bool = false
+    ) async throws -> Dump {
         guard ["debug", "release"].contains(configuration) else {
             throw ValidationError("--configuration must be 'debug' or 'release', got '\(configuration)'.")
         }
@@ -31,6 +49,9 @@ enum CommandCatalog {
         let catalogURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("swift-pwa-catalog-\(exe).json")
         try? fm.removeItem(at: catalogURL)
+        // Stale sidecar from a previous run would otherwise read as "the app
+        // still compiles in an agent surface" after one was removed.
+        try? fm.removeItem(at: URL(fileURLWithPath: catalogURL.path + HeadlessDescribe.agentCatalogSuffix))
 
         if !quiet {
             print("Building \(exe) (\(configuration)) for a headless catalog dump…")
@@ -54,7 +75,11 @@ enum CommandCatalog {
             before registration.
             """)
         }
-        return try decode(at: catalogURL)
+        let agentURL = URL(fileURLWithPath: catalogURL.path + HeadlessDescribe.agentCatalogSuffix)
+        let agentTools: [AgentTool]? = fm.contents(atPath: agentURL.path).flatMap {
+            try? JSONDecoder().decode([AgentTool].self, from: $0)
+        }
+        return try Dump(commands: decode(at: catalogURL), agentTools: agentTools)
     }
 
     static func decode(at url: URL) throws -> [CommandDescriptor] {

@@ -677,10 +677,11 @@ struct Build: AsyncParsableCommand {
             """)
             return
         }
-        let catalog = try await CommandCatalog.dump(
+        let dump = try await CommandCatalog.dumpAll(
             projectRoot: projectRoot, manifest: manifest, configuration: "release", quiet: true
         )
-        try AgentCheck.report(AgentPolicy.resolve(manifest.agent, against: catalog), appName: manifest.name)
+        try AgentCheck.report(AgentPolicy.resolve(manifest.agent, against: dump.commands), appName: manifest.name)
+        try AgentCheck.reportDrift(AgentPolicy.drift(declared: manifest.agent, compiled: dump.agentTools))
     }
 
     /// Run `pwa.json`'s `build.prebuild` command (if any) from the project

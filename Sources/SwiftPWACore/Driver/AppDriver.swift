@@ -88,15 +88,12 @@ public enum AppDriver {
 
 #if SWIFT_PWA_DRIVER
 
-    /// The accept loop behind ``AppDriver``. Newline-delimited JSON over
-    /// loopback TCP, **one client at a time** — a driver is a single supervising
-    /// process, and serialising also means two clients can't interleave frames
-    /// that move the same window.
+    /// The driver's binding of ``LoopbackServer``: mint a token, wrap a
+    /// ``DriverSession``, listen. The socket mechanics live in
+    /// `LoopbackServer`, shared with the agent surface.
     ///
-    /// Loopback TCP rather than a Unix socket because ``LoopbackSocket`` is
-    /// already the cross-platform BSD/Winsock abstraction (written for
-    /// `swift-pwa dev`, which runs the same socket in the opposite direction),
-    /// and it keeps AF_UNIX-on-Windows out of the picture entirely.
+    /// The driver never calls `stop()` — it lives for the process, since the
+    /// env var that switched it on can't be un-set from outside.
     enum DriverServer {
         struct Started {
             let port: UInt16
@@ -104,120 +101,12 @@ public enum AppDriver {
         }
 
         static func start(context: any AppContext, backend: String, port: UInt16) throws -> Started {
-            LoopbackSocket.startup() // Winsock init; no-op on POSIX
-
-            let listener = LoopbackSocket.makeStreamSocket()
-            guard LoopbackSocket.isValid(listener) else {
-                throw DriverServerError.socket("socket() failed")
-            }
-            LoopbackSocket.setReuseAddr(listener)
-
-            guard LoopbackSocket.bindLoopback(listener, port: port) else {
-                LoopbackSocket.closeSocket(listener)
-                throw DriverServerError.socket("couldn't bind 127.0.0.1:\(port)")
-            }
-            guard LoopbackSocket.startListening(listener, backlog: 4) else {
-                LoopbackSocket.closeSocket(listener)
-                throw DriverServerError.socket("listen() failed")
-            }
-
-            let token = makeToken()
+            let token = LoopbackServer.makeToken()
             let session = DriverSession(context: context, token: token, backend: backend)
-            let bound = LoopbackSocket.boundPort(listener)
-
-            // A dedicated OS thread, not a cooperative-pool task: the loop
-            // blocks in `poll`/`accept`, which would starve a pool thread. It's
-            // also the reason `blocking(_:)` below is allowed to park — this
-            // thread is neither the UI thread nor a cooperative one.
-            Thread.detachNewThread {
-                acceptLoop(listener: listener, session: session)
+            let server = try LoopbackServer.start(port: port) { line in
+                await session.handle(line: line)
             }
-
-            return Started(port: bound, token: token)
-        }
-
-        private static func acceptLoop(listener: SocketHandle, session: DriverSession) {
-            while true {
-                // Poll rather than block in `accept` so the thread isn't
-                // permanently unkillable if the app tears down around it.
-                let ready = LoopbackSocket.pollReadable(listener, timeoutMs: 500)
-                if ready < 0 { break }
-                if ready == 0 { continue }
-
-                let client = LoopbackSocket.acceptOne(listener)
-                guard LoopbackSocket.isValid(client) else { continue }
-                serve(client: client, session: session)
-                LoopbackSocket.closeSocket(client)
-            }
-            LoopbackSocket.closeSocket(listener)
-        }
-
-        /// Read newline-delimited requests off one connection until the peer
-        /// closes. A response can be large — a full-window PNG arrives
-        /// base64'd — so the write side loops over short writes.
-        private static func serve(client: SocketHandle, session: DriverSession) {
-            var pending = [UInt8]()
-            var buffer = [UInt8](repeating: 0, count: 64 * 1024)
-
-            while true {
-                let n = LoopbackSocket.recvInto(client, &buffer)
-                guard n > 0 else { return } // 0 = peer closed, < 0 = error
-                pending.append(contentsOf: buffer[0 ..< n])
-
-                while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
-                    let line = Array(pending[pending.startIndex ..< newline])
-                    pending.removeSubrange(pending.startIndex ... newline)
-                    guard !line.isEmpty else { continue }
-
-                    let response = blocking { await session.handle(line: Data(line)) }
-                    var out = [UInt8](response)
-                    out.append(UInt8(ascii: "\n"))
-                    guard LoopbackSocket.sendAll(client, out, offset: 0, count: out.count) else { return }
-                }
-            }
-        }
-
-        /// Run an async body from this blocking thread and wait for it.
-        ///
-        /// Parking a thread on a semaphore is normally a deadlock risk, but this
-        /// one is dedicated to the accept loop: it is not the UI thread and not
-        /// a cooperative-pool thread, so nothing the `Task` needs is waiting
-        /// behind it.
-        private static func blocking<T: Sendable>(_ body: @escaping @Sendable () async -> T) -> T {
-            let box = ResultBox<T>()
-            let semaphore = DispatchSemaphore(value: 0)
-            Task {
-                box.value = await body()
-                semaphore.signal()
-            }
-            semaphore.wait()
-            return box.value!
-        }
-
-        /// 128 bits of `SystemRandomNumberGenerator`, hex-encoded. Enough that
-        /// another local process can't guess its way onto the socket in the
-        /// lifetime of a debug session.
-        private static func makeToken() -> String {
-            var rng = SystemRandomNumberGenerator()
-            return (0 ..< 2)
-                .map { _ in String(format: "%016llx", UInt64.random(in: .min ... .max, using: &rng)) }
-                .joined()
-        }
-    }
-
-    /// Box so ``DriverServer/blocking(_:)`` can carry a value out of a `Task`.
-    /// Unchecked because the semaphore, not the type, orders the two accesses.
-    private final class ResultBox<T>: @unchecked Sendable {
-        var value: T?
-    }
-
-    enum DriverServerError: Error, CustomStringConvertible {
-        case socket(String)
-
-        var description: String {
-            switch self {
-            case let .socket(message): message
-            }
+            return Started(port: server.port, token: token)
         }
     }
 

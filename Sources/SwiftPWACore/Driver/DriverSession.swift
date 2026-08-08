@@ -87,6 +87,9 @@
             case "screenshot": try await screenshot(request.payload)
             case "window.setSize": try await setSize(request.payload)
             case "window.setPosition": try await setPosition(request.payload)
+            case "input.pointer": try await input(request.payload, .pointer)
+            case "input.key": try await input(request.payload, .key)
+            case "input.wheel": try await input(request.payload, .wheel)
             default:
                 throw DriverError.unknownCommand(request.cmd)
             }
@@ -99,15 +102,21 @@
         private func capabilities() async -> JSONValue {
             let verbs: [JSONValue] = [
                 "capabilities", "window.list", "eval",
-                "screenshot", "window.setSize", "window.setPosition"
+                "screenshot", "window.setSize", "window.setPosition",
+                "input.pointer", "input.key", "input.wheel"
             ].map { .string($0) }
 
             let context = context
-            let probe: (count: Int, snapshot: Bool?) = await MainThread.run {
-                // Snapshot support is a property of the webview, so read it off
-                // a live one. With no windows open there is nothing to ask.
+            let probe: (count: Int, snapshot: Bool?, input: InputCapabilities?) = await MainThread.run {
+                // Snapshot and input support are properties of the webview, so
+                // read them off a live one. With no windows open there is
+                // nothing to ask, and `null` says so rather than guessing.
                 let first = context.windows.sorted { $0.key.raw < $1.key.raw }.first?.value
-                return (context.windows.count, first?.webView.supportsSnapshot)
+                return (
+                    context.windows.count,
+                    first?.webView.supportsSnapshot,
+                    first?.webView.inputCapabilities
+                )
             }
 
             return .object([
@@ -115,10 +124,23 @@
                 "backend": .string(backend),
                 "verbs": .array(verbs),
                 "screenshot": probe.snapshot.map { JSONValue.bool($0) } ?? .null,
-                // Cut 1 ships no native input synthesis on any backend; drive
-                // the DOM through `eval` in the meantime.
-                "input": .bool(false),
+                "input": probe.input.map(Self.describe) ?? .null,
                 "windows": .number(Double(probe.count))
+            ])
+        }
+
+        /// Structured rather than a bool: "can click" and "can deliver a stylus
+        /// event with pressure and tilt" are different questions, and a client
+        /// that can't tell them apart writes a stylus test that silently runs as
+        /// a mouse click.
+        private static func describe(_ input: InputCapabilities) -> JSONValue {
+            .object([
+                "pointer": .bool(input.pointer),
+                "key": .bool(input.key),
+                "wheel": .bool(input.wheel),
+                "pointerTypes": .array(input.pointerTypes.map { .string($0.rawValue) }),
+                "pressure": .bool(input.pressure),
+                "tilt": .bool(input.tilt)
             ])
         }
 
@@ -205,6 +227,157 @@
                 let actual = window.position()
                 return .object(["x": .number(actual.x), "y": .number(actual.y)])
             }
+        }
+
+        // MARK: - Input
+
+        private enum InputKind { case pointer, key, wheel }
+
+        /// Decode one `input.*` frame and hand it to the backend.
+        ///
+        /// Coordinates arrive as window-local CSS pixels, which is the page's
+        /// own space — the client does any fraction-of-viewport arithmetic
+        /// before it gets here, so the runtime never has to know about device
+        /// pixel ratios or where the window happens to be.
+        ///
+        /// Anything the backend can't genuinely express is **refused**, not
+        /// quietly downgraded: a stylus test that ran as a mouse click would
+        /// pass while proving nothing about the stylus path.
+        private func input(_ payload: JSONValue?, _ kind: InputKind) async throws -> JSONValue {
+            let webView = try await resolveWebView(payload)
+            let capabilities = webView.inputCapabilities
+            guard capabilities.supportsAnyInput else {
+                throw DriverError.unsupported(
+                    "synthetic input isn't implemented on the \(backend) backend — "
+                        + "dispatch DOM events through `eval` instead"
+                )
+            }
+            let modifiers = InputModifiers(names: payload?["modifiers"]?.stringArray ?? [])
+
+            let event: SyntheticInput = switch kind {
+            case .pointer:
+                try .pointer(Self.decodePointer(payload, modifiers: modifiers, capabilities: capabilities))
+            case .key:
+                try .key(Self.decodeKey(payload, modifiers: modifiers, capabilities: capabilities))
+            case .wheel:
+                try .wheel(Self.decodeWheel(payload, modifiers: modifiers, capabilities: capabilities))
+            }
+            try await webView.send(event)
+            return .null
+        }
+
+        private static func decodePointer(
+            _ payload: JSONValue?,
+            modifiers: InputModifiers,
+            capabilities: InputCapabilities
+        ) throws -> PointerInput {
+            guard capabilities.pointer else {
+                throw DriverError.unsupported("this backend can't synthesize pointer events")
+            }
+            guard case let .string(rawPhase)? = payload?["type"],
+                  let phase = PointerInput.Phase(rawValue: rawPhase)
+            else {
+                throw DriverError.badRequest("input.pointer needs `type`: down, up or move")
+            }
+            guard case let .number(x)? = payload?["x"], case let .number(y)? = payload?["y"] else {
+                throw DriverError.badRequest("input.pointer needs numeric `x` and `y`")
+            }
+
+            var pointerType = PointerType.mouse
+            if case let .string(raw)? = payload?["pointerType"] {
+                guard let parsed = PointerType(rawValue: raw) else {
+                    throw DriverError.badRequest("unknown pointerType '\(raw)' — mouse, pen or touch")
+                }
+                pointerType = parsed
+            }
+            guard capabilities.supports(pointerType) else {
+                let available = capabilities.pointerTypes.map(\.rawValue).joined(separator: ", ")
+                throw DriverError.unsupported(
+                    "this backend can't produce a '\(pointerType.rawValue)' pointer — "
+                        + "a page would see '\(available)'. Refusing rather than sending "
+                        + "something that looks like a pass."
+                )
+            }
+
+            var button = PointerButton.left
+            if case let .string(raw)? = payload?["button"] {
+                guard let parsed = PointerButton(rawValue: raw) else {
+                    throw DriverError.badRequest("unknown button '\(raw)'")
+                }
+                button = parsed
+            }
+            var clickCount = 1
+            if case let .number(count)? = payload?["clickCount"] { clickCount = max(1, Int(count)) }
+
+            var pressure: Double?
+            if case let .number(value)? = payload?["pressure"] {
+                guard capabilities.pressure else {
+                    throw DriverError.unsupported("this backend can't carry pointer pressure")
+                }
+                guard (0 ... 1).contains(value) else {
+                    throw DriverError.badRequest("pressure must be between 0 and 1")
+                }
+                pressure = value
+            }
+            var tiltX: Double?
+            var tiltY: Double?
+            if case let .number(value)? = payload?["tiltX"] { tiltX = value }
+            if case let .number(value)? = payload?["tiltY"] { tiltY = value }
+            if tiltX != nil || tiltY != nil {
+                guard capabilities.tilt else {
+                    throw DriverError.unsupported("this backend can't carry stylus tilt")
+                }
+                for tilt in [tiltX, tiltY].compactMap(\.self) where !(-90 ... 90).contains(tilt) {
+                    throw DriverError.badRequest("tilt must be between -90 and 90 degrees")
+                }
+            }
+
+            return PointerInput(
+                phase: phase, x: x, y: y,
+                pointerType: pointerType, button: button, clickCount: clickCount,
+                pressure: pressure, tiltX: tiltX, tiltY: tiltY, modifiers: modifiers
+            )
+        }
+
+        private static func decodeKey(
+            _ payload: JSONValue?,
+            modifiers: InputModifiers,
+            capabilities: InputCapabilities
+        ) throws -> KeyInput {
+            guard capabilities.key else {
+                throw DriverError.unsupported("this backend can't synthesize key events")
+            }
+            guard case let .string(rawPhase)? = payload?["type"],
+                  let phase = KeyInput.Phase(rawValue: rawPhase)
+            else {
+                throw DriverError.badRequest("input.key needs `type`: down or up")
+            }
+            guard case let .string(key)? = payload?["key"], !key.isEmpty else {
+                throw DriverError.badRequest("input.key needs a `key` (a DOM key value like 'a' or 'Enter')")
+            }
+            var code: String?
+            if case let .string(value)? = payload?["code"] { code = value }
+            var text: String?
+            if case let .string(value)? = payload?["text"] { text = value }
+            return KeyInput(phase: phase, key: key, code: code, text: text, modifiers: modifiers)
+        }
+
+        private static func decodeWheel(
+            _ payload: JSONValue?,
+            modifiers: InputModifiers,
+            capabilities: InputCapabilities
+        ) throws -> WheelInput {
+            guard capabilities.wheel else {
+                throw DriverError.unsupported("this backend can't synthesize wheel events")
+            }
+            guard case let .number(x)? = payload?["x"], case let .number(y)? = payload?["y"] else {
+                throw DriverError.badRequest("input.wheel needs numeric `x` and `y`")
+            }
+            var deltaX = 0.0
+            var deltaY = 0.0
+            if case let .number(value)? = payload?["deltaX"] { deltaX = value }
+            if case let .number(value)? = payload?["deltaY"] { deltaY = value }
+            return WheelInput(x: x, y: y, deltaX: deltaX, deltaY: deltaY, modifiers: modifiers)
         }
 
         // MARK: - Helpers
@@ -323,6 +496,14 @@
         subscript(key: String) -> JSONValue? {
             guard case let .object(fields) = self else { return nil }
             return fields[key]
+        }
+
+        /// The string members of an array value; anything else is empty. Used
+        /// for `modifiers`, where a malformed value should mean "no modifiers"
+        /// rather than failing the whole event.
+        var stringArray: [String] {
+            guard case let .array(items) = self else { return [] }
+            return items.compactMap { if case let .string(value) = $0 { value } else { nil } }
         }
     }
 

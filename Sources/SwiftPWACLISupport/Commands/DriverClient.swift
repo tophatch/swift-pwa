@@ -92,6 +92,55 @@ typealias DriverJSON = SwiftPWACore.JSONValue
             )
         }
 
+        /// The centre of the first element matching `selector`, in the same
+        /// window-local CSS pixels the `input.*` verbs take.
+        ///
+        /// Client-side on purpose, like `wait`: it's `getBoundingClientRect`
+        /// arithmetic over `eval`, and putting it in the app would make every
+        /// tweak to "where exactly do we click" an app-binary change.
+        func center(of selector: String, window: String?) throws -> (x: Double, y: Double) {
+            // Encode the selector as a JS string literal so a quote or
+            // backslash in it can't break out of the snippet.
+            let encoder = JSONEncoder()
+            let literal = try String(data: encoder.encode(selector), encoding: .utf8) ?? "\"\""
+            var payload: [String: DriverJSON] = ["js": .string("""
+            (() => {
+              const el = document.querySelector(\(literal));
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              if (!r.width || !r.height) return { empty: true };
+              return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+            })()
+            """)]
+            if let window { payload["window"] = .string(window) }
+            let result = try invoke("eval", payload)
+
+            if case .bool(true) = result["empty"] {
+                throw DriveError.remote(
+                    code: "E_DRIVER_TARGET",
+                    message: "'\(selector)' matched an element with no size — is it hidden?"
+                )
+            }
+            guard case let .number(x)? = result["x"], case let .number(y)? = result["y"] else {
+                throw DriveError.remote(
+                    code: "E_DRIVER_TARGET",
+                    message: "nothing matched '\(selector)'"
+                )
+            }
+            return (x, y)
+        }
+
+        /// The viewport's CSS-pixel size, for `--fraction` coordinates.
+        func viewportSize(window: String?) throws -> (width: Double, height: Double) {
+            var payload: [String: DriverJSON] = ["js": .string("({w: innerWidth, h: innerHeight})")]
+            if let window { payload["window"] = .string(window) }
+            let result = try invoke("eval", payload)
+            guard case let .number(width)? = result["w"], case let .number(height)? = result["h"] else {
+                throw DriveError.remote(code: "E_DRIVER_TARGET", message: "couldn't read the viewport size")
+            }
+            return (width, height)
+        }
+
         private func readLine() throws -> Data {
             var buffer = [UInt8](repeating: 0, count: 64 * 1024)
             while true {

@@ -59,6 +59,21 @@ public protocol PWAWebView: AnyObject, Sendable {
     /// `capabilities` verb has to answer *before* anyone asks for pixels,
     /// and "call it and see" would mean rendering a snapshot to find out.
     var supportsSnapshot: Bool { get }
+
+    /// Deliver a synthetic pointer / key / wheel event into this webview.
+    ///
+    /// Into the app's **own** event queue, never the OS-wide HID tap — see
+    /// ``SyntheticInput`` for why that distinction is the whole point. Backends
+    /// that can't synthesize events leave the default in place, which throws
+    /// `E_UNIMPLEMENTED`; consult ``inputCapabilities`` first.
+    func send(_ input: SyntheticInput) async throws
+
+    /// What ``send(_:)`` can actually express here. Same reasoning as
+    /// ``supportsSnapshot``, but structured: "can click" and "can deliver a
+    /// stylus event with pressure and tilt" are different questions, and a
+    /// stylus test that silently ran as a mouse click would pass while proving
+    /// nothing.
+    var inputCapabilities: InputCapabilities { get }
 }
 
 public extension PWAWebView {
@@ -73,5 +88,16 @@ public extension PWAWebView {
 
     var supportsSnapshot: Bool {
         false
+    }
+
+    func send(_: SyntheticInput) async throws {
+        throw BridgeError(
+            code: BridgeError.unimplemented,
+            message: "this backend can't synthesize input events"
+        )
+    }
+
+    var inputCapabilities: InputCapabilities {
+        .none
     }
 }

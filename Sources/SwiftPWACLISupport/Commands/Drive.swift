@@ -28,11 +28,15 @@ struct Drive: AsyncParsableCommand {
         that). Nothing listens until SWIFT_PWA_DRIVE names a port, and every frame carries a token \
         minted fresh at launch — `drive` handles all three for you.
 
-        Native synthetic input (input.mouse / input.key) is not implemented yet on any backend; \
-        drive the DOM through `eval` in the meantime. `drive info` reports what a given backend \
-        actually supports.
+        Synthetic input goes into the app's own event queue, so the page sees trusted events \
+        without the real cursor moving and without the app needing to be frontmost. Not every \
+        backend can do it — `drive info` reports what the one in front of you actually supports, \
+        and a request it can't honour is refused rather than quietly downgraded.
         """,
-        subcommands: [DriveEval.self, DriveShot.self, DriveWindows.self, DriveInfo.self]
+        subcommands: [
+            DriveEval.self, DriveShot.self, DriveClick.self, DriveType.self,
+            DriveScroll.self, DriveWindows.self, DriveInfo.self
+        ]
     )
 }
 
@@ -117,6 +121,182 @@ struct DriveShot: AsyncParsableCommand {
             let url = URL(fileURLWithPath: output)
             try png.write(to: url)
             print("Wrote \(url.path) (\(png.count) bytes).")
+        }
+    }
+}
+
+struct DriveClick: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "click",
+        abstract: "Click in the page — by CSS selector, viewport fraction, or CSS pixels.",
+        discussion: """
+        The click goes into the app's own event queue, so the page receives a trusted pointer \
+        event, the real cursor never moves, and the window can stay in the background.
+
+        Prefer --selector: it survives a layout change, which a hardcoded coordinate doesn't.
+        """
+    )
+
+    @Argument(help: "x coordinate (CSS pixels, or 0-1 with --fraction). Omit when using --selector.")
+    var x: Double?
+
+    @Argument(help: "y coordinate.")
+    var y: Double?
+
+    @Option(name: .long, help: "Click the centre of the first element matching this CSS selector.")
+    var selector: String?
+
+    @Flag(help: "Treat x and y as fractions of the viewport (0-1) rather than CSS pixels.")
+    var fraction: Bool = false
+
+    @Option(name: .long, help: "Which button: left (default), right, middle, barrel or eraser.")
+    var button: String = "left"
+
+    @Option(name: .long, help: "Click count — 2 for a double-click.")
+    var count: Int = 1
+
+    @Option(name: .long, help: "Pointer type: mouse (default), pen or touch. Refused if the backend can't produce it.")
+    var pointerType: String = "mouse"
+
+    @OptionGroup var options: DriveOptions
+
+    func run() async throws {
+        try await DriveSession.run(options) { client in
+            let point = try resolvePoint(client)
+            for phase in ["down", "up"] {
+                var payload: [String: DriverJSON] = [
+                    "type": .string(phase),
+                    "x": .number(point.x),
+                    "y": .number(point.y),
+                    "button": .string(button),
+                    "clickCount": .number(Double(count)),
+                    "pointerType": .string(pointerType)
+                ]
+                if let window = options.window { payload["window"] = .string(window) }
+                try client.invoke("input.pointer", payload)
+            }
+            print("Clicked at \(Int(point.x)), \(Int(point.y)).")
+        }
+    }
+
+    private func resolvePoint(_ client: DriverClient) throws -> (x: Double, y: Double) {
+        if let selector {
+            return try client.center(of: selector, window: options.window)
+        }
+        guard let x, let y else {
+            throw ValidationError("Give x and y coordinates, or --selector <css>.")
+        }
+        guard fraction else { return (x, y) }
+        let viewport = try client.viewportSize(window: options.window)
+        return (x * viewport.width, y * viewport.height)
+    }
+}
+
+struct DriveType: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "type",
+        abstract: "Type text into the focused element, one key event per character.",
+        discussion: """
+        Real key events through the app's event queue, so text lands in whatever has focus and \
+        input handlers fire — unlike setting `.value` from `eval`, which skips both.
+
+        Focus something first (`drive click --selector "input#search"`), or pass --selector here \
+        to click it for you. Use `drive type --key Enter` for a named key.
+        """
+    )
+
+    @Argument(help: "The text to type. Omit when using --key.")
+    var text: String?
+
+    @Option(name: .long, help: "Press a single named key instead (Enter, Tab, Escape, ArrowDown, …).")
+    var key: String?
+
+    @Option(name: .long, help: "Click this element first, so the text goes somewhere.")
+    var selector: String?
+
+    @OptionGroup var options: DriveOptions
+
+    func run() async throws {
+        try await DriveSession.run(options) { client in
+            if let selector {
+                let point = try client.center(of: selector, window: options.window)
+                for phase in ["down", "up"] {
+                    try client.invoke("input.pointer", pointerPayload(phase: phase, point: point))
+                }
+            }
+            if let key {
+                try press(client, key: key, text: nil)
+                print("Pressed \(key).")
+                return
+            }
+            guard let text, !text.isEmpty else {
+                throw ValidationError("Give some text to type, or --key <name>.")
+            }
+            for character in text {
+                try press(client, key: String(character), text: String(character))
+            }
+            print("Typed \(text.count) character\(text.count == 1 ? "" : "s").")
+        }
+    }
+
+    private func pointerPayload(phase: String, point: (x: Double, y: Double)) -> [String: DriverJSON] {
+        var payload: [String: DriverJSON] = [
+            "type": .string(phase), "x": .number(point.x), "y": .number(point.y)
+        ]
+        if let window = options.window { payload["window"] = .string(window) }
+        return payload
+    }
+
+    private func press(_ client: DriverClient, key: String, text: String?) throws {
+        for phase in ["down", "up"] {
+            var payload: [String: DriverJSON] = ["type": .string(phase), "key": .string(key)]
+            if let text { payload["text"] = .string(text) }
+            if let window = options.window { payload["window"] = .string(window) }
+            try client.invoke("input.key", payload)
+        }
+    }
+}
+
+struct DriveScroll: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "scroll",
+        abstract: "Scroll the page with a wheel event.",
+        discussion: """
+        Positive amounts scroll the content down and right — the DOM's sign convention, whatever \
+        the platform's native direction or "natural scrolling" setting.
+        """
+    )
+
+    @Argument(help: "Vertical scroll distance in CSS pixels. Positive scrolls down.")
+    var amount: Double
+
+    @Option(name: .long, help: "Horizontal scroll distance in CSS pixels.")
+    var dx: Double = 0
+
+    @Option(name: .long, help: "Scroll over the centre of this element rather than the viewport's.")
+    var selector: String?
+
+    @OptionGroup var options: DriveOptions
+
+    func run() async throws {
+        try await DriveSession.run(options) { client in
+            let point: (x: Double, y: Double) = if let selector {
+                try client.center(of: selector, window: options.window)
+            } else {
+                // The viewport centre: with nested scrollers, *where* you scroll
+                // decides *what* scrolls.
+                try {
+                    let viewport = try client.viewportSize(window: options.window)
+                    return (viewport.width / 2, viewport.height / 2)
+                }()
+            }
+            var payload: [String: DriverJSON] = [
+                "x": .number(point.x), "y": .number(point.y),
+                "deltaX": .number(dx), "deltaY": .number(amount)
+            ]
+            if let window = options.window { payload["window"] = .string(window) }
+            try client.invoke("input.wheel", payload)
+            print("Scrolled \(Int(amount)) px vertically\(dx == 0 ? "" : ", \(Int(dx)) px horizontally").")
         }
     }
 }

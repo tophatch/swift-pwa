@@ -32,7 +32,16 @@ swift-pwa drive info                          # what this backend supports
 swift-pwa drive eval "document.title"         # JS in the page, JSON out
 swift-pwa drive shot out.png                  # PNG of the webview contents
 swift-pwa drive windows                       # window ids, size, position
+
+swift-pwa drive click --selector "#save"      # a real, trusted click
+swift-pwa drive type "hello" --selector "input#q"
+swift-pwa drive scroll 400                    # positive scrolls down
 ```
+
+Prefer `--selector` over coordinates: it survives a layout change, and it's
+measured and clicked in one round trip so a mid-flight animation can't leave you
+clicking where the button *was*. `drive click 0.9 0.5 --fraction` takes viewport
+fractions when you genuinely mean a position rather than an element.
 
 By default `drive` **owns the app's lifecycle**: it builds the app, launches it
 with the driver env var set, reads the port and per-launch token from the app's
@@ -123,13 +132,37 @@ best-effort `setPosition`.
 | **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Compiles in CI (shim + adapter); **not yet exercised against a running Windows app** |
 | **Android** | — | — | Already scriptable over CDP — see [android-on-device-testing.md](android-on-device-testing.md) |
 
-**Synthetic input (`input.mouse` / `input.key`) is not implemented on any
-backend yet.** Drive the DOM through `eval` in the meantime, which covers a
-large share of UI assertions. When it lands it will cover macOS, GTK3 and
-Android only: WebView2's `SendPointerInput` lives on
-`ICoreWebView2CompositionController` and swift-pwa creates a *windowed*
-controller, and GTK4 removed public event synthesis entirely (`GdkEvent` is
-opaque, `gtk_main_do_event` is gone).
+### Synthetic input
+
+`input.pointer` / `input.key` / `input.wheel` deliver events into the app's
+**own** event queue. The page receives *trusted* events — `isTrusted: true`,
+full hit testing, focus and default actions — which is the thing a DOM event
+dispatched from `eval` can't give you, since those arrive untrusted and skip
+default behaviour. And because nothing goes near the OS-wide HID tap, the real
+cursor never moves and the window needn't be frontmost.
+
+| Backend | pointer / key / wheel | pointer types | pressure | tilt |
+| --- | --- | --- | --- | --- |
+| **macOS** | Yes | `mouse` | — | — |
+| **Windows / GTK4 / iOS** | — | — | — | — |
+
+**Windows and GTK4 can't do this, and not for want of trying.** WebView2's
+`SendPointerInput` lives on `ICoreWebView2CompositionController` while swift-pwa
+creates a *windowed* controller; GTK4 removed public event synthesis entirely
+(`GdkEvent` is opaque, `gtk_main_do_event` is gone). On those backends,
+dispatch DOM events through `eval` — untrusted, but enough for a large share of
+UI assertions.
+
+**A request a backend can't honour is refused, not downgraded.** Ask macOS for
+a `pen` pointer and you get `E_DRIVER_UNSUPPORTED`, because AppKit exposes no
+synthesizable tablet-pointer event and the page would see `pointerType:
+"mouse"` — a stylus test that silently ran as a mouse click would pass while
+proving nothing. Check `drive info` and branch on it rather than assuming.
+
+Stylus and touch are modelled in the contract (`pointerType`, `pressure`,
+`tiltX` / `tiltY`) even though no shipped backend produces them yet — the wire
+format shouldn't have to break later to admit an input path that was always
+going to matter.
 
 ## Screenshots are of the webview, not the screen
 
@@ -172,6 +205,13 @@ line, requests served one connection at a time:
 | `screenshot` | `{window?}` | `{pngBase64, bytes}` |
 | `window.setSize` | `{width, height, window?}` | the size the window actually took |
 | `window.setPosition` | `{x, y, window?}` | the position the window actually took |
+| `input.pointer` | `{type, x, y, pointerType?, button?, clickCount?, pressure?, tiltX?, tiltY?, modifiers?, window?}` | `null` |
+| `input.key` | `{type, key, code?, text?, modifiers?, window?}` | `null` |
+| `input.wheel` | `{x, y, deltaX?, deltaY?, modifiers?, window?}` | `null` |
+
+`type` is `down` / `up` / `move` for a pointer and `down` / `up` for a key.
+`modifiers` is an array — `["shift", "meta"]`. Coordinates are window-local CSS
+pixels; `capabilities.input` says what the backend will actually accept.
 
 Errors come back as `{"id": 1, "ok": false, "error": {"code", "message"}}`:
 

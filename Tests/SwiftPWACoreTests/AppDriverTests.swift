@@ -85,8 +85,10 @@
             #expect(result?["backend"] == .string("gtk4"))
             #expect(result?["protocol"] == .number(1))
             #expect(result?["windows"] == .number(1))
-            // Cut 1 ships no native input synthesis anywhere.
-            #expect(result?["input"] == .bool(false))
+            // MockWebView leaves the input defaults in place — the same answer
+            // a backend with no event synthesis gives.
+            #expect(result?["input"]?["pointer"] == .bool(false))
+            #expect(result?["input"]?["pointerTypes"] == .array([]))
             // MockWebView leaves the protocol default in place, which is the
             // same answer a backend without a snapshot API would give.
             #expect(result?["screenshot"] == .bool(false))
@@ -271,6 +273,210 @@
                 payload: ["width": .string("wide"), "height": .number(768)]
             )
             #expect(response["error"]?["code"] == .string("E_DRIVER_REQUEST"))
+        }
+
+        // MARK: - Input
+
+        /// A backend that can click but is honest about not being a stylus —
+        /// which is every desktop backend that can synthesize input at all.
+        private static let mouseOnly = InputCapabilities(
+            pointer: true, key: true, wheel: true,
+            pointerTypes: [.mouse], pressure: false, tilt: false
+        )
+
+        @MainActor
+        private func makeInputSession(
+            _ capabilities: InputCapabilities
+        ) -> (DriverSession, MockWebView) {
+            let webView = MockWebView()
+            webView.stubbedInputCapabilities = capabilities
+            let (session, _) = makeSession(windows: [MockWindow(webView: webView)])
+            return (session, webView)
+        }
+
+        @Test("capabilities reports input structurally, not as one bool")
+        @MainActor
+        func inputCapabilitiesShape() async throws {
+            let (session, _) = makeInputSession(Self.mouseOnly)
+            let input = try await send(session, cmd: "capabilities")["result"]?["input"]
+            #expect(input?["pointer"] == .bool(true))
+            #expect(input?["tilt"] == .bool(false))
+            #expect(input?["pointerTypes"] == .array([.string("mouse")]))
+        }
+
+        @Test("a pointer press reaches the backend with its coordinates intact")
+        @MainActor
+        func pointerPress() async throws {
+            let (session, webView) = makeInputSession(Self.mouseOnly)
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: [
+                    "type": .string("down"), "x": .number(12), "y": .number(34),
+                    "clickCount": .number(2), "modifiers": .array([.string("shift")])
+                ]
+            )
+            #expect(response["ok"] == .bool(true))
+            guard case let .pointer(pointer)? = webView.receivedInput.first else {
+                Issue.record("expected a pointer event")
+                return
+            }
+            #expect(pointer.phase == .down)
+            #expect(pointer.x == 12)
+            #expect(pointer.y == 34)
+            #expect(pointer.clickCount == 2)
+            #expect(pointer.modifiers.contains(.shift))
+            #expect(pointer.pointerType == .mouse)
+        }
+
+        @Test("a stylus request is refused where a page would only see a mouse")
+        @MainActor
+        func refusesUnsupportedPointerType() async throws {
+            let (session, webView) = makeInputSession(Self.mouseOnly)
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: [
+                    "type": .string("down"), "x": .number(1), "y": .number(1),
+                    "pointerType": .string("pen")
+                ]
+            )
+            // Refused, not silently downgraded — a stylus test that ran as a
+            // mouse click would pass while proving nothing.
+            #expect(response["error"]?["code"] == .string("E_DRIVER_UNSUPPORTED"))
+            #expect(webView.receivedInput.isEmpty)
+        }
+
+        @Test("tilt is refused where it can't reach the page")
+        @MainActor
+        func refusesTilt() async throws {
+            let (session, webView) = makeInputSession(Self.mouseOnly)
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: [
+                    "type": .string("down"), "x": .number(1), "y": .number(1),
+                    "tiltX": .number(30)
+                ]
+            )
+            #expect(response["error"]?["code"] == .string("E_DRIVER_UNSUPPORTED"))
+            #expect(webView.receivedInput.isEmpty)
+        }
+
+        @Test("a stylus-capable backend accepts pressure and tilt")
+        @MainActor
+        func acceptsStylusWhereSupported() async throws {
+            let (session, webView) = makeInputSession(InputCapabilities(
+                pointer: true, key: true, wheel: true,
+                pointerTypes: [.mouse, .pen], pressure: true, tilt: true
+            ))
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: [
+                    "type": .string("down"), "x": .number(5), "y": .number(6),
+                    "pointerType": .string("pen"), "pressure": .number(0.7),
+                    "tiltX": .number(-20), "tiltY": .number(15)
+                ]
+            )
+            #expect(response["ok"] == .bool(true))
+            guard case let .pointer(pointer)? = webView.receivedInput.first else {
+                Issue.record("expected a pointer event")
+                return
+            }
+            #expect(pointer.pointerType == .pen)
+            #expect(pointer.pressure == 0.7)
+            #expect(pointer.tiltX == -20)
+            #expect(pointer.tiltY == 15)
+        }
+
+        @Test("an out-of-range pressure is a bad request, not a clamp")
+        @MainActor
+        func rejectsOutOfRangePressure() async throws {
+            let (session, _) = makeInputSession(InputCapabilities(
+                pointer: true, pointerTypes: [.mouse], pressure: true
+            ))
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: [
+                    "type": .string("down"), "x": .number(1), "y": .number(1),
+                    "pressure": .number(4)
+                ]
+            )
+            #expect(response["error"]?["code"] == .string("E_DRIVER_REQUEST"))
+        }
+
+        @Test("a backend with no input at all points the caller at eval")
+        @MainActor
+        func noInputSupport() async throws {
+            let (session, _) = makeInputSession(.none)
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: ["type": .string("down"), "x": .number(1), "y": .number(1)]
+            )
+            #expect(response["error"]?["code"] == .string("E_DRIVER_UNSUPPORTED"))
+            if case let .string(message)? = response["error"]?["message"] {
+                #expect(message.contains("eval"))
+            }
+        }
+
+        @Test("wheel deltas carry through with the DOM sign convention")
+        @MainActor
+        func wheel() async throws {
+            let (session, webView) = makeInputSession(Self.mouseOnly)
+            let response = try await send(
+                session,
+                cmd: "input.wheel",
+                payload: [
+                    "x": .number(100), "y": .number(200),
+                    "deltaY": .number(-120), "deltaX": .number(15)
+                ]
+            )
+            #expect(response["ok"] == .bool(true))
+            guard case let .wheel(wheel)? = webView.receivedInput.first else {
+                Issue.record("expected a wheel event")
+                return
+            }
+            #expect(wheel.deltaY == -120)
+            #expect(wheel.deltaX == 15)
+            #expect(wheel.x == 100)
+        }
+
+        @Test("a key event carries key, code and inserted text")
+        @MainActor
+        func key() async throws {
+            let (session, webView) = makeInputSession(Self.mouseOnly)
+            let response = try await send(
+                session,
+                cmd: "input.key",
+                payload: [
+                    "type": .string("down"), "key": .string("a"),
+                    "code": .string("KeyA"), "text": .string("a")
+                ]
+            )
+            #expect(response["ok"] == .bool(true))
+            guard case let .key(key)? = webView.receivedInput.first else {
+                Issue.record("expected a key event")
+                return
+            }
+            #expect(key.key == "a")
+            #expect(key.code == "KeyA")
+            #expect(key.text == "a")
+        }
+
+        @Test("an unknown pointer phase is rejected before reaching the backend")
+        @MainActor
+        func rejectsUnknownPhase() async throws {
+            let (session, webView) = makeInputSession(Self.mouseOnly)
+            let response = try await send(
+                session,
+                cmd: "input.pointer",
+                payload: ["type": .string("hover"), "x": .number(1), "y": .number(1)]
+            )
+            #expect(response["error"]?["code"] == .string("E_DRIVER_REQUEST"))
+            #expect(webView.receivedInput.isEmpty)
         }
     }
 

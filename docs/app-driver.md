@@ -141,6 +141,18 @@ dispatched from `eval` can't give you, since those arrive untrusted and skip
 default behaviour. And because nothing goes near the OS-wide HID tap, the real
 cursor never moves and the window needn't be frontmost.
 
+> **macOS: driver builds accept first mouse.** Making that last part true takes
+> one deliberate difference from a shipped build. AppKit's click-through rule is
+> that a `mouseDown` landing in a window which isn't key gets consumed as "click
+> to activate" rather than delivered, unless the view under it accepts first
+> mouse — and `WKWebView` doesn't. So a driver build substitutes a `WKWebView`
+> subclass that does, and a release build keeps the platform default, since
+> whether a click into an unfocused window should reach the page is the
+> adopter's design decision rather than swift-pwa's.
+>
+> The cost is that debug and release differ in that one behaviour. If you're
+> testing click-through by hand, test a release build.
+
 | Backend | pointer / key / wheel | pointer types | pressure | tilt |
 | --- | --- | --- | --- | --- |
 | **macOS** | Yes | `mouse` | — | — |

@@ -48,7 +48,11 @@
                 forMainFrameOnly: false
             )
             cfg.userContentController.addUserScript(userScript)
-            webView = WKWebView(frame: .zero, configuration: cfg)
+            #if os(macOS) && SWIFT_PWA_DRIVER
+                webView = DriverWebView(frame: .zero, configuration: cfg)
+            #else
+                webView = WKWebView(frame: .zero, configuration: cfg)
+            #endif
             super.init()
             continuation = captured
             cfg.userContentController.add(self, name: BridgeScript.messageHandlerName)

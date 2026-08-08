@@ -164,11 +164,6 @@ typealias BridgeJSON = SwiftPWACore.JSONValue
 /// WinSDK, but reading and printing JSON doesn't, and the agent-surface commands
 /// use these wherever the CLI builds.
 extension SwiftPWACore.JSONValue {
-    subscript(key: String) -> BridgeJSON? {
-        guard case let .object(fields) = self else { return nil }
-        return fields[key]
-    }
-
     var stringValue: String? {
         guard case let .string(value) = self else { return nil }
         return value

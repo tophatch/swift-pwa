@@ -490,21 +490,4 @@
         }
     }
 
-    extension JSONValue {
-        /// Read a key off an object value, so payload access reads as
-        /// `payload?["js"]` instead of a `case .object` dance at every call.
-        subscript(key: String) -> JSONValue? {
-            guard case let .object(fields) = self else { return nil }
-            return fields[key]
-        }
-
-        /// The string members of an array value; anything else is empty. Used
-        /// for `modifiers`, where a malformed value should mean "no modifiers"
-        /// rather than failing the whole event.
-        var stringArray: [String] {
-            guard case let .array(items) = self else { return [] }
-            return items.compactMap { if case let .string(value) = $0 { value } else { nil } }
-        }
-    }
-
 #endif

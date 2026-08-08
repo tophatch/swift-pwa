@@ -144,7 +144,12 @@ cursor never moves and the window needn't be frontmost.
 | Backend | pointer / key / wheel | pointer types | pressure | tilt |
 | --- | --- | --- | --- | --- |
 | **macOS** | Yes | `mouse` | — | — |
+| **Linux GTK3** | Yes | `mouse` | — | — |
 | **Windows / GTK4 / iOS** | — | — | — | — |
+
+GTK3 pushes events through `gtk_main_do_event`, GTK's own dispatch entry point,
+so they work **under Xvfb** — on a display server with no input device at all,
+which is what makes them usable in CI.
 
 **Windows and GTK4 can't do this, and not for want of trying.** WebView2's
 `SendPointerInput` lives on `ICoreWebView2CompositionController` while swift-pwa

@@ -177,6 +177,196 @@ static inline void swiftpwa_webview_snapshot_png(
     );
 }
 
+// ---------------------------------------------------------------------
+// Synthetic input (the app driver's `input.*` verbs)
+// ---------------------------------------------------------------------
+//
+// Events are built by hand and pushed through `gtk_main_do_event`, which is
+// GTK's own dispatch entry point — the same one the X/Wayland event reader
+// calls. So they travel the real path (grabs, widget hierarchy, WebKit's own
+// hit testing) without going anywhere near an X test extension or an
+// OS-wide injection API. GTK4 removed all of this: `GdkEvent` is opaque
+// there with no public constructors, which is why the GTK4 shim has no
+// counterpart.
+
+/// The `GdkWindow` events should target, plus the widget's offset within it.
+/// A `WebKitWebView` usually draws into an ancestor's `GdkWindow` rather than
+/// owning one, so coordinates have to be translated from widget space.
+static inline GdkWindow *swiftpwa_event_target(
+    GtkWidget *widget, int *out_dx, int *out_dy
+) {
+    GdkWindow *window = gtk_widget_get_window(widget);
+    if (!window) return NULL;
+    int dx = 0, dy = 0;
+    GtkAllocation alloc;
+    gtk_widget_get_allocation(widget, &alloc);
+    if (!gtk_widget_get_has_window(widget)) {
+        // The widget shares its parent's GdkWindow: its own origin is the
+        // allocation's origin inside that window.
+        dx = alloc.x;
+        dy = alloc.y;
+    }
+    if (out_dx) *out_dx = dx;
+    if (out_dy) *out_dy = dy;
+    return window;
+}
+
+static inline GdkDevice *swiftpwa_pointer_device(GdkWindow *window) {
+    GdkDisplay *display = gdk_window_get_display(window);
+    if (!display) return NULL;
+    GdkSeat *seat = gdk_display_get_default_seat(display);
+    return seat ? gdk_seat_get_pointer(seat) : NULL;
+}
+
+/// Push a button press / release (`phase` 0 = press, 1 = release) or motion
+/// (`phase` 2) at widget-relative `x`,`y`. `button` is GDK's numbering:
+/// 1 left, 2 middle, 3 right. `click_count` > 1 additionally emits GDK's
+/// double/triple-press event, which is how GTK reports a double-click.
+static inline void swiftpwa_send_pointer_event(
+    GtkWidget *widget, int phase, double x, double y,
+    int button, int click_count, unsigned int state
+) {
+    int dx = 0, dy = 0;
+    GdkWindow *window = swiftpwa_event_target(widget, &dx, &dy);
+    if (!window) return;
+    GdkDevice *device = swiftpwa_pointer_device(window);
+
+    double wx = x + dx, wy = y + dy;
+    int origin_x = 0, origin_y = 0;
+    gdk_window_get_origin(window, &origin_x, &origin_y);
+    guint32 time = (guint32)(g_get_monotonic_time() / 1000);
+
+    GdkEventType type = phase == 2 ? GDK_MOTION_NOTIFY
+                      : (phase == 0 ? GDK_BUTTON_PRESS : GDK_BUTTON_RELEASE);
+    GdkEvent *event = gdk_event_new(type);
+    // `gdk_event_free` unrefs the window, so hand it a reference of its own.
+    event->any.window = g_object_ref(window);
+    event->any.send_event = TRUE;
+
+    if (type == GDK_MOTION_NOTIFY) {
+        event->motion.time = time;
+        event->motion.x = wx;
+        event->motion.y = wy;
+        event->motion.x_root = origin_x + wx;
+        event->motion.y_root = origin_y + wy;
+        event->motion.state = state;
+        event->motion.is_hint = FALSE;
+        if (device) gdk_event_set_device(event, device);
+    } else {
+        event->button.time = time;
+        event->button.x = wx;
+        event->button.y = wy;
+        event->button.x_root = origin_x + wx;
+        event->button.y_root = origin_y + wy;
+        event->button.state = state;
+        event->button.button = (guint)button;
+        if (device) gdk_event_set_device(event, device);
+    }
+    gtk_main_do_event(event);
+    gdk_event_free(event);
+
+    // GTK reports a double-click as a plain press followed by a
+    // GDK_2BUTTON_PRESS, not as a press with a count — so emit the second
+    // event rather than leaving the page to infer it from timing.
+    if (type == GDK_BUTTON_PRESS && click_count > 1) {
+        GdkEvent *multi = gdk_event_new(
+            click_count >= 3 ? GDK_3BUTTON_PRESS : GDK_2BUTTON_PRESS);
+        multi->any.window = g_object_ref(window);
+        multi->any.send_event = TRUE;
+        multi->button.time = time;
+        multi->button.x = wx;
+        multi->button.y = wy;
+        multi->button.x_root = origin_x + wx;
+        multi->button.y_root = origin_y + wy;
+        multi->button.state = state;
+        multi->button.button = (guint)button;
+        if (device) gdk_event_set_device(multi, device);
+        gtk_main_do_event(multi);
+        gdk_event_free(multi);
+    }
+}
+
+/// Push a key press (`phase` 0) or release (`phase` 1). `keyval` is a GDK
+/// keyval; the hardware keycode is looked up from the active keymap, because
+/// WebKit maps a key to a DOM `code` through it and leaves it undefined
+/// otherwise.
+static inline void swiftpwa_send_key_event(
+    GtkWidget *widget, int phase, unsigned int keyval, unsigned int state
+) {
+    GdkWindow *window = swiftpwa_event_target(widget, NULL, NULL);
+    if (!window) return;
+    GdkDisplay *display = gdk_window_get_display(window);
+
+    GdkEvent *event = gdk_event_new(phase == 0 ? GDK_KEY_PRESS : GDK_KEY_RELEASE);
+    event->any.window = g_object_ref(window);
+    event->any.send_event = TRUE;
+    event->key.time = (guint32)(g_get_monotonic_time() / 1000);
+    event->key.state = state;
+    event->key.keyval = keyval;
+    event->key.hardware_keycode = 0;
+    event->key.group = 0;
+    event->key.is_modifier = 0;
+
+    GdkKeymap *keymap = gdk_keymap_get_for_display(display);
+    GdkKeymapKey *keys = NULL;
+    gint n_keys = 0;
+    if (keymap && gdk_keymap_get_entries_for_keyval(keymap, keyval, &keys, &n_keys) && n_keys > 0) {
+        event->key.hardware_keycode = (guint16)keys[0].keycode;
+        event->key.group = (guint8)keys[0].group;
+    }
+    if (keys) g_free(keys);
+
+    GdkSeat *seat = gdk_display_get_default_seat(display);
+    if (seat) {
+        GdkDevice *kbd = gdk_seat_get_keyboard(seat);
+        if (kbd) gdk_event_set_device(event, kbd);
+    }
+    gtk_main_do_event(event);
+    gdk_event_free(event);
+}
+
+/// Push a smooth-scroll event. `dx`/`dy` are in the DOM's sense (positive dy
+/// scrolls content down); GDK's smooth deltas use the same sign, so they pass
+/// through unchanged.
+static inline void swiftpwa_send_scroll_event(
+    GtkWidget *widget, double x, double y, double dx, double dy, unsigned int state
+) {
+    int off_x = 0, off_y = 0;
+    GdkWindow *window = swiftpwa_event_target(widget, &off_x, &off_y);
+    if (!window) return;
+    GdkDevice *device = swiftpwa_pointer_device(window);
+
+    double wx = x + off_x, wy = y + off_y;
+    int origin_x = 0, origin_y = 0;
+    gdk_window_get_origin(window, &origin_x, &origin_y);
+
+    GdkEvent *event = gdk_event_new(GDK_SCROLL);
+    event->any.window = g_object_ref(window);
+    event->any.send_event = TRUE;
+    event->scroll.time = (guint32)(g_get_monotonic_time() / 1000);
+    event->scroll.x = wx;
+    event->scroll.y = wy;
+    event->scroll.x_root = origin_x + wx;
+    event->scroll.y_root = origin_y + wy;
+    event->scroll.state = state;
+    event->scroll.direction = GDK_SCROLL_SMOOTH;
+    event->scroll.delta_x = dx;
+    event->scroll.delta_y = dy;
+    if (device) gdk_event_set_device(event, device);
+    gtk_main_do_event(event);
+    gdk_event_free(event);
+}
+
+/// Look up a GDK keyval from a name (`"Return"`, `"Left"`), or 0.
+static inline unsigned int swiftpwa_keyval_from_name(const char *name) {
+    return (unsigned int)gdk_keyval_from_name(name);
+}
+
+/// Look up a GDK keyval from a Unicode scalar.
+static inline unsigned int swiftpwa_keyval_from_unicode(unsigned int scalar) {
+    return (unsigned int)gdk_unicode_to_keyval((guint32)scalar);
+}
+
 /// Set the web view's base background colour (painted before/under the
 /// page), so the surface matches the app background instead of flashing
 /// opaque white before first paint. Components are 0...1.

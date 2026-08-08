@@ -17,7 +17,8 @@
     /// main thread.
     public final class WebKitGTKAdapter: PWAWebView, @unchecked Sendable {
         /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
-        private let viewWidget: UnsafeMutablePointer<GtkWidget>
+        /// `internal` so the synthetic-input extension can address it.
+        let viewWidget: UnsafeMutablePointer<GtkWidget>
         private let userContent: UnsafeMutablePointer<WebKitUserContentManager>
         private var continuation: AsyncStream<InboundFrame>.Continuation?
         private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }

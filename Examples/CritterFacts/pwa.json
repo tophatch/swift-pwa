@@ -3,6 +3,21 @@
   "name": "CritterFacts",
   "version": "0.1.0",
   "description": "A swift-pwa demo of the on-device llama.cpp backend: tap a critter and a local LLM streams back a (plausibly true) fun fact — no network after the one-time model download.",
+  "agent": {
+    "expose": [
+      {
+        "command": "critter.list",
+        "description": "The critters this app knows facts about.",
+        "read_only": true,
+        "idempotent": true
+      },
+      {
+        "command": "critter.fact",
+        "description": "One surprising fact about a critter, written by the on-device model.",
+        "read_only": true
+      }
+    ]
+  },
   "web": {
     "directory": "Sources/CritterFacts/web",
     "entry": "index.html"

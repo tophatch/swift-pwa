@@ -887,6 +887,44 @@ you; this is a thin, audited bridge to the OS store. Common pairing: a remote
 `ImagenProvider(apiKey: { try? await store.get("google-ai") })`. Full reference
 and the per-platform store table: [docs/secrets.md](secrets.md).
 
+### `agent.*` — let a user offer your commands to an AI agent (desktop only)
+
+Turns your app's *own* commands into MCP tools an agent can call — `book.open`,
+not "click at 400,300". Register the ceiling Swift-side with
+`ctx.use(AgentPlugin(tools: [...]))`, and mirror it in `pwa.json`'s
+`agent.expose` so `swift-pwa build` can check the two agree.
+
+These four commands exist so **your page can draw the consent UI**. Nothing is
+exposed until a user calls `agent.enable`.
+
+```js
+// Current state, including the declared tools and their risk annotations.
+const state = await __SWIFT_PWA__.invoke('agent.status');
+// { enabled, attached, port, token, tools: [{ command, description, readOnly, destructive, … }] }
+
+// The user says yes. Binds a loopback port and mints a token for this session.
+const on = await __SWIFT_PWA__.invoke('agent.enable');   // → { …, port: 51423, token: '…' }
+
+// The user says no. Closes the listener AND drops a connected client.
+await __SWIFT_PWA__.invoke('agent.disable');
+
+// Live state — a client attaching or dropping happens in the runtime, so a
+// page that polled would be stale exactly when it matters.
+const stop = __SWIFT_PWA__.subscribe('agent.state', undefined, (state) => render(state));
+```
+
+Show `port` and `token` to the user as a host configuration to paste; their
+agent host runs `swift-pwa mcp --agent --attach <port> --token <token>`, which
+relays to your running app. Your app re-checks its allowlist on every call.
+
+**Off at launch, per session, revocable** — nothing is persisted, and a fresh
+token is minted each time. While access is open, swift-pwa shows a system-tray
+status item your app can't suppress. `agent.*` is itself refused in
+`agent.expose`: a tool that could call `agent.enable` would widen its own
+access. Desktop only. Guide:
+[docs/tutorials/letting-an-agent-use-your-app.md](tutorials/letting-an-agent-use-your-app.md);
+full reference: [docs/agent-tools.md](agent-tools.md).
+
 ## Custom commands
 
 The Swift side can register arbitrary commands; JS calls them through

@@ -29,6 +29,14 @@ When adding new cases:
 - Add a one-line **Why human-only** note if it's not obvious why we
   can't automate the case — helps future-you not "fix" the test by
   automating it incorrectly.
+- **"It needs eyes on the UI" is no longer a reason on its own.**
+  [`swift-pwa drive`](tutorials/testing-your-app.md) screenshots the real
+  webview and delivers real clicks and keystrokes, in CI under Xvfb, so a
+  case that was manual only because someone had to look at the window can
+  usually become a scripted check plus an uploaded PNG. What stays here is
+  what the driver genuinely can't reach: install machinery, system intents
+  (`itms-services://`, package registration), on-device behaviour, and
+  visual *smoothness* as opposed to visual correctness.
 
 ## Coverage
 

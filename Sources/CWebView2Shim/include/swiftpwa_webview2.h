@@ -57,6 +57,12 @@ typedef void (*swiftpwa_w2_message_cb)(const char *utf8_json, void *user);
 typedef void (*swiftpwa_w2_eval_complete_cb)(
     const char *result_json, const char *error_message, void *user);
 
+// `capture_complete` fires when CapturePreview resolves. `error_message`
+// is NULL on success or a UTF-8 description on failure; the pointer is
+// valid only for the duration of the callback.
+typedef void (*swiftpwa_w2_capture_complete_cb)(
+    const char *error_message, void *user);
+
 // `web_resource_requested` is the hook for the `pwa://` virtual scheme.
 // `uri` is UTF-8. The Swift side responds via `swiftpwa_w2_resource_respond`
 // using the `request_token` it received here.
@@ -127,6 +133,14 @@ void swiftpwa_w2_view_add_script_on_document_created(
 void swiftpwa_w2_view_execute_script(
     swiftpwa_w2_view *view, const wchar_t *script,
     swiftpwa_w2_eval_complete_cb cb, void *user);
+
+// Capture the webview's rendered contents and write them to `path` as a
+// PNG. Backs the app driver's `screenshot` verb; goes via a file rather
+// than a buffer to match the GTK shims (and because `CapturePreview`
+// wants an `IStream` either way).
+void swiftpwa_w2_view_capture_preview(
+    swiftpwa_w2_view *view, const wchar_t *path,
+    swiftpwa_w2_capture_complete_cb cb, void *user);
 
 // Send a string from the host into the page. JS receives it as a
 // `message` event on `window.chrome.webview`.

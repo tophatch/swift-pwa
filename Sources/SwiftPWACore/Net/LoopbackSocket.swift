@@ -13,32 +13,37 @@ import Foundation
     // A loopback TCP socket handle. POSIX file descriptors are `Int32`;
     // Winsock's `SOCKET` is an unsigned pointer-sized handle — so the type
     // (and its "invalid" sentinel, and the read/write/close calls) differ per
-    // platform. `DevNet` hides all of that behind one small surface so
-    // `DevServer` itself is platform-agnostic.
+    // platform. `LoopbackSocket` hides all of that behind one small surface so
+    // its callers stay platform-agnostic.
     #if canImport(WinSDK)
-        typealias DevSocket = SOCKET
+        package typealias SocketHandle = SOCKET
     #else
-        typealias DevSocket = Int32
+        package typealias SocketHandle = Int32
     #endif
 
-    /// The one place the `DevServer` touches the platform socket API. Every
+    /// The one place loopback TCP callers touch the platform socket API. Every
     /// function maps to BSD sockets on Darwin/Glibc and to Winsock on Windows;
-    /// nothing else in the dev server carries a platform `#if`.
-    enum DevNet {
+    /// nothing else in the dev server or the app driver carries a platform `#if`.
+    ///
+    /// Two consumers, in opposite directions: `swift-pwa dev`'s live-reload
+    /// server (the CLI listens, the app connects) and the app driver (the app
+    /// listens, the CLI connects). Both want loopback TCP rather than a Unix
+    /// socket, which keeps AF_UNIX-on-Windows out of the picture entirely.
+    package enum LoopbackSocket {
         #if canImport(WinSDK)
-            static let invalid = INVALID_SOCKET
+            package static let invalid = INVALID_SOCKET
         #else
-            static let invalid: DevSocket = -1
+            package static let invalid: SocketHandle = -1
         #endif
 
-        static func isValid(_ s: DevSocket) -> Bool {
+        package static func isValid(_ s: SocketHandle) -> Bool {
             s != invalid
         }
 
         /// Winsock requires a one-time `WSAStartup` before any socket call;
         /// POSIX needs nothing. Safe to call more than once (each startup is
         /// refcounted; a short-lived CLI never needs the matching cleanup).
-        static func startup() {
+        package static func startup() {
             #if canImport(WinSDK)
                 var wsa = WSADATA()
                 _ = WSAStartup(0x0202, &wsa) // request Winsock 2.2
@@ -46,7 +51,7 @@ import Foundation
         }
 
         /// A blocking IPv4 TCP stream socket, or `invalid` on failure.
-        static func makeStreamSocket() -> DevSocket {
+        package static func makeStreamSocket() -> SocketHandle {
             #if canImport(WinSDK)
                 // SOCK_STREAM is an Int32 in WinSDK; 0 = default (TCP) protocol.
                 return socket(AF_INET, SOCK_STREAM, 0)
@@ -57,7 +62,7 @@ import Foundation
             #endif
         }
 
-        static func setReuseAddr(_ s: DevSocket) {
+        package static func setReuseAddr(_ s: SocketHandle) {
             var yes: Int32 = 1
             #if canImport(WinSDK)
                 _ = withUnsafeBytes(of: &yes) {
@@ -97,7 +102,7 @@ import Foundation
         }
 
         /// Bind the socket to `127.0.0.1:<port>` (`port == 0` → OS-assigned).
-        static func bindLoopback(_ s: DevSocket, port: UInt16) -> Bool {
+        package static func bindLoopback(_ s: SocketHandle, port: UInt16) -> Bool {
             var addr = loopbackAddr(port: port)
             return withUnsafePointer(to: &addr) { p in
                 p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
@@ -106,12 +111,23 @@ import Foundation
             }
         }
 
-        static func startListening(_ s: DevSocket, backlog: Int32) -> Bool {
+        /// Connect the socket to `127.0.0.1:<port>`. The driver client half —
+        /// the dev server only ever listens.
+        package static func connectLoopback(_ s: SocketHandle, port: UInt16) -> Bool {
+            var addr = loopbackAddr(port: port)
+            return withUnsafePointer(to: &addr) { p in
+                p.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                    connect(s, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+                }
+            }
+        }
+
+        package static func startListening(_ s: SocketHandle, backlog: Int32) -> Bool {
             listen(s, backlog) == 0
         }
 
         /// The port the socket actually bound (resolves an OS-assigned `0`).
-        static func boundPort(_ s: DevSocket) -> UInt16 {
+        package static func boundPort(_ s: SocketHandle) -> UInt16 {
             var addr = sockaddr_in()
             var len = socklen_t(MemoryLayout<sockaddr_in>.size)
             _ = withUnsafeMutablePointer(to: &addr) { p in
@@ -120,13 +136,13 @@ import Foundation
             return UInt16(bigEndian: addr.sin_port)
         }
 
-        static func acceptOne(_ s: DevSocket) -> DevSocket {
+        package static func acceptOne(_ s: SocketHandle) -> SocketHandle {
             accept(s, nil, nil)
         }
 
         /// Poll one socket for readability. Returns `> 0` when readable, `0` on
         /// timeout, `< 0` on error — same contract as `poll`/`WSAPoll`.
-        static func pollReadable(_ s: DevSocket, timeoutMs: Int32) -> Int32 {
+        package static func pollReadable(_ s: SocketHandle, timeoutMs: Int32) -> Int32 {
             #if canImport(WinSDK)
                 var pfd = WSAPOLLFD(fd: s, events: Int16(POLLRDNORM), revents: 0)
                 let r = WSAPoll(&pfd, 1, timeoutMs)
@@ -142,7 +158,7 @@ import Foundation
 
         /// Read up to `buf.count` bytes into `buf`; returns the count read
         /// (`0` = peer closed, `< 0` = error).
-        static func recvInto(_ s: DevSocket, _ buf: inout [UInt8]) -> Int {
+        package static func recvInto(_ s: SocketHandle, _ buf: inout [UInt8]) -> Int {
             buf.withUnsafeMutableBytes { raw -> Int in
                 guard let base = raw.baseAddress else { return 0 }
                 #if canImport(WinSDK)
@@ -155,7 +171,7 @@ import Foundation
 
         /// Write all of `bytes[offset...]` (`count` bytes), looping over short
         /// writes. Returns `false` if any write fails (dead socket).
-        static func sendAll(_ s: DevSocket, _ bytes: [UInt8], offset: Int, count: Int) -> Bool {
+        package static func sendAll(_ s: SocketHandle, _ bytes: [UInt8], offset: Int, count: Int) -> Bool {
             bytes.withUnsafeBytes { raw -> Bool in
                 guard let base = raw.baseAddress else { return true }
                 var sent = 0
@@ -174,7 +190,7 @@ import Foundation
             }
         }
 
-        static func closeSocket(_ s: DevSocket) {
+        package static func closeSocket(_ s: SocketHandle) {
             #if canImport(WinSDK)
                 _ = closesocket(s)
             #else

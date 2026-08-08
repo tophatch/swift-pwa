@@ -36,8 +36,68 @@ public protocol PWAWebView: AnyObject, Sendable {
     /// expose programmatic DevTools (currently iOS — its WKWebView
     /// is debugged via Safari's *Develop* menu on a paired Mac).
     func openDevTools()
+
+    /// PNG bytes of this webview's **rendered contents**.
+    ///
+    /// Deliberately the webview's pixels rather than the screen's: the
+    /// window may be occluded, in the background, or on another Space, and
+    /// the capture must still be of the app and only the app. That rules
+    /// out the screen-capture APIs (which additionally want a TCC grant on
+    /// macOS) in favour of each backend's own renderer snapshot —
+    /// `WKWebView.takeSnapshot`, `webkit_web_view_get_snapshot`,
+    /// `ICoreWebView2.CapturePreview`.
+    ///
+    /// Used by the app driver's `screenshot` verb. Backends that can't
+    /// snapshot leave the default in place, which throws
+    /// `E_UNIMPLEMENTED`; check ``supportsSnapshot`` first to get a clean
+    /// "unsupported here" rather than a failed call.
+    func captureSnapshot() async throws -> Data
+
+    /// Whether ``captureSnapshot()`` is implemented on this backend.
+    ///
+    /// A separate flag rather than a `try?` probe because the driver's
+    /// `capabilities` verb has to answer *before* anyone asks for pixels,
+    /// and "call it and see" would mean rendering a snapshot to find out.
+    var supportsSnapshot: Bool { get }
+
+    /// Deliver a synthetic pointer / key / wheel event into this webview.
+    ///
+    /// Into the app's **own** event queue, never the OS-wide HID tap — see
+    /// ``SyntheticInput`` for why that distinction is the whole point. Backends
+    /// that can't synthesize events leave the default in place, which throws
+    /// `E_UNIMPLEMENTED`; consult ``inputCapabilities`` first.
+    func send(_ input: SyntheticInput) async throws
+
+    /// What ``send(_:)`` can actually express here. Same reasoning as
+    /// ``supportsSnapshot``, but structured: "can click" and "can deliver a
+    /// stylus event with pressure and tilt" are different questions, and a
+    /// stylus test that silently ran as a mouse click would pass while proving
+    /// nothing.
+    var inputCapabilities: InputCapabilities { get }
 }
 
 public extension PWAWebView {
     func openDevTools() {} // default: no-op
+
+    func captureSnapshot() async throws -> Data {
+        throw BridgeError(
+            code: BridgeError.unimplemented,
+            message: "this backend can't snapshot its webview contents"
+        )
+    }
+
+    var supportsSnapshot: Bool {
+        false
+    }
+
+    func send(_: SyntheticInput) async throws {
+        throw BridgeError(
+            code: BridgeError.unimplemented,
+            message: "this backend can't synthesize input events"
+        )
+    }
+
+    var inputCapabilities: InputCapabilities {
+        .none
+    }
 }

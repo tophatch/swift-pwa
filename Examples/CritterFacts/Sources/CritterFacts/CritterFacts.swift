@@ -200,6 +200,12 @@ func configure(_ ctx: any AppContext) throws {
     // Build the text backend for this platform (nil if none is in the build).
     let textBackend = makeTextBackend(ctx)
 
+    // This app's own verbs, and the ceiling on what it could ever offer an
+    // agent. Registering them exposes nothing — web/agent.html is where a
+    // *user* opens the door, per session. See docs/agent-tools.md.
+    CritterAgentSurface.register(into: ctx.registry, backend: textBackend)
+    ctx.use(AgentPlugin(tools: CritterAgentSurface.tools))
+
     // Providers for the runtime workflow surface (`ai.run` / `ai.describeInputs`).
     // ComfyUI (a graph provider) is always present; the branches below add the
     // fixed-schema providers — Imagen (cloud) and the on-device image models —

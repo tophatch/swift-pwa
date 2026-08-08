@@ -364,6 +364,46 @@ stream's `onTermination` and terminates the child — so a child can't outlive
 the page that spawned it. To inject a fake in tests, conform to `ProcessRunner`
 / `ProcessChild`. Full reference: [docs/process-plugin.md](process-plugin.md).
 
+## Offering commands to an AI agent (desktop only)
+
+`AgentPlugin` declares which of your app's commands are *eligible* to be
+offered to an agent. It exposes nothing on its own — a user still has to turn
+access on at runtime.
+
+```swift
+ctx.use(AgentPlugin(tools: [
+    AgentTool(command: "book.open",   description: "Open a book by id.", readOnly: true),
+    AgentTool(command: "book.delete", description: "Permanently delete a book.", destructive: true)
+]))
+```
+
+The same list belongs in `pwa.json` under `agent.expose`, and the two have to
+agree: `pwa.json` is the copy a reviewer reads, the compiled list is what the
+runtime enforces, and `swift-pwa build` fails on any drift between them —
+including a changed description or annotation. It also resolves every entry
+against the app's real command catalog, so a rename can't quietly un-expose
+something.
+
+The plugin registers `agent.status` / `enable` / `disable` / `state` for your
+page to build a consent UI with (see
+[javascript-api.md](javascript-api.md#agent--let-a-user-offer-your-commands-to-an-ai-agent-desktop-only)).
+swift-pwa owns the consent *state* and a system-tray indicator the app can't
+suppress; the app owns the *asking*, since a swift-pwa-drawn dialog would look
+foreign across five platforms.
+
+To hold the surface yourself — to mirror it in native UI, or revoke on some app
+event — construct it directly and keep the reference:
+
+```swift
+let surface = AgentSurface(tools: tools)
+ctx.use(AgentPlugin(surface: surface))
+// later: surface.disable()
+```
+
+Only **unary** commands whose arguments are a struct (or nothing) can be tools;
+`secrets.*`, `agent.*` and `__*` are refused outright. Full reference:
+[docs/agent-tools.md](agent-tools.md).
+
 ## Concurrency model
 
 Two non-obvious points worth pinning:

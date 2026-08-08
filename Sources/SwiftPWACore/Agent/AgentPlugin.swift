@@ -87,27 +87,54 @@ public struct AgentPlugin: Plugin {
     }
 }
 
-/// Where a backend installs its user-visible "an agent is attached" indicator.
+/// One state change, plus the ability to act on it.
+public struct AgentIndicatorUpdate: Sendable {
+    public let state: AgentState
+    /// Revoke access. The indicator is also the place a user can turn it off,
+    /// which matters when the app's own window isn't in front of them.
+    public let disable: @Sendable () -> Void
+}
+
+/// Where a backend installs its user-visible "agent access is open" indicator.
 ///
-/// This is a process-global hook rather than something the app passes in, and
+/// A process-global hook rather than something the app passes in, and
 /// deliberately so: an app that could supply or replace the indicator could
 /// also suppress it, and the one thing that has to survive a developer cutting
-/// corners is that the user can *see* an agent is connected.
+/// corners is that the user can *see* the door is open.
 ///
 /// The same shape as ``MainThread``'s dispatch hook — Core declares it, the
 /// platform backend installs one at startup.
 public enum AgentIndicator {
     private static let lock = NSLock()
-    private nonisolated(unsafe) static var hook: (@Sendable (AgentState) -> Void)?
+    private nonisolated(unsafe) static var hook: (@Sendable (AgentIndicatorUpdate) -> Void)?
 
     /// Called once by a backend during startup.
-    public static func install(_ hook: @escaping @Sendable (AgentState) -> Void) {
+    public static func install(_ hook: @escaping @Sendable (AgentIndicatorUpdate) -> Void) {
         lock.lock()
         defer { lock.unlock() }
         self.hook = hook
     }
 
-    static var installed: (@Sendable (AgentState) -> Void)? {
+    /// The standard indicator for a backend with a system tray: a status item
+    /// that appears while agent access is open and disappears when it closes,
+    /// with a menu to turn it off.
+    ///
+    /// The *behaviour* lives here rather than in each backend so there's one
+    /// definition of what the user sees, and so it can't be quietly varied per
+    /// platform. Backends supply only a tray.
+    ///
+    /// Shown from the moment access is **enabled**, not from the moment a
+    /// client connects: the port is open and anyone holding the token can
+    /// connect, so a user who forgot they'd allowed it would otherwise see
+    /// nothing at all.
+    public static func installTray(_ makeTray: @escaping @MainActor @Sendable () -> any Tray) {
+        let holder = TrayIndicatorHolder(makeTray: makeTray)
+        install { update in
+            Task { await MainThread.run { holder.apply(update) } }
+        }
+    }
+
+    static var installed: (@Sendable (AgentIndicatorUpdate) -> Void)? {
         lock.lock()
         defer { lock.unlock() }
         return hook

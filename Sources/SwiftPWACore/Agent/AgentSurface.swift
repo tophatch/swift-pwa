@@ -42,7 +42,7 @@ public final class AgentSurface: @unchecked Sendable {
     /// Called with each state change so a backend can show or hide its
     /// indicator. Set once at install; not part of the app-facing API, since an
     /// app that could replace it could hide the fact that it's attached.
-    private var indicator: (@Sendable (AgentState) -> Void)?
+    private var indicator: (@Sendable (AgentIndicatorUpdate) -> Void)?
 
     public init(tools: [AgentTool]) {
         self.tools = tools
@@ -124,7 +124,7 @@ public final class AgentSurface: @unchecked Sendable {
 
     /// Attach the live app context and the backend's indicator. Called once by
     /// ``AgentPlugin`` at registration; not public API.
-    package func install(context: any AppContext, indicator: (@Sendable (AgentState) -> Void)?) {
+    package func install(context: any AppContext, indicator: (@Sendable (AgentIndicatorUpdate) -> Void)?) {
         lock.lock()
         self.context = context
         self.indicator = indicator
@@ -190,7 +190,10 @@ public final class AgentSurface: @unchecked Sendable {
         let indicator = indicator
         lock.unlock()
         for observer in observers { observer(state) }
-        indicator?(state)
+        // The indicator gets a way to revoke as well as the state: it's often
+        // the only agent-access UI in front of the user when the app's own
+        // window isn't.
+        indicator?(AgentIndicatorUpdate(state: state, disable: { [weak self] in self?.disable() }))
     }
 }
 

@@ -206,6 +206,22 @@ The properties that matter:
 `agent.enable` would widen its own access, which makes the user's gate
 decorative.
 
+### The indicator
+
+While access is open, swift-pwa shows a **system-tray status item** — waiting or
+connected, with a menu item to turn access off. It's runtime-owned: the app
+doesn't create it, can't restyle it, and can't hide it.
+
+That's the point. Consent can't be enforced in native code, so the design goal
+is narrower: a developer who skips asking can't also make the fact invisible. A
+window-title suffix was the cheaper option and fails exactly this test — the
+app's next `setTitle` overwrites it.
+
+It appears from the moment access is **enabled**, not from the moment a client
+connects, since the port is open either way and a user who forgot they'd allowed
+it should still see something. Being tray-based, it's **desktop-only**: iOS and
+Android have no equivalent surface, and the relay is a desktop CLI anyway.
+
 ### The control protocol
 
 Newline-delimited JSON on `127.0.0.1`, one request per line. Every frame

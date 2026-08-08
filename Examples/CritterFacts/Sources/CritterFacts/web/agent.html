@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <title>Agent access · Critter Facts</title>
+    <style>
+        :root {
+            --bg: #0e1116; --ink: #e9eef5; --muted: #8b97a7; --accent: #5fd0a0;
+            --accent-ink: #06231a; --line: #232a35; --card: #171c24;
+            --warn: #e8b465; --danger: #e88a8a;
+        }
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg: #f4f6f9; --card: #ffffff; --ink: #1b2330; --muted: #5c6775;
+                --accent: #1f9d70; --accent-ink: #ffffff; --line: #dce2ea;
+                --warn: #9a6b12; --danger: #b23c3c;
+            }
+        }
+        * { box-sizing: border-box; }
+        html, body { margin: 0; height: 100%; }
+        body {
+            background: var(--bg); color: var(--ink);
+            font: 15px/1.55 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+            display: flex; flex-direction: column;
+        }
+        .bar {
+            display: flex; align-items: center; gap: 12px; padding: 12px 16px;
+            border-bottom: 1px solid var(--line);
+            padding-top: calc(12px + env(safe-area-inset-top));
+        }
+        .back {
+            text-decoration: none; color: var(--ink); font-weight: 700;
+            border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px;
+        }
+        .back:active { transform: translateY(1px); }
+        main {
+            flex: 1; overflow-y: auto; padding: 28px 20px 40px;
+            display: flex; flex-direction: column; align-items: center;
+        }
+        .sheet { width: min(560px, 100%); display: flex; flex-direction: column; gap: 28px; }
+
+        h1 { font-size: 22px; margin: 0 0 6px; letter-spacing: -0.01em; }
+        .lede { color: var(--muted); margin: 0; }
+
+        /* Whitespace and alignment carry the grouping — no boxes around
+           everything. The one framed element is the connection detail, which is
+           genuinely a different kind of thing (something to copy). */
+        .tools { display: flex; flex-direction: column; gap: 2px; margin: 0; padding: 0; list-style: none; }
+        .tool { display: flex; gap: 12px; align-items: baseline; padding: 9px 0; border-bottom: 1px solid var(--line); }
+        .tool:last-child { border-bottom: 0; }
+        .tool code { font: 13px/1.4 ui-monospace, SFMono-Regular, Menlo, monospace; color: var(--ink); }
+        .tool .what { color: var(--muted); flex: 1; }
+        .tag {
+            font-size: 11px; letter-spacing: 0.04em; text-transform: uppercase;
+            color: var(--muted); white-space: nowrap; align-self: center;
+        }
+        .tag.write { color: var(--warn); }
+        .tag.danger { color: var(--danger); }
+
+        .summary { font-weight: 600; }
+        .summary .off { color: var(--muted); font-weight: 400; }
+
+        button {
+            font: inherit; font-weight: 600; border: 0; border-radius: 12px;
+            padding: 12px 18px; cursor: pointer;
+            background: var(--accent); color: var(--accent-ink);
+        }
+        button.ghost { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+        button:active { transform: translateY(1px); }
+        button:disabled { opacity: 0.5; cursor: default; }
+        .actions { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+
+        .conn {
+            background: var(--card); border: 1px solid var(--line); border-radius: 14px;
+            padding: 16px 18px; display: flex; flex-direction: column; gap: 12px;
+        }
+        .conn h2 { font-size: 13px; text-transform: uppercase; letter-spacing: 0.05em;
+                   color: var(--muted); margin: 0; font-weight: 600; }
+        pre {
+            margin: 0; overflow-x: auto; font: 12.5px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace;
+            color: var(--ink);
+        }
+        .live { display: flex; align-items: center; gap: 9px; color: var(--muted); font-size: 14px; }
+        .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); flex: none; }
+        .dot.on { background: var(--accent); }
+        .note { color: var(--muted); font-size: 13.5px; margin: 0; }
+        .err { color: var(--danger); }
+        [hidden] { display: none !important; }
+    </style>
+</head>
+<body>
+    <div class="bar">
+        <a class="back" href="index.html">← Back</a>
+    </div>
+
+    <main>
+        <div class="sheet">
+            <div>
+                <h1>Agent access</h1>
+                <p class="lede">
+                    Let an AI agent use this app's own commands. Off by default, and
+                    only until you quit — nothing is remembered between launches.
+                </p>
+            </div>
+
+            <div>
+                <p class="summary" id="summary">Loading…</p>
+                <ul class="tools" id="tools"></ul>
+            </div>
+
+            <div class="actions">
+                <button id="toggle" disabled>Allow agent access</button>
+                <span class="live"><span class="dot" id="dot"></span><span id="live">Off</span></span>
+            </div>
+
+            <div class="conn" id="conn" hidden>
+                <h2>Connect an agent</h2>
+                <p class="note">Add this to your agent host's MCP configuration. The token is new each time you allow access.</p>
+                <pre id="snippet"></pre>
+                <div class="actions">
+                    <button class="ghost" id="copy">Copy</button>
+                </div>
+            </div>
+
+            <p class="note" id="error" hidden></p>
+
+            <p class="note">
+                While access is on, swift-pwa shows a status item in the system tray —
+                it isn't this app's to hide, and you can turn access off from there too.
+            </p>
+        </div>
+    </main>
+
+    <script>
+        const $ = (id) => document.getElementById(id);
+        const bridge = window.__SWIFT_PWA__;
+        let current = null;
+
+        // Risk tiering comes from the annotations the developer declared, which
+        // is what makes this a question someone can answer: "4 read-only tools,
+        // 1 that can delete" beats "allow agent access?".
+        function tier(tool) {
+            if (tool.destructive) return { label: "can delete", cls: "danger" };
+            if (tool.readOnly) return { label: "read-only", cls: "" };
+            return { label: "makes changes", cls: "write" };
+        }
+
+        function summarise(tools) {
+            const counts = { "read-only": 0, "makes changes": 0, "can delete": 0 };
+            for (const t of tools) counts[tier(t).label]++;
+            const parts = Object.entries(counts)
+                .filter(([, n]) => n > 0)
+                .map(([label, n]) => `${n} ${label}`);
+            if (!parts.length) return "This app offers no agent tools.";
+            return `${tools.length} tool${tools.length === 1 ? "" : "s"} — ${parts.join(", ")}.`;
+        }
+
+        function renderTools(tools) {
+            $("summary").textContent = summarise(tools);
+            $("tools").replaceChildren(...tools.map((t) => {
+                const li = document.createElement("li");
+                li.className = "tool";
+                const code = document.createElement("code");
+                code.textContent = t.command;
+                const what = document.createElement("span");
+                what.className = "what";
+                what.textContent = t.description;
+                const tag = document.createElement("span");
+                const info = tier(t);
+                tag.className = "tag " + info.cls;
+                tag.textContent = info.label;
+                li.append(code, what, tag);
+                return li;
+            }));
+        }
+
+        function snippetFor(state) {
+            // The relay is the CLI: an agent host spawns it, and it talks to
+            // this running app. No HTTP server inside the app.
+            return JSON.stringify({
+                mcpServers: {
+                    critterfacts: {
+                        command: "swift-pwa",
+                        args: ["mcp", "--attach", String(state.port), "--token", state.token]
+                    }
+                }
+            }, null, 2);
+        }
+
+        function render(state) {
+            current = state;
+            renderTools(state.tools || []);
+            $("toggle").disabled = false;
+            $("toggle").textContent = state.enabled ? "Turn off agent access" : "Allow agent access";
+            $("dot").classList.toggle("on", !!state.enabled);
+            $("live").textContent = !state.enabled
+                ? "Off"
+                : state.attached ? "An agent is connected" : "On — waiting for an agent";
+            $("conn").hidden = !state.enabled;
+            if (state.enabled) $("snippet").textContent = snippetFor(state);
+        }
+
+        function fail(e) {
+            $("error").hidden = false;
+            $("error").className = "note err";
+            $("error").textContent = String((e && e.message) || e);
+        }
+
+        $("toggle").addEventListener("click", async () => {
+            $("toggle").disabled = true;
+            try {
+                render(await bridge.invoke(current && current.enabled ? "agent.disable" : "agent.enable"));
+            } catch (e) {
+                fail(e);
+                $("toggle").disabled = false;
+            }
+        });
+
+        $("copy").addEventListener("click", async () => {
+            try {
+                await bridge.invoke("clipboard.writeText", { text: $("snippet").textContent });
+                $("copy").textContent = "Copied";
+                setTimeout(() => ($("copy").textContent = "Copy"), 1200);
+            } catch (e) {
+                fail(e);
+            }
+        });
+
+        // Subscribe rather than poll: a client attaching or dropping happens in
+        // the runtime, so a page that polled would be stale exactly when it
+        // matters. The first event carries the current state.
+        bridge.subscribe("agent.state", undefined, render, fail);
+    </script>
+</body>
+</html>

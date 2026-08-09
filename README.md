@@ -309,7 +309,7 @@ try runtime.run { ctx in
     _ = try ctx.createWindow(.init(
         title: "Hello",
         size: .init(width: 1024, height: 768),
-        content: .bundled((Bundle.main.resourceURL ?? Bundle.main.bundleURL).appendingPathComponent("web"))
+        content: try .bundledWeb(entry: "index.html")   // finds web/ wherever this build put it
     ))
 }
 ```

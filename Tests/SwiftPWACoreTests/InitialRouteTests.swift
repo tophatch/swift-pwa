@@ -1,9 +1,7 @@
+import _SwiftPWATestSupport
 import Foundation
 @testable import SwiftPWACore
 import Testing
-#if os(Windows)
-    import WinSDK
-#endif
 
 /// `SWIFT_PWA_INITIAL_ROUTE` normalization. The take-once behaviour itself
 /// isn't exercised here: `InitialRoute.take` reads process-wide state, and a
@@ -18,29 +16,9 @@ struct InitialRouteTests {
     private func withRoute<T>(_ value: String?, _ body: () throws -> T) rethrows -> T {
         let key = InitialRoute.environmentVariable
         let previous = ProcessInfo.processInfo.environment[key]
-        setEnvironment(key, value)
-        defer { setEnvironment(key, previous) }
+        setEnvironmentVariable(key, value)
+        defer { setEnvironmentVariable(key, previous) }
         return try body()
-    }
-
-    /// `setenv` / `unsetenv` aren't in scope on Windows. Go through
-    /// `SetEnvironmentVariableW` there rather than the CRT's `_putenv_s`,
-    /// because it's the Win32 environment *block* that
-    /// `ProcessInfo.processInfo.environment` reads — the CRT keeps its own copy,
-    /// which wouldn't be visible to the code under test.
-    private func setEnvironment(_ key: String, _ value: String?) {
-        #if os(Windows)
-            key.withCString(encodedAs: UTF16.self) { name in
-                if let value {
-                    value.withCString(encodedAs: UTF16.self) { _ = SetEnvironmentVariableW(name, $0) }
-                } else {
-                    // A null value deletes the variable.
-                    _ = SetEnvironmentVariableW(name, nil)
-                }
-            }
-        #else
-            if let value { setenv(key, value, 1) } else { unsetenv(key) }
-        #endif
     }
 
     @Test("unset means no route")

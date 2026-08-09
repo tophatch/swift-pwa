@@ -456,49 +456,23 @@ enum Templates {
                 // a normal build.
                 content = .remote(devURL)
             } else {
-                // On Android the WebView resolves bundled assets via the
-                // virtual `https://swift-pwa.local/` host — see
-                // SwiftPWAAndroid's WebViewAssetLoader. On desktop the
-                // bundled web/ ships inside the resource bundle:
-                //   - macOS: <App>.app/Contents/Resources/web
-                //   - iOS:   <App>.app/web
-                //   - Linux: usr/share/<exe>/web (AppImage; not Bundle-resolvable)
-                //   - Windows: alongside the .exe
-                // `resourceURL` is the cross-platform answer for Apple
-                // (it points at `Contents/Resources/` on macOS and at the
-                // bundle root on iOS); fall back to `bundleURL` for hosts
-                // where corelibs-foundation doesn't synthesise one.
-                #if os(Android)
-                    let webRoot = URL(fileURLWithPath: "/android_asset/web")
-                #else
-                    let webRoot: URL
-                    if EmbeddedWebAssets.isPresent {
-                        // Single-file build (Windows `--single-file`): web/ is
-                        // embedded in the exe and served from memory, so the
-                        // backend ignores this path — and there's no disk web/
-                        // to check.
-                        webRoot = URL(fileURLWithPath: ".")
-                    } else {
-                        webRoot = (Bundle.main.resourceURL ?? Bundle.main.bundleURL)
-                            .appendingPathComponent("web")
-                        if !FileManager.default.fileExists(atPath: webRoot.path) {
-                            // Fail loudly rather than hand a blank window to the
-                            // user: the WKWebView / WebKitGTK / WebView2 schemes
-                            // all surface "missing index.html" as a silently
-                            // blank page, which is the hardest possible thing
-                            // to debug.
-                            fatalError("swift-pwa: web bundle not found at \\(webRoot.path) — did the bundler copy `web/` into Resources?")
-                        }
-                    }
-                #endif
-                // `entry` is seeded from pwa.json's `web.entry` at `init`
-                // time; edit it here to change which file the window opens.
-                // `spaFallback` (from pwa.json's `web.spa_fallback`) serves
-                // `entry` for client-side routes that name no file on disk, so
-                // history-mode deep links / hard reloads work under the custom
-                // scheme instead of 404ing.
-                content = .bundled(directory: webRoot, entry: "\(entryLiteral)", spaFallback: \(spaFallback))
+                // Wherever this app's web/ turns out to be: the bundle
+                // `swift-pwa build` produced, Android's asset host, a
+                // single-file exe's embedded overlay, or — under
+                // `swift-pwa dev` / `drive` — your source web/ directory.
+                // Throws listing every path it tried, rather than handing you
+                // a blank window, which is the hardest thing to debug.
+                //
+                // `entry` is seeded from pwa.json's `web.entry` at `init` time.
+                // `spaFallback` (from `web.spa_fallback`) serves `entry` for
+                // client-side routes that name no file on disk, so history-mode
+                // deep links work under the custom scheme instead of 404ing.
+                content = try WindowContent.bundledWeb(
+                    entry: "\(entryLiteral)",
+                    spaFallback: \(spaFallback)
+                )
             }
+
 
             // This WindowConfig is the *runtime* source of truth for the
             // window — pwa.json's `window` block only seeds these values

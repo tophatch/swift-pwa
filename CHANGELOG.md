@@ -5,6 +5,16 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`swift-pwa drive` now works on an app scaffolded by `swift-pwa init`** — which, embarrassingly, it didn't. Two adopters reported the same thing independently within days of the release: the app dies with *"web bundle not found"* before the driver can attach, and both had hand-written the same workaround (symlink `web/` next to the binary). `drive` runs the bare SwiftPM product, and a plain `swift build` stages no `web/` — only `swift-pwa build` does — so the generated `App.swift` hit its own `fatalError` first. **It escaped every check because both in-tree examples declare `resources: [.copy("web")]` *and* carry a `Bundle.module` fallback the scaffold never emitted**; the examples aren't representative of what `init` produces, so "verified on macOS" verified the one configuration that happened to work. Three cases had to be covered, and only the first had any workaround: web inside the SwiftPM target and declared as a resource; inside but *not* declared (declaring it copies the tree on every build — one adopter's is **2.2 GB of art**); and outside the target entirely (`../public`), where it can't be a SwiftPM resource at all. Fixed on both sides. `drive` now sets **`SWIFT_PWA_WEB_ROOT`** to the project's real `web.directory` — no copy, no staging, and it handles the outside-the-target case — *and* symlinks that directory next to the binary, which rescues apps scaffolded before this change without them touching a line of code.
+
+- **Finding the web bundle is the runtime's job now, not generated code's.** The resolution used to be ~30 lines copied into every `App.swift` at `init` time — the Android asset path, the single-file-exe case and the failure message all frozen in user code, so a fix reached only projects created afterwards, an adopter with a non-standard layout had to hand-edit, and tooling had no way in. New `WindowContent.bundledWeb(entry:spaFallback:fallbacks:)` resolves in order — embedded overlay, `SWIFT_PWA_WEB_ROOT`, Android's asset host, `Bundle.main.resourceURL/web`, then any `fallbacks` (pass `Bundle.module.bundleURL` if you declare `web` as a SwiftPM resource) — and **throws listing every path it tried** instead of calling `fatalError`, because a blank window is the hardest thing to debug. The scaffold is one line. The override is read **only in driver-compiled (debug) builds**: honouring it in a shipped binary would let anyone aim an installed app at web content of their choice, which then runs behind the app's full `invoke` surface.
+
+- **`drive`'s "never announced a driver port" now leads with what happened.** It used to open with "the control socket is compiled into debug builds only — was this a release build?", which is the wrong first hypothesis when the app has just printed a fatal error and exited. It now checks whether the process is still alive: an app that *exited* is reported with its status and pointed at the web-bundle cause, and the release-build theory is offered only when the app is genuinely still running.
+
 ## [0.9.4] - 2026-08-08
 
 ### Added

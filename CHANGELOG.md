@@ -5,6 +5,18 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The agent-facing CLI surfaces never worked on Windows at all.** `swift-pwa drive` and `swift-pwa agent check` / `codegen` both shell out to `swift`, and both did it as `/usr/bin/env swift` — a path that doesn't exist on Windows, so every invocation died before doing any work with a Foundation error that named no file: *"The file doesn't exist." … WindowsError Code=2*. `Shell.resolveExecutable` has had a full Windows PATH search (including `.exe` / `.cmd` / `.bat` suffixes) since the bundlers needed one, and `Dev.swift` and `Doctor.swift` both carry an explicit `#if os(Windows)` branch for exactly this — the two v0.9.4 surfaces simply didn't get the memo. They now call `swift` by bare name and let the resolver do its job, which is the same binary `env` would have found on POSIX. A third caller, `ExecutableNameResolver`, was failing the same way but **silently**: it catches the error and falls back to the manifest's `binaryName`, so on Windows the "discover the executable from the package" feature had quietly not been discovering anything. Found by running the driver against a real Windows app for the first time — CI builds the code but never launches it, so nothing was exercising these paths.
+
+- **`drive shot` on Windows wrote a correct screenshot and then failed to read it.** `CapturePreview` renders to an `IStream` over a temp file, and the shim opened that file `STGM_SHARE_EXCLUSIVE`, releasing its own reference in the completion handler on the assumption that this closed the file. It doesn't — WebView2 holds a reference of its own and drops it on its own schedule — so the PNG was complete on disk (419,738 bytes of correct, verified render) but still locked when the Swift side read it. Every screenshot failed as `E_HANDLER: the snapshot reported success but wrote nothing`, and because the cleanup couldn't open the file either, each one **leaked a PNG into the temp directory**. The stream now opens `STGM_SHARE_DENY_NONE`. Fixed alongside a doubled path separator (`…\Temp\\swift-pwa-snapshot-….png`) that Win32 normalizes but swift-corelibs `FileManager` does not — a real second bug on the same line, though the share mode was what actually broke it.
+
+### Documentation
+
+- **Windows needs an interactive desktop to be driven, which nothing said.** WebView2 refuses to create a controller in Windows' non-interactive services session, which is where an SSH shell lands — so over SSH the app starts, the driver attaches, `info` answers correctly, and then every page-dependent verb times out behind one line of stderr (`CreateCoreWebView2Controller failed: 0x80070578`, `ERROR_INVALID_WINDOW_HANDLE`). Nothing is broken; there's just no desktop to put a window on. [docs/app-driver.md](docs/app-driver.md) and the testing tutorial now say so and give the `schtasks /it` recipe for launching into the logged-on session and attaching across it — the control socket is loopback TCP, so it crosses the session boundary fine. The per-backend table's Windows row no longer says "not yet exercised against a running Windows app".
+
 ## [0.9.5] - 2026-08-09
 
 ### Fixed

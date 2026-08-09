@@ -101,6 +101,8 @@ swift-pwa drive info
 
 Where input isn't available, dispatch DOM events through `eval` instead and remember they're untrusted.
 
+**On Windows, the app needs an interactive desktop.** Locally that's automatic. Over SSH it isn't: Windows OpenSSH puts you in the non-interactive services session, WebView2 won't create a controller there (`CreateCoreWebView2Controller failed: 0x80070578`), and every page-dependent verb then times out. Launch the app in the logged-on session and attach to it — see [the driver reference](../app-driver.md#per-backend-support) for the `schtasks` recipe.
+
 ---
 
 ## Step 5 — Start on the screen you care about

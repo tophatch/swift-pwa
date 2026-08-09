@@ -129,8 +129,34 @@ best-effort `setPosition`.
 | **iOS** | Yes | Yes | Same adapter as macOS; Simulator is the practical target. Not yet exercised on device |
 | **Linux GTK3** | Yes | Yes | `webkit_web_view_get_snapshot` → cairo PNG |
 | **Linux GTK4** | Yes | Yes | `webkit_web_view_get_snapshot` → `GdkTexture` → PNG. Wayland has no screen-grab fallback, so the renderer snapshot is the only option |
-| **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Compiles in CI (shim + adapter); **not yet exercised against a running Windows app** |
+| **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Verified against a running app on Windows 11 x64 — but the app has to be on an interactive desktop, see below |
 | **Android** | — | — | Already scriptable over CDP — see [android-on-device-testing.md](android-on-device-testing.md) |
+
+> **Windows: the app needs an interactive desktop.** Driving over SSH is the
+> case that bites, because Windows OpenSSH puts your shell in **session 0**, the
+> non-interactive services session. WebView2 refuses to create a controller
+> there — the app starts, the driver attaches, `info` answers, and then every
+> page-dependent verb times out behind one line on stderr:
+>
+> ```text
+> swift-pwa: CreateCoreWebView2Controller failed: 0x80070578
+> ```
+>
+> `0x80070578` is `ERROR_INVALID_WINDOW_HANDLE`. Nothing is wrong with the app
+> or the driver; there is simply no desktop to put a window on. Run the app in
+> the logged-on user's session instead and attach to it, which is what
+> [Driving an app you launched yourself](#driving-an-app-you-launched-yourself)
+> is for. From an SSH shell, a scheduled task with `/it` gets you there:
+>
+> ```bat
+> schtasks /create /tn DriveMyApp /tr "C:\path\to\launch.bat" /sc once /st 23:59 /f /it /ru <user>
+> schtasks /run /tn DriveMyApp
+> ```
+>
+> where `launch.bat` sets `SWIFT_PWA_DRIVE` and redirects the app's stdout to a
+> file you can read the port and token back from. The control socket is loopback
+> TCP, which crosses the session boundary fine — so the CLI can keep running in
+> the SSH shell. A local RDP or console session needs none of this.
 
 ### Synthetic input
 

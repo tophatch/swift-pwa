@@ -1,3 +1,4 @@
+import _SwiftPWATestSupport
 import Foundation
 @testable import SwiftPWACore
 import Testing
@@ -8,24 +9,11 @@ import Testing
 /// `.serialized` because the override is a process-global environment variable.
 @Suite("Web root", .serialized)
 struct WebRootTests {
-    /// Sets `SWIFT_PWA_WEB_ROOT` for the duration of `body`, restoring it after.
+    /// Sets `SWIFT_PWA_WEB_ROOT` for the duration of `body`. The helper lives in
+    /// test support because the Windows path is a compile error you can't catch
+    /// locally — see `withEnvironmentVariable`.
     static func withOverride(_ value: String?, _ body: () throws -> Void) rethrows {
-        let key = WebRoot.environmentVariable
-        let previous = ProcessInfo.processInfo.environment[key]
-        setOverride(key, value)
-        defer { setOverride(key, previous) }
-        try body()
-    }
-
-    private static func setOverride(_ key: String, _ value: String?) {
-        #if os(Windows)
-            _ = key.withCString(encodedAs: UTF16.self) { name in
-                (value ?? "")
-                    .withCString(encodedAs: UTF16.self) { SetEnvironmentVariableW(name, value == nil ? nil : $0) }
-            }
-        #else
-            if let value { setenv(key, value, 1) } else { unsetenv(key) }
-        #endif
+        try withEnvironmentVariable(WebRoot.environmentVariable, value, body)
     }
 
     @Test("a directory that exists is found")

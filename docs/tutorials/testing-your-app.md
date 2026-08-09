@@ -41,6 +41,11 @@ That builds your app, launches it, waits for the page, runs the JS, prints the v
 
 ---
 
+If it stops with **"web bundle not found"**, your app predates
+`WindowContent.bundledWeb` — `drive` symlinks your `web/` next to the binary to
+cover exactly that, so this should be rare. See
+[where the web bundle comes from](../app-driver.md#where-the-web-bundle-comes-from).
+
 ## Step 2 — Screenshot the real thing
 
 ```bash

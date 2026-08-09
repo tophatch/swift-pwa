@@ -324,7 +324,7 @@ struct InitTests {
         )
     }
 
-    @Test("App.swift template resolves the web bundle via resourceURL")
+    @Test("App.swift template defers web-bundle resolution to the runtime")
     func webBundleResolvesViaResourceURL() async throws {
         let parent = tmpDir()
         defer { try? FileManager.default.removeItem(at: parent) }
@@ -335,12 +335,14 @@ struct InitTests {
         try await cmd.run()
 
         let appSwift = try String(contentsOf: target.appendingPathComponent("Sources/MyApp/App.swift"), encoding: .utf8)
-        // `resourceURL` gives the right path on both macOS
-        // (`Contents/Resources/`) and iOS (bundle root); the old
-        // `bundleURL.appendingPathComponent("web")` resolved to
-        // `<App>.app/web` on macOS where the bundler doesn't put it.
-        #expect(appSwift.contains("Bundle.main.resourceURL"))
-        #expect(!appSwift.contains("Bundle.main.bundleURL.appendingPathComponent(\"web\")"))
+        // Resolution belongs to the runtime, not to generated code frozen at
+        // scaffold time — that's what let `swift-pwa drive` fail on every
+        // scaffolded app while both in-tree examples worked.
+        #expect(appSwift.contains("WindowContent.bundledWeb"))
+        #expect(!appSwift.contains("Bundle.main.resourceURL"))
+        // And it throws rather than trapping: a fatalError in generated code
+        // can't be caught, logged, or recovered from by the app.
+        #expect(!appSwift.contains("fatalError(\"swift-pwa: web bundle not found"))
     }
 
     @Test("stamps the generated App.swift with the CLI version so doctor can flag drift")

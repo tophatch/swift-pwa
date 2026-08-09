@@ -239,6 +239,41 @@ carries the protocol stream and the spec requires it contain nothing else.
 > half (a `pwa.json` allowlist, checked against the app's real command catalog)
 > has landed and the runtime consent gate is next.
 
+## Where the web bundle comes from
+
+`drive` runs the **bare SwiftPM product**, not the bundle `swift-pwa build`
+produces — that's what makes a driven run fast. But a plain `swift build` stages
+no `web/` anywhere, so the app has nothing to serve unless something supplies it.
+
+`drive` does two things about that before launching:
+
+1. Sets **`SWIFT_PWA_WEB_ROOT`** to your `pwa.json` `web.directory`. An app whose
+   `App.swift` calls `WindowContent.bundledWeb(...)` picks it up. This is the one
+   that handles a web directory **outside** the SwiftPM target (`../public`), and
+   a tree too large to declare as a SwiftPM resource.
+2. **Symlinks** that directory next to the built binary, where an app scaffolded
+   before `bundledWeb` looks (`Bundle.main.resourceURL/web`). A link rather than
+   a copy — a real app's web directory is not small.
+
+If your app was scaffolded earlier and resolves the web root itself, either
+leave it (the symlink covers you) or move to the one-liner:
+
+```swift
+content = try WindowContent.bundledWeb(entry: "index.html", spaFallback: false)
+```
+
+Declaring `resources: [.copy("web")]` also works, and then you pass
+`Bundle.module.bundleURL.appendingPathComponent("web")` as a `fallbacks` entry —
+but SwiftPM copies the tree on every build, so it's the wrong tool for anything
+large.
+
+> **Don't reach for `#filePath`** to find your source tree at runtime. It bakes
+> an absolute path from the build machine into the binary, which is wrong the
+> moment the app runs anywhere else — and it ships in release builds.
+> `SWIFT_PWA_WEB_ROOT` is read **only** in driver-compiled (debug) builds, on
+> purpose: an installed app that honoured it would let anyone point it at web
+> content of their choice, running behind the app's full `invoke` surface.
+
 ## Wire protocol
 
 You don't need this to use `swift-pwa drive`; it's here so you can write your

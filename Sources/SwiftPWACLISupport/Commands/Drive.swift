@@ -437,19 +437,64 @@ struct LaunchedApp {
             throw DriveError.launch("built \(exe) but found no executable at \(executable.path)")
         }
 
+        let webRoot = cwd.appendingPathComponent(pwa.web.directory)
+        stageWebRoot(webRoot, besideBinaryAt: URL(fileURLWithPath: binPath), log: log)
+
         return try launch(
             executable: executable,
             cwd: cwd,
             timeout: options.timeout,
-            route: options.route
+            route: options.route,
+            webRoot: webRoot
         )
+    }
+
+    /// Make the app's `web/` reachable from the bare SwiftPM binary.
+    ///
+    /// `swift-pwa build` stages `web/` into the bundle; plain `swift build`
+    /// doesn't stage anything, so a driven app looks for
+    /// `<bin-path>/web` and finds nothing. Apps built against a runtime with
+    /// `WindowContent.bundledWeb` read `SWIFT_PWA_WEB_ROOT` instead and don't
+    /// need this — but an app scaffolded before that still resolves
+    /// `Bundle.main.resourceURL/web` and dies before the driver can attach, so
+    /// a **symlink** puts the real directory exactly where it looks.
+    ///
+    /// A symlink rather than a copy because a real app's web directory is not
+    /// small — one adopter's is 2.2 GB of art, and a per-build copy of that is
+    /// not a fix. Best-effort: if it can't be made, the launch still goes ahead
+    /// (the env var may well carry it) and the app's own error explains the
+    /// rest.
+    private static func stageWebRoot(_ webRoot: URL, besideBinaryAt binDir: URL, log: FileHandle) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: webRoot.path) else { return }
+        let link = binDir.appendingPathComponent("web")
+
+        // Leave a real directory alone — that's a build product, not ours to
+        // replace. Refresh only a link we could have made ourselves.
+        if let existing = try? fm.destinationOfSymbolicLink(atPath: link.path) {
+            if existing == webRoot.path { return }
+            try? fm.removeItem(at: link)
+        } else if fm.fileExists(atPath: link.path) {
+            return
+        }
+
+        do {
+            try fm.createSymbolicLink(at: link, withDestinationURL: webRoot)
+        } catch {
+            log.writeQuietly(Data("""
+            swift-pwa: couldn't link web/ next to the binary (\(error.localizedDescription)). \
+            If the app can't find its web bundle, it was built before \
+            `WindowContent.bundledWeb` — see docs/app-driver.md.\n
+            """.utf8))
+        }
     }
 
     private static func launch(
         executable: URL,
         cwd: URL,
         timeout: TimeInterval,
-        route: String?
+        route: String?,
+        webRoot: URL? = nil
     ) throws -> LaunchedApp {
         let process = Process()
         process.executableURL = executable
@@ -461,6 +506,11 @@ struct LaunchedApp {
         // without the usual hack of patching `location.replace` into the built
         // bundle, which mutates the artifact under test.
         if let route { env[InitialRoute.environmentVariable] = route }
+        // Point the runtime at the project's real web/ rather than hoping one
+        // was staged. Handles the cases a staged link can't: a web directory
+        // outside the SwiftPM target (`../public`), and a tree too large to
+        // declare as a SwiftPM resource.
+        if let webRoot { env[WebRoot.environmentVariable] = webRoot.path }
         process.environment = env
 
         let stdout = Pipe()
@@ -482,9 +532,24 @@ struct LaunchedApp {
         try process.run()
 
         guard let announcement = handshake.wait(seconds: min(timeout, 60)) else {
+            // Lead with what actually happened. An app that *exited* almost
+            // always died in `configure` — most often because it couldn't find
+            // its web bundle — and telling that person to check their build
+            // configuration sends them somewhere else entirely.
+            if !process.isRunning {
+                throw DriveError.launch("""
+                the app exited (status \(process.terminationStatus)) before announcing a driver port.
+
+                Its own output is above — a `configure` that throws or calls fatalError lands here. The \
+                usual cause is the web bundle: a bare `swift build` doesn't stage one. `drive` links \
+                yours next to the binary and sets \(WebRoot.environmentVariable), which an app using \
+                `WindowContent.bundledWeb` picks up; an app scaffolded before that resolves \
+                `Bundle.main.resourceURL/web` itself and may need updating. See docs/app-driver.md.
+                """)
+            }
             process.terminate()
             throw DriveError.launch("""
-            the app started but never announced a driver port.
+            the app is running but never announced a driver port.
 
             The control socket is compiled into debug builds only. If this was a release build, either
             drive the debug build instead (drop --configuration release) or rebuild with

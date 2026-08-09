@@ -364,6 +364,34 @@ stream's `onTermination` and terminates the child — so a child can't outlive
 the page that spawned it. To inject a fake in tests, conform to `ProcessRunner`
 / `ProcessChild`. Full reference: [docs/process-plugin.md](process-plugin.md).
 
+## Finding your web bundle
+
+The generated `App.swift` needs one line to locate the app's web directory:
+
+```swift
+content = try WindowContent.bundledWeb(entry: "index.html", spaFallback: false)
+```
+
+It resolves, in order: a single-file exe's embedded overlay, `SWIFT_PWA_WEB_ROOT`
+(driver builds only — what `swift-pwa drive` sets), Android's asset host,
+`Bundle.main.resourceURL/web` (where `swift-pwa build` puts it), then any
+`fallbacks` you pass. It **throws** listing every path it tried rather than
+handing you a blank window.
+
+If you declare `resources: [.copy("web")]` in `Package.swift`, add the module
+bundle so a plain `swift run` finds it too — Core can't reach another module's
+bundle itself:
+
+```swift
+content = try WindowContent.bundledWeb(
+    fallbacks: [Bundle.module.bundleURL.appendingPathComponent("web")]
+)
+```
+
+SwiftPM copies declared resources on every build, so for a large asset tree
+prefer leaving it undeclared and letting `swift-pwa build` stage it — `dev` and
+`drive` supply it during development.
+
 ## Offering commands to an AI agent (desktop only)
 
 `AgentPlugin` declares which of your app's commands are *eligible* to be

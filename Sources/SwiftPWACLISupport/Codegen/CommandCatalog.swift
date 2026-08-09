@@ -60,9 +60,11 @@ enum CommandCatalog {
         // to SWIFT_PWA_DESCRIBE and exits before opening a window; build/run
         // output is inherited so the user sees progress. Nothing we need rides
         // stdout — the catalog is the file.
+        // Bare `swift` rather than `/usr/bin/env swift` — see the note in
+        // `Drive.build`; the launcher form doesn't exist on Windows.
         try await Shell.run(
-            "/usr/bin/env",
-            ["swift", "run", "-c", configuration, exe],
+            "swift",
+            ["run", "-c", configuration, exe],
             cwd: projectRoot,
             envOverrides: [HeadlessDescribe.environmentVariable: catalogURL.path]
         )

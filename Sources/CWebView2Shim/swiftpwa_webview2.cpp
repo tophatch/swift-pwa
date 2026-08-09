@@ -408,9 +408,17 @@ extern "C" void swiftpwa_w2_view_capture_preview(
 
     // A file stream rather than an HGLOBAL one: the capture can be several
     // megabytes, and the Swift side wants the bytes on disk anyway.
+    //
+    // `STGM_SHARE_DENY_NONE`, not `STGM_SHARE_EXCLUSIVE`: releasing our
+    // reference in the completion handler below does *not* necessarily close
+    // the file, because WebView2 holds a reference of its own and drops it on
+    // its own schedule. Under an exclusive share mode the PNG was therefore
+    // fully written but still locked when the Swift side went to read it, so
+    // every screenshot failed as "wrote nothing" and then leaked, since the
+    // cleanup couldn't open it either.
     IStream *stream = nullptr;
     HRESULT hr = SHCreateStreamOnFileEx(
-        path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_EXCLUSIVE,
+        path, STGM_CREATE | STGM_READWRITE | STGM_SHARE_DENY_NONE,
         FILE_ATTRIBUTE_NORMAL, TRUE, nullptr, &stream);
     if (FAILED(hr) || !stream) {
         char buf[80];
@@ -424,8 +432,9 @@ extern "C" void swiftpwa_w2_view_capture_preview(
         COREWEBVIEW2_CAPTURE_PREVIEW_IMAGE_FORMAT_PNG, stream,
         Callback<ICoreWebView2CapturePreviewCompletedHandler>(
             [cb, user, stream](HRESULT inner_hr) -> HRESULT {
-                // Releasing here (rather than on the Swift side) is what
-                // flushes and closes the file before the caller reads it.
+                // Drop our reference as soon as the capture is done. WebView2
+                // may still hold one, which is why the stream is opened with a
+                // permissive share mode rather than an exclusive one.
                 stream->Release();
                 if (FAILED(inner_hr)) {
                     char buf[64];

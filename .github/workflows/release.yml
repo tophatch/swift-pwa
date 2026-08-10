@@ -61,10 +61,24 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
+          # 6.3.1, NOT the 6.1.2 the CI jobs pin. Foundation's file writing is
+          # broken on Windows in 6.1.2, and it broke the *shipped* CLI rather
+          # than the build: `swift-pwa init` died with an access violation
+          # (0xC0000005) writing no files at all, and `drive shot` reported
+          # "Wrote … (419738 bytes)" while leaving 6 zero bytes on disk. Both
+          # were reproduced against this published binary and both are correct
+          # when the same commit is built in release mode with 6.3.1, on the
+          # same machine — so it is the toolchain, not the configuration and not
+          # our code. Nothing in CI caught it because CI never *runs* the
+          # Windows binary it builds.
+          #
+          # Keep this at or above the Swift the Windows verify box uses, and
+          # bump the CI jobs with it rather than letting them drift apart —
+          # a toolchain we don't ship is a toolchain whose bugs we don't see.
           # `swift-version` / `swift-build` replaced the deprecated
-          # `branch` / `tag` inputs; values are unchanged.
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          # `branch` / `tag` inputs.
+          swift-version: swift-6.3.1-release
+          swift-build: 6.3.1-RELEASE
       - name: Install WebView2 SDK + WIL (NuGet)
         shell: pwsh
         run: |

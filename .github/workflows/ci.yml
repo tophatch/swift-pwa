@@ -164,8 +164,8 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          swift-version: swift-6.3.1-release
+          swift-build: 6.3.1-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         # The full package graph compiles CWebView2Shim, which needs these on
@@ -337,14 +337,20 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          # Swift 6.0.x trips a `ucrt -> _Builtin_intrinsics -> ucrt`
-          # cyclic-module-import error against the Windows SDK shipped
-          # on `windows-latest` — fixed in 6.1+. Stay on the latest
-          # 6.1 stable for now; bump as new releases land.
+          # Floor: Swift 6.0.x trips a `ucrt -> _Builtin_intrinsics -> ucrt`
+          # cyclic-module-import error against the Windows SDK on the runner
+          # image — fixed in 6.1+.
+          #
+          # Why not 6.1.2, which this pinned for a long time: Foundation's file
+          # writing is broken on Windows there, and it broke the shipped CLI
+          # rather than the build, so a green Windows job proved nothing. See
+          # the matching note in release.yml — CI and the release must move
+          # together, because a toolchain we build with but don't ship is one
+          # whose bugs we never see, and vice versa.
           # (`swift-version` / `swift-build` replaced the deprecated
-          # `branch` / `tag` inputs; values are unchanged.)
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          # `branch` / `tag` inputs.)
+          swift-version: swift-6.3.1-release
+          swift-build: 6.3.1-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         shell: pwsh

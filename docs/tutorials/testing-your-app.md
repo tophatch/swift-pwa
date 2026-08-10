@@ -6,9 +6,10 @@
 
 New to the bridge? Read [Talking to the native side](talking-to-the-native-side.md) first — though you don't need it for this.
 
-> Uses swift-pwa **0.9.5+**. Desktop only. (`drive` shipped in 0.9.4, but
-> couldn't find the web bundle of an app scaffolded by `swift-pwa init` — so
-> 0.9.5 is the first version where this guide works end to end.)
+> Uses swift-pwa **0.9.5+** — **0.9.6+ on Windows**. Desktop only. (`drive`
+> shipped in 0.9.4 but couldn't find the web bundle of an app scaffolded by
+> `swift-pwa init`, which 0.9.5 fixed. On Windows it couldn't start at all
+> until 0.9.6, and screenshots there failed until the same release.)
 
 ---
 
@@ -100,6 +101,8 @@ swift-pwa drive info
 | **Windows** | Yes | No — needs a composition controller swift-pwa doesn't create |
 
 Where input isn't available, dispatch DOM events through `eval` instead and remember they're untrusted.
+
+**On Windows, the app needs an interactive desktop.** Locally that's automatic. Over SSH it isn't: Windows OpenSSH puts you in the non-interactive services session, WebView2 won't create a controller there (`CreateCoreWebView2Controller failed: 0x80070578`), and every page-dependent verb then times out. Launch the app in the logged-on session and attach to it — see [the driver reference](../app-driver.md#per-backend-support) for the `schtasks` recipe.
 
 ---
 

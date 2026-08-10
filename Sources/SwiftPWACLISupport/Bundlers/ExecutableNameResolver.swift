@@ -38,9 +38,14 @@ enum ExecutableNameResolver {
     private static func soleExecutable(projectRoot: URL) async -> String? {
         let json: String
         do {
+            // Bare `swift` rather than `/usr/bin/env swift` — see the note in
+            // `Drive.build`. This one failed *quietly* on Windows: the throw is
+            // caught below and the resolver falls back to the manifest's
+            // `binaryName`, so auto-discovery silently stopped working there
+            // rather than reporting anything.
             json = try await Shell.capture(
-                "/usr/bin/env",
-                ["swift", "package", "describe", "--type", "json"],
+                "swift",
+                ["package", "describe", "--type", "json"],
                 cwd: projectRoot
             )
         } catch {

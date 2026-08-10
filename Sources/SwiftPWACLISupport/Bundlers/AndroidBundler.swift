@@ -104,6 +104,18 @@ struct AndroidBundler {
             to: project.appendingPathComponent("gradle.properties"),
             atomically: true, encoding: .utf8
         )
+        // `local.properties` is where Gradle reads the SDK (and NDK) location
+        // from. Writing the discovered paths here means the staged project
+        // assembles by hand (`cd <out> && ./gradlew assembleDebug`) and opens
+        // in Android Studio on a machine that never exported ANDROID_HOME —
+        // otherwise the first thing the developer meets is AGP's "SDK location
+        // not found" pointing at a file we could have written.
+        if let properties = AndroidToolchain.localProperties(sdk: AndroidToolchain.sdk()) {
+            try properties.write(
+                to: project.appendingPathComponent("local.properties"),
+                atomically: true, encoding: .utf8
+            )
+        }
 
         // App module.
         let app = project.appendingPathComponent("app")
@@ -385,20 +397,23 @@ struct AndroidBundler {
         // and the SDK's version is parseable we wrap the build in
         // `swiftly run +<major.minor>`, which overrides `.swift-version`.
         let buildTool = Self.androidBuildTool(sdkBundleID: sdk)
+        // Resolved once for the whole loop: what the cached modules under
+        // `.build/<triple>` were compiled against (see
+        // `cleanStaleCrossCompileCacheIfNeeded`).
+        let toolchainIdentity = Self.crossCompileToolchainIdentity(
+            ndk: AndroidToolchain.ndk()?.path, sdkBundleID: sdk
+        )
         var failures: [String] = []
         for abi in abis {
             let triple = tripleFor(abi: abi)
             do {
-                // Guard the stale-incremental-cross-compile hazard: if the
-                // swift-pwa runtime sources changed since this triple was last
-                // built, SwiftPM's Android incremental build can leave a caller
-                // module compiled against an *old* struct layout while core uses
-                // the new one — producing a startup SIGSEGV (a value-witness
-                // retain on a garbage field, e.g. after a field is inserted mid
-                // `WindowConfig`). Fingerprint the runtime sources and wipe the
-                // triple's build dir on a mismatch so the next `swift build`
-                // recompiles everything against one consistent layout.
-                Self.cleanStaleCrossCompileCacheIfNeeded(projectRoot: projectRoot, triple: triple)
+                // Guard the two stale-incremental-cross-compile hazards — a
+                // changed runtime ABI (startup SIGSEGV) and a moved/upgraded NDK
+                // (duplicate `_Builtin_stddef` .pcm) — by wiping the triple's
+                // build dir when either fingerprint moved.
+                Self.cleanStaleCrossCompileCacheIfNeeded(
+                    projectRoot: projectRoot, triple: triple, toolchain: toolchainIdentity
+                )
 
                 // `ai.local_onnx_runtime` needs `libonnxruntime.so` on
                 // `LIBRARY_PATH` *for this ABI's* link step — resolved here
@@ -543,16 +558,29 @@ struct AndroidBundler {
 
     /// Absolute path to the `swiftly` binary, resolved without relying on
     /// `PATH`. Checks `SWIFTLY_BIN_DIR`, `SWIFTLY_HOME_DIR/bin`, then the
-    /// per-platform default install location.
+    /// default home directories swiftly itself uses.
     static func locateSwiftly() -> String? {
-        let env = ProcessInfo.processInfo.environment
+        swiftlyCandidates(env: ProcessInfo.processInfo.environment)
+            .first { FileManager.default.isExecutableFile(atPath: $0) }
+    }
+
+    /// Ordered `swiftly` candidates. `~/.swiftly` first among the defaults:
+    /// that's where swiftly 1.x puts its home (and its `config.json`, which is
+    /// what makes `swiftly run +6.2` resolve a toolchain) unless
+    /// `SWIFTLY_HOME_DIR` says otherwise — including a Homebrew install, whose
+    /// binary lives on `PATH` but whose home doesn't. Missing it meant a
+    /// perfectly normal setup silently fell back to the ambient `swift` and
+    /// failed the cross-compile with a Swift-version mismatch. The two older
+    /// XDG-style locations stay for pre-1.0 installs.
+    static func swiftlyCandidates(env: [String: String]) -> [String] {
         let home = env["HOME"] ?? NSHomeDirectory()
         var candidates: [String] = []
         if let bin = env["SWIFTLY_BIN_DIR"] { candidates.append("\(bin)/swiftly") }
         if let root = env["SWIFTLY_HOME_DIR"] { candidates.append("\(root)/bin/swiftly") }
-        candidates.append("\(home)/.local/share/swiftly/bin/swiftly") // Linux default
-        candidates.append("\(home)/Library/Application Support/swiftly/bin/swiftly") // macOS default
-        return candidates.first { FileManager.default.isExecutableFile(atPath: $0) }
+        candidates.append("\(home)/.swiftly/bin/swiftly")
+        candidates.append("\(home)/.local/share/swiftly/bin/swiftly")
+        candidates.append("\(home)/Library/Application Support/swiftly/bin/swiftly")
+        return candidates
     }
 
     /// Parse the `major.minor` Swift version from a Swift Android SDK bundle id,
@@ -565,38 +593,94 @@ struct AndroidBundler {
         return String(id[range].dropFirst("swift-".count))
     }
 
-    /// Wipe `.build/<triple>` when the swift-pwa runtime sources (the shared-ABI
-    /// surface) have changed since this triple was last cross-compiled, so the
-    /// next `swift build` recompiles caller and library modules against one
-    /// consistent struct layout.
+    /// What `.build/<triple>` was last cross-compiled against: the swift-pwa
+    /// runtime's ABI surface, and the host toolchain that produced the cached
+    /// modules. Stored one field per line, human-readable on purpose — this
+    /// file is what you read when you want to know why a clean was (or wasn't)
+    /// forced.
+    struct CrossCompileStamp: Equatable {
+        let runtime: String
+        let toolchain: String
+
+        var serialized: String {
+            "runtime:\(runtime)\ntoolchain:\(toolchain)\n"
+        }
+
+        static func parse(_ text: String) -> CrossCompileStamp? {
+            var runtime: String?
+            var toolchain: String?
+            for line in text.split(whereSeparator: \.isNewline) {
+                if line.hasPrefix("runtime:") { runtime = String(line.dropFirst("runtime:".count)) }
+                if line.hasPrefix("toolchain:") { toolchain = String(line.dropFirst("toolchain:".count)) }
+            }
+            guard let runtime, let toolchain else { return nil }
+            return CrossCompileStamp(runtime: runtime, toolchain: toolchain)
+        }
+
+        /// Why the cache must be dropped, or `nil` when it's still valid.
+        /// Names the actual culprit — "the NDK moved" and "you bumped
+        /// swift-pwa" want different follow-up from the reader.
+        func reasonToClean(comparedTo previous: CrossCompileStamp?) -> String? {
+            guard let previous else { return "no fingerprint from a previous build" }
+            switch (previous.runtime != runtime, previous.toolchain != toolchain) {
+            case (true, true): return "the swift-pwa runtime and the Android toolchain both changed"
+            case (true, false): return "the swift-pwa runtime changed"
+            case (false, true): return "the Android toolchain changed: \(previous.toolchain) → \(toolchain)"
+            case (false, false): return nil
+            }
+        }
+    }
+
+    /// Wipe `.build/<triple>` when either the swift-pwa runtime sources (the
+    /// shared-ABI surface) or the host Android toolchain has changed since this
+    /// triple was last cross-compiled, so the next `swift build` recompiles
+    /// everything against one consistent set of headers and struct layouts.
     ///
-    /// Rationale: a stored-property change in a core type (e.g. inserting a
-    /// field mid-`WindowConfig`) shifts the struct's layout, but SwiftPM's
-    /// Android incremental build doesn't always recompile a *caller* module that
-    /// constructs the type — leaving old and new layouts linked together. The
-    /// symptom is a `swift_retain` SIGSEGV in the type's value-witness copy at
-    /// runtime (seen after PR #49). This is advisory-free self-healing: the
-    /// common trigger — bumping the swift-pwa dependency to a version with a
-    /// changed core type — is caught by the source fingerprint below, and a
-    /// clean cross-compile is only forced when something actually changed.
-    static func cleanStaleCrossCompileCacheIfNeeded(projectRoot: URL, triple: String) {
+    /// Two distinct hazards, one guard:
+    ///
+    /// - **Runtime ABI.** A stored-property change in a core type (e.g.
+    ///   inserting a field mid-`WindowConfig`) shifts the struct's layout, but
+    ///   SwiftPM's Android incremental build doesn't always recompile a
+    ///   *caller* module that constructs the type — leaving old and new layouts
+    ///   linked together. The symptom is a `swift_retain` SIGSEGV in the type's
+    ///   value-witness copy at runtime (seen after PR #49).
+    /// - **Toolchain.** The cached clang module (`.pcm`) files embed the NDK's
+    ///   header paths. Move or upgrade the NDK and the same module resolves
+    ///   through a second path, so the build dies with `module
+    ///   '_Builtin_stddef' is defined in both …-12XADZNGFAU7K.pcm and
+    ///   …-SRKHNJT8UHKO.pcm` — a message that names nothing you can act on.
+    ///
+    /// Self-healing either way, and a clean is only forced when something
+    /// actually changed.
+    static func cleanStaleCrossCompileCacheIfNeeded(projectRoot: URL, triple: String, toolchain: String) {
         let fm = FileManager.default
         let tripleDir = projectRoot.appendingPathComponent(".build/\(triple)")
-        // Nothing cached yet → the upcoming build is already clean.
-        guard fm.fileExists(atPath: tripleDir.path) else { return }
         let stampFile = tripleDir.appendingPathComponent(".swiftpwa-abi-fingerprint")
-        let current = runtimeABIFingerprint(projectRoot: projectRoot)
-        let previous = try? String(contentsOf: stampFile, encoding: .utf8)
-        guard previous != current else { return }
-        // Changed (or a pre-guard cache with no stamp): force a clean so no
-        // stale caller object survives against the new layout.
+        let current = CrossCompileStamp(
+            runtime: runtimeABIFingerprint(projectRoot: projectRoot), toolchain: toolchain
+        )
+        // Nothing cached yet → the upcoming build is already clean. Still lay
+        // the stamp down, or the *next* build sees an unstamped cache and wipes
+        // a perfectly good one (a needless full rebuild on every second run).
+        guard fm.fileExists(atPath: tripleDir.path) else {
+            try? fm.createDirectory(at: tripleDir, withIntermediateDirectories: true)
+            try? current.serialized.write(to: stampFile, atomically: true, encoding: .utf8)
+            return
+        }
+        let previous = (try? String(contentsOf: stampFile, encoding: .utf8)).flatMap(CrossCompileStamp.parse)
+        guard let reason = current.reasonToClean(comparedTo: previous) else { return }
         try? fm.removeItem(at: tripleDir)
         try? fm.createDirectory(at: tripleDir, withIntermediateDirectories: true)
-        try? current.write(to: stampFile, atomically: true, encoding: .utf8)
-        print(
-            "note: swift-pwa runtime changed since the last \(triple) build — "
-                + "cleaned .build/\(triple) to avoid a stale-layout crash"
-        )
+        try? current.serialized.write(to: stampFile, atomically: true, encoding: .utf8)
+        print("note: cleaned .build/\(triple) — \(reason)")
+    }
+
+    /// The host toolchain identity baked into a triple's cached modules: the
+    /// NDK (whose header paths the `.pcm` files embed) and the Swift Android
+    /// SDK bundle. Short and readable rather than hashed — it goes into the
+    /// stamp file and into the "cleaned because…" note.
+    static func crossCompileToolchainIdentity(ndk: String?, sdkBundleID: String) -> String {
+        "ndk=\(ndk ?? "none") sdk=\(sdkBundleID)"
     }
 
     /// A stable digest of the swift-pwa runtime sources plus the CLI version.
@@ -861,21 +945,26 @@ struct AndroidBundler {
         // Prefer the NDK's `llvm-*` over anything on PATH. macOS's
         // `/usr/bin/strip` and `/usr/bin/readelf` (when present) are
         // Mach-O-only and choke on ELF input — `llvm-strip` /
-        // `llvm-readelf` from the NDK handle ELF on every host.
-        if let ndk = env["ANDROID_NDK_HOME"], !ndk.isEmpty {
-            for host in ["darwin-x86_64", "darwin-arm64", "linux-x86_64", "windows-x86_64"] {
-                let path = "\(ndk)/toolchains/llvm/prebuilt/\(host)/bin/\(llvmName)"
-                if FileManager.default.isExecutableFile(atPath: path) {
-                    return path
-                }
-            }
+        // `llvm-readelf` from the NDK handle ELF on every host. The NDK
+        // is located by `AndroidToolchain`, so an SDK-manager install
+        // (`<sdk>/ndk/<version>`) works with no `ANDROID_NDK_HOME` set.
+        if let ndk = AndroidToolchain.ndk(env: env),
+           let tool = AndroidToolchain.ndkTool(llvmName, ndk: ndk.path)
+        {
+            return tool
         }
         let pathDirs = (env["PATH"] ?? "").split(separator: ":").map(String.init)
-        // Then prefer `llvm-<tool>` on PATH over the bare name — same
-        // ELF-vs-Mach-O reasoning. A bare `strip` / `readelf` on a
-        // Linux host is binutils and handles ELF, so this falls
-        // through to it correctly there.
-        for candidate in [llvmName, name] {
+        // Then `llvm-<tool>` on PATH — same ELF-vs-Mach-O reasoning.
+        var candidates = [llvmName]
+        #if !os(macOS)
+            // A bare `strip` / `readelf` is binutils on Linux/Windows and
+            // handles ELF. On macOS it is *always* Xcode's Mach-O strip,
+            // which exits 1 on `--strip-unneeded` for every file — the APK
+            // then ships ~130 MB of unstripped `.so` with nothing but a
+            // `note:` per library to say so. Never accept it there.
+            candidates.append(name)
+        #endif
+        for candidate in candidates {
             for dir in pathDirs {
                 let path = "\(dir)/\(candidate)"
                 if FileManager.default.isExecutableFile(atPath: path) {
@@ -895,28 +984,39 @@ struct AndroidBundler {
     private func stripELFs(in dir: URL) async throws {
         guard let tool = stripTool() else {
             print(
-                "note: no `strip` / `llvm-strip` found on PATH or under ANDROID_NDK_HOME; APK will ship unstripped .so files (~40% larger). Install the NDK and set ANDROID_NDK_HOME to enable."
+                "warning: no `llvm-strip` found under the Android NDK or on PATH; APK will ship unstripped .so files (~40% larger). Install the NDK (or set ANDROID_NDK_HOME) to enable."
             )
             return
         }
         let entries = (try? FileManager.default.contentsOfDirectory(atPath: dir.path)) ?? []
         var before: Int64 = 0
         var after: Int64 = 0
+        var stripped = 0
         for name in entries where name.hasSuffix(".so") {
             let path = dir.appendingPathComponent(name).path
             let beforeSize = fileSize(path)
             before += beforeSize
             do {
-                _ = try await Shell.capture(tool, ["--strip-unneeded", path])
+                _ = try await Shell.capture(tool, ["--strip-unneeded", path], discardStderr: true)
             } catch {
-                // A failed strip on one file isn't fatal — the file
-                // just stays unstripped in the APK. Log and continue
-                // so a single corrupt input doesn't take the whole
-                // build down.
-                print("note: strip failed on \(name): \(error)")
                 after += beforeSize
+                // One failure means the *tool* is wrong far more often
+                // than the file is (a Mach-O `strip` rejecting
+                // `--strip-unneeded` fails identically on all ~30
+                // libraries). Bail on the first one with a warning that
+                // names the tool, rather than emitting a per-file `note:`
+                // and a "saved 0 MB, 0%" line that reads like success.
+                if stripped == 0 {
+                    print(
+                        "warning: `\(tool)` failed on \(name) (\(error)); skipping the strip pass — "
+                            + "the APK will ship unstripped .so files (~40% larger)."
+                    )
+                    return
+                }
+                print("note: strip failed on \(name): \(error)")
                 continue
             }
+            stripped += 1
             after += fileSize(path)
         }
         if before > 0 {

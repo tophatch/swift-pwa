@@ -38,7 +38,8 @@ The cross-compile path verified against this repo's `Examples/HelloPWA`:
 | Swift Android SDK                    | swift-6.2-RELEASE-android-0.1 | `swift sdk install <bundle-url> --checksum <sha>` (URL + checksum from <https://github.com/swift-android-sdk/swift-android-sdk/releases/tag/6.2>) |
 | Android NDK                          | **r27d**                   | <https://dl.google.com/android/repository/android-ndk-r27d-darwin.zip> (or the linux/windows variant)  |
 | Setup script                         | (run once)                 | `ANDROID_NDK_HOME=~/android-ndk-r27d ~/Library/org.swift.swiftpm/swift-sdks/swift-6.2-RELEASE-android-0.1.artifactbundle/swift-android/scripts/setup-android-sdk.sh` |
-| JDK 17 *(for `assembleDebug`)*       | any 17.x                   | `brew install openjdk@17` and set `JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home` |
+| JDK 17 *(for `assembleDebug`)*       | any 17.x                   | `brew install openjdk@17` — no `JAVA_HOME` export needed, see [§Toolchain discovery](#toolchain-discovery) |
+| Android SDK *(for `assembleDebug`)*  | latest                     | Android Studio, or the command-line tools. Found automatically in the standard location; else set `ANDROID_HOME` |
 | Android SDK Platform-Tools (`adb`)   | latest                     | Bundled with Android Studio, or `sdkmanager "platform-tools"`                                          |
 | Gradle wrapper                       | **8.10.2 (vendored)**      | Shipped inside the generated scaffold (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`); no separate install needed. AGP 8.5 + Kotlin 2.0 dependencies are resolved on first wrapper run. |
 
@@ -63,6 +64,42 @@ The bundler smooths over the toolchain-selection part of that pin:
 > `UnsatisfiedLinkError`. If you see `'stddef.h' file not found` during the
 > cross-compile, the SDK's NDK clang link went stale (e.g. after moving the
 > NDK): re-run the setup script above.
+
+### Toolchain discovery
+
+You don't have to export `ANDROID_HOME`, `ANDROID_NDK_HOME`, or `JAVA_HOME` for a
+standard install. The CLI locates each piece itself — environment variable first
+(so an explicit export always wins), then the platform's normal install locations:
+
+| Piece | Looked for at |
+|---|---|
+| **Android SDK** | `$ANDROID_HOME` · `$ANDROID_SDK_ROOT` · `~/Library/Android/sdk` (macOS) · `~/Android/Sdk` (Linux) · `%LOCALAPPDATA%\Android\Sdk` · `/usr/local/lib/android/sdk` (GitHub runners) |
+| **NDK** | `$ANDROID_NDK_HOME` · `$ANDROID_NDK_ROOT` · `$NDK_HOME` · `<sdk>/ndk/<version>` (newest) · `<sdk>/ndk-bundle` |
+| **JDK** | `$JAVA_HOME` · a working `java` on `PATH` · `/Library/Java/JavaVirtualMachines/*` · Homebrew's keg-only `openjdk*` · `/usr/lib/jvm/*` · Android Studio's bundled JBR · `%ProgramFiles%` vendors |
+| **swiftly** (for the toolchain pin, §2) | `$SWIFTLY_BIN_DIR` · `$SWIFTLY_HOME_DIR/bin` · `~/.swiftly/bin` (swiftly 1.x's default home) · `~/.local/share/swiftly/bin` · `~/Library/Application Support/swiftly/bin` |
+
+Notes on the two that bite:
+
+- **`java` on `PATH` is not evidence of a JDK on macOS.** `/usr/bin/java` is a
+  *stub* that exists on every Mac and exits with "Unable to locate a Java
+  Runtime" when nothing is installed. The CLI runs it rather than looking it up,
+  so `doctor` tells you the truth, and Homebrew's `openjdk@17` — keg-only, so
+  never linked where `/usr/libexec/java_home` can see it — is found and handed to
+  Gradle via `JAVA_HOME`.
+- **Multiple JDKs**: the generated project pins AGP 8.5 / Gradle 8.10 and
+  compiles to Java 17, so 17 is preferred, then the newest JDK in Gradle's
+  supported 17–22 range. A JDK below 17 is never selected.
+
+`swift-pwa build --target android` also writes the resolved SDK path into the
+generated project's `local.properties`, so `cd build/<Name>-android && ./gradlew
+assembleDebug` and opening the project in Android Studio both work on a machine
+that never exported anything. (Only `sdk.dir` — an `ndk.dir` AGP doesn't need
+gets version-matched against its own default and warns `CXX1104` on every module
+task.)
+
+`swift-pwa doctor --target android` prints where each piece was found, and
+`deploy` fails up front — before the multi-minute cross-compile — when the JDK or
+SDK is missing, rather than letting Gradle report it at the end.
 
 A second pin worth knowing about, derived from the SDK's own metadata:
 
@@ -269,15 +306,26 @@ re-stage by hand.
 One more automatic safeguard runs on the way in:
 
 > **Stale-cache guard (automatic).** Before each ABI's `swift build`, the
-> bundler fingerprints the swift-pwa runtime sources and, if they changed since
-> that triple was last built, wipes `.build/<triple>` so the build recompiles
-> against one consistent struct layout. This heads off a class of startup
-> `SIGSEGV` (a `swift_retain` fault in a type's value-witness copy) that
-> SwiftPM's incremental Android build can otherwise produce when a core type's
-> stored fields change — most commonly after you bump the swift-pwa dependency.
-> You'll see a one-line `note: … cleaned .build/<triple> …` when it fires; an
-> unchanged tree keeps the fast incremental path. If you ever hit that crash on
-> a build predating this guard, `rm -rf .build/*android*` and rebuild.
+> bundler fingerprints two things — the swift-pwa runtime sources and the host
+> toolchain (resolved NDK path + Swift Android SDK bundle id) — and wipes
+> `.build/<triple>` when either moved since that triple was last built. It
+> covers two failure modes that both present as something other than their
+> cause:
+>
+> - a **changed runtime ABI** → a startup `SIGSEGV` (a `swift_retain` fault in a
+>   type's value-witness copy), which SwiftPM's incremental Android build can
+>   produce when a core type's stored fields change — most commonly after you
+>   bump the swift-pwa dependency;
+> - a **moved or upgraded NDK** → `error: module '_Builtin_stddef' is defined in
+>   both …-12XADZNGFAU7K.pcm and …-SRKHNJT8UHKO.pcm`, because the cached clang
+>   modules embed the NDK's header paths and the same module then resolves
+>   through two of them.
+>
+> When it fires you get one line naming the culprit — `note: cleaned
+> .build/<triple> — the Android toolchain changed: ndk=<old> → ndk=<new>` — and
+> an unchanged tree keeps the fast incremental path. The fingerprint lives in
+> `.build/<triple>/.swiftpwa-abi-fingerprint` (two readable lines). On a build
+> predating this guard, `rm -rf .build/*android*` and rebuild.
 
 The bundler also drops a vendored Gradle 8.10.2 wrapper into the
 generated project (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`) so
@@ -288,7 +336,9 @@ hits are zero-cost thereafter.
 
 ```bash
 cd build/MyApp-android
-export JAVA_HOME=/opt/homebrew/opt/openjdk@17/libexec/openjdk.jdk/Contents/Home
+# The SDK path is already in the generated local.properties. A JDK still has to
+# be on PATH or in JAVA_HOME for a by-hand run — `swift-pwa deploy` sets it for
+# you, a bare `./gradlew` can't.
 ./gradlew --version       # confirms wrapper bootstraps cleanly
 ./gradlew assembleDebug    # produces app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -592,14 +642,19 @@ build down to ~76 MB on `Examples/HelloPWA` (arm64-v8a, debug):
 
 The always-on strip step runs `llvm-strip --strip-unneeded` on every
 staged `.so` (the user's binary plus the bundled Swift runtime libs)
-inline before gradle sees them. The bundler resolves
-`llvm-strip` from `$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/<host>/bin/`
-— necessary because AGP's own `stripDebugDebugSymbols` task only finds
-the strip tool when an SDK-manager-installed NDK lives at
-`$ANDROID_HOME/ndk/<version>/`, and the Swift-on-Android dev setup
-pins a standalone NDK at `$ANDROID_NDK_HOME` instead. The unstripped
-binary stays in `.build/<triple>/release/<Name>` for `swift symbolicate`
-to consume during crash triage.
+inline before gradle sees them. The bundler resolves `llvm-strip` from
+the NDK's `toolchains/llvm/prebuilt/<host>/bin/` (wherever the NDK was
+[discovered](#toolchain-discovery)) — necessary because AGP's own
+`stripDebugDebugSymbols` task only finds the strip tool when an
+SDK-manager-installed NDK lives at `$ANDROID_HOME/ndk/<version>/`, and the
+Swift-on-Android dev setup pins a standalone NDK at `$ANDROID_NDK_HOME`
+instead. A bare `strip` on `PATH` is only accepted on Linux/Windows: on
+macOS that is always Xcode's Mach-O `strip`, which rejects
+`--strip-unneeded` on every ELF file it's handed. If no usable tool is
+found, the step is skipped with a `warning:` and the APK is ~40% larger —
+it never silently reports a 0% saving. The unstripped binary stays in
+`.build/<triple>/release/<Name>` for `swift symbolicate` to consume during
+crash triage.
 
 The `--prune-android-runtime` flag drops 10 unused stdlib `.so`s
 (`_Differentiation`, `_StringProcessing` build artifacts not in the

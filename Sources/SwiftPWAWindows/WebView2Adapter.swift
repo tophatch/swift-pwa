@@ -420,8 +420,16 @@
         /// The C shim writes the PNG to a temp file (see the shim for why);
         /// we read and delete it here.
         public func captureSnapshot() async throws -> Data {
-            let path = NSTemporaryDirectory()
-                .appending("\\swift-pwa-snapshot-\(UUID().uuidString).png")
+            // `NSTemporaryDirectory()` already ends in a separator here, so
+            // appending another one yields `…\Temp\\swift-pwa-snapshot-….png`.
+            // Win32 normalizes the doubled separator, so `CapturePreview`
+            // happily writes the file — but swift-corelibs `FileManager` does
+            // not, so both the read-back below and the `defer` cleanup missed
+            // it: every screenshot failed as "wrote nothing" *and* leaked a PNG
+            // into the temp directory.
+            let tmp = NSTemporaryDirectory()
+            let separator = (tmp.hasSuffix("\\") || tmp.hasSuffix("/")) ? "" : "\\"
+            let path = tmp + separator + "swift-pwa-snapshot-\(UUID().uuidString).png"
 
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, any Error>) in
                 let box = SnapshotBox(continuation: cont)

@@ -417,15 +417,20 @@ struct LaunchedApp {
         let exe = await ExecutableNameResolver.resolve(projectRoot: cwd, manifest: pwa)
 
         log.writeQuietly(Data("Building \(exe) (\(options.configuration))…\n".utf8))
+        // `swift` by bare name, not `/usr/bin/env swift`: there is no
+        // `/usr/bin/env` on Windows, so the launcher form fails before the build
+        // even starts. `Shell.resolveExecutable` does a PATH search on every
+        // platform (adding `.exe` / `.cmd` / `.bat` on Windows), which resolves
+        // to the same binary `env` would have found.
         try await Shell.run(
-            "/usr/bin/env",
-            ["swift", "build", "-c", options.configuration, "--product", exe],
+            "swift",
+            ["build", "-c", options.configuration, "--product", exe],
             cwd: cwd,
             stdoutTo: log
         )
         let binPath = try await Shell.capture(
-            "/usr/bin/env",
-            ["swift", "build", "-c", options.configuration, "--show-bin-path"],
+            "swift",
+            ["build", "-c", options.configuration, "--show-bin-path"],
             cwd: cwd
         ).trimmingCharacters(in: .whitespacesAndNewlines)
 

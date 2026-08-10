@@ -72,6 +72,14 @@ have to.
 hint if it isn't. The build prerequisites (NDK, JDK, the Swift Android SDK) reuse
 `swift-pwa doctor`'s preflight — the same heads-up `build` prints.
 
+Gradle's two prerequisites — a **JDK** and the **Android SDK** — are resolved
+before the cross-compile starts, so a gap costs a fast error with the fix instead
+of a multi-minute build that dies at `assembleDebug`. Neither needs an
+environment variable when installed in the usual place: deploy finds the SDK and
+points Gradle at it, and finds a JDK — including Homebrew's keg-only
+`openjdk@17` and Android Studio's bundled JBR — handing it over as `JAVA_HOME`.
+Search order: [android-setup.md § Toolchain discovery](android-setup.md#toolchain-discovery).
+
 ## Android cross-compile toolchain — now automatic
 
 Cross-compiling the Android shell requires the Swift compiler to **exactly

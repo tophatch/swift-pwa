@@ -220,6 +220,25 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "android-sdk-no-version") == nil)
     }
 
+    @Test("swiftly lookup: env vars first, then ~/.swiftly — swiftly 1.x's own default home")
+    func swiftlyLookupOrder() throws {
+        let withEnv = AndroidBundler.swiftlyCandidates(
+            env: ["HOME": "/Users/x", "SWIFTLY_HOME_DIR": "/opt/swiftly", "SWIFTLY_BIN_DIR": "/opt/swiftly/bin"]
+        )
+        #expect(withEnv.first == "/opt/swiftly/bin/swiftly")
+
+        // No env: `~/.swiftly/bin` must be checked, and before the pre-1.0
+        // XDG-style paths. A Homebrew swiftly keeps its home (and the
+        // config.json that makes `swiftly run +6.2` resolve) there; missing it
+        // fell back to the ambient `swift`, whose version mismatch fails the
+        // cross-compile deep in the build.
+        let bare = AndroidBundler.swiftlyCandidates(env: ["HOME": "/Users/x"])
+        #expect(bare.first == "/Users/x/.swiftly/bin/swiftly")
+        let dotSwiftly = try #require(bare.firstIndex(of: "/Users/x/.swiftly/bin/swiftly"))
+        let xdg = try #require(bare.firstIndex(of: "/Users/x/.local/share/swiftly/bin/swiftly"))
+        #expect(dotSwiftly < xdg)
+    }
+
     @Test("swiftPWAThemeXml is DayNight, fills window + bars, and picks icon luminance per mode")
     func themeXmlLuminance() throws {
         // A near-white surface wants dark (light-bar) status/navigation icons.
@@ -732,6 +751,11 @@ struct AndroidBundlerCacheGuardTests {
         #expect(found?.appendingPathComponent("SwiftPWACore").lastPathComponent == "SwiftPWACore")
     }
 
+    /// The toolchain half of the stamp, held constant unless a test varies it.
+    private static let ndkA = AndroidBundler.crossCompileToolchainIdentity(
+        ndk: "/Users/x/Library/Android/sdk/ndk/27.3.13750724", sdkBundleID: "swift-6.2-RELEASE-android-0.1"
+    )
+
     @Test("guard wipes a pre-stamp cache, then leaves an unchanged one alone")
     func cleanOnFirstThenNoop() throws {
         let fm = FileManager.default
@@ -742,14 +766,18 @@ struct AndroidBundlerCacheGuardTests {
         try "old".write(to: marker, atomically: true, encoding: .utf8)
 
         // No stamp yet (a cache predating the guard) → must clean.
-        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
         #expect(!fm.fileExists(atPath: marker.path)) // stale object wiped
         let stamp = tripleDir.appendingPathComponent(".swiftpwa-abi-fingerprint")
         #expect(fm.fileExists(atPath: stamp.path)) // fresh stamp written
 
         // A new object with the stamp matching current sources → no clean.
         try "new".write(to: marker, atomically: true, encoding: .utf8)
-        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
         #expect(fm.fileExists(atPath: marker.path)) // preserved: incremental stays fast
     }
 
@@ -761,14 +789,85 @@ struct AndroidBundlerCacheGuardTests {
         let tripleDir = root.appendingPathComponent(".build/\(triple)")
 
         // Stamp the cache against the current sources.
-        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
         let marker = tripleDir.appendingPathComponent("obj.o")
         try "x".write(to: marker, atomically: true, encoding: .utf8)
 
         // Change a core type's layout → next guard run must wipe the cache.
         try "public struct WindowConfig { public var origin: Int?; public var title: String }"
             .write(to: source, atomically: true, encoding: .utf8)
-        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(projectRoot: root, triple: triple)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
         #expect(!fm.fileExists(atPath: marker.path))
+    }
+
+    @Test("guard re-cleans when the NDK moves, with the sources untouched")
+    func cleanAfterToolchainChange() throws {
+        // The real failure this catches: the cached `.pcm` files embed the NDK's
+        // header paths, so a moved (or upgraded) NDK makes the same module
+        // resolve through two paths and the build dies with `module
+        // '_Builtin_stddef' is defined in both …`.
+        let fm = FileManager.default
+        let (root, _) = try makeProject()
+        defer { try? fm.removeItem(at: root) }
+        let tripleDir = root.appendingPathComponent(".build/\(triple)")
+
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
+        let marker = tripleDir.appendingPathComponent("obj.o")
+        try "x".write(to: marker, atomically: true, encoding: .utf8)
+
+        let movedNDK = AndroidBundler.crossCompileToolchainIdentity(
+            ndk: "/Users/x/Code-3p/android-ndk-r27d", sdkBundleID: "swift-6.2-RELEASE-android-0.1"
+        )
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: movedNDK
+        )
+        #expect(!fm.fileExists(atPath: marker.path))
+    }
+
+    @Test("first-ever build stamps the cache, so the next one doesn't wipe a good one")
+    func stampsBeforeFirstBuild() throws {
+        let fm = FileManager.default
+        let (root, _) = try makeProject()
+        defer { try? fm.removeItem(at: root) }
+        // No `.build/<triple>` at all — the state before the very first
+        // cross-compile. Without a stamp here, the *second* build would see an
+        // unstamped cache and force a needless full rebuild.
+        let tripleDir = root.appendingPathComponent(".build/\(triple)")
+        try fm.removeItem(at: tripleDir)
+
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
+        let stamp = tripleDir.appendingPathComponent(".swiftpwa-abi-fingerprint")
+        #expect(fm.fileExists(atPath: stamp.path))
+
+        let marker = tripleDir.appendingPathComponent("obj.o")
+        try "x".write(to: marker, atomically: true, encoding: .utf8)
+        AndroidBundler.cleanStaleCrossCompileCacheIfNeeded(
+            projectRoot: root, triple: triple, toolchain: Self.ndkA
+        )
+        #expect(fm.fileExists(atPath: marker.path)) // second build keeps the cache
+    }
+
+    @Test("stamp round-trips and names which half changed")
+    func stampReasons() throws {
+        let stamp = AndroidBundler.CrossCompileStamp(runtime: "abc", toolchain: "ndk=/a sdk=s")
+        #expect(AndroidBundler.CrossCompileStamp.parse(stamp.serialized) == stamp)
+        #expect(AndroidBundler.CrossCompileStamp.parse("garbage") == nil)
+
+        #expect(stamp.reasonToClean(comparedTo: stamp) == nil)
+        #expect(stamp.reasonToClean(comparedTo: nil) == "no fingerprint from a previous build")
+        let otherRuntime = AndroidBundler.CrossCompileStamp(runtime: "zzz", toolchain: "ndk=/a sdk=s")
+        #expect(stamp.reasonToClean(comparedTo: otherRuntime) == "the swift-pwa runtime changed")
+        let otherNDK = AndroidBundler.CrossCompileStamp(runtime: "abc", toolchain: "ndk=/b sdk=s")
+        #expect(try #require(stamp.reasonToClean(comparedTo: otherNDK)).contains("Android toolchain changed"))
+        let bothMoved = AndroidBundler.CrossCompileStamp(runtime: "zzz", toolchain: "ndk=/b sdk=s")
+        #expect(stamp.reasonToClean(comparedTo: bothMoved)?.contains("both changed") == true)
     }
 }

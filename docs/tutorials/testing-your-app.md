@@ -6,9 +6,10 @@
 
 New to the bridge? Read [Talking to the native side](talking-to-the-native-side.md) first — though you don't need it for this.
 
-> Uses swift-pwa **0.9.5+**. Desktop only. (`drive` shipped in 0.9.4, but
-> couldn't find the web bundle of an app scaffolded by `swift-pwa init` — so
-> 0.9.5 is the first version where this guide works end to end.)
+> Uses swift-pwa **0.9.5+** — **0.9.6+ on Windows**. Desktop only. (`drive`
+> shipped in 0.9.4 but couldn't find the web bundle of an app scaffolded by
+> `swift-pwa init`, which 0.9.5 fixed. On Windows it couldn't start at all
+> until 0.9.6, and screenshots there failed until the same release.)
 
 ---
 

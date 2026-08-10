@@ -642,6 +642,25 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 
 ## Known limitations (Windows-specific)
 
+- **`swift-pwa drive` needs an interactive desktop, so it can't be run over
+  SSH.** Windows OpenSSH puts your shell in **session 0**, the non-interactive
+  services session, and WebView2 refuses to create a controller there. The
+  failure is quiet and misleading: the app starts, the driver attaches,
+  `drive info` answers correctly, and then every verb that needs the page times
+  out, behind one line on stderr —
+  `swift-pwa: CreateCoreWebView2Controller failed: 0x80070578`
+  (`ERROR_INVALID_WINDOW_HANDLE`). Confirm with `query session`, which lists the
+  logged-on desktop separately. The fix is to launch the app in that session and
+  attach to it rather than letting `drive` own its lifecycle — the control socket
+  is loopback TCP, so it crosses the session boundary fine. A local console or
+  RDP session needs none of this. Recipe in
+  [docs/app-driver.md](app-driver.md#per-backend-support).
+- **Synthetic input isn't available on Windows.** `drive`'s `click` / `type` /
+  `scroll` return `E_DRIVER_UNSUPPORTED` — WebView2 needs a composition
+  controller swift-pwa doesn't create. `eval` and `screenshot` both work;
+  dispatch DOM events through `eval` where you need interaction, remembering
+  they arrive untrusted. `drive info` reports this honestly rather than
+  accepting the call and doing nothing.
 - **No `system.memoryPressure` event.** `system.memory` works (total RAM and
   `availableBytes` via `GlobalMemoryStatusEx`), but the runtime doesn't emit
   the `system.memoryPressure` event on Windows (it fires on iOS/macOS/Android).

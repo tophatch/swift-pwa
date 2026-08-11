@@ -50,8 +50,8 @@ typedef struct _swiftpwa_tray_item {
 } swiftpwa_tray_item;
 
 typedef struct _swiftpwa_tray {
-    GDBusConnection *connection;   // owned ref, set in on_bus_acquired
-    guint own_id;                  // g_bus_own_name id
+    GDBusConnection *connection;   // owned; private per tray, see tray_new
+    guint own_id;                  // g_bus_own_name_on_connection id
     guint watch_id;                // g_bus_watch_name id (watcher)
     guint sni_reg_id;              // registered /StatusNotifierItem object
     guint menu_reg_id;             // registered /MenuBar object
@@ -437,30 +437,6 @@ static void swiftpwa_on_watcher_vanished(
     (void)conn; (void)name; (void)user_data;
 }
 
-static void swiftpwa_on_bus_acquired(
-    GDBusConnection *conn, const gchar *name, gpointer user_data
-) {
-    (void)name;
-    swiftpwa_tray *t = (swiftpwa_tray *)user_data;
-    t->connection = (GDBusConnection *)g_object_ref(conn);
-
-    // Objects are registered on the connection, not the name — so the
-    // item answers whether a host addresses us by our well-known name or
-    // our unique connection name.
-    t->sni_reg_id = g_dbus_connection_register_object(
-        conn, "/StatusNotifierItem", t->sni_node->interfaces[0],
-        &swiftpwa_sni_vtable, t, NULL, NULL);
-    t->menu_reg_id = g_dbus_connection_register_object(
-        conn, "/MenuBar", t->menu_node->interfaces[0],
-        &swiftpwa_menu_vtable, t, NULL, NULL);
-
-    // Register now if a watcher is already up, and keep watching so a
-    // tray created before the panel still shows up later.
-    t->watch_id = g_bus_watch_name_on_connection(
-        conn, "org.kde.StatusNotifierWatcher", G_BUS_NAME_WATCHER_FLAGS_NONE,
-        swiftpwa_on_watcher_appeared, swiftpwa_on_watcher_vanished, t, NULL);
-}
-
 // --- Public API (mirrors CAyatanaAppIndicator3Shim) ------------------
 
 static inline swiftpwa_tray *swiftpwa_tray_new(
@@ -476,9 +452,71 @@ static inline swiftpwa_tray *swiftpwa_tray_new(
     t->bus_name = g_strdup_printf(
         "org.kde.StatusNotifierItem-%d-%d",
         (int)getpid(), ++swiftpwa_tray_instance_seq);
-    t->own_id = g_bus_own_name(
-        G_BUS_TYPE_SESSION, t->bus_name, G_BUS_NAME_OWNER_FLAGS_NONE,
-        swiftpwa_on_bus_acquired, NULL, NULL, t, NULL);
+
+    // Each tray gets its **own** connection to the session bus, rather than
+    // sharing the process-wide one.
+    //
+    // The spec fixes an item's object path at `/StatusNotifierItem`, and GDBus
+    // permits one object per path per connection — so on the shared connection
+    // a second tray's `register_object` fails, and it fails *quietly* unless
+    // you ask for the error. An app with its own tray (any `TrayPlugin` user)
+    // plus the runtime's agent indicator is exactly two, and the symptom is
+    // subtle enough to survive review: two icons appear, both answering with
+    // the first tray's title, tooltip and menu, so the indicator's "turn
+    // access off" item can't be reached at all. A private connection per tray
+    // gives each its own path namespace.
+    GError *error = NULL;
+    gchar *address = g_dbus_address_get_for_bus_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    if (!address) {
+        g_warning("swift-pwa: no session bus address (%s); tray disabled",
+                  error ? error->message : "unknown");
+        g_clear_error(&error);
+        return t;
+    }
+    t->connection = g_dbus_connection_new_for_address_sync(
+        address,
+        (GDBusConnectionFlags)(G_DBUS_CONNECTION_FLAGS_AUTHENTICATION_CLIENT
+                               | G_DBUS_CONNECTION_FLAGS_MESSAGE_BUS_CONNECTION),
+        NULL, NULL, &error);
+    g_free(address);
+    if (!t->connection) {
+        g_warning("swift-pwa: session bus connection failed (%s); tray disabled",
+                  error ? error->message : "unknown");
+        g_clear_error(&error);
+        return t;
+    }
+    // A dropped bus must not take the app with it — the default for a private
+    // connection, but stated because the shared one does the opposite.
+    g_dbus_connection_set_exit_on_close(t->connection, FALSE);
+
+    // Objects before the name: a host that reacts the instant we own it finds
+    // a complete item. The `&error` is the point — see above.
+    t->sni_reg_id = g_dbus_connection_register_object(
+        t->connection, "/StatusNotifierItem", t->sni_node->interfaces[0],
+        &swiftpwa_sni_vtable, t, NULL, &error);
+    if (t->sni_reg_id == 0) {
+        g_warning("swift-pwa: tray /StatusNotifierItem not exported (%s)",
+                  error ? error->message : "unknown");
+        g_clear_error(&error);
+    }
+    t->menu_reg_id = g_dbus_connection_register_object(
+        t->connection, "/MenuBar", t->menu_node->interfaces[0],
+        &swiftpwa_menu_vtable, t, NULL, &error);
+    if (t->menu_reg_id == 0) {
+        g_warning("swift-pwa: tray /MenuBar not exported (%s)",
+                  error ? error->message : "unknown");
+        g_clear_error(&error);
+    }
+
+    t->own_id = g_bus_own_name_on_connection(
+        t->connection, t->bus_name, G_BUS_NAME_OWNER_FLAGS_NONE,
+        NULL, NULL, t, NULL);
+
+    // Register now if a watcher is already up, and keep watching so a
+    // tray created before the panel still shows up later.
+    t->watch_id = g_bus_watch_name_on_connection(
+        t->connection, "org.kde.StatusNotifierWatcher", G_BUS_NAME_WATCHER_FLAGS_NONE,
+        swiftpwa_on_watcher_appeared, swiftpwa_on_watcher_vanished, t, NULL);
     return t;
 }
 

@@ -390,6 +390,14 @@ remain:
   icon just isn't drawn until then. Also per the SNI spec, icon clicks
   are owned by the panel, so `.click` (`tray.subscribe`) never fires on
   Linux; only menu-item activations do.
+- **Tray art isn't recoloured for the panel's theme.** macOS-style template
+  images (a black silhouette) stay black, and most desktops default to a dark
+  panel, so a template icon can be close to invisible. `Tray.prefersLightArt`
+  returns `nil` on both backends — unlike Windows, where the taskbar's theme is
+  a registry read — because the cross-desktop signal is the XDG desktop
+  portal's `org.freedesktop.appearance` `color-scheme`, which isn't wired up
+  yet. Ship art with its own contrast for now. This affects the runtime's
+  agent-access indicator too: on Linux it draws in dark ink regardless of panel.
 - **No `system.memoryPressure` event.** `system.memory` works (total RAM,
   plus `availableBytes` from `/proc/meminfo`'s `MemAvailable`), but Linux has
   no portable per-process memory-pressure signal, so the

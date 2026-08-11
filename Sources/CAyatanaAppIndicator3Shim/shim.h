@@ -55,14 +55,33 @@ static void swiftpwa_tray_menu_item_activate(GtkMenuItem *item, gpointer user_da
     if (b && b->tray) b->tray->cb(1, b->id, b->tray->user_data);
 }
 
+/// Distinguishes indicators within one process — see `swiftpwa_tray_new`.
+static int swiftpwa_tray_instance_seq = 0;
+
 static inline swiftpwa_tray *swiftpwa_tray_new(
     swiftpwa_tray_event_cb cb, void *user_data
 ) {
     swiftpwa_tray *t = (swiftpwa_tray *)g_malloc0(sizeof(swiftpwa_tray));
     t->cb = cb;
     t->user_data = user_data;
+    // The id has to be unique per indicator, not per app. libayatana derives
+    // the item's D-Bus object path from it (`/org/ayatana/NotificationItem/<id>`),
+    // so a second indicator built with the same id lands on the path the first
+    // one already registered, and the panel is only ever told about one of them.
+    // An app with its own tray plus the runtime's agent indicator is exactly
+    // that case: the indicator registered nothing and the user saw no sign that
+    // agent access was open.
+    char id[64];
+    int seq = ++swiftpwa_tray_instance_seq;
+    if (seq == 1) {
+        // The first keeps the bare id: it's the app's own tray, and a stable
+        // path is what a panel remembers position and visibility against.
+        g_strlcpy(id, "swift-pwa", sizeof(id));
+    } else {
+        g_snprintf(id, sizeof(id), "swift-pwa-%d", seq);
+    }
     t->indicator = app_indicator_new(
-        "swift-pwa",
+        id,
         "",                                          // icon name (set later)
         APP_INDICATOR_CATEGORY_APPLICATION_STATUS
     );

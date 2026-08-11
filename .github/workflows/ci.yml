@@ -87,7 +87,13 @@ jobs:
       - name: Install Swift 6.0
         uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.0"
+          # 6.2 floor on Linux, not 6.0: the GTK4 backend does not render
+          # under 6.0.3 — the app comes up on about:blank because the custom
+          # `pwa://` scheme handler is never invoked, silently and with no
+          # error. Verified on a real GTK4 box: same commit, body 0 under
+          # 6.0.3 and a fully loaded page under 6.2 / 6.3.1. Keep this in step
+          # with `.swift-version`, which swiftly honours inside the checkout.
+          swift-version: "6.2"
       - run: swift --version
       - name: Install GTK3 + WebKitGTK + Vulkan link/build deps
         # GTK3 dev: the default package graph includes the GTK system-library
@@ -222,7 +228,13 @@ jobs:
       - name: Install Swift 6.0
         uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.0"
+          # 6.2 floor on Linux, not 6.0: the GTK4 backend does not render
+          # under 6.0.3 — the app comes up on about:blank because the custom
+          # `pwa://` scheme handler is never invoked, silently and with no
+          # error. Verified on a real GTK4 box: same commit, body 0 under
+          # 6.0.3 and a fully loaded page under 6.2 / 6.3.1. Keep this in step
+          # with `.swift-version`, which swiftly honours inside the checkout.
+          swift-version: "6.2"
       - name: Show Swift version
         run: swift --version
       - name: Install GTK3 + WebKitGTK 4.1 + libayatana-appindicator3
@@ -278,7 +290,13 @@ jobs:
       - name: Install Swift 6.0
         uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.0"
+          # 6.2 floor on Linux, not 6.0: the GTK4 backend does not render
+          # under 6.0.3 — the app comes up on about:blank because the custom
+          # `pwa://` scheme handler is never invoked, silently and with no
+          # error. Verified on a real GTK4 box: same commit, body 0 under
+          # 6.0.3 and a fully loaded page under 6.2 / 6.3.1. Keep this in step
+          # with `.swift-version`, which swiftly honours inside the checkout.
+          swift-version: "6.2"
       - name: Show Swift version
         run: swift --version
       - name: Install GTK4 + WebKitGTK 6.0

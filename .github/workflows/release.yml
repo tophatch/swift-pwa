@@ -26,7 +26,13 @@ jobs:
         if: runner.os == 'Linux'
         uses: swift-actions/setup-swift@v2
         with:
-          swift-version: "6.0"
+          # 6.2 floor on Linux, not 6.0: the GTK4 backend does not render
+          # under 6.0.3 — the app comes up on about:blank because the custom
+          # `pwa://` scheme handler is never invoked, silently and with no
+          # error. Verified on a real GTK4 box: same commit, body 0 under
+          # 6.0.3 and a fully loaded page under 6.2 / 6.3.1. Keep this in step
+          # with `.swift-version`, which swiftly honours inside the checkout.
+          swift-version: "6.2"
       - name: Install libsecret (Linux only)
         # Building the CLI compiles SwiftPWACore, which pulls the
         # CSecretShim/CLibSecret libsecret dep on Linux (secrets.* store).

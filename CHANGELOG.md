@@ -5,6 +5,14 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.9.7] - 2026-08-11
+
+### Fixed
+
+- **The published Windows CLI couldn't write files, and had shipped that way for three releases.** `swift-pwa init` died with an access violation (`0xC0000005`) having written nothing at all, and `drive shot` printed `Wrote … (419738 bytes)` while leaving **6 zero bytes** on disk — both silently, the CLI reporting success either way. The cause is the **Swift 6.1.2** toolchain the Windows binary was built with, whose Foundation file writing is broken on that platform; it is not the source and not the release configuration, isolated by building the same commit in release mode with 6.3.1 on the same machine against the same running app minutes apart, where both operations are correct. So the Windows CI jobs *and* the release job move to **6.3.1** together — a toolchain we build with but don't ship is one whose bugs we never see, and the reverse. It affected the **published Windows binary only**: building from source with your own 6.2+ toolchain was fine, as were the macOS and Linux binaries, which is why it went unreported on top of `drive` not starting on Windows at all before 0.9.6. The v0.9.4 / v0.9.5 / v0.9.6 Windows assets carry the defect; v0.9.6's notes now say so. The `android` job deliberately stays on 6.2.0 — the Swift Android SDK 6.2 requires the matching compiler, since `.swiftmodule` format isn't ABI-stable across patch releases.
+
+- **CI now runs the Windows CLI it builds instead of only linking it.** Both Windows jobs compiled and link-checked without ever executing the binary, and `swift test` can't run on Windows at all (swift-testing discovery emits 0-byte stubs) — so "green on Windows" only ever meant "it compiled", and that blind spot is what let the two bugs above ship through a fully passing build. `init` is the probe: it writes files and needs no network, git or device, so it exercises exactly the path that broke, and asserting the scaffolded files exist **and** have plausible sizes catches a silent truncation as well as a crash. `release.yml` runs it against the **staged** exe — the bytes actually uploaded — rather than something merely built alongside them. Validated by running the same logic against the defective 6.1.2 binary and confirming it fails.
+
 ## [0.9.6] - 2026-08-10
 
 ### Fixed

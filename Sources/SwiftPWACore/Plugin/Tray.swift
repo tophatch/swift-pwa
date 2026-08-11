@@ -42,21 +42,22 @@ public protocol Tray: AnyObject, Sendable {
     /// activations of menu items by id.
     func eventStream() -> AsyncStream<TrayEvent>
 
-    /// Whether art drawn for this tray should be light rather than dark, where
-    /// the platform can say. `nil` means don't adapt — either the platform
-    /// tints for us (Apple, via `template`) or it exposes nothing reliable to
-    /// key off.
+    /// Whether art drawn for this tray should be light rather than dark.
+    /// `nil` means this platform doesn't adapt, because it tints template art
+    /// itself — Apple, via `template`.
     ///
-    /// Only the backend can answer this: the signal is the *system chrome's*
-    /// theme, not the app's, and each platform reports it differently (or not
-    /// at all). Read per icon rather than cached, so a user switching theme
-    /// while the app runs is picked up the next time the art changes.
+    /// Only the backend can answer it: the signal is the *system chrome's*
+    /// theme rather than the app's, and each platform reports it differently.
+    /// Windows reads the taskbar's theme from the registry; both Linux backends
+    /// read the XDG portal's colour-scheme preference. Read per icon rather
+    /// than cached, so a user switching theme mid-session is picked up the next
+    /// time the art changes.
     var prefersLightArt: Bool? { get }
 }
 
 public extension Tray {
-    /// Platforms that tint template art, or that offer no dependable signal,
-    /// get the default: leave the art alone.
+    /// Platforms that tint template art for themselves get the default: leave
+    /// the art alone.
     var prefersLightArt: Bool? {
         nil
     }

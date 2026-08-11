@@ -666,4 +666,84 @@ static inline void swiftpwa_tray_free(swiftpwa_tray *t) {
     g_free(t);
 }
 
+
+// ---------------------------------------------------------------------
+// Panel-theme detection, for tray art that has to read against it.
+//
+// Nothing on Linux tints a tray icon the way AppKit tints a macOS
+// template image, so art drawn as a black silhouette disappears against
+// a dark panel. There's no way to ask what colour the panel *is* — the
+// closest portable signal is the XDG desktop portal's
+// `org.freedesktop.appearance` / `color-scheme` preference.
+//
+// Returns 1 to draw light art, 0 to draw dark art. There is no "don't
+// know": a missing portal, a missing Settings backend and a missing
+// session bus all mean the same thing in practice — we have to pick, and
+// light is the better pick (below).
+//
+// The mapping is deliberately asymmetric. `color-scheme` is 0 (no
+// preference), 1 (prefer dark) or 2 (prefer light), and it describes the
+// user's *app* theme rather than the panel: GNOME's top bar is dark in
+// both modes, and most other default panels are dark too. So only an
+// explicit "prefer light" earns dark ink; no preference, no portal and no
+// session bus all fall through to light, which is the better guess far
+// more often than not. A light panel with no portal is the case this gets
+// wrong, and it's the rarer one.
+//
+// Duplicated verbatim in `CAyatanaAppIndicator3Shim` — the two Linux backends
+// are parallel implementations that already carry two copies of the whole
+// `swiftpwa_tray_*` API, and one shared C target for 30 lines would be a
+// worse trade than the copy. Change both.
+// ---------------------------------------------------------------------
+
+/// Peel nested variants until something that isn't a variant falls out.
+/// `ReadOne` returns the value boxed once; the older `Read` boxes it
+/// twice, and implementations have differed on this.
+static inline GVariant *swiftpwa_unbox_variant(GVariant *v) {
+    while (v && g_variant_is_of_type(v, G_VARIANT_TYPE_VARIANT)) {
+        GVariant *inner = g_variant_get_variant(v);
+        g_variant_unref(v);
+        v = inner;
+    }
+    return v;
+}
+
+static inline int swiftpwa_prefers_light_art(void) {
+    GError *error = NULL;
+    GDBusConnection *bus = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, &error);
+    if (!bus) {
+        g_clear_error(&error);
+        return 1;
+    }
+
+    // A short timeout on purpose: this runs on the UI thread when the art
+    // changes, and a desktop with no Settings backend should cost a blink,
+    // not a stall.
+    GVariant *reply = NULL;
+    const char *methods[] = { "ReadOne", "Read" };  // Read: portals < 1.17
+    for (int i = 0; i < 2 && !reply; i++) {
+        reply = g_dbus_connection_call_sync(
+            bus, "org.freedesktop.portal.Desktop", "/org/freedesktop/portal/desktop",
+            "org.freedesktop.portal.Settings", methods[i],
+            g_variant_new("(ss)", "org.freedesktop.appearance", "color-scheme"),
+            G_VARIANT_TYPE("(v)"), G_DBUS_CALL_FLAGS_NONE, 300, NULL, &error);
+        if (!reply) g_clear_error(&error);
+    }
+    g_object_unref(bus);
+    if (!reply) return 1;
+
+    GVariant *value = swiftpwa_unbox_variant(g_variant_get_child_value(reply, 0));
+    g_variant_unref(reply);
+    if (!value) return 1;
+
+    int scheme = -1;
+    if (g_variant_is_of_type(value, G_VARIANT_TYPE_UINT32)) {
+        scheme = (int)g_variant_get_uint32(value);
+    } else if (g_variant_is_of_type(value, G_VARIANT_TYPE_INT32)) {
+        scheme = g_variant_get_int32(value);
+    }
+    g_variant_unref(value);
+    return scheme == 2 ? 0 : 1;   // 2 = prefer light; everything else => light art
+}
+
 #endif

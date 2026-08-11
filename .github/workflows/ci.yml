@@ -164,8 +164,8 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          swift-version: swift-6.3.1-release
+          swift-build: 6.3.1-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         # The full package graph compiles CWebView2Shim, which needs these on
@@ -337,14 +337,20 @@ jobs:
       - name: Set up Swift for Windows
         uses: compnerd/gha-setup-swift@main
         with:
-          # Swift 6.0.x trips a `ucrt -> _Builtin_intrinsics -> ucrt`
-          # cyclic-module-import error against the Windows SDK shipped
-          # on `windows-latest` — fixed in 6.1+. Stay on the latest
-          # 6.1 stable for now; bump as new releases land.
+          # Floor: Swift 6.0.x trips a `ucrt -> _Builtin_intrinsics -> ucrt`
+          # cyclic-module-import error against the Windows SDK on the runner
+          # image — fixed in 6.1+.
+          #
+          # Why not 6.1.2, which this pinned for a long time: Foundation's file
+          # writing is broken on Windows there, and it broke the shipped CLI
+          # rather than the build, so a green Windows job proved nothing. See
+          # the matching note in release.yml — CI and the release must move
+          # together, because a toolchain we build with but don't ship is one
+          # whose bugs we never see, and vice versa.
           # (`swift-version` / `swift-build` replaced the deprecated
-          # `branch` / `tag` inputs; values are unchanged.)
-          swift-version: swift-6.1.2-release
-          swift-build: 6.1.2-RELEASE
+          # `branch` / `tag` inputs.)
+          swift-version: swift-6.3.1-release
+          swift-build: 6.3.1-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
         shell: pwsh
@@ -361,6 +367,36 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
       - name: Build (release)
         run: swift build -c release
+      - name: Smoke-test the built CLI (it must actually run)
+        # This job compiles and link-checks but never used to *run* anything,
+        # and that blind spot shipped two bugs in the Windows CLI — a crash on
+        # `init` and silently truncated file writes, both from the toolchain,
+        # both through a green build. `init` only writes files (no network, no
+        # git), so it probes exactly the path that broke; the size assertions
+        # catch a silent truncation as well as a hard crash. Mirrors the
+        # staged-binary smoke in release.yml — keep the two in step.
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD ".build\release\swift-pwa.exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version exited $LASTEXITCODE" }
+
+          $tmp = Join-Path $env:RUNNER_TEMP "cli-smoke"
+          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Push-Location $tmp
+          & $exe init SmokeApp
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "init exited $code (0xC0000005 = access violation)" }
+
+          foreach ($rel in @('Package.swift', 'pwa.json', 'web\index.html', 'Sources\SmokeApp\App.swift')) {
+            $p = Join-Path $tmp "SmokeApp\$rel"
+            if (-not (Test-Path $p)) { throw "init reported success but did not write $rel" }
+            $len = (Get-Item $p).Length
+            if ($len -lt 64) { throw "$rel is only $len bytes — a truncated write" }
+            Write-Host ("ok  {0,-34} {1} bytes" -f $rel, $len)
+          }
       - name: Build (debug + test targets)
         # `swift test` drops back to the debug configuration regardless
         # of the prior release build, which on Windows means a from-

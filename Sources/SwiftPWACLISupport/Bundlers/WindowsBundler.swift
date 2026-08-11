@@ -60,6 +60,7 @@ struct WindowsBundler {
     /// Embed `web/` as an overlay in the exe and emit a single `.exe` instead
     /// of a folder (portable format only). See `embedWebOverlay`.
     var singleFile: Bool = false
+    var configuration: BuildConfiguration = .release
 
     func build() async throws -> URL {
         #if !os(Windows)
@@ -69,7 +70,7 @@ struct WindowsBundler {
             """)
         #else
             try await Shell.run(
-                "swift", ["build", "-c", "release"],
+                "swift", ["build", "-c", configuration.swiftPMValue],
                 cwd: projectRoot,
                 envOverrides: resolvePackageEnvOverrides()
             )
@@ -93,7 +94,7 @@ struct WindowsBundler {
             // machine-wide setting, often unavailable on CI runners or
             // shared boxes.
             let symlinkBinary = buildDir
-                .appendingPathComponent("release")
+                .appendingPathComponent(configuration.swiftPMValue)
                 .appendingPathComponent(exeName)
             let binary: URL
             if FileManager.default.fileExists(atPath: symlinkBinary.path) {
@@ -105,7 +106,7 @@ struct WindowsBundler {
                 return name.hasSuffix("-windows-msvc") && !name.hasPrefix(".")
             }) {
                 let candidate = archDir
-                    .appendingPathComponent("release")
+                    .appendingPathComponent(configuration.swiftPMValue)
                     .appendingPathComponent(exeName)
                 guard FileManager.default.fileExists(atPath: candidate.path) else {
                     throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
@@ -125,6 +126,14 @@ struct WindowsBundler {
 
             let bundledExe = bundleDir.appendingPathComponent(exeName)
             try FileManager.default.copyItem(at: binary, to: bundledExe)
+
+            // Any SwiftPM resource bundles the build produced go beside the exe
+            // — which on Windows *is* where `Bundle.module` looks, so an app
+            // with resource-carrying dependencies works off the build machine.
+            try ResourceBundles.stage(
+                ResourceBundles.found(in: binary.deletingLastPathComponent()),
+                into: singleFile ? outputDir : bundleDir
+            )
 
             // Embed the Common Controls v6 manifest into the bundled
             // EXE's resource section. The dialog shim's

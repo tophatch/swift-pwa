@@ -58,10 +58,10 @@ export ANDROID_HOME=$HOME/Library/Android/sdk
 export PATH=$ANDROID_HOME/platform-tools:$PATH
 
 cd Examples/HelloPWA
-rm -rf build/HelloPWA-android
+rm -rf build/android/HelloPWA-android
 swiftly run +6.2.0 swift run --package-path ../.. swift-pwa build \
   --target android --cross-compile-android --android-abis arm64-v8a
-cd build/HelloPWA-android
+cd build/android/HelloPWA-android
 ./gradlew --no-daemon assembleDebug
 
 APK=app/build/outputs/apk/debug/app-debug.apk

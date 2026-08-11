@@ -244,8 +244,8 @@ Two paths:
 
 ```bash
 swift-pwa build --target android
-# Built: build/MyApp-android
-# Next: cd 'build/MyApp-android' && ./gradlew assembleDebug
+# Built: build/android/MyApp-android
+# Next: cd 'build/android/MyApp-android' && ./gradlew assembleDebug
 ```
 
 You'll see a note that `jniLibs/` is empty. Drop your built `.so`s in
@@ -254,9 +254,9 @@ manually (note: pass the triple as `--swift-sdk <triple>`, not as
 
 ```bash
 swiftly run +6.2.0 swift build -c release --swift-sdk aarch64-unknown-linux-android28
-mkdir -p build/MyApp-android/app/src/main/jniLibs/arm64-v8a
+mkdir -p build/android/MyApp-android/app/src/main/jniLibs/arm64-v8a
 cp .build/aarch64-unknown-linux-android28/release/MyApp \
-   build/MyApp-android/app/src/main/jniLibs/arm64-v8a/libMyApp.so
+   build/android/MyApp-android/app/src/main/jniLibs/arm64-v8a/libMyApp.so
 ```
 
 **You must also stage the Swift runtime + C++ shared libraries into the same
@@ -268,10 +268,10 @@ because nothing else carries the Swift standard library or the NDK's
 ```bash
 # Swift stdlib .so's (path is inside your installed Swift Android SDK bundle):
 cp <swift-android-sdk>/swift-resources/usr/lib/swift-aarch64/android/*.so \
-   build/MyApp-android/app/src/main/jniLibs/arm64-v8a/
+   build/android/MyApp-android/app/src/main/jniLibs/arm64-v8a/
 # NDK C++ runtime:
 cp <ndk>/toolchains/llvm/prebuilt/<host>/sysroot/usr/lib/aarch64-linux-android/libc++_shared.so \
-   build/MyApp-android/app/src/main/jniLibs/arm64-v8a/
+   build/android/MyApp-android/app/src/main/jniLibs/arm64-v8a/
 ```
 
 This staging is precisely what **Option B (`--cross-compile-android`) does for
@@ -335,7 +335,7 @@ fetches Gradle 8.10.2 from `services.gradle.org` on first run; cache
 hits are zero-cost thereafter.
 
 ```bash
-cd build/MyApp-android
+cd build/android/MyApp-android
 # The SDK path is already in the generated local.properties. A JDK still has to
 # be on PATH or in JAVA_HOME for a by-hand run — `swift-pwa deploy` sets it for
 # you, a bare `./gradlew` can't.
@@ -756,7 +756,7 @@ Set the two password env vars and invoke `assembleRelease` (or
 ```bash
 export SWIFT_PWA_ANDROID_STORE_PASSWORD=...
 export SWIFT_PWA_ANDROID_KEY_PASSWORD=...
-cd build/MyApp-android
+cd build/android/MyApp-android
 ./gradlew assembleRelease
 # app/build/outputs/apk/release/app-release.apk
 ```
@@ -777,7 +777,7 @@ base64-encoded secret and decode it before the build:
     ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
 - name: Build signed APK
   run: ./gradlew assembleRelease
-  working-directory: build/MyApp-android
+  working-directory: build/android/MyApp-android
   env:
     SWIFT_PWA_ANDROID_STORE_PASSWORD: ${{ secrets.ANDROID_STORE_PASSWORD }}
     SWIFT_PWA_ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}

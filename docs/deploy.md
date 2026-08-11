@@ -45,7 +45,9 @@ themselves. `deploy` is the verb that runs `gradlew` for you.
 | `--release` | Android: assemble the release variant. (A release APK must be signed to install.) |
 | `--android-abis <list>` | Passed through to the build (e.g. `arm64-v8a,x86_64`). |
 | `--team`, `--sign`, `--provisioning-profile`, `--entitlements` | iOS device signing, passed through to the build (see [iOS](#ios)). |
-| `--manifest`, `--output` | Same as `build`. |
+| `--configuration <debug\|release>` | Build configuration, `release` by default. `debug` installs a driveable build — the app driver's control socket is compiled into debug only. (Android: this is the Swift library; the APK variant is `--release`.) |
+| `--arch <arch>` | macOS: repeatable, `--arch arm64 --arch x86_64` for a universal build. Passed through. |
+| `--manifest`, `--output` | Same as `build` — including the per-target default output directory (`build/macos`, `build/ios`, `build/ios-simulator`, …). |
 
 ## Android device selection
 

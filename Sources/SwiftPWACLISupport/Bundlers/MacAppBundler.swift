@@ -2,7 +2,8 @@ import ArgumentParser
 import Foundation
 
 /// Builds a macOS `.app` from a `swift-pwa` project. The flow:
-///   1. `swift build -c release` to produce the binary.
+///   1. `swift build -c <configuration>` (with `--arch` per requested slice) to
+///      produce the binary.
 ///   2. Lay out `MyApp.app/Contents/{MacOS,Resources}`.
 ///   3. Generate `Info.plist` from the manifest.
 ///   4. Copy the web bundle into `Contents/Resources/web`.
@@ -18,17 +19,22 @@ struct MacAppBundler {
     /// submitted to Apple's notary service and the ticket stapled to it,
     /// fully automating submit → wait → staple. nil skips notarization.
     var notarizeProfile: String?
+    /// Architecture slices to build. Empty = the host's, SwiftPM's default. Two
+    /// or more produce one universal (fat) binary in a single `swift build`.
+    var archs: [String] = []
+    var configuration: BuildConfiguration = .release
 
     func build() async throws -> URL {
-        // 1. swift build -c release
-        try await Shell.run(
-            "/usr/bin/env",
-            ["swift", "build", "-c", "release"],
-            cwd: projectRoot
-        )
-        let binDir = projectRoot
-            .appendingPathComponent(".build")
-            .appendingPathComponent("release")
+        // 1. swift build. `--arch` is repeatable and SwiftPM lipos the slices
+        // itself; with more than one it also moves the products to
+        // `.build/apple/Products/<Config>`, so ask it where they landed rather
+        // than assuming `.build/<config>`.
+        let buildArgs = ["swift", "build", "-c", configuration.swiftPMValue]
+            + archs.flatMap { ["--arch", $0] }
+        try await Shell.run("/usr/bin/env", buildArgs, cwd: projectRoot)
+        let binDir = try await URL(fileURLWithPath: Shell.capture(
+            "/usr/bin/env", buildArgs + ["--show-bin-path"], cwd: projectRoot
+        ).trimmingCharacters(in: .whitespacesAndNewlines))
         // The built binary is named after the SwiftPM target — resolved
         // from the package itself (via `swift package describe`), which
         // may differ from the human-facing display `name` used for the
@@ -51,6 +57,15 @@ struct MacAppBundler {
         try FileManager.default.createDirectory(at: macOSDir, withIntermediateDirectories: true)
         try FileManager.default.createDirectory(at: resourcesDir, withIntermediateDirectories: true)
         try FileManager.default.copyItem(at: binary, to: macOSDir.appendingPathComponent(exe))
+        if archs.count > 1 { await Self.reportSlices(of: binary) }
+
+        // Any SwiftPM resource bundles the build produced (an adopter target or
+        // a dependency declaring `resources:`). swift-pwa's own runtime makes
+        // none — see ResourceBundles for why `Contents/Resources` is the only
+        // place they can go, and what that costs.
+        try ResourceBundles.reportAppBundleCaveat(
+            ResourceBundles.stage(ResourceBundles.found(in: binDir), into: resourcesDir)
+        )
 
         // 3. Info.plist
         let plist = InfoPlistGenerator.macOS(manifest: manifest, executableName: exe)
@@ -106,6 +121,19 @@ struct MacAppBundler {
         }
 
         return app
+    }
+
+    /// Print the slices actually present in a multi-arch build, read back from
+    /// the binary rather than echoed from the flags — the point of asking for
+    /// two architectures is that both are really there. Best-effort: a missing
+    /// `lipo` says nothing rather than failing the build.
+    private static func reportSlices(of binary: URL) async {
+        guard let out = try? await Shell.capture(
+            "/usr/bin/env", ["lipo", "-archs", binary.path], discardStderr: true
+        ) else { return }
+        let slices = out.split(whereSeparator: \.isWhitespace).joined(separator: ", ")
+        guard !slices.isEmpty else { return }
+        print("swift-pwa: universal binary — \(slices)")
     }
 
     /// Convert `manifest.icon` (a PNG) into `AppIcon.icns` via
@@ -190,6 +218,7 @@ enum BundlerError: Error, CustomStringConvertible {
     case binaryMissing(URL, expectedName: String)
     case toolMissing(String)
     case shell(Int32, String)
+    case timedOut(String, seconds: TimeInterval)
     case iosSimulatorRuntimeMissing
     case notarizeUnsigned
     case iosDeviceUnsigned
@@ -224,6 +253,12 @@ enum BundlerError: Error, CustomStringConvertible {
             """
         case let .toolMissing(name): "required tool not on PATH: \(name)"
         case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
+        case let .timedOut(cmd, seconds):
+            """
+            timed out after \(Int(seconds))s (and was terminated): \(cmd)
+            It produced no result and didn't exit — that's a wedged tool, not a slow one. \
+            `simctl` does this on a cold machine; `xcrun simctl shutdown all` usually clears it.
+            """
         case let .profileMintFailed(bundleID, team):
             """
             --allow-provisioning-registration: the throwaway build for team \(team) / bundle id \
@@ -257,10 +292,17 @@ enum Shell {
     /// through to ours. The MCP server needs it: its own stdout carries the
     /// protocol stream, and a stray line of compiler progress there would
     /// corrupt the session.
+    ///
+    /// `timeout` (seconds) bounds the run: past the deadline the child is
+    /// terminated and the call throws `BundlerError.timedOut`. Use it for any
+    /// command that can wedge rather than fail — `simctl` is the reason it
+    /// exists. A cold `simctl boot` on a CI runner sat for 39 minutes with no
+    /// output and no exit, and an unbounded `waitUntilExit` turns that into a
+    /// job that looks like a slow build instead of a stuck one.
     static func run(
         _ executable: String, _ arguments: [String],
         cwd: URL? = nil, envOverrides: [String: String]? = nil,
-        stdoutTo: FileHandle? = nil
+        stdoutTo: FileHandle? = nil, timeout: TimeInterval? = nil
     ) async throws {
         let task = Process()
         task.executableURL = try resolveExecutable(executable)
@@ -272,12 +314,35 @@ enum Shell {
         }
         // Inherit stdout/stderr — pass through to the user.
         try task.run()
+        let timedOut = TimeoutFlag()
+        if let timeout {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if task.isRunning {
+                    timedOut.set()
+                    task.terminate()
+                }
+            }
+        }
         task.waitUntilExit()
+        if timedOut.isSet, let timeout {
+            throw BundlerError.timedOut(([executable] + arguments).joined(separator: " "), seconds: timeout)
+        }
         if task.terminationStatus != 0 {
             throw BundlerError.shell(
                 task.terminationStatus,
                 ([executable] + arguments).joined(separator: " ")
             )
+        }
+    }
+
+    /// One-bit box so the timeout timer and the waiting thread can agree on
+    /// *why* a process ended, without either capturing the other's state.
+    private final class TimeoutFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        func set() { lock.lock(); value = true; lock.unlock() }
+        var isSet: Bool {
+            lock.lock(); defer { lock.unlock() }; return value
         }
     }
 

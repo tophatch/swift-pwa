@@ -378,6 +378,16 @@ swift run swift-pwa build --target windows --bootstrap-webview2
 `MicrosoftEdgeWebview2Setup.exe` next to the EXE, and prompts the user
 via a MessageBox before `ShellExecuteEx`-ing it with elevation.
 
+### What travels in the bundle
+
+The portable folder (and the single-file `.exe`) is self-contained:
+`bridge.js` is compiled into the binary rather than shipped as a SwiftPM
+resource bundle, and any resource bundle your own target or a dependency
+produces is staged next to the `.exe`, which is where `Bundle.module`
+looks on Windows. Until 0.9.10 neither happened, so a bundle read its
+runtime out of the build machine's `.build/` directory and crashed on
+launch on any other box.
+
 ## 4. Optional — On-device AI (llama.cpp)
 
 The portable on-device AI backend (`SwiftPWALlama` / `LlamaBackend`) runs a

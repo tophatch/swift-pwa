@@ -77,6 +77,45 @@ It's a thin wrapper over `SWIFT_PWA_INITIAL_ROUTE`, which works on any launch
 (`SWIFT_PWA_INITIAL_ROUTE=/doc.html?id=42 ./MyApp`) and is useful well outside
 testing. First window only, bundled content only; see the README.
 
+### Driving on the iOS Simulator
+
+```bash
+swift-pwa drive eval --simulator "getComputedStyle(document.body).paddingTop"
+swift-pwa drive shot --simulator --route "/reader.html?id=42" reader.png
+swift-pwa drive info --simulator
+```
+
+`--simulator` (equivalently `--target ios --simulator`) moves the whole loop onto
+a simulator: a **debug** `.app` via the same `build --target ios --simulator` an
+adopter runs, `simctl install`, `simctl launch --console-pty` with the driver env
+var passed through as `SIMCTL_CHILD_SWIFT_PWA_DRIVE`, the handshake read off the
+app's console, then the verb, then `simctl terminate`. Pick a device with
+`--device "iPad Pro 13-inch (M4)"`; otherwise a booted simulator wins, else the
+first available one.
+
+None of that is new machinery in the app — the iOS runtime has started the
+control socket since the driver shipped. What was missing was a way to get a
+debug build onto a simulator: `deploy` built release only, where the socket isn't
+compiled in at all. Checking a safe-area or full-bleed change therefore meant
+deploy → `simctl launch` → `simctl io screenshot` → crop → look, once per
+iteration, with anything time-dependent caught by burst-screenshotting.
+
+One caveat about CI: this path is verified by hand and by an opt-in
+`simulator-drive` job (`workflow_dispatch` or weekly), not on every PR. On a
+GitHub runner the `xcodebuild` underneath it twice ran past 28 minutes and had to
+be killed, while the same app bundles for macOS there in 45 seconds and the same
+simulator run takes ~16s on a local Mac. If you wire `drive --simulator` into
+your own CI, give the step a generous timeout and let its stderr reach the log —
+the phase lines (build → boot → install → launch) are what tell you where a
+stall is.
+
+Two honest limits. **Synthetic input is refused** — `drive info` reports
+`input.pointer: false`, because iOS exposes no public way to inject an event into
+a `WKWebView`; dispatch from the page instead (`drive eval
+"document.querySelector('#save').click()"`). And a **physical device** is out of
+reach: the control socket listens on the device's loopback, which is not this
+machine's, so there is nothing for `--attach` to connect to.
+
 ### Driving an app you launched yourself
 
 For a session of several commands against one app — or to drive an app started
@@ -126,7 +165,7 @@ best-effort `setPosition`.
 | Backend | `eval` | `screenshot` | Notes |
 | --- | --- | --- | --- |
 | **macOS** | Yes | Yes | `WKWebView.takeSnapshot` — renders offscreen, so no frontmost / unoccluded requirement and no TCC grant |
-| **iOS** | Yes | Yes | Same adapter as macOS; Simulator is the practical target. Not yet exercised on device |
+| **iOS Simulator** | Yes | Yes | Same adapter as macOS. `drive --simulator` runs the whole loop; **no synthetic input** (iOS has no public event-synthesis API). A *device* can't be driven at all — its loopback isn't the host's |
 | **Linux GTK3** | Yes | Yes | `webkit_web_view_get_snapshot` → cairo PNG |
 | **Linux GTK4** | Yes | Yes | `webkit_web_view_get_snapshot` → `GdkTexture` → PNG. Wayland has no screen-grab fallback, so the renderer snapshot is the only option |
 | **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Verified against a running app on Windows 11 x64 — but the app has to be on an interactive desktop, see below |

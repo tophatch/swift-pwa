@@ -627,12 +627,12 @@ enum Templates {
                 run: swift-pwa build --target macos
               - name: Zip the .app (preserves the bundle layout)
                 run: |
-                  cd build
+                  cd build/macos
                   for app in *.app; do ditto -c -k --keepParent "$app" "${app%.app}-macos.zip"; done
               - uses: actions/upload-artifact@v7
                 with:
                   name: macos
-                  path: build/*-macos.zip
+                  path: build/macos/*-macos.zip
                   if-no-files-found: error
 
           linux:
@@ -662,7 +662,7 @@ enum Templates {
               - uses: actions/upload-artifact@v7
                 with:
                   name: linux
-                  path: build/*.AppImage
+                  path: build/linux/*.AppImage
                   if-no-files-found: error
 
           windows:
@@ -699,11 +699,11 @@ enum Templates {
                 run: .\\swift-pwa.exe build --target windows
               - name: Zip the portable bundle
                 shell: pwsh
-                run: Get-ChildItem build -Directory | ForEach-Object { Compress-Archive -Path $_.FullName -DestinationPath "build/$($_.Name)-windows.zip" -Force }
+                run: Get-ChildItem build/windows -Directory | ForEach-Object { Compress-Archive -Path $_.FullName -DestinationPath "build/windows/$($_.Name)-windows.zip" -Force }
               - uses: actions/upload-artifact@v7
                 with:
                   name: windows
-                  path: build/*-windows.zip
+                  path: build/windows/*-windows.zip
                   if-no-files-found: error
 
           # ── iOS (opt-in) ────────────────────────────────────────────────

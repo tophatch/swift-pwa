@@ -24,6 +24,26 @@ enum BuildTarget: String, ExpressibleByArgument, CaseIterable {
     }
 }
 
+/// Which SwiftPM / xcodebuild configuration the app is compiled in.
+///
+/// Release is the default — a bundle is normally something you ship. `debug`
+/// exists because the app driver's control socket is compiled into debug builds
+/// only, so a release-only pipeline can't be driven: on the iOS simulator, where
+/// `swift-pwa drive` is otherwise perfectly reachable over the shared loopback,
+/// that made an iPad layout unverifiable except by screenshot-and-squint.
+enum BuildConfiguration: String, ExpressibleByArgument, CaseIterable {
+    case debug, release
+
+    /// `swift build -c <value>`.
+    var swiftPMValue: String {
+        rawValue
+    }
+    /// `xcodebuild -configuration <value>` (capitalized).
+    var xcodeValue: String {
+        rawValue.capitalized
+    }
+}
+
 struct Build: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "build",
@@ -132,8 +152,15 @@ struct Build: AsyncParsableCommand {
     )
     var skipPostbuild: Bool = false
 
-    @Option(help: "Output directory for the bundled artifact. Defaults to ./build.")
-    var output: String = "build"
+    @Option(
+        help: """
+        Output directory for the bundled artifact. Defaults to a per-target directory under ./build \
+        (build/macos, build/ios, build/ios-simulator, build/linux, build/windows, build/android) so \
+        the Apple targets — which both write <name>.app — can't overwrite each other. An explicit \
+        --output is used verbatim.
+        """
+    )
+    var output: String?
 
     @Option(
         help: "Windows package format: portable (default) or msix."
@@ -141,13 +168,26 @@ struct Build: AsyncParsableCommand {
     var packageFormat: String = "portable"
 
     @Option(
+        parsing: .singleValue,
         help: """
-        Windows MSIX target architecture: x64 (default), x86, or arm64. Must match the architecture \
-        of the Swift toolchain running the build — cross-compile on Swift-for-Windows is still rough, \
-        so an arm64 MSIX needs to be produced from an arm64 host.
+        Target architecture. Repeatable on macOS — pass it twice (--arch arm64 --arch x86_64) for a \
+        universal .app; omit it for the host's architecture. On Windows it names the MSIX \
+        architecture (x64 (default), x86, or arm64) and takes a single value that must match the \
+        Swift toolchain running the build — cross-compile on Swift-for-Windows is still rough, so an \
+        arm64 MSIX needs an arm64 host. Ignored on Linux / iOS / Android.
         """
     )
-    var arch: String = "x64"
+    var arch: [String] = []
+
+    @Option(
+        help: """
+        Build configuration: release (default) or debug. Applies to macOS / iOS / Linux / Windows. \
+        Use debug to get a driveable build — the app driver's control socket is compiled into debug \
+        builds only (see docs/app-driver.md). On Android the Swift library is always release; the \
+        APK variant is chosen when you assemble it (`deploy --release`).
+        """
+    )
+    var configuration: BuildConfiguration = .release
 
     @Flag(
         help: "Drop the WebView2 Evergreen Bootstrapper (~1.7 MB) into the Windows bundle."
@@ -216,8 +256,18 @@ struct Build: AsyncParsableCommand {
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
-        let outputDir = cwd.appendingPathComponent(output)
+        let outputDir = cwd.appendingPathComponent(Self.resolveOutput(output, target: target, simulator: simulator))
         let pwa = try PWAManifest.load(from: manifestURL)
+        try Self.validateArchs(arch, target: target)
+
+        let stamp = BuildStamp(
+            target: target.rawValue,
+            destination: target == .ios ? (simulator ? "simulator" : "device") : nil,
+            name: pwa.name,
+            configuration: configuration.rawValue,
+            cliVersion: SwiftPWAVersion.current
+        )
+        try BuildStamp.checkCompatible(directory: outputDir, with: stamp)
 
         try Self.preflight(manifest: pwa, projectRoot: cwd)
         await Self.reportToolGaps(target: target, crossCompileAndroid: crossCompileAndroid)
@@ -249,7 +299,9 @@ struct Build: AsyncParsableCommand {
                 outputDir: outputDir,
                 signIdentity: sign,
                 entitlements: entitlements.map { URL(fileURLWithPath: $0) },
-                notarizeProfile: notarize
+                notarizeProfile: notarize,
+                archs: arch,
+                configuration: configuration
             )
             artifact = try await bundler.build()
         case .ios:
@@ -313,14 +365,16 @@ struct Build: AsyncParsableCommand {
                 signIdentity: signIdentity,
                 entitlements: entitlementsURL,
                 provisioningProfile: profileURL,
-                simulator: simulator
+                simulator: simulator,
+                configuration: configuration
             )
             artifact = try await bundler.build()
         case .linux:
             let bundler = AppImageBundler(
                 manifest: pwa,
                 projectRoot: cwd,
-                outputDir: outputDir
+                outputDir: outputDir,
+                configuration: configuration
             )
             artifact = try await bundler.build()
         case .windows:
@@ -333,7 +387,7 @@ struct Build: AsyncParsableCommand {
                     "swift-pwa: --package-format must be 'portable' or 'msix' (got '\(packageFormat)')"
                 )
             }
-            let archValue = try AppxManifestGenerator.Architecture.parse(arch)
+            let archValue = try AppxManifestGenerator.Architecture.parse(arch.first ?? "x64")
             if singleFile, format == .msix {
                 throw ValidationError(
                     "swift-pwa: --single-file is for the portable format; MSIX already packages "
@@ -348,7 +402,8 @@ struct Build: AsyncParsableCommand {
                 arch: archValue,
                 bootstrapWebView2: bootstrapWebview2,
                 signIdentity: sign,
-                singleFile: singleFile
+                singleFile: singleFile,
+                configuration: configuration
             )
             artifact = try await bundler.build()
         case .android:
@@ -380,6 +435,10 @@ struct Build: AsyncParsableCommand {
             artifact = try await bundler.build()
         }
 
+        // Record what this directory now holds, so a later build for another
+        // platform refuses rather than overwriting it (see BuildStamp).
+        try stamp.write(to: outputDir)
+
         // After-bundling hook: runs on the produced artifact (path in
         // SWIFT_PWA_ARTIFACT) before we report success, so a failing
         // postbuild fails the build.
@@ -390,6 +449,47 @@ struct Build: AsyncParsableCommand {
         print("Built: \(artifact.path)")
         if target == .android, !noNextSteps {
             print("Next: cd '\(artifact.path)' && ./gradlew assembleDebug")
+        }
+    }
+
+    /// The output directory: an explicit `--output` verbatim, else a per-target
+    /// directory under `build/`. Shared with `deploy`, which resolves the same
+    /// path to find what the build produced.
+    static func resolveOutput(_ explicit: String?, target: BuildTarget, simulator: Bool) -> String {
+        if let explicit, !explicit.isEmpty { return explicit }
+        return "build/\(target.outputSubdirectory(simulator: simulator))"
+    }
+
+    /// `--arch` means different things per platform, so reject the combinations
+    /// that would otherwise be silently ignored (a universal build that quietly
+    /// produced one slice is worse than an error).
+    static func validateArchs(_ archs: [String], target: BuildTarget) throws {
+        guard !archs.isEmpty else { return }
+        switch target {
+        case .macos:
+            let supported = ["arm64", "x86_64"]
+            for arch in archs where !supported.contains(arch) {
+                throw ValidationError(
+                    "swift-pwa: --arch \(arch) isn't a macOS architecture — pass arm64 and/or x86_64 "
+                        + "(both, for a universal .app)."
+                )
+            }
+            if Set(archs).count != archs.count {
+                throw ValidationError("swift-pwa: --arch was repeated with the same value.")
+            }
+        case .windows:
+            if archs.count > 1 {
+                throw ValidationError(
+                    "swift-pwa: --target windows takes a single --arch (the MSIX architecture); it must "
+                        + "match the Swift toolchain running the build."
+                )
+            }
+        case .ios, .linux, .android:
+            throw ValidationError(
+                "swift-pwa: --arch isn't used for --target \(target.rawValue). iOS builds both device "
+                    + "slices via xcodebuild; Android's architectures are --android-abis; Linux builds "
+                    + "for the host."
+            )
         }
     }
 

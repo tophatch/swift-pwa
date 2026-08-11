@@ -66,8 +66,8 @@ chmod +x /usr/local/bin/swift-pwa
 swift-pwa init MyApp
 cd MyApp
 swift-pwa build --target macos
-# → build/MyApp.app
-open build/MyApp.app
+# → build/macos/MyApp.app
+open build/macos/MyApp.app
 ```
 
 If you're hacking on swift-pwa itself (or pinning to a specific
@@ -106,6 +106,37 @@ The bundler:
    it fell back (no icon set / not a PNG / file missing / tool absent).
 6. If `pwa.json.description` is set, writes a `Credits.html` so the
    description shows up as the body of the standard About panel.
+
+### Universal binaries
+
+```bash
+swift-pwa build --target macos --arch arm64 --arch x86_64
+# swift-pwa: universal binary — x86_64, arm64
+```
+
+`--arch` is repeatable and passes straight through to `swift build`,
+which lipos the slices itself. Omit it and you get the host
+architecture, as before. The build prints the slices it *found in the
+binary* (via `lipo -archs`), not the ones you asked for, so a slice
+that silently didn't happen shows up as a missing name.
+
+A universal build is worth pairing with a signed one: the reason to
+ship both slices is that the app leaves this machine.
+
+### What travels in the `.app`
+
+Everything the runtime needs is inside the bundle — `bridge.js` is
+compiled into the binary rather than shipped as a SwiftPM resource
+bundle, precisely because a resource bundle can't be reached from
+inside a signed `.app` (see *Known limitations*). If your own code
+reads resources, read them by path from `Contents/Resources`.
+
+The check worth having in your own pipeline is the blunt one: build the
+`.app`, delete `.build/`, and launch it. swift-pwa's CI does exactly
+that on a freshly scaffolded app (`bundle-smoke` in
+[.github/workflows/ci.yml](../.github/workflows/ci.yml)) — because
+before 0.9.10 every bundle read its runtime out of the build
+directory, and nothing noticed until an app was moved to another Mac.
 
 ### Custom `Info.plist` keys (`macos.info_plist`)
 
@@ -180,8 +211,8 @@ swift-pwa build --target macos \
 Verify the signature:
 
 ```bash
-codesign -dvvv build/MyApp.app
-spctl --assess --type execute --verbose build/MyApp.app
+codesign -dvvv build/macos/MyApp.app
+spctl --assess --type execute --verbose build/macos/MyApp.app
 ```
 
 ## 6. Notarization
@@ -263,9 +294,15 @@ returns a clean error explaining how to bundle first.
   prepare the App Sandbox / `embedded.provisionprofile` layout that
   Mac App Store submissions require. `--sign` + `--entitlements` is
   geared at Developer ID distribution.
-- **Universal binaries aren't built for you.** `swift build` uses
-  the host arch; if you need x86_64 + arm64, build twice and `lipo
-  -create` the binaries yourself before bundling.
+- **`Bundle.module` doesn't work inside a `.app`.** Not swift-pwa's
+  runtime (it compiles `bridge.js` in), but your own target or a
+  dependency that declares `resources:`. SwiftPM's generated accessor
+  looks for the resource bundle beside `Bundle.main.bundleURL` — the
+  `.app` **root** — and codesign refuses to seal anything there
+  ("unsealed contents present in the bundle root"). The bundler stages
+  those bundles into `Contents/Resources` (signable, and where a human
+  would look), so read them by path from `Bundle.main.resourceURL`
+  rather than through `Bundle.module`.
 
 ## Reporting issues
 

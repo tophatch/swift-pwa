@@ -7,9 +7,10 @@ struct AppImageBundler {
     let manifest: PWAManifest
     let projectRoot: URL
     let outputDir: URL
+    var configuration: BuildConfiguration = .release
 
     func build() async throws -> URL {
-        // 1. swift build -c release.
+        // 1. swift build.
         // Note: `--static-swift-stdlib` was dropped — recent Swift
         // toolchains (6.0+) ship without a bundled static stdlib on
         // Linux, and the flag silently extends build time without an
@@ -17,16 +18,16 @@ struct AppImageBundler {
         // alongside the binary, which is what we actually want.
         try await Shell.run(
             "/usr/bin/env",
-            ["swift", "build", "-c", "release"],
+            ["swift", "build", "-c", configuration.swiftPMValue],
             cwd: projectRoot
         )
         // SwiftPM target / product name, resolved from the package
         // rather than guessed from the display `name`.
         let resolvedExe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
-        let binary = projectRoot
+        let binDir = projectRoot
             .appendingPathComponent(".build")
-            .appendingPathComponent("release")
-            .appendingPathComponent(resolvedExe)
+            .appendingPathComponent(configuration.swiftPMValue)
+        let binary = binDir.appendingPathComponent(resolvedExe)
         guard FileManager.default.fileExists(atPath: binary.path) else {
             throw BundlerError.binaryMissing(binary, expectedName: resolvedExe)
         }
@@ -50,6 +51,14 @@ struct AppImageBundler {
         let exeName = manifest.linux?.executableName ?? resolvedExe
         let installedBin = appDir.appendingPathComponent("usr/bin/\(exeName)")
         try FileManager.default.copyItem(at: binary, to: installedBin)
+
+        // Any SwiftPM resource bundles the build produced go beside the binary —
+        // which on Linux *is* where `Bundle.module` looks, so an app with
+        // resource-carrying dependencies works off the build machine.
+        try ResourceBundles.stage(
+            ResourceBundles.found(in: binDir),
+            into: installedBin.deletingLastPathComponent()
+        )
 
         // Icon: linuxdeploy requires the file referenced by `Icon=` in
         // `.desktop` to exist at `<AppDir>/<exeName>.png` (or another
@@ -86,16 +95,19 @@ struct AppImageBundler {
             encoding: .utf8
         )
 
-        // Web bundle alongside the binary; the runtime resolves it via
-        // an env var or reasonable default. (For MVP, we copy to /usr/share/<exe>/web.)
+        // Web bundle **beside the binary** — `usr/bin/web`, which is where
+        // `WindowContent.bundledWeb` looks off Apple (`Bundle.main.resourceURL`
+        // for a bare ELF binary is its own directory). It used to go to
+        // `usr/share/<exe>/web`, a location nothing resolves: a scaffolded app's
+        // AppImage died in `configure` with "couldn't find the app's web/
+        // directory", and only the in-tree examples ran, because they declare
+        // `resources: [.copy("web")]` and fall back to their own resource bundle.
         let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)
         if FileManager.default.fileExists(atPath: webSrc.path) {
-            let webDst = appDir.appendingPathComponent("usr/share/\(exeName)/web")
-            try FileManager.default.createDirectory(
-                at: webDst.deletingLastPathComponent(),
-                withIntermediateDirectories: true
+            try FileManager.default.copyItem(
+                at: webSrc,
+                to: installedBin.deletingLastPathComponent().appendingPathComponent("web")
             )
-            try FileManager.default.copyItem(at: webSrc, to: webDst)
         }
 
         // 3. Run linuxdeploy. Pass icon and desktop files explicitly

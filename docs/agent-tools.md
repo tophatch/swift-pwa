@@ -95,6 +95,20 @@ Error: pwa.json's agent.expose doesn't match Books's registered commands:
     commands in that namespace: book.open, book.delete, book.search.
 ```
 
+Because the check *runs your app*, `configure` has to get far enough to register
+its commands. Two consequences worth knowing:
+
+- **Your web assets don't need to be there.** The dump creates no window, so
+  `WindowContent.bundledWeb` doesn't fail the build when it can't find `web/` —
+  which it otherwise would for every app declaring `agent.expose`, since the
+  bare SwiftPM binary has nothing staged and `swift-pwa init` puts `web/`
+  outside the SwiftPM target. A genuinely missing web bundle is still caught,
+  by the bundler, where that check belongs.
+- **Side effects in `configure` still run.** `createWindow` is a no-op and
+  `serveDirectory` / `emit` are inert, but anything else — starting a download,
+  spawning a process — happens for real. Guard it with
+  `if HeadlessDescribe.isDumping { return }`.
+
 `swift-pwa agent check --json` prints the resolved tools exactly as an agent
 would receive them, which is the quickest way to see what a schema lowered to.
 

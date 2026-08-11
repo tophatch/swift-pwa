@@ -45,6 +45,34 @@ struct WebRootTests {
         }
     }
 
+    /// A headless catalog dump creates no window, so the web root it would have
+    /// used is never read — and throwing there broke `swift-pwa build` for
+    /// *any* app declaring `agent.expose`, since the build resolves that list by
+    /// running the app for its command catalog and the bare SwiftPM binary has
+    /// no staged `web/`. Reported by an adopter whose web directory lives
+    /// outside the package entirely, where no `fallbacks:` value could help.
+    @Test("a missing root does NOT throw during a headless describe run")
+    func missingRootIsToleratedWhileDumping() throws {
+        let ghost = URL(fileURLWithPath: "/nonexistent-swift-pwa-web-\(UUID().uuidString)")
+        try withEnvironmentVariable(HeadlessDescribe.environmentVariable, "/tmp/catalog.json") {
+            #expect(HeadlessDescribe.isDumping)
+            // Whatever it returns is never dereferenced; the point is that a
+            // build isn't failed over an asset the dump doesn't use.
+            #expect(throws: Never.self) { _ = try WebRoot.resolve(fallbacks: [ghost]) }
+        }
+    }
+
+    @Test("the tolerance is scoped to the dump — it still throws normally")
+    func missingRootStillThrowsOutsideADump() throws {
+        let ghost = URL(fileURLWithPath: "/nonexistent-swift-pwa-web-\(UUID().uuidString)")
+        try withEnvironmentVariable(HeadlessDescribe.environmentVariable, nil) {
+            #expect(!HeadlessDescribe.isDumping)
+            #if !os(Android)
+                #expect(throws: WebRootError.self) { _ = try WebRoot.resolve(fallbacks: [ghost]) }
+            #endif
+        }
+    }
+
     @Test("fallbacks are tried after the platform default, not before")
     func fallbacksComeLast() {
         let fallback = URL(fileURLWithPath: "/tmp/some-fallback")

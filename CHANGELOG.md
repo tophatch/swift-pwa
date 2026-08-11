@@ -5,6 +5,12 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`swift-pwa build` failed for any app declaring `agent.expose`, over web assets the build doesn't use.** Resolving that allowlist means *running* the app for its live command catalog, and that headless dump stages no `web/` and sets no `SWIFT_PWA_WEB_ROOT` — so the generated `configure`'s `WindowContent.bundledWeb` threw and took the build with it. `swift-pwa init` puts `web/` outside the SwiftPM target and declares no resource, so this was the **default scaffold**, not an exotic layout; it was reported by an adopter whose web directory lives outside the package entirely (`../public`), where it can't be a SwiftPM resource and **no `fallbacks:` value could have helped**. The dump creates no window and never reads the path, so `WebRoot.resolve` now returns rather than throws while `HeadlessDescribe.isDumping` — fixing it in the runtime instead of asking every app to pass a workaround. Deliberately *not* fixed by having `agent check` set `SWIFT_PWA_WEB_ROOT` the way `drive` does: that variable is honoured only in driver-compiled builds, so it would have left the same failure in a release-configuration dump. A genuinely missing web bundle still fails loud in the bundler, which is where that check belongs, and that's verified rather than assumed.
+
 ## [0.9.7] - 2026-08-11
 
 ### Fixed

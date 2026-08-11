@@ -58,6 +58,8 @@ public enum WebRoot {
 
     /// The first candidate that exists on disk.
     ///
+    /// During a headless catalog dump this never throws — see below.
+    ///
     /// - Throws: ``WebRootError/notFound(tried:)`` listing every path tried —
     ///   a blank window is the hardest possible thing to debug, and "it
     ///   wasn't in any of these five places" is a fixable message where
@@ -69,6 +71,26 @@ public enum WebRoot {
             let tried = candidates(fallbacks: fallbacks)
             for root in tried where FileManager.default.fileExists(atPath: root.path) {
                 return root
+            }
+            // A headless describe run never creates a window, so the web root
+            // it would have used is never read — and failing here breaks
+            // something that has nothing to do with web assets. It broke
+            // `swift-pwa build` for *any* app declaring `agent.expose`: the
+            // build resolves that list by running the app for its command
+            // catalog, and the bare SwiftPM binary has no staged `web/`
+            // (`init` puts `web/` outside the SwiftPM target and declares no
+            // resource, so this was the default scaffold, not an exotic
+            // layout). Reported by an adopter whose web directory lives
+            // outside the package entirely, where it *cannot* be a SwiftPM
+            // resource, so no `fallbacks:` value exists that would have helped.
+            //
+            // Returning the first candidate rather than throwing: it's where
+            // the app would look, nothing dereferences it before the process
+            // exits, and `swift-pwa build` still fails loud on a genuinely
+            // missing web bundle in the bundler, which is where that check
+            // belongs.
+            if HeadlessDescribe.isDumping, let first = tried.first {
+                return first
             }
             throw WebRootError.notFound(tried: tried)
         #endif

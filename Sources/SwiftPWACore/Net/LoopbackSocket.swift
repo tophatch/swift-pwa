@@ -4,11 +4,15 @@ import Foundation
     import Darwin
 #elseif canImport(Glibc)
     import Glibc
+#elseif canImport(Android)
+    // Bionic, not glibc — `canImport(Glibc)` is false on Android, which is how
+    // this file (and with it all of SwiftPWACore) stopped compiling there.
+    import Android
 #elseif canImport(WinSDK)
     import WinSDK
 #endif
 
-#if canImport(Darwin) || canImport(Glibc) || canImport(WinSDK)
+#if canImport(Darwin) || canImport(Glibc) || canImport(Android) || canImport(WinSDK)
 
     // A loopback TCP socket handle. POSIX file descriptors are `Int32`;
     // Winsock's `SOCKET` is an unsigned pointer-sized handle — so the type
@@ -52,13 +56,13 @@ import Foundation
 
         /// A blocking IPv4 TCP stream socket, or `invalid` on failure.
         package static func makeStreamSocket() -> SocketHandle {
-            #if canImport(WinSDK)
-                // SOCK_STREAM is an Int32 in WinSDK; 0 = default (TCP) protocol.
-                return socket(AF_INET, SOCK_STREAM, 0)
-            #elseif canImport(Darwin)
-                return socket(AF_INET, SOCK_STREAM, 0)
-            #else
+            // glibc alone types SOCK_STREAM as an enum; Darwin, Bionic and
+            // WinSDK all import it as an Int32 already. 0 = default protocol
+            // for the family, i.e. TCP.
+            #if canImport(Glibc)
                 return socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+            #else
+                return socket(AF_INET, SOCK_STREAM, 0)
             #endif
         }
 

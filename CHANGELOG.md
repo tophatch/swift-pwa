@@ -5,6 +5,12 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The `swift-pwa-macos-x86_64` release asset was an arm64 binary, and had been for several releases.** The release workflow's build matrix declared an `arch` per job and the build step never used it, so on Apple-silicon `macos-15` runners both macOS jobs produced the same arm64 binary — an Intel Mac downloading the asset named for its architecture got `bad CPU type in executable`. Confirmed on the published v0.9.5, v0.9.8 and v0.9.9 assets, which are all arm64 under both names. The macOS jobs now pass `--arch`, and a new step reads the staged binary's actual architecture and **fails the job** rather than uploading an asset that lies about itself. Found by downloading and running what v0.9.9 actually published instead of trusting a green release build — the same check that caught the broken Windows CLI in v0.9.7, which is now the standing habit. Adopters' generated pipelines are unaffected: the `generate-ci` template installs the arm64 asset by name.
+
 ## [0.9.9] - 2026-08-11
 
 ### Changed

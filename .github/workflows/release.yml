@@ -39,11 +39,38 @@ jobs:
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
       - name: Build CLI
-        run: swift build -c release --product swift-pwa
+        # `--arch` on Apple, and it's load-bearing: the macos-15 runners are
+        # Apple silicon, so a plain `swift build` ignores the matrix entry and
+        # builds for the host. That's how the asset named x86_64 came to be a
+        # second arm64 binary. Not passed on Linux — SwiftPM only accepts
+        # `--arch` on Apple platforms.
+        run: |
+          if [ "$RUNNER_OS" = "macOS" ]; then
+            swift build -c release --product swift-pwa --arch ${{ matrix.arch }}
+          else
+            swift build -c release --product swift-pwa
+          fi
       - name: Stage binary
         run: |
           mkdir dist
           cp .build/release/swift-pwa dist/${{ matrix.artifact }}
+      - name: Check the binary is the architecture its name claims
+        # The matrix `arch` was decorative for several releases, and nothing
+        # noticed: an Intel Mac downloading `swift-pwa-macos-x86_64` got a
+        # `bad CPU type in executable`. An asset that lies about its
+        # architecture is worse than one that's missing, so this fails the job
+        # rather than uploading it.
+        run: |
+          got=$(file -b dist/${{ matrix.artifact }})
+          echo "$got"
+          case "${{ matrix.arch }}" in
+            arm64)
+              echo "$got" | grep -q arm64 \
+                || { echo "::error::${{ matrix.artifact }} is not arm64: $got"; exit 1; } ;;
+            x86_64)
+              echo "$got" | grep -qE 'x86[_-]64' \
+                || { echo "::error::${{ matrix.artifact }} is not x86_64: $got"; exit 1; } ;;
+          esac
       - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}

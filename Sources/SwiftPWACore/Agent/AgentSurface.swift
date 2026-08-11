@@ -122,9 +122,17 @@ public final class AgentSurface: @unchecked Sendable {
 
     // MARK: - Wiring (backend-installed)
 
-    /// Attach the live app context and the backend's indicator. Called once by
-    /// ``AgentPlugin`` at registration; not public API.
-    package func install(context: any AppContext, indicator: (@Sendable (AgentIndicatorUpdate) -> Void)?) {
+    /// Attach the live app context, and optionally an indicator to use instead
+    /// of the backend-installed one. Called once by ``AgentPlugin`` at
+    /// registration; not public API.
+    ///
+    /// `indicator` exists for tests. Production passes nil and the real hook is
+    /// resolved in ``publish(_:)`` — see the comment there for why it can't be
+    /// captured at this point.
+    package func install(
+        context: any AppContext,
+        indicator: (@Sendable (AgentIndicatorUpdate) -> Void)? = nil
+    ) {
         lock.lock()
         self.context = context
         self.indicator = indicator
@@ -187,7 +195,15 @@ public final class AgentSurface: @unchecked Sendable {
     private func publish(_ state: AgentState) {
         lock.lock()
         let observers = Array(observers.values)
-        let indicator = indicator
+        // Resolved here rather than captured at install time. Every backend
+        // installs its tray hook *after* running the app's `configure`, which
+        // is where `AgentPlugin` registers — so a surface that snapshotted the
+        // hook always snapshotted `nil`, and the indicator never appeared on
+        // any platform. Looking it up when there's something to show removes
+        // the ordering dependency instead of relying on four backends to keep
+        // two lines in the right order. The stored one stays for tests, which
+        // inject a tray directly.
+        let indicator = indicator ?? AgentIndicator.installed
         lock.unlock()
         for observer in observers { observer(state) }
         // The indicator gets a way to revoke as well as the state: it's often

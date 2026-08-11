@@ -39,7 +39,10 @@ public struct AgentPlugin: Plugin {
 
     public func register(into registry: CommandRegistry, app: any AppContext) {
         let surface = surface
-        surface.install(context: app, indicator: AgentIndicator.installed)
+        // No indicator passed: this runs inside the app's `configure`, before
+        // the backend has installed its tray hook, so anything read here would
+        // be nil. The surface resolves the live hook when it has state to show.
+        surface.install(context: app)
 
         registry.register(
             "agent.status",
@@ -113,6 +116,15 @@ public enum AgentIndicator {
         lock.lock()
         defer { lock.unlock() }
         self.hook = hook
+    }
+
+    /// Drop the installed hook. For tests only — a backend installs one at
+    /// startup and never removes it, but process-global state has to be
+    /// returnable to its starting point or one test's hook leaks into the next.
+    package static func uninstall() {
+        lock.lock()
+        defer { lock.unlock() }
+        hook = nil
     }
 
     /// The standard indicator for a backend with a system tray: a status item

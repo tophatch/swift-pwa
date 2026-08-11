@@ -14,7 +14,19 @@ have WebKitGTK 6.0 in apt without a PPA). Pick GTK4 for modern distros
 and the long-term direction. JS↔Swift bridge round-trip is verified
 end-to-end against `Examples/HelloPWA` on both.
 
-## 1. Install Swift 6.0+
+## 1. Install Swift 6.2+
+
+> **6.2 is a hard floor on Linux, and 6.0.x fails in a way that looks like your
+> app's fault.** Under Swift 6.0.3 the GTK4 backend never renders: the window
+> opens on `about:blank` and stays there, because the custom `pwa://` scheme
+> handler is never invoked — silently, with nothing on stderr. Verified on a
+> real GTK4 box, same commit either side: an empty document under 6.0.3, a fully
+> loaded page under 6.2 and 6.3.1. If you see a blank window and no error, check
+> `swift --version` first.
+>
+> Mind that **swiftly honours the `.swift-version` file inside a checkout**, so
+> the toolchain building your app may not be the one your login shell reports.
+> This repo pins `6.2` there.
 
 The recommended path is Swiftly, the official toolchain manager.
 Per [swift.org/install/linux](https://www.swift.org/install/linux/) the
@@ -27,8 +39,8 @@ curl -O https://download.swift.org/swiftly/linux/swiftly-$(uname -m).tar.gz && \
     . "${SWIFTLY_HOME_DIR:-$HOME/.local/share/swiftly}/env.sh" && \
     hash -r
 
-swiftly install latest    # or pin a version, e.g. `swiftly install 6.0.3`
-swift --version           # expect 6.0+
+swiftly install latest    # or pin a version, e.g. `swiftly install 6.2.0`
+swift --version           # expect 6.2+
 ```
 
 (The older `curl … swiftly-install.sh | bash` flow is deprecated — that

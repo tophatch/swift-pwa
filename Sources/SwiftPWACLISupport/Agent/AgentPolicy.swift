@@ -75,7 +75,32 @@ enum AgentPolicy {
     /// `agent.*` is the other one, for a plainer reason: a tool that could call
     /// `agent.enable` would be able to widen its own access, which makes the
     /// user's gate decorative.
-    private static let forbiddenPrefixes = ["secrets.", "agent."]
+    /// Each carries its own explanation. One shared string covered both for a
+    /// release, which meant an app declaring `agent.enable` was told the
+    /// `secrets.*` story — that it would leak a credential — and pointed at a
+    /// fix ("expose the command that uses the key") that has nothing to do with
+    /// the actual problem. On the one surface where a developer is being told
+    /// *no*, the reason has to be the real one.
+    private static let forbiddenPrefixes: [(prefix: String, reason: String)] = [
+        (
+            "secrets.",
+            """
+            The `secrets.` namespace exists so credentials never leave the native side, and an agent that \
+            can call it reads any key it can name — while the consent sheet, built from your description and \
+            annotations, would honestly call that read-only. Whatever needs the key, your app should do: \
+            expose the command that uses it (`myapp.translate`) so the key never crosses the tool boundary \
+            at all.
+            """
+        ),
+        (
+            "agent.",
+            """
+            The `agent.` namespace is the user's gate over this whole surface, so a tool that could call it \
+            would be able to widen its own access — and a gate an agent can open is decorative. Enabling \
+            and revoking access stays with the user, through your app's own UI.
+            """
+        )
+    ]
 
     /// Built-in system capabilities. Exposing one isn't wrong — it's the
     /// developer's app — but it's rarely what they meant: these are general
@@ -105,14 +130,8 @@ enum AgentPolicy {
                 errors.append("agent.expose can't expose '\(command)' — the `__` namespace is bridge internals.")
                 continue
             }
-            if let prefix = forbiddenPrefixes.first(where: { command.hasPrefix($0) }) {
-                errors.append("""
-                agent.expose can't expose '\(command)'. The `\(prefix)` namespace exists so credentials never \
-                leave the native side, and an agent that can call it reads any key it can name — while the \
-                consent sheet, built from your description and annotations, would honestly call that \
-                read-only. Whatever needs the key, your app should do: expose the command that uses it \
-                (`myapp.translate`) so the key never crosses the tool boundary at all.
-                """)
+            if let refused = forbiddenPrefixes.first(where: { command.hasPrefix($0.prefix) }) {
+                errors.append("agent.expose can't expose '\(command)'. \(refused.reason)")
                 continue
             }
             guard let descriptor = commands[command] else {

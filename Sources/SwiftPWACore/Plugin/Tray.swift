@@ -15,9 +15,16 @@ import Foundation
 public protocol Tray: AnyObject, Sendable {
     /// Set the icon shown in the tray. Path is interpreted by the
     /// platform's image loader (`NSImage(byReferencingFile:)` on Apple,
-    /// `gtk_status_icon_set_from_file` on GTK). `template` requests a
-    /// monochrome menu-bar style on macOS — `template == false` on
-    /// other platforms is a no-op since they don't auto-tint.
+    /// `gtk_status_icon_set_from_file` on GTK, `LoadImageW` on Windows —
+    /// which reads `.ico` only, so the Windows backend repackages a PNG
+    /// into an icon container first, keeping PNG working everywhere).
+    /// `template` requests a monochrome menu-bar style on macOS —
+    /// `template == false` on other platforms is a no-op since they
+    /// don't auto-tint, which also means template art drawn for macOS
+    /// (a black silhouette) is left as-is elsewhere, and reads poorly
+    /// against a dark taskbar. Either supply art with its own contrast,
+    /// or pick a variant from ``prefersLightArt`` the way the runtime's
+    /// own agent indicator does.
     func setIcon(path: String, template: Bool)
 
     /// Set the hover-tooltip text.
@@ -34,6 +41,25 @@ public protocol Tray: AnyObject, Sendable {
     /// Stream of tray-originated events: clicks on the icon and
     /// activations of menu items by id.
     func eventStream() -> AsyncStream<TrayEvent>
+
+    /// Whether art drawn for this tray should be light rather than dark, where
+    /// the platform can say. `nil` means don't adapt — either the platform
+    /// tints for us (Apple, via `template`) or it exposes nothing reliable to
+    /// key off.
+    ///
+    /// Only the backend can answer this: the signal is the *system chrome's*
+    /// theme, not the app's, and each platform reports it differently (or not
+    /// at all). Read per icon rather than cached, so a user switching theme
+    /// while the app runs is picked up the next time the art changes.
+    var prefersLightArt: Bool? { get }
+}
+
+public extension Tray {
+    /// Platforms that tint template art, or that offer no dependable signal,
+    /// get the default: leave the art alone.
+    var prefersLightArt: Bool? {
+        nil
+    }
 }
 
 // MARK: - Menu model

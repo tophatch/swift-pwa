@@ -8,8 +8,12 @@ import Testing
 /// Its whole reason to exist is surviving a developer who cuts the corner and
 /// skips asking, so the behaviour is defined in Core (backends supply only a
 /// tray) and checked here rather than five times over.
+/// `.serialized` because two of these install the process-global
+/// `AgentIndicator` hook. Run in parallel, one test's surface can publish into
+/// the other's hook — which is a flake that reports as the very bug being
+/// tested, so it's worth the lost concurrency.
 @MainActor
-@Suite("Agent indicator")
+@Suite("Agent indicator", .serialized)
 struct AgentIndicatorTests {
     static let tools = [
         AgentTool(command: "book.open", description: "Open a book.", readOnly: true),
@@ -105,6 +109,70 @@ struct AgentIndicatorTests {
         tray.emit(.menuItemClicked(id: "status"))
         try? await Task.sleep(nanoseconds: 20_000_000)
         #expect(revoked.value == false)
+    }
+
+    // MARK: - The seam between the surface and the indicator
+
+    /// Reproduces real startup order, which is the one thing the tests above
+    /// couldn't see: they drive ``TrayIndicatorHolder`` directly, and every
+    /// other piece was checked in isolation too — so nobody noticed that
+    /// `AgentPlugin.register` runs inside the app's `configure` while a backend
+    /// installs its tray hook *after* `configure` returns. The surface captured
+    /// the hook at registration, captured nil, and the indicator never appeared
+    /// on any platform for two releases.
+    @Test("enabling access notifies the indicator a backend installs after configure")
+    func indicatorInstalledAfterConfigureStillFires() async throws {
+        let app = await MockAppContext()
+        let surface = AgentSurface(tools: Self.tools)
+
+        // configure(): the app installs AgentPlugin, which wires the surface.
+        surface.install(context: app)
+
+        // Startup, after configure: the backend installs its indicator.
+        let seen = Updates()
+        AgentIndicator.install { seen.append($0) }
+        defer { AgentIndicator.uninstall() }
+
+        _ = try surface.enable()
+        defer { surface.disable() }
+
+        #expect(seen.latest?.state.enabled == true, "the indicator was never told access opened")
+        #expect(seen.latest?.state.tools.count == Self.tools.count)
+    }
+
+    /// An indicator handed in explicitly still wins, so a test can inject one
+    /// without the process-global hook interfering.
+    @Test("an injected indicator takes precedence over the installed hook")
+    func injectedIndicatorWins() async throws {
+        let app = await MockAppContext()
+        let surface = AgentSurface(tools: Self.tools)
+        let injected = Updates()
+        let global = Updates()
+        surface.install(context: app, indicator: { injected.append($0) })
+        AgentIndicator.install { global.append($0) }
+        defer { AgentIndicator.uninstall() }
+
+        _ = try surface.enable()
+        defer { surface.disable() }
+
+        #expect(injected.latest?.state.enabled == true)
+        #expect(global.latest == nil)
+    }
+
+    final class Updates: @unchecked Sendable {
+        private let lock = NSLock()
+        private var updates: [AgentIndicatorUpdate] = []
+        func append(_ update: AgentIndicatorUpdate) {
+            lock.lock()
+            updates.append(update)
+            lock.unlock()
+        }
+
+        var latest: AgentIndicatorUpdate? {
+            lock.lock()
+            defer { lock.unlock() }
+            return updates.last
+        }
     }
 
     final class Flag: @unchecked Sendable {

@@ -661,6 +661,25 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   dispatch DOM events through `eval` where you need interaction, remembering
   they arrive untrusted. `drive info` reports this honestly rather than
   accepting the call and doing nothing.
+- **A tray icon lands in the hidden-icon overflow, not on the taskbar.**
+  Windows 11 puts every newly-registered notification-area icon behind the
+  taskbar's chevron by default, and there's no supported API to promote it out —
+  the user decides, under *Settings → Personalization → Taskbar → Other system
+  tray icons*. Worth knowing if your app treats the tray as its primary surface,
+  and worth saying out loud for the agent-access indicator
+  ([docs/agent-tools.md](agent-tools.md#the-indicator)), whose job is to be
+  seen: on Windows a user has to expand the overflow to see it. macOS and both
+  Linux backends show a tray item immediately.
+- **A tray icon shows at the small-icon metric, and a PNG is repackaged to get
+  there.** `Shell_NotifyIconW` wants an `HICON`, and the Win32 loader behind it
+  reads `.ico` only — so the runtime wraps PNG bytes in a single-entry icon
+  container before loading, which is why `tray.setIcon({ path: 'icon.png' })`
+  works here as it does on macOS and Linux. Supply art that reads at **16 px**:
+  it's loaded at `SM_CXSMICON` rather than being downscaled from 32. Nothing
+  recolours your art — macOS-style template images (a black silhouette) come out
+  black on a dark taskbar. `Tray.prefersLightArt` reports the taskbar's polarity
+  from `SystemUsesLightTheme` if you want to ship two variants, which is what
+  the agent indicator does.
 - **No `system.memoryPressure` event.** `system.memory` works (total RAM and
   `availableBytes` via `GlobalMemoryStatusEx`), but the runtime doesn't emit
   the `system.memoryPressure` event on Windows (it fires on iOS/macOS/Android).

@@ -478,7 +478,7 @@ struct LaunchedApp {
             "swift",
             ["build", "-c", options.configuration, "--product", exe],
             cwd: cwd,
-            stdoutTo: progressSink(for: log)
+            stdoutTo: progressSink
         )
         let binPath = try await Shell.capture(
             "swift",
@@ -539,7 +539,7 @@ struct LaunchedApp {
             let app = outputDir.appendingPathComponent("\(pwa.name).app")
             let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
 
-            let udid = try await withStdout(redirectedTo: progressSink(for: log)) {
+            let udid = try await withStdout(redirectedTo: progressSink) {
                 // `build` prints with `print(...)`, and xcodebuild inherits our
                 // stdout — both would land in the MCP protocol stream, so the
                 // whole build+install phase writes where lifecycle chatter goes.
@@ -595,12 +595,19 @@ struct LaunchedApp {
         }
     #endif
 
-    /// Where a build's own output goes: wherever lifecycle chatter goes, except
-    /// that "stdout" means stderr here. The verb's result is the only thing on
-    /// our stdout — `drive eval … | jq` has to keep working — which is the same
-    /// reason `HandshakeReader` echoes the app's output to stderr.
-    static func progressSink(for log: FileHandle) -> FileHandle {
-        log.fileDescriptor == FileHandle.standardOutput.fileDescriptor ? .standardError : log
+    /// Where a build's own output goes: **always stderr**, whoever is driving.
+    ///
+    /// Our stdout carries the verb's result and nothing else — `drive eval … |
+    /// jq` has to keep working, and `swift-pwa mcp`'s stdout is the protocol
+    /// stream, where one stray compiler line ends the session. That's the same
+    /// reason `HandshakeReader` echoes the app's own output to stderr.
+    ///
+    /// A constant rather than a function of the lifecycle log because there is no
+    /// caller who wants build chatter on stdout, and asking "is this handle our
+    /// stdout?" isn't portable: `FileHandle.fileDescriptor` is unavailable on
+    /// Windows ("Cannot perform non-owning handle to fd conversion").
+    static var progressSink: FileHandle {
+        .standardError
     }
 
     // Run `body` with this process's stdout pointed at `sink`.

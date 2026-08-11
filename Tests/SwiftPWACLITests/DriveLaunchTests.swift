@@ -34,17 +34,11 @@ struct DriveLaunchTests {
     }
 
     /// A verb's result is the only thing allowed on stdout, so the build's own
-    /// chatter goes to stderr — the same reason the app's output does.
-    @Test("build progress goes to stderr when lifecycle logging is stdout")
+    /// chatter goes to stderr — the same reason the app's output does. (Asserted
+    /// by identity, not by file descriptor: `FileHandle.fileDescriptor` is
+    /// unavailable on Windows, and the test targets compile there.)
+    @Test("build progress never goes to stdout")
     func progressSinkAvoidsStdout() {
-        #expect(
-            LaunchedApp.progressSink(for: .standardOutput).fileDescriptor
-                == FileHandle.standardError.fileDescriptor
-        )
-        // An explicit sink (the MCP server passes stderr) is used as given.
-        #expect(
-            LaunchedApp.progressSink(for: .standardError).fileDescriptor
-                == FileHandle.standardError.fileDescriptor
-        )
+        #expect(LaunchedApp.progressSink === FileHandle.standardError)
     }
 }

@@ -585,18 +585,18 @@ jobs:
         # first run; subsequent runs are cache hits. JAVA_HOME is
         # picked up from the setup-java step.
         run: |
-          cd Examples/HelloPWA/build/HelloPWA-android
+          cd Examples/HelloPWA/build/android/HelloPWA-android
           ./gradlew --no-daemon assembleDebug
       - name: Verify APK exists
         run: |
-          APK=Examples/HelloPWA/build/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
+          APK=Examples/HelloPWA/build/android/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
           test -f "$APK" || (echo "no APK at $APK" && exit 1)
           ls -lh "$APK"
       - name: Upload APK as artifact
         uses: actions/upload-artifact@v7
         with:
           name: HelloPWA-debug-apk
-          path: Examples/HelloPWA/build/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
+          path: Examples/HelloPWA/build/android/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
 
   lint:

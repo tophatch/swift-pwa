@@ -19,6 +19,12 @@
         /// lookup.
         @MainActor
         public final class SystemDialog: Dialog {
+            /// Holds each picked location's grant for the session and mints
+            /// the bookmarks `dialog.openFile` / `openDirectory` return.
+            /// Outside the App Sandbox this is only about durability across
+            /// relaunches; inside it, it's what keeps the path readable.
+            private let grants = FileGrants()
+
             public init() {}
 
             public func message(_ args: DialogMessageArgs, parent _: WindowID?) async throws {
@@ -54,7 +60,7 @@
                 }
                 let resp = await runPanel(panel)
                 guard resp == .OK else { return [] }
-                return panel.urls.map(\.path)
+                return grants.retain(panel.urls)
             }
 
             public func saveFile(_ args: DialogSaveFileArgs, parent _: WindowID?) async throws -> String? {
@@ -83,7 +89,15 @@
                 }
                 let resp = await runPanel(panel)
                 guard resp == .OK else { return [] }
-                return panel.urls.map(\.path)
+                return grants.retain(panel.urls)
+            }
+
+            public func makeBookmark(forPath path: String) async throws -> String? {
+                grants.makeBookmark(forPath: path)
+            }
+
+            public func resolveBookmark(_ bookmark: String) async throws -> DialogResolveBookmarkResult {
+                try grants.resolve(bookmark)
             }
 
             public func exportFile(_ args: DialogExportFileArgs, parent _: WindowID?) async throws -> String? {
@@ -183,6 +197,13 @@
         public final class SystemDialog: Dialog {
             private var savedFileWarned = false
 
+            /// Holds the security scope on every location the user picks.
+            /// Without this the paths `openFile` / `openDirectory` return
+            /// are unreadable the moment the picker deallocates — anything
+            /// outside the app container (iCloud Drive, another app's
+            /// documents) is exactly what the scope guards.
+            private let grants = FileGrants()
+
             public init() {}
 
             public func message(_ args: DialogMessageArgs, parent _: WindowID?) async throws {
@@ -263,6 +284,14 @@
                 return await presentPicker(picker)
             }
 
+            public func makeBookmark(forPath path: String) async throws -> String? {
+                grants.makeBookmark(forPath: path)
+            }
+
+            public func resolveBookmark(_ bookmark: String) async throws -> DialogResolveBookmarkResult {
+                try grants.resolve(bookmark)
+            }
+
             // MARK: - Helpers
 
             private func presentAlert(title: String, message: String, actions: [UIAlertAction]) {
@@ -272,9 +301,15 @@
                 presenter.present(alert, animated: true)
             }
 
+            /// Present a picker and return the picked paths, with each
+            /// location's security scope activated and retained first — the
+            /// URL is the only thing carrying that grant, so it has to
+            /// happen here, before the URLs are flattened to strings.
             private func presentPicker(_ picker: UIDocumentPickerViewController) async -> [String] {
                 await withCheckedContinuation { (cont: CheckedContinuation<[String], Never>) in
-                    let delegate = DocumentPickerDelegate { paths in cont.resume(returning: paths) }
+                    let delegate = DocumentPickerDelegate { [grants] urls in
+                        cont.resume(returning: grants.retain(urls))
+                    }
                     picker.delegate = delegate
                     // Retain the delegate for the picker's lifetime via
                     // an associated reference — UIDocumentPicker holds
@@ -310,6 +345,7 @@
         /// `UIDocumentPickerDelegate` callbacks. Both `didPickDocumentsAt`
         /// and `wasCancelled` need to resume the continuation exactly
         /// once; we guard with `done` to keep the contract.
+        @MainActor
         private final class DocumentPickerDelegate: NSObject, UIDocumentPickerDelegate {
             /// objc_setAssociatedObject requires a stable per-key
             /// address. A heap allocation gives us one without falling
@@ -317,25 +353,28 @@
             /// var; the leak is intentional (one byte, once per process).
             static let assocKey: UnsafeRawPointer = .init(malloc(1)!)
 
-            private let onResult: ([String]) -> Void
+            private let onResult: ([URL]) -> Void
             private var done = false
 
-            init(_ onResult: @escaping ([String]) -> Void) {
+            /// Hands back the picked **URLs**, not paths: each one carries
+            /// the security scope for a location outside the app container,
+            /// and the caller has to activate it before that URL is dropped.
+            init(_ onResult: @escaping ([URL]) -> Void) {
                 self.onResult = onResult
             }
 
             func documentPicker(_: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-                fire(urls.map(\.path))
+                fire(urls)
             }
 
             func documentPickerWasCancelled(_: UIDocumentPickerViewController) {
                 fire([])
             }
 
-            private func fire(_ paths: [String]) {
+            private func fire(_ urls: [URL]) {
                 guard !done else { return }
                 done = true
-                onResult(paths)
+                onResult(urls)
             }
         }
 

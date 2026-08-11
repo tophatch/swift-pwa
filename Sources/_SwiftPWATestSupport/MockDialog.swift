@@ -19,6 +19,8 @@ public final class MockDialog: Dialog {
         case saveFile(DialogSaveFileArgs, parent: WindowID?)
         case openDirectory(DialogOpenDirectoryArgs, parent: WindowID?)
         case exportFile(DialogExportFileArgs, parent: WindowID?)
+        case makeBookmark(path: String)
+        case resolveBookmark(String)
     }
 
     public private(set) var actions: [Action] = []
@@ -28,6 +30,10 @@ public final class MockDialog: Dialog {
     public var nextSaveFilePath: String?
     public var nextOpenDirectoryPaths: [String] = []
     public var nextExportFilePath: String?
+    /// Token `makeBookmark` returns per path. A path that isn't in here
+    /// gets `nil` — the "platform can't vouch for this one" case.
+    public var nextBookmarksByPath: [String: String] = [:]
+    public var nextResolveBookmark = DialogResolveBookmarkResult(path: nil)
 
     public init() {}
 
@@ -58,5 +64,15 @@ public final class MockDialog: Dialog {
     public func exportFile(_ args: DialogExportFileArgs, parent: WindowID?) async throws -> String? {
         actions.append(.exportFile(args, parent: parent))
         return nextExportFilePath
+    }
+
+    public func makeBookmark(forPath path: String) async throws -> String? {
+        actions.append(.makeBookmark(path: path))
+        return nextBookmarksByPath[path]
+    }
+
+    public func resolveBookmark(_ bookmark: String) async throws -> DialogResolveBookmarkResult {
+        actions.append(.resolveBookmark(bookmark))
+        return nextResolveBookmark
     }
 }

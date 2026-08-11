@@ -343,6 +343,23 @@ const { path: saved } = await __SWIFT_PWA__.invoke('dialog.exportFile', {
 const { path: dir } = await __SWIFT_PWA__.invoke('dialog.openDirectory');
 const { paths: dirs } = await __SWIFT_PWA__.invoke('dialog.openDirectory',
     { multiple: true });
+
+// Every pick also comes with a bookmark per path — store that, not the path,
+// if you want the location back after a restart:
+const { path: folder, bookmark } =
+    await __SWIFT_PWA__.invoke('dialog.openDirectory');
+localStorage.setItem('libraryFolder', bookmark);
+
+// …on a later launch:
+const stored = localStorage.getItem('libraryFolder');
+const { path, stale, bookmark: refreshed } =
+    await __SWIFT_PWA__.invoke('dialog.resolveBookmark', { bookmark: stored });
+if (path == null) {
+    // The grant is gone — deleted, revoked, or an unmounted volume. Ask the
+    // user to pick again.
+} else if (stale) {
+    localStorage.setItem('libraryFolder', refreshed);
+}
 ```
 
 `dialog.openDirectory` returns both `paths` (every selected directory) and
@@ -350,6 +367,31 @@ const { paths: dirs } = await __SWIFT_PWA__.invoke('dialog.openDirectory',
 `multiple` is desktop-only — macOS / Windows / GTK / iOS honor it; on Android
 the SAF tree picker grants one directory per launch, so at most one path comes
 back.
+
+**Bookmarks: what a path can't carry.** `dialog.openFile` and
+`dialog.openDirectory` also return `bookmarks` — one entry per path, same order,
+`null` where the platform couldn't mint one (`openDirectory` adds a `bookmark`
+convenience for the first, mirroring `path`). A bookmark is an **opaque token**:
+store it and hand it back to `dialog.resolveBookmark` verbatim, don't parse it.
+
+The reason it exists is that on two of the five platforms a picked location
+isn't reachable from its path alone:
+
+| Platform | What the token holds | Without it |
+| --- | --- | --- |
+| iOS | Foundation bookmark data from the picker's security-scoped URL | A folder outside the app container is unreadable — the runtime holds the scope for the session, but nothing survives a relaunch |
+| Android | The SAF `content://` URI, with a *persisted* permission taken at pick time | The URI throws on the next launch — a picker's grant dies with the task |
+| macOS | A bookmark, app-scoped when the app is sandboxed | Sandboxed apps lose access at relaunch (needs the `com.apple.security.files.bookmarks.app-scope` entitlement); unsandboxed apps are fine |
+| Linux / Windows | The path — there's no grant to preserve | Nothing lost |
+
+`dialog.resolveBookmark` returns `{ path, stale, bookmark }`. `path` is `null`
+when the token no longer resolves — the folder was deleted, the user revoked
+access, the volume isn't mounted — which is the app's cue to ask for a fresh
+pick rather than an error to report. Resolving also **re-activates the grant for
+the rest of the session**, so `fs.*` works on the returned path immediately.
+When `stale` is `true` the token resolved but wants replacing: store the
+`bookmark` that came back with it. A malformed token — or one minted on a
+different platform — throws `E_HANDLER`.
 
 **`dialog.saveFile` vs `dialog.exportFile`.** `saveFile` returns a *destination
 path you then write to* — natural on desktop and Android, but a no-op on iOS

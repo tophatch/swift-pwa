@@ -1303,6 +1303,8 @@ enum AndroidTemplates {
                 "dialog.saveFile" -> dialogSaveFile(json, done)
                 "dialog.exportFile" -> dialogExportFile(json, done)
                 "dialog.openDirectory" -> dialogOpenDirectory(done)
+                "dialog.takePersistableUri" -> dialogTakePersistableUri(json, done)
+                "dialog.checkPersistedUri" -> dialogCheckPersistedUri(json, done)
                 "biometric.canAuthenticate" -> biometricCanAuthenticate(done)
                 "biometric.authenticate" -> biometricAuthenticate(json, done)
                 "updater.installApk" -> updaterInstallApk(json, done)
@@ -1592,6 +1594,62 @@ enum AndroidTemplates {
             }
             pendingOpenDirectory = { result -> done(result, null) }
             openDirectoryLauncher.launch(null)
+        }
+
+        // A SAF grant from a picker lasts only as long as the task, so a
+        // stored `content://` URI throws on the next launch. Taking a
+        // *persistable* grant is what makes it durable, and it has to
+        // happen while the picker's transient grant is still alive — hence
+        // the runtime asking for this right after a pick, not later.
+        private fun dialogTakePersistableUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uri = Uri.parse(json.optString("uri"))
+            val read = Intent.FLAG_GRANT_READ_URI_PERMISSION
+            val write = Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+            // A tree pick grants read+write; a read-only document pick
+            // rejects the write flag outright, and losing the read grant
+            // over it would be the wrong trade.
+            val persisted = try {
+                activity.contentResolver.takePersistableUriPermission(uri, read or write)
+                true
+            } catch (t: Throwable) {
+                try {
+                    activity.contentResolver.takePersistableUriPermission(uri, read)
+                    true
+                } catch (t2: Throwable) {
+                    false
+                }
+            }
+            done(JSONObject().put("persisted", persisted).toString(), null)
+        }
+
+        // Two separate questions, both of which have to hold for the URI to
+        // be worth handing back: do we still have the grant (the user can
+        // revoke it from Settings), and is the document still there.
+        private fun dialogCheckPersistedUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val raw = json.optString("uri")
+            val uri = Uri.parse(raw)
+            val granted = activity.contentResolver.persistedUriPermissions.any {
+                it.uri.toString() == raw && it.isReadPermission
+            }
+            if (!granted) {
+                done(JSONObject().put("persisted", false).toString(), null)
+                return
+            }
+            val probe = if (DocumentsContract.isTreeUri(uri)) {
+                DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                uri
+            }
+            val exists = try {
+                activity.contentResolver.query(
+                    probe,
+                    arrayOf(DocumentsContract.Document.COLUMN_DOCUMENT_ID),
+                    null, null, null
+                )?.use { it.count > 0 } ?: false
+            } catch (t: Throwable) {
+                false
+            }
+            done(JSONObject().put("persisted", exists).toString(), null)
         }
 
         // -----------------------------------------------------------

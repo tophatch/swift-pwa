@@ -1029,6 +1029,21 @@ staged.
   `OpenDocumentTree` should drive the `DocumentFile` /
   `DocumentsContract` API directly (out of scope for the cross-
   platform `Fs` surface).
+- **A picked URI only survives a relaunch as a bookmark.** SAF's grant
+  from a picker lasts as long as the task, so a `content://` URI stashed
+  in `localStorage` throws the next time the app starts. The runtime asks
+  for a *persistable* grant
+  (`ContentResolver.takePersistableUriPermission`) for every pick and
+  returns the URI as a token in `bookmarks` / `bookmark`; hand that to
+  `dialog.resolveBookmark` on a later launch and it verifies the grant is
+  still held (the user can revoke it in Settings → the app's permissions)
+  and that the document still exists, then hands the URI back — or `null`
+  when either check fails. A tree pick takes read+write; a read-only
+  document pick that refuses the write flag falls back to read rather than
+  losing the grant altogether. Android's per-app cap on persisted grants
+  (a few hundred) is the practical limit on how many locations an app can
+  remember. Cross-platform contract:
+  [docs/javascript-api.md](javascript-api.md#dialog).
 - **Delta / split APKs not supported.** Only single-APK updates
   work through `AndroidUpdater`; AAB / split-by-density support is
   on the roadmap. The Ed25519 signature pins the artifact identity

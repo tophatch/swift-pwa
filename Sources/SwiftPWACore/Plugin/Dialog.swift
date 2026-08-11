@@ -67,6 +67,35 @@ public protocol Dialog: AnyObject, Sendable {
     /// time, so `multiple` is ignored there and at most one path comes
     /// back — documented in `docs/android-setup.md`.
     func openDirectory(_ args: DialogOpenDirectoryArgs, parent: WindowID?) async throws -> [String]
+
+    /// Mint a durable token for a location this `Dialog` just handed back
+    /// from `openFile` / `openDirectory`, or `nil` when the platform
+    /// can't vouch for that path.
+    ///
+    /// On the sandboxed platforms a picked location is only reachable
+    /// through the *grant* the picker attached to it, which a bare path
+    /// string can't carry: iOS hands out a security-scoped `URL` whose
+    /// scope dies with the object, and Android hands out a `content://`
+    /// URI whose permission dies with the task. The token is where that
+    /// grant is preserved, so an app can store it and get the location
+    /// back on a later launch via ``resolveBookmark(_:)``.
+    ///
+    /// Called by `DialogPlugin` for each picked path, so the JS result
+    /// carries `bookmarks` alongside `paths` with no extra round trip.
+    /// Backends mint from whatever they still hold for that path — which
+    /// is why this has to be asked *right after* the pick, not
+    /// arbitrarily later.
+    func makeBookmark(forPath path: String) async throws -> String?
+
+    /// Redeem a token from ``makeBookmark(forPath:)`` back into a usable
+    /// location, re-activating whatever grant it carries for the rest of
+    /// the session.
+    ///
+    /// A token that no longer resolves — folder deleted, permission
+    /// revoked by the user, volume unmounted — comes back as a `nil`
+    /// `path` rather than an error, mirroring how a cancelled picker
+    /// reports "nothing to work with". Only a *malformed* token throws.
+    func resolveBookmark(_ bookmark: String) async throws -> DialogResolveBookmarkResult
 }
 
 // MARK: - Severity
@@ -215,6 +244,16 @@ public struct DialogOpenDirectoryArgs: Sendable, Codable, Equatable {
     }
 }
 
+public struct DialogResolveBookmarkArgs: Sendable, Codable, Equatable {
+    /// A token previously returned in `bookmarks` by `dialog.openFile` /
+    /// `dialog.openDirectory`.
+    public var bookmark: String
+
+    public init(bookmark: String) {
+        self.bookmark = bookmark
+    }
+}
+
 // MARK: - Result envelopes (used by `DialogPlugin`)
 
 public struct DialogConfirmResult: Sendable, Codable, Equatable {
@@ -224,7 +263,19 @@ public struct DialogConfirmResult: Sendable, Codable, Equatable {
 
 public struct DialogOpenFileResult: Sendable, Codable, Equatable {
     public var paths: [String]
-    public init(paths: [String]) { self.paths = paths }
+    /// Durable tokens for `paths`, index-aligned — `bookmarks[i]` belongs
+    /// to `paths[i]`, and is `null` where the platform couldn't mint one.
+    /// Persist a token to reach the same file on a later launch (see
+    /// `dialog.resolveBookmark`); on iOS and Android it is the *only*
+    /// thing that survives, since the path alone carries no grant.
+    public var bookmarks: [String?]
+
+    public init(paths: [String], bookmarks: [String?] = []) {
+        self.paths = paths
+        // Stay index-aligned with `paths` even when the backend minted
+        // nothing (or fewer tokens than paths) — JS indexes across the two.
+        self.bookmarks = paths.indices.map { $0 < bookmarks.count ? bookmarks[$0] : nil }
+    }
 }
 
 public struct DialogPathResult: Sendable, Codable, Equatable {
@@ -240,10 +291,103 @@ public struct DialogPathResult: Sendable, Codable, Equatable {
 public struct DialogOpenDirectoryResult: Sendable, Codable, Equatable {
     public var path: String?
     public var paths: [String]
+    /// Durable tokens for `paths`, index-aligned. See
+    /// `DialogOpenFileResult.bookmarks`.
+    public var bookmarks: [String?]
+    /// Token for the first selection, mirroring `path`.
+    public var bookmark: String?
 
-    public init(paths: [String]) {
+    public init(paths: [String], bookmarks: [String?] = []) {
         self.paths = paths
         path = paths.first
+        self.bookmarks = paths.indices.map { $0 < bookmarks.count ? bookmarks[$0] : nil }
+        bookmark = self.bookmarks.first ?? nil
+    }
+}
+
+/// Result of `dialog.resolveBookmark`.
+public struct DialogResolveBookmarkResult: Sendable, Codable, Equatable {
+    /// The location the token points at (a filesystem path, or a
+    /// `content://` URI on Android), or `nil` when the grant is gone —
+    /// deleted, revoked, or on a volume that isn't mounted. A `nil` path
+    /// is the app's cue to ask the user to pick the location again.
+    public var path: String?
+    /// `true` when the token still resolved but the platform wants it
+    /// re-minted (the file moved, or the bookmark's format aged out). The
+    /// refreshed token is in `bookmark` — store it in place of the old one.
+    public var stale: Bool
+    /// A freshly minted replacement token, present when `stale` is `true`.
+    public var bookmark: String?
+
+    public init(path: String?, stale: Bool = false, bookmark: String? = nil) {
+        self.path = path
+        self.stale = stale
+        self.bookmark = bookmark
+    }
+}
+
+// MARK: - Bookmark tokens
+
+/// The wire form of a `dialog` bookmark: a short, versioned, **opaque**
+/// string that JS stores and hands back verbatim. Each platform puts a
+/// different thing inside — Foundation bookmark data on Apple, a
+/// `content://` URI on Android, the path itself where a path is all the
+/// grant there is (Linux, Windows, unsandboxed macOS) — so a token means
+/// nothing on a machine other than the one that minted it.
+///
+/// The one-character kind tag exists so a token from a foreign platform,
+/// or from a format we later change, fails loudly at `resolveBookmark`
+/// instead of resolving to something surprising. Apps must not parse it;
+/// that's what makes it free to change.
+public enum DialogBookmark {
+    public enum Payload: Sendable, Equatable {
+        /// A plain filesystem path — the whole grant on platforms that
+        /// don't scope file access to a token.
+        case path(String)
+        /// Apple security-scoped (or plain) bookmark data.
+        case bookmarkData(Data)
+        /// An Android SAF `content://` URI held by a persisted permission.
+        case uri(String)
+    }
+
+    public static func token(path: String) -> String {
+        "p1:" + Data(path.utf8).base64EncodedString()
+    }
+
+    public static func token(bookmarkData: Data) -> String {
+        "b1:" + bookmarkData.base64EncodedString()
+    }
+
+    public static func token(uri: String) -> String {
+        "u1:" + Data(uri.utf8).base64EncodedString()
+    }
+
+    /// Decode a token. Throws `E_HANDLER` on anything we didn't mint —
+    /// a truncated string, an unknown kind, invalid base64.
+    public static func payload(of token: String) throws -> Payload {
+        let parts = token.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+        guard parts.count == 2, let data = Data(base64Encoded: String(parts[1])) else {
+            throw BridgeError(
+                code: BridgeError.handler,
+                message: "dialog.resolveBookmark: not a bookmark token minted by this platform"
+            )
+        }
+        switch parts[0] {
+        case "p1":
+            guard let path = String(data: data, encoding: .utf8) else { break }
+            return .path(path)
+        case "b1":
+            return .bookmarkData(data)
+        case "u1":
+            guard let uri = String(data: data, encoding: .utf8) else { break }
+            return .uri(uri)
+        default:
+            break
+        }
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "dialog.resolveBookmark: unrecognized bookmark token (kind \"\(parts[0])\")"
+        )
     }
 }
 
@@ -319,5 +463,34 @@ public extension Dialog {
             code: BridgeError.unimplemented,
             message: "dialog.exportFile is not implemented by this Dialog"
         )
+    }
+
+    /// Default for platforms where a path *is* the grant: Linux, Windows,
+    /// and unsandboxed macOS all keep reading a directory the user picked
+    /// last month, so the token only has to remember where it was. The
+    /// GTK and Windows backends take this as-is; the Apple and Android
+    /// backends override it, because there a path on its own is worthless.
+    func makeBookmark(forPath path: String) async throws -> String? {
+        DialogBookmark.token(path: path)
+    }
+
+    /// Counterpart to the default ``makeBookmark(forPath:)``: the location
+    /// is whatever the token remembered, as long as it's still there.
+    func resolveBookmark(_ bookmark: String) async throws -> DialogResolveBookmarkResult {
+        switch try DialogBookmark.payload(of: bookmark) {
+        case let .path(path):
+            guard FileManager.default.fileExists(atPath: path) else {
+                return DialogResolveBookmarkResult(path: nil)
+            }
+            return DialogResolveBookmarkResult(path: path)
+        case .bookmarkData, .uri:
+            throw BridgeError(
+                code: BridgeError.handler,
+                message: """
+                dialog.resolveBookmark: this token was minted on a different platform \
+                and can't be resolved here
+                """
+            )
+        }
     }
 }

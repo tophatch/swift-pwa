@@ -297,7 +297,8 @@ Every call is `await __SWIFT_PWA__.invoke(command, options)`. It returns a Promi
 | `dialog.saveFile` | `{ title?, defaultName?, defaultPath?, filters? }` | `{ path }` — `path` is `null` if cancelled (no-op on iOS — see `exportFile`) |
 | `dialog.exportFile` | `{ title?, defaultName?, filters?, dataBase64? / path? }` | `{ path }` — writes the content to the chosen location; `null` if cancelled. Works on iOS too |
 | `dialog.openFile` | `{ title?, defaultPath?, filters?, multiple? }` | `{ paths }` — empty array if cancelled |
-| `dialog.openDirectory` | `{ title?, defaultPath?, multiple? }` | `{ paths, path }` — `paths` empty (and `path` `null`) if cancelled; `path` is the first selection |
+| `dialog.openDirectory` | `{ title?, defaultPath?, multiple? }` | `{ paths, path, bookmarks, bookmark }` — `paths` empty (and `path` `null`) if cancelled; `path` is the first selection |
+| `dialog.resolveBookmark` | `{ bookmark }` | `{ path, stale, bookmark }` — `path` is `null` if the remembered location is no longer reachable |
 | `fs.writeText` | `{ path, contents }` | `{}` |
 | `fs.readText` | `{ path }` | `{ contents }` |
 | `fs.writeBinary` | `{ path, dataBase64 }` | `{}` |
@@ -315,4 +316,5 @@ There's more in both features — `fs.exists`, `mkdir`, `remove`, `readDir`, `co
 - **Cancel is not an error.** If the user closes the Save/Open dialog, you get back `path: null` (or an empty `paths`), *not* a thrown error. Treat it as "never mind" and move on — the helpers above already return `null` for this.
 - **Big files? Don't use base64.** Text files go across as-is. Binary files (`fs.readBinary` / `fs.writeBinary`) travel as base64-encoded text, which is fine for save files but wasteful for, say, large images or audio. For big media, prefer loading it through a URL in your page instead of round-tripping base64.
 - **App sandbox (Mac App Store / iOS).** On those platforms your app can only touch its own private folder *plus* whatever the user explicitly picks in a dialog. That's the deeper reason to always pair a `dialog.*` pick with `fs.*` — the dialog is what unlocks access to that file.
+- **Remembering a location needs the bookmark, not the path.** If your app wants to come back to a folder or file on the next launch — a library folder, a recent-files list — store the `bookmark` the pick returned and redeem it with `dialog.resolveBookmark`. A path string is enough on Linux, Windows, and unsandboxed macOS; on iOS and Android it isn't, because the permission the user granted lives on the token rather than the path. `resolveBookmark` gives you back a path that's live again, or `null` if the user has since moved, deleted, or revoked it. The full contract is in the [JavaScript API reference](../javascript-api.md#dialog).
 - **One codebase is the whole point.** Because everything falls back to plain browser APIs, you can build and test your game in a browser tab all day and only produce the native app when you actually want to ship it. No special "native-only" branches in your code.

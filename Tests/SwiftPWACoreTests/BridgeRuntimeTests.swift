@@ -97,18 +97,26 @@ struct BridgeRuntimeTests {
     }
 }
 
-/// Spin until `condition()` becomes true or 2 seconds elapse.
+/// Spin until `condition()` becomes true, or the timeout elapses.
+///
+/// 10 seconds, not 2: these wait on work that has to cross an actor hop or a
+/// task start, and on a loaded CI runner sharing a machine with ~900 other
+/// tests that can take longer than a couple of seconds — which showed up as
+/// `pushRaceIsBuffered` failing on GitHub while passing every time locally.
+/// A generous bound costs nothing when the condition is met and only adds
+/// waiting to runs that are already failing; a tight one turns a slow machine
+/// into a false negative, which is the more expensive mistake.
 @MainActor
-func waitFor(timeout: Duration = .seconds(2), condition: () -> Bool) async throws {
+func waitFor(timeout: Duration = .seconds(10), condition: () -> Bool) async throws {
     try await waitForCondition(timeout: timeout, condition)
 }
 
 @MainActor
-func waitForCondition(timeout: Duration = .seconds(2), _ condition: () -> Bool) async throws {
+func waitForCondition(timeout: Duration = .seconds(10), _ condition: () -> Bool) async throws {
     let deadline = ContinuousClock.now + timeout
     while !condition() {
         if ContinuousClock.now >= deadline {
-            Issue.record("waitForCondition timed out")
+            Issue.record("waitForCondition timed out after \(timeout)")
             return
         }
         try await Task.sleep(for: .milliseconds(5))

@@ -390,14 +390,18 @@ remain:
   icon just isn't drawn until then. Also per the SNI spec, icon clicks
   are owned by the panel, so `.click` (`tray.subscribe`) never fires on
   Linux; only menu-item activations do.
-- **Tray art isn't recoloured for the panel's theme.** macOS-style template
-  images (a black silhouette) stay black, and most desktops default to a dark
-  panel, so a template icon can be close to invisible. `Tray.prefersLightArt`
-  returns `nil` on both backends — unlike Windows, where the taskbar's theme is
-  a registry read — because the cross-desktop signal is the XDG desktop
-  portal's `org.freedesktop.appearance` `color-scheme`, which isn't wired up
-  yet. Ship art with its own contrast for now. This affects the runtime's
-  agent-access indicator too: on Linux it draws in dark ink regardless of panel.
+- **Nothing recolours *your* tray art, but the panel's likely polarity is
+  readable.** There's no equivalent of AppKit's template tinting on Linux, so a
+  black-silhouette icon stays black against a dark panel. `Tray.prefersLightArt`
+  answers `true` when light art is the better bet, read from the XDG desktop
+  portal's `org.freedesktop.appearance` / `color-scheme` preference, so an app
+  can ship two variants and pick — which is what the runtime's own agent-access
+  indicator does. The mapping is deliberately asymmetric: only an explicit
+  *prefer light* gives `false`, because `color-scheme` describes the user's app
+  theme rather than the panel (GNOME's top bar is dark in both modes) and most
+  default panels are dark. No portal, no Settings backend and no session bus all
+  answer `true` for the same reason. The case this gets wrong is a light panel on
+  a desktop with no portal.
 - **No `system.memoryPressure` event.** `system.memory` works (total RAM,
   plus `availableBytes` from `/proc/meminfo`'s `MemAvailable`), but Linux has
   no portable per-process memory-pressure signal, so the

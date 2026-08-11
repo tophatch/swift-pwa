@@ -55,6 +55,17 @@
             path.withCString { swiftpwa_tray_set_icon_path(p, $0) }
         }
 
+        /// The panel's likely polarity, from the XDG portal's colour-scheme
+        /// preference — see `swiftpwa_prefers_light_art` for the mapping and why
+        /// it isn't symmetric.
+        ///
+        /// Never `nil`: the protocol's default means "this platform doesn't
+        /// adapt", which is true of Apple (AppKit tints template art) and not of
+        /// Linux, where nothing tints anything and something has to be chosen.
+        public var prefersLightArt: Bool? {
+            swiftpwa_prefers_light_art() == 1
+        }
+
         public func setTooltip(_ text: String) {
             guard let p = trayPtr else { return }
             text.withCString { swiftpwa_tray_set_tooltip(p, $0) }

@@ -112,7 +112,7 @@ swift-pwa ships a pile of built-in commands (`window.*`, `app.*`, `dialog.*`, `f
 
 ```sh
 swift-pwa build            # builds for your current OS (macOS/Linux/Windows)
-open build/MyApp.app       # macOS — Linux/Windows land in build/ too
+open build/macos/MyApp.app # each target gets its own dir: build/linux, build/windows, …
 ```
 
 `--target` defaults to whatever OS you're on, so you can omit it for a local build. That's a genuine native app: your web assets bundled inside, running on the system webview, no browser shipped.

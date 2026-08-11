@@ -118,6 +118,34 @@ That opens the app's **first** window at that path (query string and fragment in
 
 ---
 
+## Step 5b — Check the iPad layout without a redeploy
+
+Safe areas, full-bleed backgrounds and a 402-point viewport aren't things macOS
+can tell you about. Add `--simulator` and the same verbs run against a real iOS
+webview on a simulator:
+
+```bash
+swift-pwa drive eval --simulator "getComputedStyle(document.body).paddingTop"
+swift-pwa drive shot --simulator --route "/reader.html" reader.png
+swift-pwa drive shot --simulator --device "iPad Pro 13-inch (M4)" ipad.png
+```
+
+`drive` builds a debug `.app`, installs it, launches it with the driver enabled,
+runs the verb, and shuts the app down. The simulator shares your machine's
+network stack, which is why the control socket is reachable at all — and also
+why a *physical* device can't be driven: its loopback isn't yours.
+
+One thing to know before you plan a test around it: **`click` / `type` / `scroll`
+don't work on iOS.** There's no public API for injecting an event into a
+`WKWebView`, so `drive info` reports `input.pointer: false` and the verb is
+refused rather than quietly doing nothing. Drive the page from the page instead:
+
+```bash
+swift-pwa drive eval --simulator "document.querySelector('#save').click()"
+```
+
+---
+
 ## Step 6 — Drive an app you launched yourself
 
 By default `drive` owns the app's lifecycle. To keep one app up across many commands, launch it yourself and attach:

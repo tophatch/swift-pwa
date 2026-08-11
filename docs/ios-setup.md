@@ -47,7 +47,7 @@ cd MyApp
 $EDITOR Package.swift
 
 swift-pwa build --target ios --simulator
-# → build/MyApp.app  (universal arm64 + x86_64 simulator slices)
+# → build/ios-simulator/MyApp.app  (universal arm64 + x86_64 simulator slices)
 ```
 
 If you're working from a swift-pwa checkout (or pinning to an
@@ -58,7 +58,8 @@ Under the hood the bundler:
 
 1. Runs `xcodebuild -scheme MyApp -workspace . -destination
    'generic/platform=iOS Simulator' -configuration Release` against
-   the SwiftPM-generated workspace.
+   the SwiftPM-generated workspace. `--configuration debug` switches
+   that to `Debug`, which is what compiles the app driver in (below).
 2. Wraps the resulting Mach-O + SwiftPM resource bundles + your
    `web/` directory into `MyApp.app` with a generated `Info.plist`.
 3. Adhoc-codesigns the `.app` so the simulator will accept it.
@@ -69,7 +70,7 @@ Under the hood the bundler:
 # Boot whichever device you want — list them with: xcrun simctl list devices
 xcrun simctl boot "iPhone 16" 2>/dev/null || true
 open -a Simulator                               # bring up the window
-xcrun simctl install booted build/MyApp.app
+xcrun simctl install booted build/ios-simulator/MyApp.app
 xcrun simctl launch --console-pty booted com.example.myapp
 ```
 
@@ -86,6 +87,36 @@ To attach Safari Web Inspector for the page running inside your app:
 **Safari → Develop → Simulator → MyApp → index.html**. (Enable Web
 Inspector once via Safari → Settings → Advanced → Show features for web
 developers.)
+
+### Driving the simulator (`swift-pwa drive --simulator`)
+
+The simulator shares the host's network stack, so the app's driver
+socket is reachable from your terminal — everything `drive` does on
+macOS works here, against a real iOS `WKWebView` with a real device
+viewport and real safe areas:
+
+```bash
+swift-pwa drive eval --simulator "getComputedStyle(document.body).paddingTop"
+swift-pwa drive shot --simulator --route "/reader.html?id=42" reader.png
+swift-pwa drive info --simulator          # what this backend can and can't do
+```
+
+One command owns the whole loop: it builds **debug** (the control
+socket is compiled into debug builds only), installs, launches with the
+driver enabled, reads the port and per-launch token off the app's
+console, runs the verb, and terminates the app. Add
+`--device "iPad Pro 13-inch (M4)"` to pick a simulator; without it,
+a booted one wins, else the first available.
+
+What doesn't work: **synthetic input** (`click` / `type` / `scroll`).
+iOS has no public API for injecting events into a `WKWebView`, and
+`drive info` reports `input.pointer: false` rather than pretending.
+Dispatch from the page instead (`drive eval
+"document.querySelector('#save').click()"`).
+
+And a **physical device** can't be driven at all: the socket listens on
+the device's loopback, which isn't your machine's. Use the simulator for
+layout iteration, and the device for what only a device can tell you.
 
 ## 4. Build for a real device
 
@@ -105,7 +136,7 @@ swift-pwa build --target ios \
   --sign "Apple Development: you@example.com (TEAMID)" \
   --provisioning-profile path/to/app.mobileprovision \
   --entitlements path/to/app.entitlements
-# → build/MyApp.ipa  (profile embedded, signed with entitlements)
+# → build/ios/MyApp.ipa  (profile embedded, signed with entitlements)
 ```
 
 The bundler runs the `xcodebuild` phase **unsigned** (`CODE_SIGNING_ALLOWED=NO`)
@@ -194,7 +225,7 @@ won't auto-provision it. Two ways to obtain the profile:
   Xcode once with *Automatically manage signing* and reuse the emitted
   `embedded.mobileprovision` with the explicit flags.
 
-Then install with `xcrun devicectl device install app build/MyApp.ipa` (or
+Then install with `xcrun devicectl device install app build/ios/MyApp.ipa` (or
 `swift-pwa deploy --target ios …`). Alternatively, just run from Xcode
 (`xed Package.swift` → pick your device → *Run*) and let it manage signing.
 
@@ -221,7 +252,7 @@ xcodebuild -exportArchive \
     -exportPath build/
 
 # Install via libimobiledevice (`brew install libimobiledevice`).
-ideviceinstaller -i build/MyApp.ipa
+ideviceinstaller -i build/ios/MyApp.ipa
 ```
 
 A minimal `ExportOptions.plist` for ad-hoc distribution:
@@ -321,6 +352,13 @@ over HTTPS. The `.ipa` itself can be HTTP-redirected from the plist's
 must be HTTPS — iOS rejects http manifests outright.
 
 ## Known limitations on iOS
+
+- **The app driver is simulator-only, and can't synthesize input.**
+  `swift-pwa drive --simulator` gives you `eval` / `shot` / `windows` /
+  `--route` against a real iOS webview. A device is out of reach (its
+  loopback isn't the host's), and `click` / `type` / `scroll` are
+  refused on both — iOS has no public event-synthesis API. See
+  [docs/app-driver.md](app-driver.md).
 
 - **On-device install needs a provisioning profile — the CLI can mint one for
   free teams.** `swift-pwa build --target ios --sign <identity>` alone runs

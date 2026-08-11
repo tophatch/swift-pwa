@@ -49,6 +49,22 @@ struct DriveOptions: ParsableArguments {
     @Option(name: .long, help: "Build configuration to launch: debug (default) or release.")
     var configuration: String = "debug"
 
+    @Option(
+        name: .long,
+        help: """
+        Where to run the app: the host (default), or ios with --simulator. An iOS *device* can't be \
+        driven — its loopback isn't this machine's — but the simulator shares the host network stack, \
+        so everything works there.
+        """
+    )
+    var target: BuildTarget = .host
+
+    @Flag(help: "Run on the iOS Simulator (implies --target ios).")
+    var simulator: Bool = false
+
+    @Option(name: .long, help: "iOS Simulator name or UDID. Defaults to a booted one, else the first available.")
+    var device: String?
+
     @Option(name: .long, help: "Talk to an already-running app on this loopback port instead of launching one.")
     var attach: Int?
 
@@ -75,6 +91,29 @@ struct DriveOptions: ParsableArguments {
 
     @Flag(help: "Don't wait for document.readyState === 'complete' before running the verb.")
     var noPageWait: Bool = false
+
+    /// Whether this run goes to the iOS Simulator rather than the host.
+    var runsOnSimulator: Bool {
+        simulator || target == .ios
+    }
+
+    func validate() throws {
+        if target == .ios, !simulator {
+            throw ValidationError("""
+            an iOS device can't be driven — the control socket listens on the device's loopback, which \
+            isn't this machine's. Add --simulator to drive the simulator (it shares the host network \
+            stack), or drive the same page on macOS.
+            """)
+        }
+        if simulator, target != .ios, target != .host {
+            throw ValidationError("--simulator is iOS-only; drop --target \(target.rawValue).")
+        }
+        #if !os(macOS)
+            if runsOnSimulator {
+                throw ValidationError("the iOS Simulator is only available on macOS.")
+            }
+        #endif
+    }
 }
 
 // MARK: - Verbs
@@ -398,6 +437,10 @@ struct LaunchedApp {
     let process: Process
     let port: UInt16
     let token: String
+    /// Teardown for a launch where `process` isn't the app itself. On the
+    /// simulator it's simctl's console relay, and killing that leaves the app
+    /// running — so the run also has to `simctl terminate`.
+    var stop: (() -> Void)?
 
     /// Build the app, launch it with the driver env var set, and wait for it to
     /// announce its port and token on stdout.
@@ -408,6 +451,9 @@ struct LaunchedApp {
     static func build(_ options: DriveOptions, log: FileHandle = .standardOutput) async throws -> LaunchedApp {
         guard ["debug", "release"].contains(options.configuration) else {
             throw ValidationError("--configuration must be 'debug' or 'release', got '\(options.configuration)'.")
+        }
+        if options.runsOnSimulator {
+            return try await buildForSimulator(options, log: log)
         }
         let fm = FileManager.default
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
@@ -432,7 +478,7 @@ struct LaunchedApp {
             "swift",
             ["build", "-c", options.configuration, "--product", exe],
             cwd: cwd,
-            stdoutTo: log
+            stdoutTo: progressSink(for: log)
         )
         let binPath = try await Shell.capture(
             "swift",
@@ -459,6 +505,125 @@ struct LaunchedApp {
             webRoot: webRoot
         )
     }
+
+    // The simulator path: bundle a real `.app` (via the same `build --target
+    // ios --simulator` an adopter runs), install it, launch it with the driver
+    // asked for, and read the handshake off the app's console.
+    //
+    // Nothing here is new machinery on the app's side — the iOS runtime has
+    // started the control socket since it shipped. What was missing was a way to
+    // get a *debug* build onto a simulator and read its stdout: `deploy` built
+    // release only, so the socket wasn't compiled in, and an iPad layout could
+    // only be checked by deploy → screenshot → crop → squint, once per change.
+    //
+    // macOS-only at the source level, not just at runtime: the body reaches for
+    // `simctl` and for POSIX `dup2` / `fflush(stdout)`, neither of which is
+    // portable — glibc types `stdout` as a mutable global (a strict-concurrency
+    // error on Linux) and Windows spells the fd calls `_dup2` / `_close`.
+    #if os(macOS)
+        private static func buildForSimulator(
+            _ options: DriveOptions, log: FileHandle
+        ) async throws -> LaunchedApp {
+            let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            let pwa: PWAManifest
+            do {
+                pwa = try PWAManifest.load(from: cwd.appendingPathComponent(options.manifest))
+            } catch {
+                throw ValidationError(
+                    "Couldn't read \(options.manifest): \(error). Run `swift-pwa drive` from your app's directory."
+                )
+            }
+            let outputDir = cwd.appendingPathComponent(
+                Build.resolveOutput(nil, target: .ios, simulator: true)
+            )
+            let app = outputDir.appendingPathComponent("\(pwa.name).app")
+            let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
+
+            let udid = try await withStdout(redirectedTo: progressSink(for: log)) {
+                // `build` prints with `print(...)`, and xcodebuild inherits our
+                // stdout — both would land in the MCP protocol stream, so the
+                // whole build+install phase writes where lifecycle chatter goes.
+                let build = try Build.parse([
+                    "--target", "ios", "--simulator",
+                    "--configuration", options.configuration,
+                    "--manifest", options.manifest
+                ])
+                try await build.run()
+                let udid = try await SimulatorControl.resolve(explicit: options.device)
+                print("→ installing \(app.lastPathComponent) to simulator \(udid)")
+                SimulatorControl.terminate(bundleID: bundleID, on: udid)
+                try await SimulatorControl.install(app: app, on: udid)
+                return udid
+            }
+
+            var childEnvironment = [AppDriver.environmentVariable: "0"]
+            if let route = options.route { childEnvironment[InitialRoute.environmentVariable] = route }
+            let stdout = Pipe()
+            let handshake = HandshakeReader()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                handshake.consume(data)
+            }
+            let relay = try SimulatorControl.launchProcess(
+                bundleID: bundleID, on: udid, childEnvironment: childEnvironment, stdout: stdout
+            )
+            guard let announcement = handshake.wait(seconds: min(options.timeout, 60)) else {
+                relay.terminate()
+                SimulatorControl.terminate(bundleID: bundleID, on: udid)
+                throw DriveError.launch("""
+                the app launched on simulator \(udid) but never announced a driver port.
+
+                The control socket is compiled into debug builds only — drop --configuration release. \
+                If this *was* a debug build, the app's own output is above.
+                """)
+            }
+            // The app's loopback is the host's, which is the whole reason this
+            // works: connect to 127.0.0.1 on the port it just printed.
+            return LaunchedApp(
+                process: relay,
+                port: announcement.port,
+                token: announcement.token,
+                stop: { SimulatorControl.terminate(bundleID: bundleID, on: udid) }
+            )
+        }
+    #else
+        private static func buildForSimulator(
+            _: DriveOptions, log _: FileHandle
+        ) async throws -> LaunchedApp {
+            throw ValidationError("the iOS Simulator is only available on macOS.")
+        }
+    #endif
+
+    /// Where a build's own output goes: wherever lifecycle chatter goes, except
+    /// that "stdout" means stderr here. The verb's result is the only thing on
+    /// our stdout — `drive eval … | jq` has to keep working — which is the same
+    /// reason `HandshakeReader` echoes the app's output to stderr.
+    static func progressSink(for log: FileHandle) -> FileHandle {
+        log.fileDescriptor == FileHandle.standardOutput.fileDescriptor ? .standardError : log
+    }
+
+    // Run `body` with this process's stdout pointed at `sink`.
+    //
+    // `drive` reuses `Build` in-process and `Build` reports progress with
+    // `print(...)`, plus `xcodebuild` inherits our stdout. Both would land in
+    // the verb's own output — and in `swift-pwa mcp`, whose stdout carries the
+    // protocol stream, one stray line ends the session.
+    #if os(macOS)
+        private static func withStdout<T>(
+            redirectedTo log: FileHandle, _ body: () async throws -> T
+        ) async throws -> T {
+            fflush(stdout)
+            let saved = dup(FileHandle.standardOutput.fileDescriptor)
+            dup2(log.fileDescriptor, FileHandle.standardOutput.fileDescriptor)
+            defer {
+                fflush(stdout)
+                dup2(saved, FileHandle.standardOutput.fileDescriptor)
+                close(saved)
+            }
+            return try await body()
+        }
+    #endif
 
     /// Make the app's `web/` reachable from the bare SwiftPM binary.
     ///
@@ -571,6 +736,7 @@ struct LaunchedApp {
     }
 
     func terminate() {
+        if let stop { stop() }
         guard process.isRunning else { return }
         process.terminate()
         // Give the app a moment to close its window cleanly rather than
@@ -584,7 +750,7 @@ struct LaunchedApp {
 
 /// Scans the app's stdout for the driver's announcement line, then keeps
 /// draining so a chatty app can't fill the pipe and stall.
-private final class HandshakeReader: @unchecked Sendable {
+final class HandshakeReader: @unchecked Sendable {
     struct Announcement {
         let port: UInt16
         let token: String
@@ -623,11 +789,17 @@ private final class HandshakeReader: @unchecked Sendable {
     }
 
     /// Parses `swift-pwa driver listening port=51234 token=<hex>`.
-    private static func parse(_ line: String) -> Announcement? {
+    ///
+    /// Fields are whitespace-trimmed, which is load-bearing for the simulator:
+    /// `simctl launch --console-pty` relays the app's stdout through a PTY, whose
+    /// line endings are CRLF, and a token with a trailing `\r` is silently the
+    /// wrong token — the connection succeeds and every frame is refused.
+    static func parse(_ line: String) -> Announcement? {
+        let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
         guard line.hasPrefix("swift-pwa driver listening ") else { return nil }
         var port: UInt16?
         var token: String?
-        for field in line.split(separator: " ") {
+        for field in line.split(whereSeparator: \.isWhitespace) {
             if field.hasPrefix("port=") { port = UInt16(field.dropFirst(5)) }
             if field.hasPrefix("token=") { token = String(field.dropFirst(6)) }
         }

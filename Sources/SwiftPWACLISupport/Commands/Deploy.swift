@@ -48,8 +48,29 @@ struct Deploy: AsyncParsableCommand {
     @Option(help: "Path to pwa.json. Defaults to ./pwa.json.")
     var manifest: String = "pwa.json"
 
-    @Option(help: "Output directory for the bundled artifact. Defaults to ./build.")
-    var output: String = "build"
+    @Option(
+        help: """
+        Output directory for the bundled artifact. Defaults to a per-target directory under ./build \
+        (build/macos, build/ios, build/ios-simulator, …); an explicit --output is used verbatim.
+        """
+    )
+    var output: String?
+
+    @Option(
+        parsing: .singleValue,
+        help: "macOS: architecture to build, repeatable (--arch arm64 --arch x86_64 ⇒ universal). Passed through."
+    )
+    var arch: [String] = []
+
+    @Option(
+        help: """
+        Build configuration: release (default) or debug. Pass debug to install a driveable build — \
+        the driver's control socket is compiled into debug builds only, which is what \
+        `swift-pwa drive --target ios --simulator` needs. (Android: this is the Swift library's \
+        configuration; the APK variant is --release.)
+        """
+    )
+    var configuration: BuildConfiguration = .release
 
     @Option(
         name: .long,
@@ -128,7 +149,9 @@ struct Deploy: AsyncParsableCommand {
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(manifest)
-        let outputDir = cwd.appendingPathComponent(output)
+        let outputDir = cwd.appendingPathComponent(
+            Build.resolveOutput(output, target: target, simulator: simulator)
+        )
         let pwa = try PWAManifest.load(from: manifestURL)
 
         switch target {
@@ -153,7 +176,12 @@ struct Deploy: AsyncParsableCommand {
     /// ArgumentParser command's `@Option`/`@Flag` properties are only bound by
     /// its parser, so a plain init leaves them unbound and accessing one traps.
     private func runBuild(crossCompileAndroid: Bool, iosDeviceUDID: String? = nil) async throws {
-        var args = ["--target", target.rawValue, "--manifest", manifest, "--output", output]
+        var args = [
+            "--target", target.rawValue, "--manifest", manifest,
+            "--output", Build.resolveOutput(output, target: target, simulator: simulator),
+            "--configuration", configuration.rawValue
+        ]
+        for arch in arch { args += ["--arch", arch] }
         if simulator { args.append("--simulator") }
         if crossCompileAndroid { args.append("--cross-compile-android") }
         if let androidAbis { args += ["--android-abis", androidAbis] }
@@ -367,11 +395,11 @@ struct Deploy: AsyncParsableCommand {
             throw ValidationError("built simulator app not found at \(app.path) — run without --no-build.")
         }
 
-        let udid = try await resolveSimulator()
+        let udid = try await SimulatorControl.resolve(explicit: device)
         // Bring the Simulator UI up (a `simctl boot` alone doesn't open it).
         try? await Shell.run("/usr/bin/env", ["open", "-a", "Simulator"])
         print("→ installing to simulator \(udid)")
-        try await Shell.run("/usr/bin/env", ["xcrun", "simctl", "install", udid, app.path])
+        try await SimulatorControl.install(app: app, on: udid)
 
         if launch {
             let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
@@ -447,63 +475,6 @@ struct Deploy: AsyncParsableCommand {
             }
         }
         print("Deployed to \(target.name) (\(target.udid)).")
-    }
-
-    private struct SimDevice {
-        let udid: String
-        let name: String
-        let state: String
-    }
-
-    /// Choose the simulator to target: an explicit `--device` (name or UDID,
-    /// booted on demand), else a booted one, else the first available iOS
-    /// simulator (booted on demand).
-    private func resolveSimulator() async throws -> String {
-        let devices = try await Self.listAvailableIOSSimulators()
-        if let device {
-            guard let match = devices.first(where: { $0.udid == device || $0.name == device }) else {
-                throw ValidationError(
-                    "no available iOS simulator matches --device \"\(device)\". "
-                        + "List them with `xcrun simctl list devices available`."
-                )
-            }
-            try await Self.bootIfNeeded(match)
-            return match.udid
-        }
-        if let booted = devices.first(where: { $0.state == "Booted" }) {
-            return booted.udid
-        }
-        guard let pick = devices.first else {
-            throw ValidationError(
-                "no iOS simulators are available. Install a runtime (Xcode → Settings → Platforms → iOS) and retry."
-            )
-        }
-        try await Self.bootIfNeeded(pick)
-        return pick.udid
-    }
-
-    private static func bootIfNeeded(_ device: SimDevice) async throws {
-        guard device.state != "Booted" else { return }
-        print("→ booting simulator \(device.name)")
-        // `simctl boot` on an already-booted device errors; we guarded on state.
-        try? await Shell.run("/usr/bin/env", ["xcrun", "simctl", "boot", device.udid])
-    }
-
-    private static func listAvailableIOSSimulators() async throws -> [SimDevice] {
-        let json = try await Shell.capture(
-            "/usr/bin/env", ["xcrun", "simctl", "list", "devices", "available", "-j"], discardStderr: true
-        )
-        guard let obj = try? JSONSerialization.jsonObject(with: Data(json.utf8)) as? [String: Any],
-              let byRuntime = obj["devices"] as? [String: [[String: Any]]]
-        else { return [] }
-        var result: [SimDevice] = []
-        for (runtime, list) in byRuntime where runtime.contains("iOS") {
-            for entry in list {
-                guard let udid = entry["udid"] as? String, let name = entry["name"] as? String else { continue }
-                result.append(SimDevice(udid: udid, name: name, state: entry["state"] as? String ?? "Shutdown"))
-            }
-        }
-        return result
     }
 
     // MARK: - macOS

@@ -40,6 +40,8 @@ struct EnvLauncherHygieneTests {
         "IOSSigning.swift",
         "IOSDeviceResolver.swift",
         "Deploy.swift",
+        // simctl, and only reachable behind `#if os(macOS)` / --simulator.
+        "SimulatorControl.swift",
         // Linux-only: linuxdeploy / appimagetool.
         "AppImageBundler.swift",
         // Android cross-compilation is supported from POSIX hosts only.

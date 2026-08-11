@@ -22,6 +22,10 @@ struct IPABundler {
     var entitlements: URL?
     var provisioningProfile: URL?
     let simulator: Bool
+    /// Release by default. A debug build is what makes a simulator run
+    /// driveable — the driver's control socket is compiled into debug builds
+    /// only — so `swift-pwa drive --target ios --simulator` asks for one.
+    var configuration: BuildConfiguration = .release
 
     /// Signing flags for the `xcodebuild` build phase. We **always** build
     /// unsigned and sign the assembled `.app` ourselves afterward (simulator →
@@ -54,7 +58,7 @@ struct IPABundler {
         let destination = simulator
             ? "generic/platform=iOS Simulator"
             : "generic/platform=iOS"
-        let configuration = "Release"
+        let configurationName = configuration.xcodeValue
 
         var args = [
             "xcodebuild",
@@ -63,7 +67,7 @@ struct IPABundler {
             "-scheme", exe,
             "-workspace", projectRoot.path,
             "-destination", destination,
-            "-configuration", configuration,
+            "-configuration", configurationName,
             "-derivedDataPath", derived.path
         ]
         args.append(contentsOf: Self.buildPhaseSigningArgs)
@@ -78,7 +82,7 @@ struct IPABundler {
         let suffix = simulator ? "iphonesimulator" : "iphoneos"
         let productsDir = derived
             .appendingPathComponent("Build/Products")
-            .appendingPathComponent("\(configuration)-\(suffix)")
+            .appendingPathComponent("\(configurationName)-\(suffix)")
         let binary = productsDir.appendingPathComponent(exe)
         guard FileManager.default.fileExists(atPath: binary.path) else {
             throw BundlerError.binaryMissing(binary, expectedName: exe)
@@ -149,10 +153,12 @@ struct IPABundler {
         return ipa
     }
 
-    /// Lay out the `.app` from xcodebuild's loose products: copy the binary,
-    /// the SwiftPM resource bundles (e.g. `bridge.js`), the project's `web/`
-    /// directory, and write `Info.plist`. iOS bundles are flat — no
-    /// `Contents/MacOS` wrapper.
+    /// Lay out the `.app` from xcodebuild's loose products: copy the binary, any
+    /// SwiftPM resource bundles, the project's `web/` directory, and write
+    /// `Info.plist`. iOS bundles are flat — no `Contents/MacOS` wrapper, which
+    /// is also why resource bundles work here and not on macOS: flat means the
+    /// bundle root *is* `Bundle.main.resourceURL`, so `Bundle.module` resolves
+    /// and codesign seals it.
     private func assembleApp(binary: URL, productsDir: URL, executableName: String) async throws -> URL {
         let fm = FileManager.default
         let app = outputDir.appendingPathComponent("\(manifest.name).app")
@@ -187,15 +193,8 @@ struct IPABundler {
         }
         try plist.write(to: app.appendingPathComponent("Info.plist"))
 
-        // SwiftPM resource bundles (e.g. swift-pwa_SwiftPWACore.bundle holding bridge.js).
-        for entry in (try? fm.contentsOfDirectory(atPath: productsDir.path)) ?? []
-            where entry.hasSuffix(".bundle")
-        {
-            try fm.copyItem(
-                at: productsDir.appendingPathComponent(entry),
-                to: app.appendingPathComponent(entry)
-            )
-        }
+        // SwiftPM resource bundles from an adopter target or a dependency.
+        try ResourceBundles.stage(ResourceBundles.found(in: productsDir), into: app)
 
         // Project's web/ directory.
         let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)

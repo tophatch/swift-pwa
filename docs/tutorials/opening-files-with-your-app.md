@@ -105,7 +105,7 @@ Windows associates by **file extension**. Use the `windows.document_types` key:
 
 Rebuild and install a real bundle (associations don't apply to `swift-pwa dev`):
 
-- **macOS:** `swift-pwa build --target macos`, then `open -a build/MyApp.app somefile.json` (or right-click a file → Open With). Both cold launch and warm (app already running) route to `app.openFile`.
+- **macOS:** `swift-pwa build --target macos`, then `open -a build/macos/MyApp.app somefile.json` (or right-click a file → Open With). Both cold launch and warm (app already running) route to `app.openFile`.
 - **Android:** build/install, then open a matching file from Files or share one to your app.
 - **Linux:** build the AppImage, install its `.desktop` (or run `xdg-mime default`), then open a matching file from your file manager.
 - **Windows:** install the MSIX, or run `register-file-types.cmd` from the portable folder, then double-click a matching file.

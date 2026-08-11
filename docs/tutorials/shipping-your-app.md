@@ -24,11 +24,11 @@ What comes out of step 1, per platform:
 
 | Platform | Artifact | Signing needed to run elsewhere? |
 |---|---|---|
-| macOS   | `build/MyApp.app`              | Yes — Developer ID + notarization (or Gatekeeper blocks it) |
-| iOS     | `build/MyApp.ipa`             | Yes — provisioning profile + Apple identity |
-| Linux   | `build/MyApp-x86_64.AppImage` | No — runs as-is |
-| Windows | `build/MyApp/` folder or `.exe` (portable), or an `.msix` | Optional for portable; signing recommended for MSIX |
-| Android | `build/MyApp-android/` Gradle project → APK / AAB | Yes — a keystore, for release builds |
+| macOS   | `build/macos/MyApp.app`        | Yes — Developer ID + notarization (or Gatekeeper blocks it) |
+| iOS     | `build/ios/MyApp.ipa`         | Yes — provisioning profile + Apple identity |
+| Linux   | `build/linux/MyApp-x86_64.AppImage` | No — runs as-is |
+| Windows | `build/windows/MyApp/` folder or `.exe` (portable), or an `.msix` | Optional for portable; signing recommended for MSIX |
+| Android | `build/android/MyApp-android/` Gradle project → APK / AAB | Yes — a keystore, for release builds |
 
 Everything lands in `build/`. Let's do each one.
 
@@ -42,7 +42,7 @@ Everything lands in `build/`. Let's do each one.
 
 ```sh
 swift-pwa build --target macos
-open build/MyApp.app
+open build/macos/MyApp.app
 ```
 
 That's a real `.app`. It'll run on **your** machine. But if you send it to a friend, macOS Gatekeeper will refuse to open it ("can't be verified") — because it isn't signed and notarized yet. That's step 2.
@@ -78,7 +78,7 @@ swift-pwa build --target macos \
 
 ### Getting it to users
 
-Zip the `.app` (`ditto -c -k --keepParent build/MyApp.app MyApp.zip`) or wrap it in a `.dmg`, then put it on your download page or a GitHub Release. That's the whole flow for direct distribution.
+Zip the `.app` (`ditto -c -k --keepParent build/macos/MyApp.app MyApp.zip`) or wrap it in a `.dmg`, then put it on your download page or a GitHub Release. That's the whole flow for direct distribution.
 
 > **Custom entitlements?** Pass `--entitlements MyApp.entitlements` alongside `--sign`.
 
@@ -117,7 +117,7 @@ swift-pwa build --target ios \
   --entitlements path/to/app.entitlements
 ```
 
-Either way you get `build/MyApp.ipa`.
+Either way you get `build/ios/MyApp.ipa`.
 
 > **No paid account?** You can use a **free personal team**: make a throwaway app target in Xcode once, let Xcode create a personal-team profile, then reuse it here. Apps signed this way expire after 7 days but are perfect for trying it on your own phone. Full recipe in [docs/ios-setup.md](../ios-setup.md).
 
@@ -126,7 +126,7 @@ Either way you get `build/MyApp.ipa`.
 Install on a tethered device with:
 
 ```sh
-xcrun devicectl device install app build/MyApp.ipa
+xcrun devicectl device install app build/ios/MyApp.ipa
 ```
 
 For wider testing (TestFlight) or the App Store, you take the `.ipa` (or an `xcodebuild archive`) through Apple's upload tooling yourself — **swift-pwa doesn't automate the store upload yet**. [docs/ios-setup.md](../ios-setup.md) has the archive/export commands.
@@ -143,7 +143,7 @@ The easiest platform to ship: **no signing, no store, no account.** One command,
 swift-pwa build --target linux
 ```
 
-Out comes `build/MyApp-x86_64.AppImage` — a single self-contained file that runs on most modern distros (Ubuntu 22.04+, Fedora 36+). Make it executable (`chmod +x`) and double-click, or ship it on your download page / GitHub Release. Done.
+Out comes `build/linux/MyApp-x86_64.AppImage` — a single self-contained file that runs on most modern distros (Ubuntu 22.04+, Fedora 36+). Make it executable (`chmod +x`) and double-click, or ship it on your download page / GitHub Release. Done.
 
 > **Prerequisite:** `linuxdeploy` and `linuxdeploy-plugin-appimage` need to be on your `PATH` (they assemble the AppImage). `swift-pwa doctor --target linux` checks for them.
 
@@ -193,13 +193,13 @@ Portable: zip the folder (or hand over the single `.exe`) and put it on your dow
 
 ## Android
 
-`swift-pwa build --target android` produces a standard **Gradle project** under `build/MyApp-android/`, and you finish the build with Gradle — the same as any Android app. The one-time toolchain setup (a specific Swift version, the Android SDK/NDK, JDK 17) is exact and load-bearing; get it from [docs/android-setup.md](../android-setup.md) before your first build.
+`swift-pwa build --target android` produces a standard **Gradle project** under `build/android/MyApp-android/`, and you finish the build with Gradle — the same as any Android app. The one-time toolchain setup (a specific Swift version, the Android SDK/NDK, JDK 17) is exact and load-bearing; get it from [docs/android-setup.md](../android-setup.md) before your first build.
 
 ### Build a debug APK to try on a device
 
 ```sh
 swift-pwa build --target android --cross-compile-android --android-abis arm64-v8a,x86_64
-cd build/MyApp-android
+cd build/android/MyApp-android
 ./gradlew assembleDebug          # → app/build/outputs/apk/debug/app-debug.apk
 adb install app/build/outputs/apk/debug/app-debug.apk
 ```
@@ -222,7 +222,7 @@ export SWIFT_PWA_ANDROID_STORE_PASSWORD='…'
 export SWIFT_PWA_ANDROID_KEY_PASSWORD='…'
 swift-pwa build --target android --cross-compile-android \
   --sign /path/to/release.jks --android-key-alias upload-key
-cd build/MyApp-android
+cd build/android/MyApp-android
 ./gradlew bundleRelease          # → an .aab for the Play Store
 ./gradlew assembleRelease        # → a signed .apk for direct/sideload distribution
 ```
@@ -256,7 +256,7 @@ swift-pwa ships an updater: you publish a signed manifest, and the app checks it
 
 ```sh
 swift-pwa updater keygen  --private-key key.priv --public-key key.pub    # one-time keypair
-swift-pwa updater sign    --private-key key.priv build/MyApp.AppImage     # per-artifact signature
+swift-pwa updater sign    --private-key key.priv build/linux/MyApp.AppImage     # per-artifact signature
 swift-pwa updater manifest --version 1.0.1 --platform linux=…=<url> --output manifest.json
 ```
 

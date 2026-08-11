@@ -222,8 +222,8 @@ chmod +x /usr/local/bin/swift-pwa
 swift-pwa init MyApp
 cd MyApp
 swift-pwa build --target linux
-# → build/MyApp-x86_64.AppImage
-./build/MyApp-x86_64.AppImage
+# → build/linux/MyApp-x86_64.AppImage
+./build/linux/MyApp-x86_64.AppImage
 ```
 
 Or build the CLI from a swift-pwa checkout (useful when you're
@@ -233,9 +233,20 @@ hacking on the bundler itself):
 swift build --product swift-pwa
 cd Examples/HelloPWA
 ../../.build/debug/swift-pwa build --target linux
-# → build/HelloPWA-x86_64.AppImage
-./build/HelloPWA-x86_64.AppImage
+# → build/linux/HelloPWA-x86_64.AppImage
+./build/linux/HelloPWA-x86_64.AppImage
 ```
+
+The AppImage is self-contained: `web/` is staged beside the binary in
+`usr/bin` (which is where the runtime looks — it went to
+`usr/share/<exe>/web` before 0.9.10, where nothing found it),
+`bridge.js` is compiled into the binary
+(not a SwiftPM resource bundle — one can't be reached from inside a macOS
+`.app`, so the runtime doesn't use one on any platform), and any resource
+bundle your own target or a dependency produces is staged next to the
+binary in `usr/bin`, which is where `Bundle.module` looks on Linux. Until
+0.9.10 neither happened, so an AppImage read its runtime out of the build
+machine's `.build/` and crashed on launch on any other box.
 
 ## 7. Optional — On-device AI (llama.cpp, Vulkan)
 

@@ -47,6 +47,63 @@ jobs:
             -derivedDataPath build/ios-sim \
             build
 
+  bundle-smoke:
+    # Does a bundled app actually run somewhere other than the machine that
+    # built it? Nothing checked that until 0.9.10, and the answer was no: the
+    # runtime read `bridge.js` from a SwiftPM resource bundle, whose generated
+    # accessor points at an absolute path inside `.build/`. Every `.app` we and
+    # our adopters shipped hard-crashed on launch on anyone else's Mac, through
+    # a fully green CI.
+    #
+    # So: scaffold a *fresh* app (not an Example — those carry fallbacks the
+    # scaffold never emits), bundle it, delete `.build`, and drive the result.
+    # The same run covers `drive --simulator`, whose whole job is running a
+    # bundled app on a simulator.
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the CLI
+        run: swift build --product swift-pwa
+      - name: Scaffold an app against this checkout
+        run: |
+          mkdir -p /tmp/bundle-smoke
+          cd /tmp/bundle-smoke
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" init BundleSmoke --path app
+          cd app
+          # The scaffold depends on the released swift-pwa; point it at the
+          # commit under test.
+          sed -i '' -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
+          grep -n 'package(path' Package.swift
+      - name: Bundle a debug .app (debug so the driver is compiled in)
+        working-directory: /tmp/bundle-smoke/app
+        run: "$GITHUB_WORKSPACE/.build/debug/swift-pwa build --target macos --configuration debug"
+      - name: Delete .build, then drive the .app
+        working-directory: /tmp/bundle-smoke/app
+        run: |
+          set -euo pipefail
+          rm -rf .build
+          cp -R "build/macos/BundleSmoke.app" /tmp/Relocated.app
+          SWIFT_PWA_DRIVE=0 /tmp/Relocated.app/Contents/MacOS/BundleSmoke > /tmp/app.log 2>&1 &
+          for _ in $(seq 1 60); do grep -q "driver listening" /tmp/app.log && break; sleep 1; done
+          cat /tmp/app.log
+          PORT=$(sed -n 's/.*port=\([0-9]*\).*/\1/p' /tmp/app.log | head -1)
+          TOKEN=$(sed -n 's/.*token=\([0-9a-f]*\).*/\1/p' /tmp/app.log | head -1)
+          test -n "$PORT" || (echo "the relocated .app never announced a driver port — it died on launch" && exit 1)
+          # `typeof __SWIFT_PWA__` is the assertion that matters: it's "object"
+          # only if bridge.js was found and injected.
+          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            "typeof __SWIFT_PWA__")
+          echo "$OUT"
+          echo "$OUT" | grep -q object
+      - name: Drive the same app on the iOS Simulator
+        working-directory: /tmp/bundle-smoke/app
+        run: |
+          set -euo pipefail
+          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --simulator \
+            "typeof __SWIFT_PWA__" 2>/dev/null)
+          echo "$OUT"
+          echo "$OUT" | grep -q object
+
   macos-llama:
     # Coverage for the opt-in llama.cpp backend. It's env-gated
     # (SWIFT_PWA_LLAMA) so the default `macos` job above never compiles it —

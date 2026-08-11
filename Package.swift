@@ -227,9 +227,15 @@ let package = Package(
                 // platforms the edge is absent so the C targets aren't built.
                 .target(name: "CSecretShim", condition: .when(platforms: [.linux]))
             ],
-            resources: [
-                .copy("Resources/bridge.js")
-            ],
+            // `Resources/bridge.js` is the canonical source of the JS runtime
+            // but is deliberately NOT a SwiftPM resource: the generated
+            // `Bundle.module` accessor looks beside `Bundle.main.bundleURL`,
+            // which for a `.app` is the bundle root — where codesign refuses to
+            // seal anything — so a bundled app resolved it to the build
+            // machine's `.build/` and crashed on launch anywhere else. The text
+            // is compiled in instead (`Generated/BridgeJSData.swift`, written by
+            // Scripts/regenerate-bridge-js.sh; `swift test` fails on drift).
+            exclude: ["Resources/bridge.js"],
             swiftSettings: swiftSettings,
             linkerSettings: [
                 // DPAPI (CryptProtectData/CryptUnprotectData) for

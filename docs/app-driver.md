@@ -100,6 +100,15 @@ compiled in at all. Checking a safe-area or full-bleed change therefore meant
 deploy → `simctl launch` → `simctl io screenshot` → crop → look, once per
 iteration, with anything time-dependent caught by burst-screenshotting.
 
+One caveat about CI: this path is verified by hand and by an opt-in
+`simulator-drive` job (`workflow_dispatch` or weekly), not on every PR. On a
+GitHub runner the `xcodebuild` underneath it twice ran past 28 minutes and had to
+be killed, while the same app bundles for macOS there in 45 seconds and the same
+simulator run takes ~16s on a local Mac. If you wire `drive --simulator` into
+your own CI, give the step a generous timeout and let its stderr reach the log —
+the phase lines (build → boot → install → launch) are what tell you where a
+stall is.
+
 Two honest limits. **Synthetic input is refused** — `drive info` reports
 `input.pointer: false`, because iOS exposes no public way to inject an event into
 a `WKWebView`; dispatch from the page instead (`drive eval

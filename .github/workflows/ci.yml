@@ -4,6 +4,11 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+  schedule:
+    # Weekly, for the simulator-drive job below — it's too slow and too flaky on
+    # a runner to gate a PR on, but it shouldn't rot unwatched either.
+    - cron: "17 5 * * 1"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -56,14 +61,12 @@ jobs:
     # a fully green CI.
     #
     # So: scaffold a *fresh* app (not an Example — those carry fallbacks the
-    # scaffold never emits), bundle it, delete `.build`, and drive the result.
-    # The same run covers `drive --simulator`, whose whole job is running a
-    # bundled app on a simulator.
+    # scaffold never emits), bundle it, delete `.build`, move it, and drive the
+    # result. ~1 minute, and it fails on exactly the regression that shipped.
+    # (The simulator counterpart is the `simulator-drive` job below, which is
+    # opt-in — see the comment there.)
     runs-on: macos-15
-    # A wedged `simctl` is the failure mode here, not a slow one: the first run
-    # of this job sat inside one call for 39 minutes with no output. The CLI now
-    # bounds every simctl call itself; this is the backstop.
-    timeout-minutes: 30
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
       - name: Build the CLI
@@ -102,22 +105,43 @@ jobs:
           # Don't leave it running — the job's cleanup reports it as an orphan,
           # which is noise in the log of the next thing that goes wrong.
           pkill -x BundleSmoke || true
-      - name: Drive the same app on the iOS Simulator
-        working-directory: /tmp/bundle-smoke/app
+
+  # `drive --simulator`, on demand (workflow_dispatch) or weekly — NOT on every
+  # PR. Twice in a row the xcodebuild inside it ran past 28 minutes on a runner
+  # and had to be killed, while the *same scaffolded app* bundles for macOS on
+  # the same runner in 45 seconds and the same simulator run takes ~16s on a
+  # local Mac with every simulator shut down. Until that's understood it isn't
+  # allowed to gate anything; the verb itself is verified by hand (see
+  # docs/app-driver.md) and every simctl call is bounded by the CLI.
+  #
+  # Note the shape of the run: stdout goes to a file and stderr flows straight to
+  # the job log, so a killed job still shows which phase it reached. Capturing
+  # stderr into a file that's only tailed afterwards is why the first two stalls
+  # logged nothing at all.
+  simulator-drive:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: macos-15
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - name: Build the CLI
+        run: swift build --product swift-pwa
+      - name: Scaffold an app against this checkout
+        run: |
+          mkdir -p /tmp/sim-drive
+          cd /tmp/sim-drive
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" init SimDrive --path app
+          cd app
+          sed -i '' -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
+      - name: Drive it on the iOS Simulator
+        working-directory: /tmp/sim-drive/app
         run: |
           set -euo pipefail
-          # stderr goes to a file rather than /dev/null: `drive` reports its
-          # phases there (build → boot → install → launch), and throwing that
-          # away is why the first stuck run left a log with nothing in it at all.
-          set +e
-          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --simulator \
-            "typeof __SWIFT_PWA__" 2>/tmp/sim.log)
-          status=$?
-          set -e
-          tail -40 /tmp/sim.log
-          test $status -eq 0
-          echo "$OUT"
-          echo "$OUT" | grep -q object
+          xcrun simctl list devices available | head -20
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --simulator \
+            "typeof __SWIFT_PWA__" > /tmp/sim-out.txt
+          cat /tmp/sim-out.txt
+          grep -q object /tmp/sim-out.txt
 
   macos-llama:
     # Coverage for the opt-in llama.cpp backend. It's env-gated

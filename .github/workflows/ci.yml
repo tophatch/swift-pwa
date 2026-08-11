@@ -367,6 +367,36 @@ jobs:
           Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
       - name: Build (release)
         run: swift build -c release
+      - name: Smoke-test the built CLI (it must actually run)
+        # This job compiles and link-checks but never used to *run* anything,
+        # and that blind spot shipped two bugs in the Windows CLI — a crash on
+        # `init` and silently truncated file writes, both from the toolchain,
+        # both through a green build. `init` only writes files (no network, no
+        # git), so it probes exactly the path that broke; the size assertions
+        # catch a silent truncation as well as a hard crash. Mirrors the
+        # staged-binary smoke in release.yml — keep the two in step.
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD ".build\release\swift-pwa.exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version exited $LASTEXITCODE" }
+
+          $tmp = Join-Path $env:RUNNER_TEMP "cli-smoke"
+          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Push-Location $tmp
+          & $exe init SmokeApp
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "init exited $code (0xC0000005 = access violation)" }
+
+          foreach ($rel in @('Package.swift', 'pwa.json', 'web\index.html', 'Sources\SmokeApp\App.swift')) {
+            $p = Join-Path $tmp "SmokeApp\$rel"
+            if (-not (Test-Path $p)) { throw "init reported success but did not write $rel" }
+            $len = (Get-Item $p).Length
+            if ($len -lt 64) { throw "$rel is only $len bytes — a truncated write" }
+            Write-Host ("ok  {0,-34} {1} bytes" -f $rel, $len)
+          }
       - name: Build (debug + test targets)
         # `swift test` drops back to the debug configuration regardless
         # of the prior release build, which on Windows means a from-

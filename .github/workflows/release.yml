@@ -99,6 +99,40 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           Copy-Item -Path .build\release\swift-pwa.exe -Destination dist\swift-pwa-windows-x86_64.exe
+      - name: Smoke-test the staged binary
+        # Run the exact bytes we're about to publish. Compiling and linking is
+        # not evidence that the artifact works, and twice now it wasn't: the
+        # v0.9.6 Windows CLI shipped crashing on `init` (access violation,
+        # nothing written) and silently truncating `drive shot` output to 6
+        # bytes, both from the toolchain, through a fully green build.
+        #
+        # `init` is the right probe because it only writes files — no network,
+        # no git, no device — so it exercises the path that broke, and asserting
+        # the files exist *and* have plausible sizes catches a silent truncation
+        # as well as a crash. A CLI that can't scaffold an app is not shippable.
+        shell: pwsh
+        run: |
+          $exe = Join-Path $PWD "dist\swift-pwa-windows-x86_64.exe"
+          & $exe --version
+          if ($LASTEXITCODE -ne 0) { throw "--version exited $LASTEXITCODE" }
+
+          $tmp = Join-Path $env:RUNNER_TEMP "cli-smoke"
+          Remove-Item -Recurse -Force $tmp -ErrorAction SilentlyContinue
+          New-Item -ItemType Directory -Force $tmp | Out-Null
+          Push-Location $tmp
+          & $exe init SmokeApp
+          $code = $LASTEXITCODE
+          Pop-Location
+          if ($code -ne 0) { throw "init exited $code (0xC0000005 = access violation)" }
+
+          foreach ($rel in @('Package.swift', 'pwa.json', 'web\index.html', 'Sources\SmokeApp\App.swift')) {
+            $p = Join-Path $tmp "SmokeApp\$rel"
+            if (-not (Test-Path $p)) { throw "init reported success but did not write $rel" }
+            $len = (Get-Item $p).Length
+            if ($len -lt 64) { throw "$rel is only $len bytes — a truncated write" }
+            Write-Host ("ok  {0,-34} {1} bytes" -f $rel, $len)
+          }
+          Write-Host "staged CLI runs and writes files correctly"
       - uses: actions/upload-artifact@v7
         with:
           name: swift-pwa-windows-x86_64

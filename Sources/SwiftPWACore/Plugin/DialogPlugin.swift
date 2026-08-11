@@ -45,7 +45,11 @@ public struct DialogPlugin: Plugin {
         registry.register(
             "dialog.openFile",
             typed: { (args: DialogOpenFileArgs, ctx) async throws -> DialogOpenFileResult in
-                try await DialogOpenFileResult(paths: dialog.openFile(args, parent: ctx.originWindow))
+                let paths = try await dialog.openFile(args, parent: ctx.originWindow)
+                return try await DialogOpenFileResult(
+                    paths: paths,
+                    bookmarks: dialog.bookmarks(forPaths: paths)
+                )
             }
         )
 
@@ -59,7 +63,18 @@ public struct DialogPlugin: Plugin {
         registry.register(
             "dialog.openDirectory",
             typed: { (args: DialogOpenDirectoryArgs, ctx) async throws -> DialogOpenDirectoryResult in
-                try await DialogOpenDirectoryResult(paths: dialog.openDirectory(args, parent: ctx.originWindow))
+                let paths = try await dialog.openDirectory(args, parent: ctx.originWindow)
+                return try await DialogOpenDirectoryResult(
+                    paths: paths,
+                    bookmarks: dialog.bookmarks(forPaths: paths)
+                )
+            }
+        )
+
+        registry.register(
+            "dialog.resolveBookmark",
+            typed: { (args: DialogResolveBookmarkArgs, _) async throws -> DialogResolveBookmarkResult in
+                try await dialog.resolveBookmark(args.bookmark)
             }
         )
 
@@ -69,5 +84,21 @@ public struct DialogPlugin: Plugin {
                 try await DialogPathResult(path: dialog.exportFile(args, parent: ctx.originWindow))
             }
         )
+    }
+}
+
+private extension Dialog {
+    /// Mint a token per picked path so the JS result carries `bookmarks`
+    /// beside `paths` without a second round trip. Backends report "no
+    /// durable handle for this one" as a `nil` slot, keeping the pick
+    /// itself successful; a thrown error means the mint went wrong and is
+    /// worth failing the call over.
+    func bookmarks(forPaths paths: [String]) async throws -> [String?] {
+        var out: [String?] = []
+        out.reserveCapacity(paths.count)
+        for path in paths {
+            try await out.append(makeBookmark(forPath: path))
+        }
+        return out
     }
 }

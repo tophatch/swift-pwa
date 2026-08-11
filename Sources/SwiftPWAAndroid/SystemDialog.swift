@@ -88,6 +88,54 @@
             )
             return result.path
         }
+
+        /// A picked `content://` URI is only usable while the task that
+        /// picked it lives, so the durable form is the same URI backed by a
+        /// *persisted* permission — taken here, right after the pick, which
+        /// is the window in which SAF still allows it.
+        public func makeBookmark(forPath path: String) async throws -> String? {
+            guard path.hasPrefix("content://") else {
+                // An app-private path the app handed us rather than a SAF
+                // pick; nothing to persist, the path is the whole grant.
+                return DialogBookmark.token(path: path)
+            }
+            let result: PersistedURIResult = try await AndroidRPC.call(
+                "dialog.takePersistableUri", URIPayload(uri: path)
+            )
+            return result.persisted ? DialogBookmark.token(uri: path) : nil
+        }
+
+        public func resolveBookmark(_ bookmark: String) async throws -> DialogResolveBookmarkResult {
+            switch try DialogBookmark.payload(of: bookmark) {
+            case let .uri(uri):
+                let result: PersistedURIResult = try await AndroidRPC.call(
+                    "dialog.checkPersistedUri", URIPayload(uri: uri)
+                )
+                return DialogResolveBookmarkResult(path: result.persisted ? uri : nil)
+            case let .path(path):
+                guard FileManager.default.fileExists(atPath: path) else {
+                    return DialogResolveBookmarkResult(path: nil)
+                }
+                return DialogResolveBookmarkResult(path: path)
+            case .bookmarkData:
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: """
+                    dialog.resolveBookmark: this token was minted on a different platform \
+                    and can't be resolved here
+                    """
+                )
+            }
+        }
+    }
+
+    /// Wire payloads for the two SAF permission RPCs.
+    private struct URIPayload: Encodable {
+        let uri: String
+    }
+
+    private struct PersistedURIResult: Decodable {
+        let persisted: Bool
     }
 
     /// Wire payload for `dialog.exportFile` → Kotlin: the destination

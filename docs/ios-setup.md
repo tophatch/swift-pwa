@@ -359,6 +359,23 @@ must be HTTPS — iOS rejects http manifests outright.
   `openFile` and `openDirectory` route through
   `UIDocumentPickerViewController` in opening / folder mode. See
   [docs/javascript-api.md](javascript-api.md#dialog).
+- **Store the `bookmark` from a pick, not the path.** iOS hands the app a
+  *security-scoped* URL for anything outside the app container — iCloud
+  Drive, another app's documents, the folders that make "add a library
+  folder" worth building. The grant lives on that URL object, and a path
+  string can't carry it, so the runtime activates the scope and holds it
+  for the session before flattening the pick to a path. That makes the
+  returned path readable *now*; it does nothing for the next launch.
+  What survives is the token in `bookmarks` (`bookmark` for the first
+  selection), redeemed with `dialog.resolveBookmark`, which re-activates
+  the scope and hands the path back. Persist the token beside your own
+  record of the location. Details and the cross-platform table:
+  [docs/javascript-api.md](javascript-api.md#dialog).
+- **Not-yet-downloaded iCloud files are yours to handle.** Once a folder
+  is reachable, spotting placeholder files
+  (`URLResourceKey.ubiquitousItemDownloadingStatusKey`) and pulling them
+  down (`FileManager.startDownloadingUbiquitousItem`) is plain Foundation
+  on a URL — no runtime involvement, and no swift-pwa command wraps it.
 - **`pwa.json.icon` drives both the home-screen App Icon and the
   launch screen.** From the single 1024×1024 PNG the bundler compiles
   a real `AppIcon` via `actool` (a single "universal" asset — Xcode

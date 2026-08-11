@@ -348,11 +348,19 @@
                 <code>DialogPlugin</code> — each backend wires its platform's
                 HIG dialog (NSAlert/NSOpenPanel, UIAlertController,
                 GtkFileChooser, IFileOpenDialog).</p>
+                <p>A pick also hands back a <strong>bookmark</strong> per path —
+                an opaque token that keeps the location reachable after the app
+                restarts, which on iOS and Android the path alone can't do.
+                <strong>Remember folder</strong> stores one; quit, relaunch, and
+                <strong>Reopen remembered</strong> redeems it via
+                <code>dialog.resolveBookmark</code> and lists the folder.</p>
                 <div class="actions">
                     <button id="dialog-confirm" data-requires="dialog.confirm">Confirm</button>
                     <button id="dialog-open" data-requires="dialog.openFile">Open file</button>
                     <button id="dialog-save" data-requires="dialog.saveFile">Save file</button>
                     <button id="dialog-folder" data-requires="dialog.openDirectory">Pick folder</button>
+                    <button id="dialog-remember" data-requires="dialog.openDirectory">Remember folder</button>
+                    <button id="dialog-reopen" data-requires="dialog.resolveBookmark">Reopen remembered</button>
                 </div>
             </section>
 
@@ -834,6 +842,53 @@
                 });
                 log(r.path == null ? "openDirectory → cancel" : "openDirectory → " + r.path);
             },
+            // The half of the story a path can't tell: store the bookmark,
+            // not the path. On iOS the path is only readable while the
+            // runtime holds the picker's grant, and on Android the SAF URI
+            // dies with the task — the token is what outlives both.
+            dialogRemember: async () => {
+                const r = await __SWIFT_PWA__.invoke("dialog.openDirectory", {
+                    title: "Pick a folder to remember",
+                });
+                if (r.path == null) { log("openDirectory → cancel"); return; }
+                if (r.bookmark == null) {
+                    log("openDirectory → " + r.path + " (no bookmark: this platform "
+                        + "couldn't mint one for that location)");
+                    return;
+                }
+                localStorage.setItem("rememberedFolder", r.bookmark);
+                log("remembered " + r.path + " — quit and relaunch, then Reopen");
+            },
+            dialogReopen: async () => {
+                const stored = localStorage.getItem("rememberedFolder");
+                if (!stored) { log("nothing remembered yet — use Remember folder first"); return; }
+                const r = await __SWIFT_PWA__.invoke("dialog.resolveBookmark", { bookmark: stored });
+                if (r.path == null) {
+                    log("resolveBookmark → gone (deleted, or access revoked); pick again");
+                    localStorage.removeItem("rememberedFolder");
+                    return;
+                }
+                // A stale token still resolved, but the platform wants the
+                // replacement stored in its place.
+                if (r.stale && r.bookmark) {
+                    localStorage.setItem("rememberedFolder", r.bookmark);
+                    log("resolveBookmark → " + r.path + " (token refreshed)");
+                } else {
+                    log("resolveBookmark → " + r.path);
+                }
+                // Proof the grant is live, not just remembered. Android hands
+                // back a SAF tree URI, which fs.readDir doesn't walk — there
+                // the persisted permission surviving the relaunch is the result.
+                if (r.path.startsWith("content://")) { return; }
+                try {
+                    const listing = await __SWIFT_PWA__.invoke("fs.readDir", { path: r.path });
+                    const names = listing.entries.map((e) => e.name);
+                    log("fs.readDir → " + names.length + " entries"
+                        + (names.length ? ": " + names.slice(0, 5).join(", ") : ""));
+                } catch (e) {
+                    log("fs.readDir failed — the grant did not survive: " + e.message);
+                }
+            },
             updaterCheck: async () => {
                 try {
                     const r = await __SWIFT_PWA__.invoke("updater.check");
@@ -970,6 +1025,8 @@
         document.getElementById("dialog-open").onclick    = actions.dialogOpen;
         document.getElementById("dialog-save").onclick    = actions.dialogSave;
         document.getElementById("dialog-folder").onclick  = actions.dialogFolder;
+        document.getElementById("dialog-remember").onclick = actions.dialogRemember;
+        document.getElementById("dialog-reopen").onclick   = actions.dialogReopen;
         document.getElementById("fs-write").onclick  = actions.fsWrite;
         document.getElementById("fs-read").onclick   = actions.fsRead;
         document.getElementById("fs-meta").onclick   = actions.fsMeta;

@@ -539,20 +539,23 @@ struct LaunchedApp {
             let app = outputDir.appendingPathComponent("\(pwa.name).app")
             let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
 
-            let udid = try await withStdout(redirectedTo: progressSink) {
+            let sink = progressSink
+            let udid = try await withStdout(redirectedTo: sink) {
                 // `build` prints with `print(...)`, and xcodebuild inherits our
                 // stdout — both would land in the MCP protocol stream, so the
                 // whole build+install phase writes where lifecycle chatter goes.
+                sink.writeQuietly(Data("→ building \(pwa.name) for the simulator (\(options.configuration))\n".utf8))
                 let build = try Build.parse([
                     "--target", "ios", "--simulator",
                     "--configuration", options.configuration,
                     "--manifest", options.manifest
                 ])
                 try await build.run()
-                let udid = try await SimulatorControl.resolve(explicit: options.device)
-                print("→ installing \(app.lastPathComponent) to simulator \(udid)")
+                let udid = try await SimulatorControl.resolve(explicit: options.device, log: sink)
+                sink.writeQuietly(Data("→ installing \(app.lastPathComponent) to simulator \(udid)\n".utf8))
                 SimulatorControl.terminate(bundleID: bundleID, on: udid)
-                try await SimulatorControl.install(app: app, on: udid)
+                try await SimulatorControl.install(app: app, on: udid, log: sink)
+                sink.writeQuietly(Data("→ launching \(bundleID)\n".utf8))
                 return udid
             }
 

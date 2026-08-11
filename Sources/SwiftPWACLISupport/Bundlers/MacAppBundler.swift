@@ -218,6 +218,7 @@ enum BundlerError: Error, CustomStringConvertible {
     case binaryMissing(URL, expectedName: String)
     case toolMissing(String)
     case shell(Int32, String)
+    case timedOut(String, seconds: TimeInterval)
     case iosSimulatorRuntimeMissing
     case notarizeUnsigned
     case iosDeviceUnsigned
@@ -252,6 +253,12 @@ enum BundlerError: Error, CustomStringConvertible {
             """
         case let .toolMissing(name): "required tool not on PATH: \(name)"
         case let .shell(code, cmd): "command failed (\(code)): \(cmd)"
+        case let .timedOut(cmd, seconds):
+            """
+            timed out after \(Int(seconds))s (and was terminated): \(cmd)
+            It produced no result and didn't exit — that's a wedged tool, not a slow one. \
+            `simctl` does this on a cold machine; `xcrun simctl shutdown all` usually clears it.
+            """
         case let .profileMintFailed(bundleID, team):
             """
             --allow-provisioning-registration: the throwaway build for team \(team) / bundle id \
@@ -285,10 +292,17 @@ enum Shell {
     /// through to ours. The MCP server needs it: its own stdout carries the
     /// protocol stream, and a stray line of compiler progress there would
     /// corrupt the session.
+    ///
+    /// `timeout` (seconds) bounds the run: past the deadline the child is
+    /// terminated and the call throws `BundlerError.timedOut`. Use it for any
+    /// command that can wedge rather than fail — `simctl` is the reason it
+    /// exists. A cold `simctl boot` on a CI runner sat for 39 minutes with no
+    /// output and no exit, and an unbounded `waitUntilExit` turns that into a
+    /// job that looks like a slow build instead of a stuck one.
     static func run(
         _ executable: String, _ arguments: [String],
         cwd: URL? = nil, envOverrides: [String: String]? = nil,
-        stdoutTo: FileHandle? = nil
+        stdoutTo: FileHandle? = nil, timeout: TimeInterval? = nil
     ) async throws {
         let task = Process()
         task.executableURL = try resolveExecutable(executable)
@@ -300,12 +314,35 @@ enum Shell {
         }
         // Inherit stdout/stderr — pass through to the user.
         try task.run()
+        let timedOut = TimeoutFlag()
+        if let timeout {
+            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                if task.isRunning {
+                    timedOut.set()
+                    task.terminate()
+                }
+            }
+        }
         task.waitUntilExit()
+        if timedOut.isSet, let timeout {
+            throw BundlerError.timedOut(([executable] + arguments).joined(separator: " "), seconds: timeout)
+        }
         if task.terminationStatus != 0 {
             throw BundlerError.shell(
                 task.terminationStatus,
                 ([executable] + arguments).joined(separator: " ")
             )
+        }
+    }
+
+    /// One-bit box so the timeout timer and the waiting thread can agree on
+    /// *why* a process ended, without either capturing the other's state.
+    private final class TimeoutFlag: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value = false
+        func set() { lock.lock(); value = true; lock.unlock() }
+        var isSet: Bool {
+            lock.lock(); defer { lock.unlock() }; return value
         }
     }
 

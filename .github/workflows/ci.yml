@@ -60,6 +60,10 @@ jobs:
     # The same run covers `drive --simulator`, whose whole job is running a
     # bundled app on a simulator.
     runs-on: macos-15
+    # A wedged `simctl` is the failure mode here, not a slow one: the first run
+    # of this job sat inside one call for 39 minutes with no output. The CLI now
+    # bounds every simctl call itself; this is the backstop.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Build the CLI
@@ -95,12 +99,23 @@ jobs:
             "typeof __SWIFT_PWA__")
           echo "$OUT"
           echo "$OUT" | grep -q object
+          # Don't leave it running — the job's cleanup reports it as an orphan,
+          # which is noise in the log of the next thing that goes wrong.
+          pkill -x BundleSmoke || true
       - name: Drive the same app on the iOS Simulator
         working-directory: /tmp/bundle-smoke/app
         run: |
           set -euo pipefail
+          # stderr goes to a file rather than /dev/null: `drive` reports its
+          # phases there (build → boot → install → launch), and throwing that
+          # away is why the first stuck run left a log with nothing in it at all.
+          set +e
           OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --simulator \
-            "typeof __SWIFT_PWA__" 2>/dev/null)
+            "typeof __SWIFT_PWA__" 2>/tmp/sim.log)
+          status=$?
+          set -e
+          tail -40 /tmp/sim.log
+          test $status -eq 0
           echo "$OUT"
           echo "$OUT" | grep -q object
 

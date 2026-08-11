@@ -185,6 +185,32 @@
             return out.path
         }
 
+        /// Dark taskbar ⇒ light art. Read from the theme registry each time
+        /// rather than cached: a user can switch theme while the app runs, and
+        /// there's no cost worth avoiding here.
+        ///
+        /// `SystemUsesLightTheme`, not `AppsUseLightTheme` — the notification
+        /// area is system chrome, and the two are independently settable. A
+        /// missing value means the default, which is a dark taskbar.
+        public var prefersLightArt: Bool? {
+            var value: DWORD = 0
+            var size = DWORD(MemoryLayout<DWORD>.size)
+            let status = "Software\\Microsoft\\Windows\\CurrentVersion\\Themes\\Personalize"
+                .withCString(encodedAs: UTF16.self) { subkey in
+                    "SystemUsesLightTheme".withCString(encodedAs: UTF16.self) { name in
+                        withUnsafeMutablePointer(to: &value) { valuePointer in
+                            RegGetValueW(
+                                HKEY_CURRENT_USER, subkey, name,
+                                DWORD(RRF_RT_REG_DWORD), nil,
+                                UnsafeMutableRawPointer(valuePointer), &size
+                            )
+                        }
+                    }
+                }
+            guard status == ERROR_SUCCESS else { return true }
+            return value == 0
+        }
+
         public func setTooltip(_ text: String) {
             // szTip is a fixed 128-WCHAR buffer in NOTIFYICONDATAW;
             // truncate silently if the caller hands us something longer.

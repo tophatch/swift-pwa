@@ -675,7 +675,11 @@ WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
   reads `.ico` only — so the runtime wraps PNG bytes in a single-entry icon
   container before loading, which is why `tray.setIcon({ path: 'icon.png' })`
   works here as it does on macOS and Linux. Supply art that reads at **16 px**:
-  it's loaded at `SM_CXSMICON` rather than being downscaled from 32.
+  it's loaded at `SM_CXSMICON` rather than being downscaled from 32. Nothing
+  recolours your art — macOS-style template images (a black silhouette) come out
+  black on a dark taskbar. `Tray.prefersLightArt` reports the taskbar's polarity
+  from `SystemUsesLightTheme` if you want to ship two variants, which is what
+  the agent indicator does.
 - **No `system.memoryPressure` event.** `system.memory` works (total RAM and
   `availableBytes` via `GlobalMemoryStatusEx`), but the runtime doesn't emit
   the `system.memoryPressure` event on Windows (it fires on iOS/macOS/Android).

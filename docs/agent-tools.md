@@ -225,6 +225,13 @@ While access is open, swift-pwa shows a **system-tray status item** — waiting 
 connected, with a menu item to turn access off. It's runtime-owned: the app
 doesn't create it, can't restyle it, and can't hide it.
 
+The mark is a **ring** while the door is open with nothing through it, and gains
+an **inset dot** once a client is actually connected — the same distinction the
+tooltip and the menu's first row spell out, readable without hovering. It's drawn
+by the runtime at tray size, in dark or light ink depending on what the platform
+says about its own chrome (macOS tints template art itself; Windows is read from
+the taskbar's theme).
+
 That's the point. Consent can't be enforced in native code, so the design goal
 is narrower: a developer who skips asking can't also make the fact invisible. A
 window-title suffix was the cheaper option and fails exactly this test — the

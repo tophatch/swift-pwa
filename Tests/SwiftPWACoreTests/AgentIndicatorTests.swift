@@ -8,8 +8,12 @@ import Testing
 /// Its whole reason to exist is surviving a developer who cuts the corner and
 /// skips asking, so the behaviour is defined in Core (backends supply only a
 /// tray) and checked here rather than five times over.
+/// `.serialized` because two of these install the process-global
+/// `AgentIndicator` hook. Run in parallel, one test's surface can publish into
+/// the other's hook — which is a flake that reports as the very bug being
+/// tested, so it's worth the lost concurrency.
 @MainActor
-@Suite("Agent indicator")
+@Suite("Agent indicator", .serialized)
 struct AgentIndicatorTests {
     static let tools = [
         AgentTool(command: "book.open", description: "Open a book.", readOnly: true),

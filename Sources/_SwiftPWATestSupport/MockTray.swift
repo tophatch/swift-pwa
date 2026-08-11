@@ -19,9 +19,16 @@ public final class MockTray: Tray {
     public private(set) var menu: TrayMenu = .init()
     public private(set) var visible: Bool = true
 
+    /// What this tray claims about its background, for tests that check art
+    /// polarity. `nil` (the default) is the real behaviour on a platform that
+    /// tints template art for itself.
+    public var prefersLightArt: Bool?
+
     private var continuations: [UUID: AsyncStream<TrayEvent>.Continuation] = [:]
 
-    public init() {}
+    public init(prefersLightArt: Bool? = nil) {
+        self.prefersLightArt = prefersLightArt
+    }
 
     public func setIcon(path: String, template: Bool) {
         actions.append(.setIcon(path: path, template: template))

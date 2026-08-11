@@ -2,7 +2,7 @@
 
 Build your app as a web frontend — HTML/CSS/JS, or React/Vue/Svelte — and ship it as a genuine native app on macOS, iOS, Linux, Windows, and Android, all from one Swift package. `swift-pwa` wraps each platform's own system webview in a thin native shell, so there's no bundled browser and downloads stay small (5–15 MB). It's Tauri or Wails for the Swift world, with on-device AI built in.
 
-> **Status:** [`v0.9.7`](https://github.com/tophatch/swift-pwa/releases/tag/v0.9.7) is the current release. macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class — one Swift package, one JS API, one CLI, five platforms from the same source.
+> **Status:** [`v0.9.8`](https://github.com/tophatch/swift-pwa/releases/tag/v0.9.8) is the current release. macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class — one Swift package, one JS API, one CLI, five platforms from the same source.
 >
 > This is young, fast-moving software (pre-1.0, under heavy active development) — expect rapid iteration and the occasional breaking change before 1.0. **Feedback, [issues](https://github.com/tophatch/swift-pwa/issues), and contributions are very welcome** — real-world usage reports are especially valuable at this stage.
 

@@ -15,9 +15,15 @@ import Foundation
 public protocol Tray: AnyObject, Sendable {
     /// Set the icon shown in the tray. Path is interpreted by the
     /// platform's image loader (`NSImage(byReferencingFile:)` on Apple,
-    /// `gtk_status_icon_set_from_file` on GTK). `template` requests a
-    /// monochrome menu-bar style on macOS — `template == false` on
-    /// other platforms is a no-op since they don't auto-tint.
+    /// `gtk_status_icon_set_from_file` on GTK, `LoadImageW` on Windows —
+    /// which reads `.ico` only, so the Windows backend repackages a PNG
+    /// into an icon container first, keeping PNG working everywhere).
+    /// `template` requests a monochrome menu-bar style on macOS —
+    /// `template == false` on other platforms is a no-op since they
+    /// don't auto-tint, which also means template art drawn for macOS
+    /// (a black silhouette) is left as-is elsewhere, and reads poorly
+    /// against a dark taskbar. Supply art with its own contrast if it
+    /// has to work off-Apple.
     func setIcon(path: String, template: Bool)
 
     /// Set the hover-tooltip text.

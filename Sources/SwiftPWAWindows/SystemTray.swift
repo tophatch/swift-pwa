@@ -80,28 +80,109 @@
         }
 
         public func setIcon(path: String, template _: Bool) {
-            // Load the file as an HICON. WebView2 / Win32 use 16x16
-            // icons in the tray; let the OS pick the best size.
-            //
+            // `LoadImageW(IMAGE_ICON, LR_LOADFROMFILE)` reads `.ico` files and
+            // nothing else — hand it a PNG and it returns null, which is how
+            // the agent indicator came to occupy a blank slot in the
+            // notification area on Windows while rendering fine everywhere
+            // else. The cross-platform contract is that a PNG works (macOS
+            // takes one, both GTK backends take one, and the JS docs show
+            // one), so the conversion belongs here rather than in every
+            // caller: a PNG gets repackaged as a single-entry icon container
+            // on the way in.
+            let loadPath = Self.iconContainerPath(for: path) ?? path
+            defer {
+                if loadPath != path { try? FileManager.default.removeItem(atPath: loadPath) }
+            }
+
             // `LoadImageW` returns `HANDLE` (`UnsafeMutableRawPointer?`)
             // on Swift's WinSDK overlay; `HICON` is a distinct typed
             // pointer (`UnsafeMutablePointer<HICON__>`). Convert
             // through `OpaquePointer` so the bit pattern is preserved
             // without going through `Int`.
-            let h: HICON? = path.withCString(encodedAs: UTF16.self) { wcs in
+            //
+            // Asking for the small-icon metric rather than `LR_DEFAULTSIZE`:
+            // this is a notification-area icon, and the default is the large
+            // (32px) metric, so the shell would resample a second time to get
+            // it down to tray size.
+            let side = GetSystemMetrics(SM_CXSMICON)
+            let h: HICON? = loadPath.withCString(encodedAs: UTF16.self) { wcs in
                 guard let raw = LoadImageW(
                     nil, wcs,
                     UINT(IMAGE_ICON),
-                    0, 0,
-                    UINT(LR_LOADFROMFILE | LR_DEFAULTSIZE)
+                    side, side,
+                    UINT(LR_LOADFROMFILE)
                 ) else { return nil }
                 return HICON(OpaquePointer(raw))
+            }
+            if h == nil {
+                FileHandle.standardError.writeQuietly(
+                    Data("swift-pwa: tray icon '\(path)' could not be loaded (\(GetLastError()))\n".utf8)
+                )
             }
             if let old = hicon { DestroyIcon(old) }
             hicon = h
             nid.hIcon = h
             nid.uFlags |= UINT(NIF_ICON)
             _ = Shell_NotifyIconW(DWORD(NIM_MODIFY), &nid)
+        }
+
+        /// Repackage a PNG as a single-entry `.ico` in the temp directory, and
+        /// return its path. `nil` for anything that isn't a PNG — including a
+        /// file `LoadImageW` already handles, which is passed through
+        /// untouched.
+        ///
+        /// Detection is by signature, not by extension: `LoadImageW` sniffs
+        /// content (verified — icon bytes named `.png` load fine), so the
+        /// extension is the less reliable of the two.
+        ///
+        /// The container itself is 22 bytes of header in front of the original
+        /// PNG bytes, which Windows has accepted inside `.ico` since Vista.
+        /// Verified on a real box against the notification area rather than in
+        /// a unit test: `swift test` doesn't run on Windows.
+        private static func iconContainerPath(for path: String) -> String? {
+            guard let png = FileManager.default.contents(atPath: path),
+                  png.count > 24,
+                  png.starts(with: [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
+            else { return nil }
+
+            /// IHDR is the first chunk, so width and height are at fixed
+            /// offsets, big-endian.
+            func dimension(at offset: Int) -> Int {
+                (0 ..< 4).reduce(0) { $0 << 8 | Int(png[offset + $1]) }
+            }
+            /// An entry's size field is one byte, where 0 means 256. Anything
+            /// larger is declared as 256 and scaled from the real PNG, which is
+            /// what the loader reads for the actual pixels anyway.
+            func sizeByte(_ value: Int) -> UInt8 {
+                value >= 256 || value <= 0 ? 0 : UInt8(value)
+            }
+
+            var ico = Data()
+            func u16(_ value: Int) {
+                ico.append(UInt8(value & 0xFF))
+                ico.append(UInt8((value >> 8) & 0xFF))
+            }
+            func u32(_ value: Int) {
+                u16(value & 0xFFFF)
+                u16((value >> 16) & 0xFFFF)
+            }
+            u16(0) // reserved
+            u16(1) // type: icon
+            u16(1) // one image
+            ico.append(sizeByte(dimension(at: 16)))
+            ico.append(sizeByte(dimension(at: 20)))
+            ico.append(0) // palette entries: not paletted
+            ico.append(0) // reserved
+            u16(1) // colour planes
+            u16(32) // bits per pixel
+            u32(png.count)
+            u32(22) // payload offset, past this 6 + 16 byte header
+            ico.append(png)
+
+            let out = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("swift-pwa-tray-\(Foundation.UUID().uuidString).ico")
+            guard (try? ico.write(to: out)) != nil else { return nil }
+            return out.path
         }
 
         public func setTooltip(_ text: String) {

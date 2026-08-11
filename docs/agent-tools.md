@@ -235,6 +235,13 @@ connects, since the port is open either way and a user who forgot they'd allowed
 it should still see something. Being tray-based, it's **desktop-only**: iOS and
 Android have no equivalent surface, and the relay is a desktop CLI anyway.
 
+How well "can't make the fact invisible" holds up varies by platform, and it's
+weakest on Windows: Windows 11 files a newly-registered notification-area icon
+behind the taskbar's chevron, and no supported API promotes it out — so the
+indicator is one click away rather than in view. macOS and both Linux backends
+put it on screen directly. Nothing here is the app's doing, but it's the honest
+shape of the guarantee.
+
 ### The control protocol
 
 Newline-delimited JSON on `127.0.0.1`, one request per line. Every frame

@@ -209,7 +209,8 @@ struct AgentPolicyTests {
     func secretsAreForbidden() {
         let resolution = Self.resolve(Self.section(Self.expose("secrets.get")))
         #expect(resolution.tools.isEmpty)
-        #expect(resolution.errors.contains { $0.contains("credentials") })
+        let error = try? #require(resolution.errors.first { $0.contains("secrets.get") })
+        #expect(error?.contains("credentials never leave the native side") == true)
     }
 
     @Test("bridge internals can never be exposed")
@@ -333,13 +334,20 @@ struct AgentPolicyTests {
         #expect(AgentPolicy.drift(declared: nil, compiled: []).isEmpty)
     }
 
+    /// The reason, not just the refusal: both forbidden namespaces shared one
+    /// error string for a release, so an app declaring `agent.enable` was told
+    /// it would leak a credential and pointed at a fix for a problem it didn't
+    /// have. Asserting only that the message mentions the namespace is what let
+    /// that through, so this checks the explanation belongs to *this* refusal.
     @Test("the agent namespace can't be exposed — it would widen its own access")
     func agentNamespaceIsForbidden() {
         let resolution = AgentPolicy.resolve(Self.section(Self.expose("agent.enable")), against: [
             CommandDescriptor(name: "agent.enable", kind: .unary, args: .void, result: .void)
         ])
         #expect(resolution.tools.isEmpty)
-        #expect(resolution.errors.contains { $0.contains("agent.") })
+        let error = try? #require(resolution.errors.first { $0.contains("agent.enable") })
+        #expect(error?.contains("widen its own access") == true)
+        #expect(error?.contains("credentials") == false, "this is the secret store's reason, not this one")
     }
 
     // MARK: - Manifest decoding

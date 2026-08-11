@@ -69,7 +69,7 @@ swift-pwa drive shot ready.png --wait "document.querySelectorAll('.card').length
 swift-pwa drive eval "document.querySelector('#total').textContent" --wait "!document.querySelector('.loading')"
 ```
 
-`--timeout <seconds>` bounds the wait (default 30). The wait runs **in the CLI**, not the app, so you can change what you wait for without rebuilding anything.
+`--timeout <seconds>` bounds the wait (default 60). The wait runs **in the CLI**, not the app, so you can change what you wait for without rebuilding anything.
 
 ---
 

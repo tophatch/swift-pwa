@@ -58,8 +58,14 @@ struct DriveOptions: ParsableArguments {
     @Option(name: .long, help: "Poll this JS expression until it's truthy before running the verb.")
     var wait: String?
 
-    @Option(name: .long, help: "Seconds to wait for the app, the page, and --wait. Default 30.")
-    var timeout: Double = 30
+    /// 60, not 30: on a software-rendered headless Linux box the *first* WebKit
+    /// start after a clean build can take longer than 30s, and the timeout that
+    /// followed was indistinguishable from a broken page — it cost real time
+    /// chasing a rendering bug that wasn't there. A too-low default fails runs
+    /// that would have worked; a higher one only costs waiting on runs that are
+    /// already broken, and `--timeout` overrides either way.
+    @Option(name: .long, help: "Seconds to wait for the app, the page, and --wait. Default 60.")
+    var timeout: Double = 60
 
     @Option(name: .long, help: "Open the app's first window at this bundle path, e.g. /doc.html?id=42.")
     var route: String?

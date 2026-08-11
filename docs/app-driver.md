@@ -57,7 +57,7 @@ swift-pwa drive shot ready.png --wait "!!document.querySelector('.viewer canvas'
 swift-pwa drive eval "app.state.count" --wait "window.app?.ready" --timeout 60
 ```
 
-`--timeout` (default 30s) bounds the app launch, the page-ready poll and
+`--timeout` (default 60s) bounds the app launch, the page-ready poll and
 `--wait` together. A cold WebKitGTK start under Xvfb on a software renderer can
 take longer than that; raise it rather than assuming a hang.
 

@@ -641,7 +641,10 @@ enum Templates {
               - uses: actions/checkout@v5
               - uses: swift-actions/setup-swift@v2
                 with:
-                  swift-version: "6.0"
+                  # 6.2 is a floor, not a preference: under 6.0.x the GTK4
+                  # backend renders nothing — the window opens on about:blank
+                  # and stays there, with nothing logged. Don't lower it.
+                  swift-version: "6.2"
               - name: Install GTK / WebKitGTK + linuxdeploy
                 run: |
                   sudo apt-get update
@@ -673,8 +676,12 @@ enum Templates {
               - name: Set up Swift for Windows
                 uses: compnerd/gha-setup-swift@main
                 with:
-                  swift-version: swift-6.1.2-release
-                  swift-build: 6.1.2-RELEASE
+                  # 6.3.1, not 6.1.2: Foundation's file writing is broken on
+                  # Windows in 6.1.2, and it breaks the built app rather than
+                  # the build — writes are silently truncated and some exit
+                  # with an access violation. Don't lower it.
+                  swift-version: swift-6.3.1-release
+                  swift-build: 6.3.1-RELEASE
               - name: Install WebView2 SDK + WIL (NuGet)
                 shell: pwsh
                 run: |

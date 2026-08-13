@@ -101,6 +101,11 @@ public final class MockWindow: Window {
     }
     public func isFullscreen() -> Bool { currentFullscreen }
 
+    /// Settable so a test can drive both branches of the driver's
+    /// occluded-window reporting; a real backend reads it from the platform.
+    public var mockVisibility: WindowVisibility = .unknown
+    public func visibility() -> WindowVisibility { mockVisibility }
+
     public func close() {
         receivedActions.append(.close)
         isClosed = true

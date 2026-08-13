@@ -93,7 +93,7 @@
                     message: "couldn't build a \(type) mouse event"
                 )
             }
-            window.sendEvent(event)
+            send(event, to: window)
         }
 
         // MARK: - Keyboard
@@ -107,26 +107,39 @@
             if window.firstResponder !== webView {
                 window.makeFirstResponder(webView)
             }
-            // `characters` is what gets inserted. An explicit `text` wins; a
-            // single-character `key` is itself; a named key ("Enter",
-            // "ArrowLeft") inserts nothing, since its effect comes from the key
-            // code rather than a character.
-            let characters = key.text ?? (key.key.count == 1 ? key.key : "")
+            // `characters` decides what the page sees as `event.key`, and an
+            // **empty** string is not "no character" — WebKit reads it as a dead
+            // key and the page gets `key: "Dead"`. Every named key used to land
+            // that way (arrows, Enter, Tab, Escape, Backspace), so anything
+            // switching on `e.key` — which is nearly everything — couldn't be
+            // driven at all, while `code` and `keyCode` looked perfectly right.
+            // Reported by an adopter whose reader ignored every arrow key.
+            //
+            // A named key therefore carries the character macOS itself sends for
+            // it: a control character for Enter / Tab / Escape / Backspace, and
+            // for the navigation and function keys one of AppKit's private-use
+            // code points (`NSLeftArrowFunctionKey` = U+F702 and friends).
+            let named = SyntheticKeyMap.named(key.key) ?? key.code.flatMap(SyntheticKeyMap.named)
+            let characters = key.text ?? named?.characters ?? (key.key.count == 1 ? key.key : "")
+            // Real navigation/function-key events carry these flags; WebKit and
+            // page code can both read them, so match what a keyboard produces.
+            var modifierFlags = Self.flags(key.modifiers)
+            if let named { modifierFlags.formUnion(named.flags) }
             guard let event = NSEvent.keyEvent(
                 with: key.phase == .down ? .keyDown : .keyUp,
                 location: .zero,
-                modifierFlags: Self.flags(key.modifiers),
+                modifierFlags: modifierFlags,
                 timestamp: ProcessInfo.processInfo.systemUptime,
                 windowNumber: window.windowNumber,
                 context: nil,
                 characters: characters,
                 charactersIgnoringModifiers: characters,
                 isARepeat: false,
-                keyCode: Self.virtualKeyCode(key: key.key, code: key.code)
+                keyCode: named?.virtualKeyCode ?? Self.virtualKeyCode(key: key.key, code: key.code)
             ) else {
                 throw BridgeError(code: BridgeError.handler, message: "couldn't build a key event")
             }
-            window.sendEvent(event)
+            send(event, to: window)
         }
 
         // MARK: - Wheel
@@ -162,6 +175,23 @@
             guard let event = NSEvent(cgEvent: scroll) else {
                 throw BridgeError(code: BridgeError.handler, message: "couldn't wrap the scroll event")
             }
+            send(event, to: window)
+        }
+
+        // MARK: - Delivery
+
+        /// Hand the event to the app's own window, first registering it so the
+        /// system alert beep can be suppressed if nothing ends up handling it.
+        ///
+        /// Registration rather than a scope around `sendEvent`: WebKit decides a
+        /// key event's fate asynchronously and re-sends the unhandled ones on a
+        /// later turn of the main loop, so there is no synchronous window to
+        /// bracket. See `DriverWindow`.
+        @MainActor
+        private func send(_ event: NSEvent, to window: NSWindow) {
+            #if SWIFT_PWA_DRIVER
+                DriverWindow.willInject(event)
+            #endif
             window.sendEvent(event)
         }
 
@@ -202,13 +232,11 @@
         /// delivers the event's *characters* (so typing text works) but won't
         /// trigger behaviour keyed on the physical key.
         private static func virtualKeyCode(key: String, code: String?) -> UInt16 {
-            let named: [String: UInt16] = [
-                "Enter": 36, "Return": 36, "Tab": 48, " ": 49, "Space": 49,
-                "Backspace": 51, "Delete": 51, "Escape": 53,
-                "ArrowLeft": 123, "ArrowRight": 124, "ArrowDown": 125, "ArrowUp": 126
-            ]
-            if let match = named[key] { return match }
-            if let code, let match = named[code] { return match }
+            // Named keys are handled by `namedKey(_:)`, which also carries the
+            // `characters` they must send; this is the character-key fallback.
+            if let named = SyntheticKeyMap.named(key) ?? code.flatMap(SyntheticKeyMap.named) {
+                return named.virtualKeyCode
+            }
 
             let letters = "asdfhgzxcv" // 0...9 in macOS virtual-key order
             let lowercased = key.lowercased()

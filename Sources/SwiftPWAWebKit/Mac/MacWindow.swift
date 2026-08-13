@@ -42,12 +42,24 @@
                 width: config.size.width,
                 height: config.size.height
             )
-            let window = NSWindow(
-                contentRect: rect,
-                styleMask: style,
-                backing: .buffered,
-                defer: false
-            )
+            // A driver build uses a window subclass that suppresses the
+            // unhandled-key alert beep for events the driver itself injected —
+            // see DriverWindow. Everything else about it is a plain NSWindow.
+            #if SWIFT_PWA_DRIVER
+                let window = DriverWindow(
+                    contentRect: rect,
+                    styleMask: style,
+                    backing: .buffered,
+                    defer: false
+                )
+            #else
+                let window = NSWindow(
+                    contentRect: rect,
+                    styleMask: style,
+                    backing: .buffered,
+                    defer: false
+                )
+            #endif
             window.title = config.title
             if let min = config.minSize { window.contentMinSize = NSSize(width: min.width, height: min.height) }
             if let max = config.maxSize { window.contentMaxSize = NSSize(width: max.width, height: max.height) }
@@ -136,6 +148,16 @@
             if on != isFs { nsWindow.toggleFullScreen(nil) }
         }
         public func isFullscreen() -> Bool { nsWindow.styleMask.contains(.fullScreen) }
+
+        /// `NSWindow.occlusionState` is AppKit's own answer to "is any of this
+        /// window actually on screen" — it accounts for being covered by another
+        /// window, being on an inactive Space, and the display being asleep, all
+        /// of which stop WebKit servicing `requestAnimationFrame`. Miniaturized
+        /// windows report `.visible` in some macOS versions, so check that too.
+        public func visibility() -> WindowVisibility {
+            if nsWindow.isMiniaturized { return .hidden }
+            return nsWindow.occlusionState.contains(.visible) ? .visible : .hidden
+        }
 
         public func close() { nsWindow.performClose(nil) }
 

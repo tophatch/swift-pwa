@@ -425,6 +425,17 @@
         }
         public func isFullscreen() -> Bool { fullscreen }
 
+        /// Minimized is the only part Win32 will tell us: there is no occlusion
+        /// query short of DWM tricks, so a window that merely *might* be covered
+        /// reports `unknown` rather than claiming to be visible.
+        public func visibility() -> WindowVisibility {
+            // `== false` rather than a bare condition or `.boolValue`: Win32's
+            // `BOOL` arrives as `WindowsBool` in some import configurations and as
+            // `Bool` in others, and comparing against a literal compiles either
+            // way. (Can't be built on a Mac, so it's CI that finds out.)
+            IsIconic(hwnd) == false ? .unknown : .hidden
+        }
+
         public func close() {
             // Sending WM_CLOSE goes through the same path as the user
             // clicking the close button: emits .willClose, destroys

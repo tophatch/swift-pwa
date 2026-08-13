@@ -102,6 +102,14 @@ swift-pwa drive info
 
 Where input isn't available, dispatch DOM events through `eval` instead and remember they're untrusted.
 
+**If the run depends on rendering, keep the window visible.** WebKit stops
+servicing `requestAnimationFrame` for a window that's covered or minimized, so a
+page that draws (or restores scroll position) in a rAF callback does nothing while
+it's hidden — and `drive shot` returns a *clean* screenshot of the stale state,
+which looks exactly like a bug in your app. Every verb warns on stderr when its
+target window isn't on screen, and `drive windows` reports it. Everything else —
+`eval`, input, screenshots of already-rendered content — is fine occluded.
+
 **On Windows, the app needs an interactive desktop.** Locally that's automatic. Over SSH it isn't: Windows OpenSSH puts you in the non-interactive services session, WebView2 won't create a controller there (`CreateCoreWebView2Controller failed: 0x80070578`), and every page-dependent verb then times out. Launch the app in the logged-on session and attach to it — see [the driver reference](../app-driver.md#per-backend-support) for the `schtasks` recipe.
 
 ---

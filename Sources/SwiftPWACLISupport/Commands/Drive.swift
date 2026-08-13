@@ -429,6 +429,40 @@ enum DriveSession {
         if let expression = options.wait {
             try client.wait(for: expression, timeout: options.timeout, window: options.window)
         }
+        warnIfWindowHidden(client, options)
+    }
+
+    /// Say so when the target window isn't on screen.
+    ///
+    /// WebKit throttles (or stops) `requestAnimationFrame` for a window the
+    /// compositor isn't showing, so a page that draws or restores state in a rAF
+    /// callback silently does nothing while it's covered — and `drive shot`
+    /// returns a clean screenshot of the stale content, which reads as an app bug
+    /// rather than an environment one. An adopter lost an hour to this twice
+    /// ("EPUB renders nothing", "reading position isn't restored"; both fine when
+    /// visible). The driver can't stop WebKit throttling, so the least it can do
+    /// is not let you debug the wrong thing.
+    ///
+    /// Best-effort and quiet on anything unexpected: this is a diagnostic, and it
+    /// must never be the reason a verb fails. Backends with no occlusion query
+    /// report `unknown`, which says nothing rather than guessing.
+    private static func warnIfWindowHidden(_ client: DriverClient, _ options: DriveOptions) {
+        guard let windows = try? client.invoke("window.list", [:]),
+              case let .array(entries) = windows
+        else { return }
+        let target = entries.first { entry in
+            guard let id = options.window else { return true } // default: the only/first window
+            return entry["id"]?.stringValue == id
+        }
+        guard target?["visibility"]?.stringValue == WindowVisibility.hidden.rawValue else { return }
+        let id = target?["id"]?.stringValue ?? "?"
+        FileHandle.standardError.writeQuietly(Data("""
+        swift-pwa: window \(id) isn't on screen (occluded, minimized, or on another Space).
+          WebKit throttles requestAnimationFrame for a window the compositor isn't showing, so a page \
+        that draws or restores state in a rAF callback will appear to do nothing — and a screenshot \
+        will capture that stale state cleanly. Bring the window to the front if the run depends on \
+        rendering.\n
+        """.utf8))
     }
 }
 

@@ -135,6 +135,31 @@
             #expect(entries[1]["position"]?["y"] == .number(34))
         }
 
+        /// A window the compositor isn't showing has its `requestAnimationFrame`
+        /// throttled, so a page that draws in a rAF callback appears to do
+        /// nothing and a screenshot captures the stale state cleanly — an adopter
+        /// lost an hour to that twice. `window.list` reports it so the CLI can
+        /// warn; `unknown` is a real answer on backends with no occlusion query.
+        @Test("window.list reports whether each window is actually on screen")
+        @MainActor
+        func windowListReportsVisibility() async throws {
+            let shown = MockWindow(id: WindowID(raw: "aaa"), title: "Shown")
+            shown.mockVisibility = .visible
+            let covered = MockWindow(id: WindowID(raw: "bbb"), title: "Covered")
+            covered.mockVisibility = .hidden
+            let unknown = MockWindow(id: WindowID(raw: "ccc"), title: "Unknown")
+            let (session, _) = makeSession(windows: [shown, covered, unknown])
+
+            let result = try await send(session, cmd: "window.list")["result"]
+            guard case let .array(entries)? = result, entries.count == 3 else {
+                Issue.record("expected three windows")
+                return
+            }
+            #expect(entries[0]["visibility"] == .string("visible"))
+            #expect(entries[1]["visibility"] == .string("hidden"))
+            #expect(entries[2]["visibility"] == .string("unknown"))
+        }
+
         // MARK: - eval
 
         @Test("eval runs the snippet in the page and parses the JSON result")

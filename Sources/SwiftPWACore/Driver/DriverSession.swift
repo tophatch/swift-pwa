@@ -159,7 +159,12 @@
                             "x": .number(window.position().x),
                             "y": .number(window.position().y)
                         ]),
-                        "fullscreen": .bool(window.isFullscreen())
+                        "fullscreen": .bool(window.isFullscreen()),
+                        // `hidden` means the compositor isn't showing this
+                        // window, which stops requestAnimationFrame — see
+                        // `Window.visibility()`. `unknown` is a real answer on
+                        // backends with no occlusion query, not a failure.
+                        "visibility": .string(window.visibility().rawValue)
                     ])
                 })
             }

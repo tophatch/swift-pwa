@@ -206,6 +206,20 @@ dispatched from `eval` can't give you, since those arrive untrusted and skip
 default behaviour. And because nothing goes near the OS-wide HID tap, the real
 cursor never moves and the window needn't be frontmost.
 
+**Named keys carry the character macOS sends for them.** `--key ArrowRight` is
+delivered with AppKit's private-use code point (U+F703) and the `function` /
+`numericPad` flags a real arrow-key event has, not with an empty `characters`
+string — an empty one is not "no character" to WebKit, it's a *dead key*, and
+until 0.9.11 every named key (arrows, `Enter`, `Tab`, `Escape`, `Backspace`)
+arrived in the page as `key: "Dead"` while `code` and `keyCode` looked right.
+`Backspace` and `Delete` are also distinct keys now, as they are on a keyboard.
+
+**No alert beep.** A `keyDown` nothing in the page handles ends at AppKit's
+`noResponder`, which beeps — audibly, on your machine, once per keystroke, which
+rather undercuts driving an app in the background. A driver build recognises the
+events it injected and suppresses that feedback for those only; a key *you* press
+that nothing handles still beeps.
+
 > **macOS: driver builds accept first mouse.** Making that last part true takes
 > one deliberate difference from a shipped build. AppKit's click-through rule is
 > that a `mouseDown` landing in a window which isn't key gets consumed as "click
@@ -258,6 +272,25 @@ capture comes from the webview's own compositor, so it is:
 
 Verified by driving a window moved to `(-984, -768)` — almost entirely off the
 display — and getting back a full, correctly rendered 1024×768 viewport.
+
+> **A clean screenshot of an occluded window can still be a stale one.** The
+> capture is complete, but WebKit **throttles `requestAnimationFrame` for a window
+> the compositor isn't showing** — measured at 1 frame in 3 seconds while
+> minimized, against 183 when visible. So a page that draws, or restores its
+> state, inside a rAF callback does nothing while it's covered, and the
+> screenshot shows that stale content perfectly sharply. It reads as an app bug;
+> it isn't one. An adopter lost an hour to it twice ("EPUB renders nothing",
+> "reading position isn't restored" — both fine when the window was visible).
+>
+> `drive windows` reports each window's `visibility` (`visible` / `hidden` /
+> `unknown`), and **every verb warns on stderr** when its target window isn't on
+> screen. If a run depends on rendering, bring the window to the front — or move
+> the work off rAF, which is the more robust design anyway.
+>
+> Who can answer: **macOS** properly (`NSWindow.occlusionState`, which also
+> covers another Space and a sleeping display); **Windows** detects minimized
+> only; **Linux** and **Android** report `unknown`, because X11/Wayland expose no
+> occlusion query and a backend answering `visible` there would be guessing.
 
 Coordinates in `window.setSize` / `window.setPosition` are read back rather than
 echoed, because both are best-effort: macOS clamps a window to keep part of it

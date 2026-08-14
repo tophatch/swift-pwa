@@ -133,6 +133,16 @@ jobs:
           "$GITHUB_WORKSPACE/.build/debug/swift-pwa" init SimDrive --path app
           cd app
           sed -i '' -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
+      # `simctl list runtimes -j` is the query that deadlocked `Shell.capture`
+      # (a pipe drained only after `waitUntilExit`, so anything over 64 KiB
+      # wedged forever). These byte counts are the evidence for whether a future
+      # stall here is the same shape — the shell drains properly, so measuring
+      # is safe even when the CLI wasn't.
+      - name: Record the runner's simctl surface
+        run: |
+          xcrun simctl list runtimes
+          echo "runtimes -j:          $(xcrun simctl list runtimes -j | wc -c) bytes"
+          echo "devices available -j: $(xcrun simctl list devices available -j | wc -c) bytes"
       - name: Drive it on the iOS Simulator
         working-directory: /tmp/sim-drive/app
         run: |

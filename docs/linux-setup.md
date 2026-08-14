@@ -138,6 +138,18 @@ sudo wget -O /usr/local/bin/linuxdeploy-plugin-appimage \
 sudo chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-appimage
 ```
 
+**FUSE isn't required.** Both tools are AppImages, which normally self-mount over
+FUSE — so they'd fail outright in a container or on a CI runner that has no
+`/dev/fuse`. `swift-pwa build --target linux` runs them with
+`APPIMAGE_EXTRACT_AND_RUN=1` instead, which unpacks each to a temp directory and
+runs it from there. That's not only for portability: on the FUSE path the build
+**never returns** — `linuxdeploy` finishes, the `.AppImage` is complete and
+correct on disk, and the CLI then waits forever on a child that has exited but
+whose mount daemon lingers (measured at 84 minutes before being killed, on two
+different machines). Extract-and-run also happens to be faster end to end
+(26 seconds against never finishing). Nothing to configure — it's just worth
+knowing why you'll see `appimage_extracted_…` paths in the build output.
+
 ## 4. Clone and build
 
 ```bash

@@ -657,7 +657,12 @@ enum Templates {
                   curl -fsSL "\(cliBase)/$SWIFT_PWA_CLI_VERSION/swift-pwa-linux-x86_64" -o /usr/local/bin/swift-pwa
                   chmod +x /usr/local/bin/swift-pwa
               - name: Build the AppImage
-                # linuxdeploy needs a FUSE-less extraction on CI runners.
+                # linuxdeploy is itself an AppImage and self-mounts over FUSE,
+                # which a runner doesn't have. The CLI sets this itself now — and
+                # everywhere, not just on CI, because the FUSE path doesn't fail,
+                # it hangs forever with the finished AppImage already on disk.
+                # Kept here anyway: this workflow installs a *pinned* released
+                # CLI, which may predate that fix.
                 run: APPIMAGE_EXTRACT_AND_RUN=1 swift-pwa build --target linux
               - uses: actions/upload-artifact@v7
                 with:

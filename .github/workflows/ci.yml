@@ -106,13 +106,89 @@ jobs:
           # which is noise in the log of the next thing that goes wrong.
           pkill -x BundleSmoke || true
 
+  bundle-smoke-linux:
+    # The same question on Linux, and it went unasked for far longer: the two
+    # GTK jobs compile the backend and run tests, but **nothing in CI had ever
+    # bundled an AppImage**. Both of the bugs that shipped would have failed
+    # here — an AppImage that read `bridge.js` out of the build machine's
+    # `.build/` (0.9.10), and `build --target linux` never returning at all,
+    # because `linuxdeploy` self-mounts over FUSE and left us waiting on a
+    # zombie with the finished artifact already on disk.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          # Same floor as the GTK jobs — see the note there.
+          swift-version: "6.2"
+      - name: Install GTK3 + WebKitGTK 4.1 + libayatana-appindicator3
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libsecret-1-dev \
+            xvfb
+      - name: Install linuxdeploy + the appimage plugin
+        # The same two URLs docs/linux-setup.md tells adopters to use. Both are
+        # themselves AppImages, and a hosted runner has no FUSE — which is fine,
+        # because the CLI runs them with APPIMAGE_EXTRACT_AND_RUN=1 (see
+        # AppImageBundler). If that ever regresses, this job hangs and its
+        # timeout says so.
+        run: |
+          sudo wget -q -O /usr/local/bin/linuxdeploy \
+            https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage
+          sudo wget -q -O /usr/local/bin/linuxdeploy-plugin-appimage \
+            https://github.com/linuxdeploy/linuxdeploy-plugin-appimage/releases/download/continuous/linuxdeploy-plugin-appimage-x86_64.AppImage
+          sudo chmod +x /usr/local/bin/linuxdeploy /usr/local/bin/linuxdeploy-plugin-appimage
+      - name: Build the CLI
+        run: swift build --product swift-pwa
+      - name: Scaffold an app against this checkout
+        run: |
+          mkdir -p /tmp/bundle-smoke
+          cd /tmp/bundle-smoke
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" init BundleSmoke --path app
+          cd app
+          # The scaffold depends on the released swift-pwa; point it at the
+          # commit under test. (GNU sed — no empty argument after -i.)
+          sed -i -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
+          grep -n 'package(path' Package.swift
+      - name: Bundle a debug AppImage (debug so the driver is compiled in)
+        working-directory: /tmp/bundle-smoke/app
+        run: "$GITHUB_WORKSPACE/.build/debug/swift-pwa build --target linux --configuration debug"
+      - name: Delete .build, then drive the relocated AppImage
+        working-directory: /tmp/bundle-smoke/app
+        run: |
+          set -euo pipefail
+          rm -rf .build
+          mv build/linux/BundleSmoke-x86_64.AppImage /tmp/Relocated.AppImage
+          # Extract-and-run for the same no-FUSE reason; a display because the
+          # app is a real GTK app. Both are about the runner, not the bundle:
+          # what's under test is that the AppImage carries everything it needs.
+          cd /tmp
+          APPIMAGE_EXTRACT_AND_RUN=1 SWIFT_PWA_DRIVE=0 \
+            xvfb-run -a /tmp/Relocated.AppImage > /tmp/app.log 2>&1 &
+          for _ in $(seq 1 60); do grep -q "driver listening" /tmp/app.log && break; sleep 1; done
+          cat /tmp/app.log
+          PORT=$(sed -n 's/.*port=\([0-9]*\).*/\1/p' /tmp/app.log | head -1)
+          TOKEN=$(sed -n 's/.*token=\([0-9a-f]*\).*/\1/p' /tmp/app.log | head -1)
+          test -n "$PORT" || (echo "the relocated AppImage never announced a driver port — it died on launch" && exit 1)
+          # "object" only if bridge.js was found and injected.
+          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            "typeof __SWIFT_PWA__")
+          echo "$OUT"
+          echo "$OUT" | grep -q object
+          pkill -x BundleSmoke || true
+
   # `drive --simulator`, on demand (workflow_dispatch) or weekly — NOT on every
-  # PR. Twice in a row the xcodebuild inside it ran past 28 minutes on a runner
-  # and had to be killed, while the *same scaffolded app* bundles for macOS on
-  # the same runner in 45 seconds and the same simulator run takes ~16s on a
-  # local Mac with every simulator shut down. Until that's understood it isn't
-  # allowed to gate anything; the verb itself is verified by hand (see
-  # docs/app-driver.md) and every simctl call is bounded by the CLI.
+  # PR. Not because it's broken any more (the stall was an undrained pipe in the
+  # CLI, fixed, and it passes in ~5 minutes now) but because it isn't where the
+  # risk is: an iPad *device* is what we actually need to be sure about, and a
+  # simulator can't stand in for one. So it stays a scheduled canary, and the
+  # per-PR gate is the two `bundle-smoke` jobs above.
   #
   # Note the shape of the run: stdout goes to a file and stderr flows straight to
   # the job log, so a killed job still shows which phase it reached. Capturing

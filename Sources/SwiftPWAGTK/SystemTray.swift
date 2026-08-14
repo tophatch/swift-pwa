@@ -45,6 +45,25 @@
         /// from one runs into Swift 6's "non-Sendable property in
         /// nonisolated deinit" rule for nothing.)
         public init() {
+            // Inert when there's nothing to put an icon on. Two cases, one of
+            // which was fatal:
+            //
+            // * **No display.** `app_indicator_new` builds a `GtkMenu`, and GTK
+            //   *aborts the process* rather than returning an error when there's
+            //   no display connection ("Can't create a GtkStyleContext without a
+            //   display connection"). `swift-pwa build --target linux` runs the
+            //   app's own `configure` headlessly to dump its command catalog, so
+            //   **every app that both declared `agent.expose` and built a tray
+            //   failed to build for Linux at all** — and `xvfb-run` didn't help,
+            //   because the dump happens before `gtk_init`.
+            // * **A catalog dump.** Even where it can't crash (the GTK4 backend
+            //   talks to D-Bus, not GTK), registering a status item would put an
+            //   icon in the user's panel as a side effect of running a *build*.
+            //
+            // Gating here rather than in `TrayPlugin` because an app constructs
+            // `SystemTray()` itself — that's the documented way to install the
+            // agent indicator — so a plugin-level guard would miss it.
+            guard !HeadlessDescribe.isDumping, gdk_display_get_default() != nil else { return }
             let opaque = Unmanaged.passRetained(self).toOpaque()
             trayPtr = swiftpwa_tray_new(trayEventTrampoline, opaque)
         }

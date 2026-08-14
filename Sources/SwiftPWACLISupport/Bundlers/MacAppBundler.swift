@@ -364,14 +364,17 @@ enum Shell {
         return merged
     }
 
-    /// Run a short command and capture its stdout. Used for `which` and
-    /// `swift package describe`.
+    /// Run a command and capture its stdout. Used for `which`,
+    /// `swift package describe`, and the various `-j` / `-json` tool queries.
+    ///
+    /// Output size is unbounded — see the drain comment in the body for why the
+    /// read has to happen before the wait, and what it cost to learn that.
     ///
     /// `timeout` (seconds) bounds the run: if the process is still alive
-    /// after the deadline it's terminated and the call throws. Used by
-    /// `doctor`, whose whole job is probing toolchains that might be
-    /// wedged (e.g. an `xcrun` stuck on Xcode first-launch) — a probe must
-    /// never hang the checker.
+    /// after the deadline it's terminated and the call throws
+    /// `BundlerError.timedOut`. Used by `doctor`, whose whole job is probing
+    /// toolchains that might be wedged (e.g. an `xcrun` stuck on Xcode
+    /// first-launch) — a probe must never hang the checker.
     static func capture(
         _ executable: String, _ arguments: [String],
         cwd: URL? = nil, timeout: TimeInterval? = nil, discardStderr: Bool = false
@@ -387,13 +390,29 @@ enum Shell {
         // banners from a half-configured toolchain).
         task.standardError = discardStderr ? FileHandle.nullDevice : FileHandle.standardError
         try task.run()
+        let timedOut = TimeoutFlag()
         if let timeout {
             DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if task.isRunning { task.terminate() }
+                if task.isRunning {
+                    timedOut.set()
+                    task.terminate()
+                }
             }
         }
-        task.waitUntilExit()
+        // Drain to EOF *before* waiting for exit. The other order deadlocks as
+        // soon as the child writes more than the pipe buffer holds (64 KiB on
+        // macOS): the child blocks in `write`, we block in `waitUntilExit`, and
+        // neither ever moves. `xcrun simctl list runtimes -j` crosses that line
+        // on a machine with several runtimes installed — which is how a CI job
+        // sat for 39 minutes inside what read like a slow iOS build. EOF arrives
+        // when the child closes its stdout, so `waitUntilExit` below returns
+        // immediately; a child that wedges *without* closing it is still bounded
+        // by the timeout above, whose `terminate` produces the EOF.
         let outData = stdout.fileHandleForReading.readDataToEndOfFile()
+        task.waitUntilExit()
+        if timedOut.isSet, let timeout {
+            throw BundlerError.timedOut(([executable] + arguments).joined(separator: " "), seconds: timeout)
+        }
         if task.terminationStatus != 0 {
             throw BundlerError.shell(
                 task.terminationStatus,

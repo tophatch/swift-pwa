@@ -40,6 +40,12 @@
         /// is the design rather than a bug (and it keeps `deinit` off the
         /// non-Sendable-property path Swift 6 flags).
         public init() {
+            // A catalog dump has no UI: `swift-pwa build` runs the app's own
+            // `configure` headlessly, and registering a status item there would
+            // put an icon in the user's panel as a side effect of a *build*.
+            // This backend's tray is D-Bus only so it can't crash the way the
+            // GTK3 one did (see the note there), but it's the same wrong thing.
+            guard !HeadlessDescribe.isDumping else { return }
             let opaque = Unmanaged.passRetained(self).toOpaque()
             trayPtr = swiftpwa_tray_new(trayEventTrampoline, opaque)
         }

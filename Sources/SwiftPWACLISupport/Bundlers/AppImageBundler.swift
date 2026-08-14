@@ -150,7 +150,20 @@ struct AppImageBundler {
             print("swift-pwa: bundling libonnxruntime.so.1 into the AppImage (ai.local_onnx_runtime)")
         }
         args += ["--output", "appimage"]
-        try await Shell.run("/usr/bin/env", args, cwd: outputDir)
+        // `linuxdeploy` and its plugins are themselves AppImages, and by default
+        // each one self-mounts over FUSE. That path **never returns here**: the
+        // AppImage finishes its work — the `.AppImage` is complete and correct on
+        // disk — and then `build --target linux` sits there forever, our direct
+        // child an unreaped zombie while the runtime's mount daemon lingers.
+        // Measured on a clean box with the shipped v0.9.11 binary: still waiting
+        // at 84 minutes. Extract-and-run skips FUSE entirely, and the same build
+        // completes in **26 seconds** — so this isn't a workaround with a cost,
+        // it's faster as well. It's also the mode AppImage documents for
+        // automation, where FUSE often isn't available at all.
+        try await Shell.run(
+            "/usr/bin/env", args, cwd: outputDir,
+            envOverrides: ["APPIMAGE_EXTRACT_AND_RUN": "1"]
+        )
 
         // linuxdeploy emits <Name>-<arch>.AppImage in cwd.
         let candidates = (try? FileManager.default.contentsOfDirectory(atPath: outputDir.path)) ?? []

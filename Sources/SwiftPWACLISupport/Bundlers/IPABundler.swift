@@ -42,6 +42,12 @@ struct IPABundler {
         "CODE_SIGNING_ALLOWED=NO"
     ]
 
+    /// Bound for the pre-flight `simctl` query below. Not a performance budget —
+    /// `simctl` doesn't reliably fail, it wedges, and this one runs before the
+    /// build prints anything, so an unbounded hang here looks exactly like a
+    /// slow compile.
+    static let simctlProbeTimeout: TimeInterval = 120
+
     func build() async throws -> URL {
         if simulator {
             try await Self.ensureSimulatorRuntimeInstalled()
@@ -211,11 +217,35 @@ struct IPABundler {
     /// Settings → Platforms or `xcodebuild -downloadPlatform`.
     private static func ensureSimulatorRuntimeInstalled() async throws {
         let json: String
+        // Announced, because it runs *before* the build says anything: when this
+        // step hung, the last line in the log was the caller's "building for the
+        // simulator", which read as a slow compile for three CI jobs running.
+        //
+        // Straight to stderr rather than `print`, for two reasons that both
+        // matter here: stdout is block-buffered when it isn't a terminal, so a
+        // line announcing a step that might never return would be lost with the
+        // buffer when the job is killed — and `drive` redirects stdout during
+        // this phase, which puts a buffered line in the wrong place in the log.
+        FileHandle.standardError.writeQuietly(Data("→ checking the installed iOS Simulator runtimes\n".utf8))
         do {
             json = try await Shell.capture(
                 "/usr/bin/env",
-                ["xcrun", "simctl", "list", "runtimes", "-j"]
+                ["xcrun", "simctl", "list", "runtimes", "-j"],
+                timeout: simctlProbeTimeout
             )
+        } catch let error as BundlerError {
+            // A *diagnostic* must never be able to block the build. This check
+            // exists only to turn xcodebuild's opaque "Unable to find a
+            // destination" into a sentence naming the fix, so if `simctl` won't
+            // answer we say so and let xcodebuild speak for itself.
+            if case .timedOut = error {
+                print(
+                    "note: `xcrun simctl list runtimes` didn't answer within "
+                        + "\(Int(simctlProbeTimeout))s; skipping the runtime pre-flight."
+                )
+                return
+            }
+            throw error
         } catch {
             // simctl missing entirely → xcrun's own error is informative; rethrow.
             throw error

@@ -63,7 +63,8 @@ typedef struct {
     /// Link state.
     char *device_path;
     guint device_signal;
-    guint characteristic_signal;
+    /// Characteristic object paths with notifications turned on.
+    GList *notifying;
     int reported_ready;
 } swiftpwa_ble_session;
 
@@ -152,9 +153,7 @@ static void swiftpwa_ble_session_free(swiftpwa_ble_session *session) {
     if (session->added_signal) g_dbus_connection_signal_unsubscribe(session->bus, session->added_signal);
     if (session->changed_signal) g_dbus_connection_signal_unsubscribe(session->bus, session->changed_signal);
     if (session->device_signal) g_dbus_connection_signal_unsubscribe(session->bus, session->device_signal);
-    if (session->characteristic_signal) {
-        g_dbus_connection_signal_unsubscribe(session->bus, session->characteristic_signal);
-    }
+    g_list_free_full(session->notifying, g_free);
     if (session->loop) {
         g_main_loop_quit(session->loop);
         if (session->thread) g_thread_join(session->thread);
@@ -713,7 +712,8 @@ static void swiftpwa_ble_link_changed(
             }
         }
     } else if (g_strcmp0(changed_interface, SWIFTPWA_BLUEZ_CHARACTERISTIC) == 0 &&
-               g_str_has_prefix(object_path, session->device_path)) {
+               g_str_has_prefix(object_path, session->device_path) &&
+               g_list_find_custom(session->notifying, object_path, (GCompareFunc)g_strcmp0)) {
         while (g_variant_iter_loop(changed, "{&sv}", &key, &value)) {
             if (g_strcmp0(key, "Value") != 0) continue;
             gsize length = 0;
@@ -955,16 +955,20 @@ static int swiftpwa_ble_set_notify(
         if (error_out) *error_out = g_strdup_printf("this peripheral has no characteristic %s", uuid);
         return 0;
     }
-    if (enabled && !session->characteristic_signal) {
-        // Subscribed lazily: a link that never notifies shouldn't be
-        // woken for every property change on the bus.
-        g_main_context_push_thread_default(session->context);
-        session->characteristic_signal = g_dbus_connection_signal_subscribe(
-            session->bus, SWIFTPWA_BLUEZ, "org.freedesktop.DBus.Properties",
-            "PropertiesChanged", NULL, NULL, G_DBUS_SIGNAL_FLAGS_NONE,
-            swiftpwa_ble_link_changed, session, NULL
-        );
-        g_main_context_pop_thread_default(session->context);
+    // Remember what's subscribed. BlueZ raises `Value` PropertiesChanged for
+    // a `ReadValue` too, so without this a read comes back to the page as a
+    // notification it never asked for — which then looks like the peripheral
+    // pushing data on its own.
+    if (enabled) {
+        if (!g_list_find_custom(session->notifying, path, (GCompareFunc)g_strcmp0)) {
+            session->notifying = g_list_prepend(session->notifying, g_strdup(path));
+        }
+    } else {
+        GList *entry = g_list_find_custom(session->notifying, path, (GCompareFunc)g_strcmp0);
+        if (entry) {
+            g_free(entry->data);
+            session->notifying = g_list_delete_link(session->notifying, entry);
+        }
     }
     int ok = swiftpwa_ble_call(
         session, path, SWIFTPWA_BLUEZ_CHARACTERISTIC,

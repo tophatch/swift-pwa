@@ -12,21 +12,21 @@
 #                  touched, with a diagnostic on stderr naming the fix
 #   scan           whatever is advertising nearby, so the D-Bus plumbing is
 #                  exercised against real advertisements
-#   connect        only when --address is given, since a link needs a
-#                  peripheral in radio range and this box may have none
+#   connect        scan → connect → subscribe → write → read, against
+#                  whichever swift-pwa test peripheral is in radio range
 #
-# Run `Scripts/ble-test-peripheral.py` on a second machine within a few metres
-# to have something to connect to, then pass its address here.
+# Needs one of Scripts/ble-test-peripheral.{swift,py} or the Android fixture
+# running within a few metres. Prefer an LE-only one (the Android fixture): a
+# Mac or another Linux box is dual-mode, and BlueZ tries classic Bluetooth
+# first for those and fails `br-connection-key-missing`.
 #
 # Usage: verify-linux-ble.sh [--gtk4] [--toolchain <ver>] [--repo <dir>]
-#                            [--address AA:BB:CC:DD:EE:FF]
 
 set -euo pipefail
 
 GTK4=0
 TOOLCHAIN=""
 REPO="$HOME/swift-pwa"
-ADDRESS=""
 WORK="${TMPDIR:-/tmp}/blecheck"
 
 while [[ $# -gt 0 ]]; do
@@ -34,7 +34,6 @@ while [[ $# -gt 0 ]]; do
         --gtk4) GTK4=1; shift ;;
         --toolchain) TOOLCHAIN="$2"; shift 2 ;;
         --repo) REPO="$2"; shift 2 ;;
-        --address) ADDRESS="$2"; shift 2 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
 done
@@ -110,30 +109,38 @@ PY
         }); }, 8000);
     })" || true
 
-    if [[ -n "$ADDRESS" && "$name" != "undeclared" ]]; then
-        echo "── ble.connect → subscribe → write → read  ($ADDRESS)"
+    if [[ "$name" == "declared" ]]; then
+        echo "── ble.connect → subscribe → write → read  (finds the fixture itself)"
         drive "new Promise((resolve) => {
             const log = [];
-            const link = __SWIFT_PWA__.session('ble.connect', { id: '$ADDRESS', timeoutMs: 25000 }, {
-                onChunk: (e) => {
-                    if (e.kind === 'ready') {
-                        log.push({ ready: (e.services || []).length + ' services' });
-                        link.push({ kind: 'subscribe', characteristic: '$NOTIFY', token: 1 });
-                    } else if (e.kind === 'ack' && e.token === 1) {
-                        log.push({ note: 'notifications on' });
-                        link.push({ kind: 'write', characteristic: '$WRITE', valueBase64: btoa('ping'), withResponse: true, token: 2 });
-                    } else if (e.kind === 'ack' && e.token === 2) {
-                        log.push({ note: 'write acknowledged' });
-                        link.push({ kind: 'read', characteristic: '$READ', token: 3 });
-                    } else if (e.kind === 'read') {
-                        log.push({ read: atob(e.value) });
-                    } else if (e.kind === 'notify') {
-                        log.push({ notify: atob(e.value) });
-                    } else { log.push(e); }
-                },
-                onError: (err) => { log.push({ streamError: String((err && err.message) || err) }); resolve(log); },
-            });
-            setTimeout(() => { link.close(); resolve(log); }, 20000);
+            let found = null;
+            const stop = __SWIFT_PWA__.subscribe('ble.scan', { services: ['$SERVICE'] },
+                (p) => { if (!found) found = p; });
+            setTimeout(() => {
+                stop();
+                if (!found) { resolve({ error: 'no swift-pwa test peripheral in range — start one of Scripts/ble-test-peripheral.*' }); return; }
+                log.push({ scanned: found.name, rssi: found.rssi });
+                const link = __SWIFT_PWA__.session('ble.connect', { id: found.id, timeoutMs: 25000 }, {
+                    onChunk: (e) => {
+                        if (e.kind === 'ready') {
+                            log.push({ ready: (e.services || []).length + ' services' });
+                            link.push({ kind: 'subscribe', characteristic: '$NOTIFY', token: 1 });
+                        } else if (e.kind === 'ack' && e.token === 1) {
+                            log.push({ note: 'notifications on' });
+                            link.push({ kind: 'write', characteristic: '$WRITE', valueBase64: btoa('ping'), withResponse: true, token: 2 });
+                        } else if (e.kind === 'ack' && e.token === 2) {
+                            log.push({ note: 'write acknowledged' });
+                            link.push({ kind: 'read', characteristic: '$READ', token: 3 });
+                        } else if (e.kind === 'read') {
+                            log.push({ read: atob(e.value) });
+                        } else if (e.kind === 'notify') {
+                            log.push({ notify: atob(e.value) });
+                        } else { log.push(e); }
+                    },
+                    onError: (err) => { log.push({ streamError: String((err && err.message) || err) }); resolve(log); },
+                });
+                setTimeout(() => { link.close(); resolve(log); }, 16000);
+            }, 6000);
         })" || true
     fi
 

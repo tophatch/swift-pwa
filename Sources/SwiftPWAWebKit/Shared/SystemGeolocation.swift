@@ -86,16 +86,27 @@
         @MainActor
         private func startOneShot(id: UUID, request: GeoRequest) {
             let manager = ensureManager(request)
-            guard authorize(manager) else {
+            switch authorize(manager) {
+            case .refused:
                 finishOneShot(id: id, with: .failure(GeoError.denied(
                     "location services are off, or this app isn't allowed to use them"
                 )))
                 return
+            case .undecided:
+                // The prompt is up. Do *not* ask for a location yet: on macOS a
+                // `requestLocation` while authorization is still `.notDetermined`
+                // fails immediately with `kCLErrorDenied`, which reads as "the
+                // user said no" about a dialog they haven't answered — and the
+                // app then genuinely lands in Location Services switched off.
+                // `locationManagerDidChangeAuthorization` resumes this once the
+                // user decides. The timeout below still bounds the wait.
+                break
+            case .authorized:
+                // `requestLocation` delivers one fix and stops by itself, which
+                // is exactly the one-shot contract — and cheaper than starting
+                // updates and remembering to stop them.
+                manager.requestLocation()
             }
-            // `requestLocation` delivers one fix and stops by itself, which is
-            // exactly the one-shot contract — and cheaper than starting updates
-            // and remembering to stop them.
-            manager.requestLocation()
 
             if let timeout = request.timeoutSeconds {
                 Task { [weak self] in
@@ -110,7 +121,8 @@
         @MainActor
         private func startWatching(_ request: GeoRequest) {
             let manager = ensureManager(request)
-            guard authorize(manager) else {
+            switch authorize(manager) {
+            case .refused:
                 let denied = GeoError.denied(
                     "location services are off, or this app isn't allowed to use them"
                 ).bridgeError
@@ -120,26 +132,48 @@
                     return all
                 }
                 for continuation in continuations { continuation.finish(throwing: denied) }
-                return
+            case .undecided:
+                break // Resumed by `locationManagerDidChangeAuthorization`.
+            case .authorized:
+                manager.startUpdatingLocation()
             }
-            manager.startUpdatingLocation()
         }
 
-        /// Ask for authorization if it hasn't been decided, and report whether
-        /// proceeding is worthwhile. `notDetermined` is treated as worth trying:
-        /// the request is what raises the prompt, and the delegate callback
-        /// delivers the answer.
+        private enum Authorization {
+            /// Granted (or provisionally so) — start asking for locations.
+            case authorized
+            /// The prompt is up and the user hasn't answered. Anything asked of
+            /// CoreLocation in this state fails as a *denial*, so the only
+            /// correct move is to wait for the delegate.
+            case undecided
+            /// Settled, and the answer was no.
+            case refused
+        }
+
+        /// Raise the prompt if the question hasn't been asked, and report which
+        /// of the three states applies.
         @MainActor
-        private func authorize(_ manager: CLLocationManager) -> Bool {
+        private func authorize(_ manager: CLLocationManager) -> Authorization {
             switch manager.authorizationStatus {
             case .notDetermined:
                 manager.requestWhenInUseAuthorization()
-                return true
+                return .undecided
             case .restricted, .denied:
-                return false
+                return .refused
             default:
-                return true
+                return .authorized
             }
+        }
+
+        /// Start whatever was waiting on the user's answer.
+        @MainActor
+        private func resumeAfterAuthorization() {
+            guard let manager = lock.withLock({ manager }) else { return }
+            let (hasOneShots, hasWatchers) = lock.withLock {
+                (!oneShots.isEmpty, !watchers.isEmpty)
+            }
+            if hasOneShots { manager.requestLocation() }
+            if hasWatchers { manager.startUpdatingLocation() }
         }
 
         @MainActor
@@ -228,14 +262,20 @@
         }
 
         public func locationManagerDidChangeAuthorization(_ manager: CLLocationManager) {
-            // The answer to a prompt raised by `authorize`. A refusal has to be
-            // delivered, or a `geo.current` awaiting consent hangs until its
+            // The answer to a prompt raised by `authorize`, and the only place a
+            // request parked as `.undecided` can be resumed. A refusal has to be
+            // delivered too, or a `geo.current` awaiting consent hangs until its
             // timeout for a question the user already answered.
             switch manager.authorizationStatus {
             case .denied, .restricted:
                 deliver(GeoError.denied("the user denied location access"))
+            case .notDetermined:
+                return // Still waiting on the prompt.
             default:
-                return
+                // CoreLocation delivers on the run loop the manager was created
+                // on, and `ensureManager` only ever runs on the main actor — so
+                // this callback is already there.
+                MainActor.assumeIsolated { resumeAfterAuthorization() }
             }
         }
     }

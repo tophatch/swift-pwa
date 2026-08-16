@@ -604,8 +604,10 @@
         // has no opinion about it.
         default: nil
         }
-        guard let wanted else { return 1 }
-        return policy.decide(all: wanted, origin: origin) == .allow ? 1 : 0
+        guard let wanted else { RuntimeDiagnostics.emit("TEMPPROBE kind=\(kind) unmodelled -> allow"); return 1 }
+        let decision = policy.decide(all: wanted, origin: origin)
+        RuntimeDiagnostics.emit("TEMPPROBE kind=\(kind) wanted=\(wanted) origin=\(origin) decision=\(decision)")
+        return decision == .allow ? 1 : 0
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_set_web_message_handler`.

@@ -123,6 +123,10 @@ struct ViewExtension {
 
     swiftpwa_w2_message_cb message_cb = nullptr;
     void *message_user = nullptr;
+
+    swiftpwa_w2_permission_cb permission_cb = nullptr;
+    void *permission_user = nullptr;
+    bool permission_subscribed = false;
 };
 
 // We keep the per-view extension as a side-table keyed by the
@@ -511,6 +515,52 @@ extern "C" void swiftpwa_w2_view_set_web_message_handler(
         view->owner->web_message_token = token;
         view->owner->web_message_subscribed = true;
     }
+}
+
+extern "C" void swiftpwa_w2_view_set_permission_handler(
+    swiftpwa_w2_view *view,
+    swiftpwa_w2_permission_cb cb,
+    void *user) {
+    if (!view || !view->raw) return;
+    ViewExtension &ext = get_or_create_extension(view->raw);
+    {
+        std::lock_guard<std::mutex> lock(ext.mu);
+        ext.permission_cb = cb;
+        ext.permission_user = user;
+        if (ext.permission_subscribed) return;
+        ext.permission_subscribed = true;
+    }
+
+    EventRegistrationToken token{};
+    view->raw->add_PermissionRequested(
+        Callback<ICoreWebView2PermissionRequestedEventHandler>(
+            [view](ICoreWebView2 *, ICoreWebView2PermissionRequestedEventArgs *args) -> HRESULT {
+                COREWEBVIEW2_PERMISSION_KIND kind = COREWEBVIEW2_PERMISSION_KIND_UNKNOWN_PERMISSION;
+                args->get_PermissionKind(&kind);
+                wil::unique_cotaskmem_string origin;
+                args->get_Uri(&origin);
+                std::string utf8 = origin ? wide_to_utf8(origin.get()) : std::string();
+
+                ViewExtension &ext = get_or_create_extension(view->raw);
+                swiftpwa_w2_permission_cb cb_local = nullptr;
+                void *user_local = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(ext.mu);
+                    cb_local = ext.permission_cb;
+                    user_local = ext.permission_user;
+                }
+                if (!cb_local) return S_OK;
+
+                if (cb_local(static_cast<int>(kind), utf8.c_str(), user_local)) {
+                    // Left at DEFAULT so WebView2 asks the user — clearing the
+                    // app's gate earns the right to ask, not the answer.
+                    args->put_State(COREWEBVIEW2_PERMISSION_STATE_DEFAULT);
+                } else {
+                    args->put_State(COREWEBVIEW2_PERMISSION_STATE_DENY);
+                }
+                return S_OK;
+            }).Get(),
+        &token);
 }
 
 extern "C" void swiftpwa_w2_view_map_virtual_host(

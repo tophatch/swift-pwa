@@ -131,7 +131,8 @@
                 parent: hwnd,
                 content: config.content,
                 backgroundColor: config.backgroundColor.flatMap(RGBColor.init(hex:)),
-                sharedProvider: app.assetProvider
+                sharedProvider: app.assetProvider,
+                permissions: app.permissions
             )
             self.adapter = adapter
             webView = adapter

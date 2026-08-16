@@ -551,6 +551,17 @@ extern "C" void swiftpwa_w2_view_set_permission_handler(
                 }
                 if (!cb_local) return S_OK;
 
+                // The app's veto is *revocable*, so this decision must not be
+                // written into the WebView2 profile. Measured: without this,
+                // one refusal is remembered per-origin and WebView2 stops
+                // raising the event at all — so turning the app's switch back
+                // on leaves capture blocked forever, with nothing left to
+                // consult. `SavesInProfile` is WebView2's own answer to that.
+                ComPtr<ICoreWebView2PermissionRequestedEventArgs2> args2;
+                if (SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&args2))) && args2) {
+                    args2->put_SavesInProfile(FALSE);
+                }
+
                 if (cb_local(static_cast<int>(kind), utf8.c_str(), user_local)) {
                     // Left at DEFAULT so WebView2 asks the user — clearing the
                     // app's gate earns the right to ask, not the answer.

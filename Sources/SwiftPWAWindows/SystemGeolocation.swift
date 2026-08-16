@@ -28,8 +28,12 @@
                     continuation.resume(with: result)
                 }).toOpaque()
                 // The shim's one-shot blocks on the WinRT operation, so it runs
-                // off the calling task's thread rather than stalling it.
+                // off the calling task's thread rather than stalling it. The
+                // box is laundered through `UInt` because a raw pointer isn't
+                // `Sendable` and this closure escapes.
+                let boxBits = UInt(bitPattern: box)
                 DispatchQueue.global().async {
+                    guard let box = UnsafeMutableRawPointer(bitPattern: boxBits) else { return }
                     swiftpwa_wingeo_get_position(high, timeout, maximumAge, winGeoTrampoline, box)
                     Unmanaged<WinGeoBox>.fromOpaque(box).release()
                 }
@@ -54,10 +58,12 @@
                 }
                 // Laundered through `UInt` for strict concurrency — a raw
                 // pointer isn't `Sendable` and this closure escapes.
+                // The session is an opaque struct declared only in the header,
+                // so it imports as `OpaquePointer` rather than a typed pointer.
                 let sessionBits = UInt(bitPattern: session)
                 let boxBits = UInt(bitPattern: box)
                 continuation.onTermination = { _ in
-                    if let session = UnsafeMutablePointer<swiftpwa_wingeo_session>(bitPattern: sessionBits) {
+                    if let session = OpaquePointer(bitPattern: sessionBits) {
                         swiftpwa_wingeo_stop(session)
                     }
                     if let box = UnsafeMutableRawPointer(bitPattern: boxBits) {

@@ -157,6 +157,46 @@ ignored where the platform already happens to work. See
 [the proposal](proposals/permissions-bridge.md) for the measurements behind each
 cell — every one was taken on real hardware.
 
+## Location: `geo.*`
+
+Location is the one capability the permission work can't reach through the web
+API. On **macOS**, WKWebView gives an embedder no public way to grant
+`navigator.geolocation`, so a page there stays denied however the app is
+configured — measured directly: in one process, with location authorized by the
+user, `geo.current` returns a fix while `navigator.geolocation` is still refused
+`code 1 "User denied Geolocation"`.
+
+So location gets a plugin, and this is the documented cross-platform path.
+
+```swift
+ctx.permissions.declare(.geolocation)
+ctx.use(GeoPlugin(SystemGeolocation()))
+```
+```js
+const fix = await __SWIFT_PWA__.invoke('geo.current', { accuracy: 'high' });
+const stop = __SWIFT_PWA__.subscribe('geo.watch', {}, (fix) => { /* … */ });
+```
+
+`GeoFix` deliberately mirrors the web platform's `GeolocationCoordinates` —
+same field names, same units — so moving off `navigator.geolocation` isn't a
+re-learn. The one difference is `timestamp`, in seconds rather than JS
+milliseconds, matching every other time value the bridge carries. `accuracy` is
+a two-value hint (`high` / `balanced`) because that's what all four platform
+APIs actually express; a metre budget would imply a promise none of them make.
+
+It goes through the **same gate** as the web API: undeclared or vetoed fails
+`E_GEO_DENIED` *before the provider is touched*, so a refusal never spins up the
+hardware and an app's own location switch has no documented bypass.
+`E_GEO_UNAVAILABLE` means this machine right now — never "this OS".
+
+| Platform | Backend | Verified |
+| :--- | :--- | :--- |
+| macOS | CoreLocation | ✅ 35 m fix, `geo.watch` streams |
+| iOS | CoreLocation | ✅ 6 m fix on a real iPad |
+| Linux GTK3 / GTK4 | GeoClue 2 over D-Bus | ✅ ~26 km fix on both boxes |
+| Windows | WinRT `Geolocator` | not yet |
+| Android | `LocationManager` | not yet |
+
 ## Linux specifics
 
 WebKitGTK routes *every* permission through one `permission-request` signal, so

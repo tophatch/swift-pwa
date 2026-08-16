@@ -92,6 +92,129 @@ typealias BridgeJSON = SwiftPWACore.JSONValue
             )
         }
 
+        /// Evaluate `script`, and if it produced a thenable, wait for it to
+        /// settle and return the settled value.
+        ///
+        /// Client-side for the same reason `wait` is: it's a polling loop over
+        /// the existing `eval` verb, so it needs no app-binary change and works
+        /// on every backend. That matters because *no* backend awaits a promise
+        /// natively — Apple's `evaluateJavaScript`, WebKitGTK, WebView2 and
+        /// Android's WebView all hand the `Promise` object back, which then
+        /// fails to serialize.
+        ///
+        /// The script is run through **indirect `eval`** rather than wrapped in
+        /// parentheses, so it stays a *program* and keeps today's semantics
+        /// exactly: statements still work, `var` still lands on the global, and
+        /// the value is the program's completion value (`a = 1; b = 2` → `2`).
+        /// That's what lets this be automatic instead of a flag.
+        ///
+        /// A page whose CSP forbids `unsafe-eval` can't be driven this way, so
+        /// it reports back and the caller falls back to a plain `eval`. The
+        /// probe that detects it evaluates a harmless constant *before* the
+        /// script, so a page that blocks `eval` never runs the script at all —
+        /// the fallback can't double-execute it.
+        func evalAwaitingPromise(
+            _ script: String,
+            timeout: TimeInterval,
+            window: String?
+        ) throws -> BridgeJSON? {
+            let key = "__swiftPWADriveAwait\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
+            let start = """
+            (function () {
+                var k = \(Self.jsStringLiteral(key));
+                try { (0, eval)("0"); } catch (probe) { return { cspBlocked: true }; }
+                var v = (0, eval)(\(Self.jsStringLiteral(script)));
+                if (!v || typeof v.then !== "function") {
+                    return { settled: true, value: v === undefined ? null : v };
+                }
+                window[k] = { state: "pending" };
+                v.then(
+                    function (r) { window[k] = { state: "done", value: r === undefined ? null : r }; },
+                    function (e) {
+                        window[k] = { state: "failed", message: String(e && e.message ? e.message : e) };
+                    }
+                );
+                return { settled: false };
+            })()
+            """
+
+            var payload: [String: BridgeJSON] = ["js": .string(start)]
+            if let window { payload["window"] = .string(window) }
+            let first = try invoke("eval", payload)
+            // nil means "this page forbids eval" — the caller runs the script
+            // the old way. Nothing of it has executed yet.
+            if case .bool(true) = first["cspBlocked"] { return nil }
+            if case .bool(true) = first["settled"] { return first["value"] ?? .null }
+
+            // Drain the global as we read it, so a page driven repeatedly
+            // doesn't accumulate one leaked key per awaited call.
+            let poll = """
+            (function () {
+                var k = \(Self.jsStringLiteral(key));
+                var s = window[k];
+                if (!s) { return { state: "lost" }; }
+                if (s.state === "pending") { return { state: "pending" }; }
+                delete window[k];
+                return s;
+            })()
+            """
+            var pollPayload: [String: BridgeJSON] = ["js": .string(poll)]
+            if let window { pollPayload["window"] = .string(window) }
+
+            let deadline = Date().addingTimeInterval(timeout)
+            repeat {
+                let state = try invoke("eval", pollPayload)
+                switch state["state"]?.stringValue {
+                case "done":
+                    return state["value"] ?? .null
+                case "failed":
+                    throw DriveError.remote(
+                        code: "E_EVAL_REJECTED",
+                        message: state["message"]?.stringValue ?? "the awaited promise rejected"
+                    )
+                case "lost":
+                    // The page navigated out from under us and took the global
+                    // with it; there is nothing left to wait for.
+                    throw DriveError.remote(
+                        code: "E_EVAL_LOST",
+                        message: "the page navigated while the awaited promise was still pending"
+                    )
+                default:
+                    break
+                }
+                Thread.sleep(forTimeInterval: 0.05)
+            } while Date() < deadline
+
+            throw DriveError.timedOut(
+                expression: script,
+                seconds: timeout,
+                lastError: "the script returned a promise that never settled"
+            )
+        }
+
+        /// A JS string literal for `value`, so a key or script can't end the
+        /// literal early or inject.
+        static func jsStringLiteral(_ value: String) -> String {
+            var out = "\""
+            for scalar in value.unicodeScalars {
+                switch scalar {
+                case "\"": out += "\\\""
+                case "\\": out += "\\\\"
+                case "\n": out += "\\n"
+                case "\r": out += "\\r"
+                case "\u{2028}": out += "\\u2028"
+                case "\u{2029}": out += "\\u2029"
+                default:
+                    if scalar.value < 0x20 {
+                        out += String(format: "\\u%04x", scalar.value)
+                    } else {
+                        out.unicodeScalars.append(scalar)
+                    }
+                }
+            }
+            return out + "\""
+        }
+
         /// The centre of the first element matching `selector`, in the same
         /// window-local CSS pixels the `input.*` verbs take.
         ///

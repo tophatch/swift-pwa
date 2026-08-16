@@ -392,7 +392,7 @@ line, requests served one connection at a time:
 | --- | --- | --- |
 | `capabilities` | — | `{protocol, backend, verbs, screenshot, input, windows}` |
 | `window.list` | — | `[{id, title, size, position, fullscreen}]` |
-| `eval` | `{js, window?}` | the JSON value the expression evaluated to |
+| `eval` | `{js, window?}` | the JSON value the expression evaluated to (a promise fails to serialize — see `--await`) |
 | `screenshot` | `{window?}` | `{pngBase64, bytes}` |
 | `window.setSize` | `{width, height, window?}` | the size the window actually took |
 | `window.setPosition` | `{x, y, window?}` | the position the window actually took |
@@ -428,6 +428,39 @@ swift-pwa drive eval "({ items: store.items.length, ready: app.ready })" | jq .i
 
 A JS string therefore arrives quoted (`"CritterFacts"`), objects and arrays
 arrive as objects and arrays, and `undefined` arrives as `null`.
+
+### Promises are awaited
+
+A script that produces a promise gets its **settled value**, with no flag:
+
+```bash
+swift-pwa drive eval "fetch('/api/x').then(r => r.status)"
+swift-pwa drive eval "(async () => (await navigator.mediaDevices.enumerateDevices()).length)()"
+```
+
+This is worth stating because no backend does it — Apple's `evaluateJavaScript`,
+WebKitGTK, WebView2 and Android's WebView all hand the `Promise` object back
+verbatim, where it fails to serialize. `drive` waits client-side by polling the
+same `eval` verb (as `--wait` does), so it needs no app-binary change and
+behaves identically everywhere.
+
+- **A rejection is an error, not a value** — `E_EVAL_REJECTED` carrying the
+  rejection's message.
+- **`--timeout` bounds the wait.** A promise that never settles fails at the
+  deadline saying so, rather than hanging forever.
+- **A page that navigates mid-flight** fails `E_EVAL_LOST` rather than hanging.
+
+Nothing about non-promise scripts changed. The script is run through indirect
+`eval`, so it is still a *program*, not an expression: statements work,
+declarations still land on the global object and persist for the life of the
+app, and the result is still the completion value (`window.a = 1; window.b = 2`
+→ `2`).
+
+> **Pages that forbid `eval`.** If the page's CSP has no `unsafe-eval`, the
+> promise-awaiting path can't run and `drive` falls back to evaluating the
+> script directly — the old behaviour, promises included. Detection runs a
+> harmless constant through `eval` *before* your script, so a blocked page never
+> executes it twice.
 
 ## Related
 

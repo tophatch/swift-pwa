@@ -251,10 +251,14 @@ Three options were considered — always allow; a declaration in `pwa.json`; a
 runtime callback into the app. The recommendation is the **two-gate** shape the
 agent surface already establishes:
 
-1. **A declaration in `pwa.json` is the ceiling.** Undeclared stays denied, so no
-   existing app silently gains a capability when this ships.
-2. **The OS prompt does the asking.** The runtime never invents consent UI; it
-   forwards to the platform's own prompt and relays the answer.
+1. **A declaration in `pwa.json` is the build-time ceiling.** Undeclared stays
+   denied, so no existing app silently gains a capability when this ships.
+2. **An app-level veto is the runtime ceiling.** An app can refuse a permission
+   itself — for its own in-app privacy switches — and a vetoed permission is
+   refused *without prompting*, so the user isn't asked for something the app has
+   already ruled out.
+3. **Otherwise the OS prompt does the asking.** The runtime never invents consent
+   UI; it forwards to the platform's own prompt and relays the answer.
 
 ```json
 "permissions": {
@@ -362,20 +366,72 @@ Per platform:
 **All cells are now measured.** Two traps for whoever repeats this: capture needs
 real hardware *and* a reachable audio server (from SSH, export
 `XDG_RUNTIME_DIR=/run/user/1000`, or WebKit reports absent devices and you learn
-nothing); and `swift-pwa drive eval` **does not await promises** — it fails with
-`E_HANDLER: Unsupported result type` — so an async probe has to stash its result
-on a global and be read back in a second call, unlike CDP's `awaitPromise`.
+nothing); and `swift-pwa drive eval` did **not** await promises — it failed with an
+unsupported-result-type error, so every async probe had to stash its result on a
+global and be read back in a second call. **Fixed**: promises are now awaited
+automatically.
+
+## Resolved
+
+- **Should `permissions.web` gate anything on Windows, where it already works
+  without a declaration?** **Yes — gate it.** No adopter ships a Windows app yet,
+  so there is no working behaviour to take away, and a declaration that means the
+  same thing on all five is worth more than one platform's head start. Revisit
+  only if a real app is caught out by it.
+- **An app-level veto.** **Yes, ship it** — not for kiosk builds, but because an
+  app wants its own in-app privacy controls ("microphone: off") that hold
+  regardless of what a page asks for. The `pwa.json` declaration is a build-time
+  ceiling; the veto is a runtime one the app owns and can put in its own settings
+  UI. It must sit *above* the OS prompt: a vetoed permission is refused without
+  ever asking, so the user isn't prompted for something the app has already
+  decided against.
 
 ## Open questions
 
-- Should `permissions.web` be one flat list, or per-platform? A flat list is the
-  simpler promise, but Android wants `neverForLocation`-style qualifiers that have
-  no Apple counterpart.
-- Should `permissions.web` gate anything on **Windows**, where the capability
-  already works without a declaration? Enforcing the ceiling there would take away
-  working behaviour to buy consistency; not enforcing it means the declaration
-  means something slightly different on one platform. Leaning: don't enforce, and
-  say so in the docs.
-- Should the runtime offer an app-level veto callback (deny camera regardless of
-  what the page asks) or is the `pwa.json` ceiling enough? A kiosk build is the
-  motivating case, and no adopter has asked for it — leaning "not yet".
+- **Flat list or per-platform?** Neither, quite — see below. Ben is undecided and
+  wants the shape settled before implementation.
+
+### The declaration's shape
+
+A flat list of capability names is the nicer promise:
+
+```json
+"permissions": { "web": ["microphone", "geolocation"] }
+```
+
+but it cannot carry two things that are **mandatory on the platforms it targets**:
+
+- **Apple requires a human-readable purpose string per permission**
+  (`NSMicrophoneUsageDescription`, …). It's shown to the user in the system
+  prompt, and an app missing one is rejected. A bare name can't express it, and
+  the strings differ per app, so we cannot invent them.
+- **Android has qualifiers with no Apple counterpart** — `usesPermissionFlags="neverForLocation"`
+  on `BLUETOOTH_SCAN` (which [ble-plugin.md](ble-plugin.md) needs), `maxSdkVersion`
+  on legacy permissions, and the `ACCESS_FINE_LOCATION` / `ACCESS_COARSE_LOCATION`
+  split.
+
+The proposed answer is **scalar-or-object**, which is already the house pattern:
+`window.background_color` takes a plain hex string *or* a `{light, dark}` pair via
+a custom `Codable` (`PWAManifest.BackgroundColor`). Same idea here — a name for
+the simple case, an object when a platform needs more:
+
+```json
+"permissions": {
+  "web": {
+    "microphone":  { "reason": "Record a voice note." },
+    "geolocation": { "reason": "Show jobs near you.", "accuracy": "coarse" }
+  }
+}
+```
+
+with the flat-array form accepted as shorthand where no detail is needed. `reason`
+emits the Apple usage description and the build **fails loud** without one when an
+Apple target is built — the same stance `agent.expose` takes, resolving against the
+live catalog rather than trusting the manifest, and better than shipping an app the
+App Store rejects. Genuinely platform-specific knobs stay namespaced
+(`android: { neverForLocation: true }`) rather than becoming a parallel top-level
+list, so there is one place to look.
+
+**What's still open:** whether `accuracy` is worth generalising (iOS has reduced
+accuracy, Android has coarse/fine, desktop has neither), or whether coarse/fine
+should wait for a second consumer rather than being designed in now.

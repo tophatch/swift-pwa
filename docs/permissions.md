@@ -195,7 +195,7 @@ hardware and an app's own location switch has no documented bypass.
 | iOS | CoreLocation | ✅ 6 m fix on a real iPad |
 | Linux GTK3 / GTK4 | GeoClue 2 over D-Bus | ✅ ~26 km fix on both boxes |
 | Windows | WinRT `Geolocator` | not yet |
-| Android | `LocationManager` | not yet |
+| Android | `LocationManager` | ✅ 100 m fix on a real device |
 
 ## Linux specifics
 

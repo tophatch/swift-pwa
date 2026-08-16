@@ -1425,6 +1425,9 @@ enum AndroidTemplates {
                 }
                 "notifications.requestAuthorization" -> notificationsRequestAuth(done)
                 "permissions.resolve" -> permissionsResolve(json, done)
+                "geo.current" -> geoCurrent(json, done)
+                "geo.watch.start" -> geoWatchStart(json, done)
+                "geo.watch.stop" -> geoWatchStop(json, done)
                 "notifications.send" -> notificationsSend(json, done)
                 "dialog.message" -> dialogMessage(json, done)
                 "dialog.confirm" -> dialogConfirm(json, done)
@@ -1563,6 +1566,201 @@ enum AndroidTemplates {
             } else {
                 done(JSONObject().put("granted", notificationsAuthorized()).toString(), null)
             }
+        }
+
+        // -----------------------------------------------------------
+        // Location (geo.*)
+        // -----------------------------------------------------------
+
+        // `LocationManager`, not `FusedLocationProviderClient`: fused lives in
+        // Play Services, and adding a Google dependency to every generated
+        // project to reach a framework API would be a poor trade — especially
+        // on a device without Play Services, where fused simply isn't there.
+
+        private var geoWatchers = HashMap<Int, android.location.LocationListener>()
+        private var nextGeoWatchId = 1
+
+        private fun locationManager(): android.location.LocationManager =
+            activity.getSystemService(Context.LOCATION_SERVICE)
+                as android.location.LocationManager
+
+        private fun hasLocationPermission(): Boolean =
+            ContextCompat.checkSelfPermission(
+                activity, android.Manifest.permission.ACCESS_COARSE_LOCATION
+            ) == android.content.pm.PackageManager.PERMISSION_GRANTED ||
+                ContextCompat.checkSelfPermission(
+                    activity, android.Manifest.permission.ACCESS_FINE_LOCATION
+                ) == android.content.pm.PackageManager.PERMISSION_GRANTED
+
+        private fun ensureLocationPermission(complete: (Boolean) -> Unit) {
+            if (hasLocationPermission()) { complete(true); return }
+            if (pendingOsPermission != null) { complete(false); return }
+            // Re-check rather than trusting the launcher's all-granted result:
+            // for location a coarse-only grant is a real yes, where for capture
+            // a half-granted request is not.
+            pendingOsPermission = { _ -> complete(hasLocationPermission()) }
+            appActivity.runOnUiThread {
+                webPermLauncher.launch(arrayOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                ))
+            }
+        }
+
+        // The provider matching the requested accuracy, or null when nothing
+        // usable is enabled — location switched off at the OS level, or a
+        // device with no such hardware.
+        private fun geoProvider(highAccuracy: Boolean): String? {
+            val manager = locationManager()
+            val ordered = if (highAccuracy) {
+                listOf(
+                    android.location.LocationManager.GPS_PROVIDER,
+                    android.location.LocationManager.NETWORK_PROVIDER
+                )
+            } else {
+                listOf(
+                    android.location.LocationManager.NETWORK_PROVIDER,
+                    android.location.LocationManager.GPS_PROVIDER
+                )
+            }
+            return ordered.firstOrNull {
+                try { manager.isProviderEnabled(it) } catch (e: Exception) { false }
+            }
+        }
+
+        private fun geoFixJson(location: android.location.Location): JSONObject {
+            val fix = JSONObject()
+                .put("latitude", location.latitude)
+                .put("longitude", location.longitude)
+                .put("accuracy", if (location.hasAccuracy()) location.accuracy.toDouble() else 10000.0)
+                .put("timestamp", location.time / 1000.0)
+            if (location.hasAltitude()) fix.put("altitude", location.altitude)
+            if (location.hasSpeed()) fix.put("speed", location.speed.toDouble())
+            if (location.hasBearing()) fix.put("heading", location.bearing.toDouble())
+            return fix
+        }
+
+        private fun geoFailure(kind: String, message: String): String =
+            JSONObject().put("ok", false).put("kind", kind).put("message", message).toString()
+
+        private fun geoCurrent(json: JSONObject, done: (String?, String?) -> Unit) {
+            val high = json.optString("accuracy", "balanced") == "high"
+            val timeoutMs = (json.optDouble("timeoutSeconds", 20.0) * 1000).toLong()
+            val maxAgeSeconds = json.optDouble("maximumAgeSeconds", -1.0)
+
+            ensureLocationPermission { granted ->
+                if (!granted) {
+                    done(geoFailure("denied", "the user or system denied location access"), null)
+                    return@ensureLocationPermission
+                }
+                val provider = geoProvider(high)
+                if (provider == null) {
+                    done(geoFailure(
+                        "unavailable",
+                        "no location provider is enabled — location may be switched off in system settings"
+                    ), null)
+                    return@ensureLocationPermission
+                }
+                val manager = locationManager()
+
+                // A cached position, when the caller said one is acceptable.
+                // Cheap, instant, and often exactly what a page wants.
+                if (maxAgeSeconds > 0) {
+                    try {
+                        val last = manager.getLastKnownLocation(provider)
+                        if (last != null &&
+                            (System.currentTimeMillis() - last.time) / 1000.0 <= maxAgeSeconds
+                        ) {
+                            done(JSONObject().put("ok", true).put("fix", geoFixJson(last)).toString(), null)
+                            return@ensureLocationPermission
+                        }
+                    } catch (e: SecurityException) { /* fall through to a live request */ }
+                }
+
+                val settled = java.util.concurrent.atomic.AtomicBoolean(false)
+                val handler = android.os.Handler(android.os.Looper.getMainLooper())
+                var listener: android.location.LocationListener? = null
+                val timeout = Runnable {
+                    if (settled.compareAndSet(false, true)) {
+                        listener?.let { try { manager.removeUpdates(it) } catch (e: Exception) {} }
+                        done(geoFailure("timeout", "no fix within ${timeoutMs}ms"), null)
+                    }
+                }
+                listener = android.location.LocationListener { location ->
+                    if (settled.compareAndSet(false, true)) {
+                        handler.removeCallbacks(timeout)
+                        listener?.let { try { manager.removeUpdates(it) } catch (e: Exception) {} }
+                        done(JSONObject().put("ok", true).put("fix", geoFixJson(location)).toString(), null)
+                    }
+                }
+                try {
+                    appActivity.runOnUiThread {
+                        manager.requestLocationUpdates(
+                            provider, 0L, 0f, listener!!, android.os.Looper.getMainLooper()
+                        )
+                    }
+                    handler.postDelayed(timeout, timeoutMs)
+                } catch (e: SecurityException) {
+                    settled.set(true)
+                    done(geoFailure("denied", "location permission was revoked: ${e.message}"), null)
+                }
+            }
+        }
+
+        private fun geoWatchStart(json: JSONObject, done: (String?, String?) -> Unit) {
+            val high = json.optString("accuracy", "balanced") == "high"
+            val channel = json.optString("channel", "")
+            if (channel.isEmpty()) {
+                done(geoFailure("unavailable", "geo.watch.start needs a channel"), null)
+                return
+            }
+            ensureLocationPermission { granted ->
+                if (!granted) {
+                    done(geoFailure("denied", "the user or system denied location access"), null)
+                    return@ensureLocationPermission
+                }
+                val provider = geoProvider(high)
+                if (provider == null) {
+                    done(geoFailure(
+                        "unavailable",
+                        "no location provider is enabled — location may be switched off in system settings"
+                    ), null)
+                    return@ensureLocationPermission
+                }
+                val id = nextGeoWatchId++
+                val listener = android.location.LocationListener { location ->
+                    val payload = JSONObject()
+                        .put("channel", channel)
+                        .put("fix", geoFixJson(location))
+                    bridge.nativeHostEvent(payload.toString())
+                }
+                geoWatchers[id] = listener
+                try {
+                    appActivity.runOnUiThread {
+                        locationManager().requestLocationUpdates(
+                            provider, 1000L, 0f, listener, android.os.Looper.getMainLooper()
+                        )
+                    }
+                    done(JSONObject().put("ok", true).put("id", id).toString(), null)
+                } catch (e: SecurityException) {
+                    geoWatchers.remove(id)
+                    done(geoFailure("denied", "location permission was revoked: ${e.message}"), null)
+                }
+            }
+        }
+
+        private fun geoWatchStop(json: JSONObject, done: (String?, String?) -> Unit) {
+            val id = json.optInt("id", -1)
+            val listener = geoWatchers.remove(id)
+            if (listener != null) {
+                // On the UI thread and swallowing SecurityException: the
+                // permission can be revoked while a watch is live, and failing
+                // to *stop* would leave the sensor running.
+                appActivity.runOnUiThread {
+                    try { locationManager().removeUpdates(listener) } catch (e: Exception) {}
+                }
+            }
+            done(null, null)
         }
 
         // -----------------------------------------------------------

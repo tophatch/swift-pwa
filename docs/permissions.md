@@ -248,6 +248,42 @@ Linux can't do this.
 Expect coarse results where there's no WiFi source configured: both test boxes
 return an IP-class fix accurate to ~26 km.
 
+## Apple specifics — why the veto can't reach capture
+
+On macOS and iOS the **app-level veto does not gate the page's own
+`getUserMedia`**, and that isn't an omission — WKWebView doesn't offer the
+decision.
+
+`WKUIDelegate` has a capture hook
+(`webView(_:requestMediaCapturePermissionFor:initiatedByFrame:type:decisionHandler:)`),
+and it looks like the right seam. It isn't, for bundled content. Measured: with
+a delegate installed on the live web view, `responds(to:)` true for WebKit's
+exact selector, the method is **never called** — a page served from the `pwa://`
+scheme goes straight to the OS. The prompt a user sees is macOS's own TCC
+dialog, showing the `NSMicrophoneUsageDescription` string from
+`permissions.web`, not a WebKit page-level prompt naming an origin.
+
+So on Apple the gate is TCC, and the app's own switch can't sit in front of it
+for capture. Two consequences worth designing around:
+
+- **An in-app "camera: off" switch must not claim to block the page.** Either
+  gate your own capture code behind it, or say plainly that it applies to the
+  app's native features. The runtime won't pretend otherwise.
+- **`geo.*` is unaffected**, because `GeoPlugin` gates location in Core rather
+  than at a backend seam — so the veto reaches location on all five platforms.
+
+Untested: whether the delegate *is* consulted for `.remote(url)` https content.
+It plausibly is, since the "first-party app content" shortcut wouldn't apply —
+but nothing here depends on it, so it stays an open question rather than a
+claim.
+
+| | Declaration gates it | Veto gates it |
+| :--- | :--- | :--- |
+| `geo.*` (all platforms) | Yes | Yes |
+| Capture — Linux, Android | Yes | Yes |
+| Capture — macOS, iOS | No — TCC decides | No |
+| Capture — Windows | No — WebView2 prompts | Not yet wired |
+
 ## Android specifics
 
 Android needed two layers, not one: a `WebChromeClient` (there was none at all,

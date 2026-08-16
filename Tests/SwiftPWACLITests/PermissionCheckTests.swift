@@ -178,6 +178,22 @@ struct PermissionCheckTests {
         #expect(plist["NSCameraUsageDescription"] as? String == "Hand-written.")
     }
 
+    @Test("a cross-compiled build says it skipped rather than pretending it checked")
+    func crossCompiledSaysSoEvenWithNoManifestBlock() async throws {
+        // The check is no longer gated on the manifest having a permissions
+        // block — an app that declares in Swift and nowhere else is exactly
+        // what it exists to catch, and that's the shape `swift-pwa init`
+        // produces. A cross-compiled target still can't run the app, so it must
+        // return quietly rather than trying (this project root doesn't exist,
+        // so a build attempt would throw).
+        try await Build.validatePermissions(
+            manifest: manifest(),
+            projectRoot: URL(fileURLWithPath: "/nonexistent-swift-pwa-project"),
+            target: .android,
+            configuration: "release"
+        )
+    }
+
     // MARK: - Drift
 
     @Test("matching declarations don't drift")

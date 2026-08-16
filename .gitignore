@@ -51,3 +51,9 @@ Vendor/lama/
 
 # Local secrets (API keys for live tests) — never commit
 .env
+
+# The Android BLE fixture's Gradle output (Scripts/ble-test-peripheral-android)
+Scripts/ble-test-peripheral-android/.gradle/
+Scripts/ble-test-peripheral-android/build/
+Scripts/ble-test-peripheral-android/app/build/
+Scripts/ble-test-peripheral-android/local.properties

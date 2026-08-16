@@ -1,15 +1,17 @@
 # Proposal: Bluetooth LE plugin (`ble.*`)
 
-> **Status: proposed.** Written against a concrete consumer: an app that sends
-> plotter jobs to a consumer HPGL cutting plotter over BLE. That consumer is
-> shipping a host-mediated design first (phone → WebSocket → Node service →
-> machine), so **nothing is blocked on this**. It's queued as the later "no host
-> awake" tier.
+> **Status: shipped** in 0.10.1 — see [`docs/bluetooth.md`](../bluetooth.md) and
+> the CHANGELOG. Kept for the reasoning, which the implementation followed:
+> four real backends rather than a `None` on desktop, a connection as a duplex
+> session, raw scan results, and `E_BLE_UNAVAILABLE` meaning *this machine, right
+> now*.
 >
-> **Revised:** the first draft proposed shipping Apple + Android only, with a
-> `None` backend on desktop. That's reversed below — `ble.*` lands on all four
-> platforms that have a Bluetooth stack, for the reason in
-> [Why desktop is in scope](#why-desktop-is-in-scope).
+> Two things the build changed. **Reconnect** (listed as an open question) is
+> resolved: a link survives a drop and re-emits `ready`, because the consumer
+> shape is a machine that browns out mid-job. And the **UUID spelling** problem
+> below wasn't foreseen at all — each platform returns a different form, which
+> silently breaks a page written against one of them, so the wire is
+> canonicalized in both directions.
 
 ## The problem
 

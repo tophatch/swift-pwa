@@ -257,7 +257,8 @@ struct AgentPolicyTests {
         try await Build.validateAgentSurface(
             manifest: manifest,
             projectRoot: URL(fileURLWithPath: "/nonexistent-swift-pwa-project"),
-            target: .android
+            target: .android,
+            configuration: "release"
         )
     }
 
@@ -267,7 +268,8 @@ struct AgentPolicyTests {
         try await Build.validateAgentSurface(
             manifest: manifest,
             projectRoot: URL(fileURLWithPath: "/nonexistent-swift-pwa-project"),
-            target: .host
+            target: .host,
+            configuration: "release"
         )
     }
 

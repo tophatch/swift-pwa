@@ -96,13 +96,16 @@ enum InfoPlistGenerator {
     static let appleUsageDescriptionKeys: [String: String] = [
         "camera": "NSCameraUsageDescription",
         "microphone": "NSMicrophoneUsageDescription",
-        "geolocation": "NSLocationWhenInUseUsageDescription"
+        "geolocation": "NSLocationWhenInUseUsageDescription",
+        // `NSBluetoothPeripheralUsageDescription` is the pre-iOS-13 spelling
+        // and isn't emitted: the deployment targets here are iOS 18 / macOS 15.
+        "bluetooth": "NSBluetoothAlwaysUsageDescription"
         // `notifications` has no usage-description key: UserNotifications
         // prompts without one.
     ]
 
     private static func applyUsageDescriptions(_ manifest: PWAManifest, into plist: inout InfoPlist) {
-        guard let declarations = manifest.permissions?.web else { return }
+        guard let declarations = manifest.permissions?.allDeclarations else { return }
         for name in declarations.names {
             guard let key = appleUsageDescriptionKeys[name],
                   let reason = declarations.detail(for: name)?.reason,

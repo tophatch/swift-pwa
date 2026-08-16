@@ -38,7 +38,7 @@
         static func install(policy: PermissionPolicy) {
             AndroidHostEventRouter.subscribe(channel: channel) { data in
                 guard let request = try? JSONDecoder().decode(Request.self, from: data) else { return }
-                let permissions = Set(request.kinds.compactMap(WebPermission.init(rawValue:)))
+                let permissions = Set(request.kinds.compactMap(DevicePermission.init(rawValue:)))
                 // A kind we don't model must not be waved through, and the
                 // policy's all-of shape already refuses an empty set.
                 let decision = permissions.count == request.kinds.count

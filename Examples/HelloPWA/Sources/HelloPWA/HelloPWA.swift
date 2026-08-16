@@ -169,8 +169,11 @@ func configure(_ ctx: any AppContext) throws {
     // something now answers the webview's request, and location goes through
     // the plugin because macOS WKWebView can't be told to allow the web API.
     // See the "Device & location" card in web/index.html.
-    ctx.permissions.declare(.camera, .microphone, .geolocation)
+    ctx.permissions.declare(.camera, .microphone, .geolocation, .bluetooth)
     ctx.use(GeoPlugin(SystemGeolocation()))
+    // `ble.*` — the one capability here that no webview exposes at all, so
+    // there's nothing to fall back to. See the "Bluetooth" card.
+    ctx.use(BLEPlugin(SystemBluetooth()))
 
     // The app's own privacy switch, the thing an in-app "location: off" toggle
     // would drive. It sits *above* the OS prompt, so flipping it off refuses

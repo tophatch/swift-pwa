@@ -172,7 +172,8 @@ struct AndroidBundler {
             packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil,
             documentTypes: manifest.android?.documentTypes ?? [],
             networkConfigStaged: networkSecurityConfig != nil,
-            webPermissions: manifest.permissions?.web?.names ?? []
+            webPermissions: manifest.permissions?.allDeclarations?.names ?? [],
+            minSdk: minSdk
         ).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
             atomically: true, encoding: .utf8

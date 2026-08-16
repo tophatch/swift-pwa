@@ -286,8 +286,12 @@ struct Build: AsyncParsableCommand {
         let prebuildRan = !skipPrebuild
             && (pwa.build?.prebuild?.trimmingCharacters(in: .whitespaces).isEmpty == false)
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
-        try await Self.validatePermissions(manifest: pwa, projectRoot: cwd, target: target)
-        try await Self.validateAgentSurface(manifest: pwa, projectRoot: cwd, target: target)
+        try await Self.validatePermissions(
+            manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
+        )
+        try await Self.validateAgentSurface(
+            manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
+        )
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
 
@@ -767,9 +771,9 @@ struct Build: AsyncParsableCommand {
     /// what it registered. Rather than silently skip, say so and point at
     /// `swift-pwa agent check`, which does the host build on its own.
     ///
-    /// Uses the release configuration the bundlers build with, so the dump
-    /// warms the same build products instead of adding a second one.
-    /// Check `pwa.json`'s `permissions.web` — its names always, and its
+    /// Uses the configuration this build is producing, so the dump reuses those
+    /// build products instead of compiling the app a second time.
+    /// Check `pwa.json`'s `permissions` block — its names always, and its
     /// agreement with the app's own `ctx.permissions.declare` when this build
     /// can run the app. See ``PermissionCheck``.
     ///
@@ -777,30 +781,43 @@ struct Build: AsyncParsableCommand {
     /// precisely where a typo does damage: the manifest entry silently isn't
     /// emitted and the device denies a permission the adopter believes they
     /// declared.
-    static func validatePermissions(manifest: PWAManifest, projectRoot: URL, target: BuildTarget) async throws {
+    static func validatePermissions(
+        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String
+    ) async throws {
         try PermissionCheck.validateNames(manifest)
         if target == .macos || target == .ios {
             try PermissionCheck.validateAppleReasons(manifest)
         }
-        guard manifest.permissions?.web != nil else { return }
+        // Deliberately *not* gated on the manifest having a permissions block.
+        // An app that declares in Swift and nowhere else is the case this check
+        // exists to catch — on Android the request is refused, and on Apple a
+        // missing usage description terminates the app the moment it asks — and
+        // it's also the shape `swift-pwa init` produces, so gating on the
+        // manifest skipped the most likely way to get it wrong.
         guard target == .host else {
             print("""
-            swift-pwa: permissions.web not checked against the app for --target \(target.rawValue) — \
+            swift-pwa: pwa.json permissions not checked against the app for --target \(target.rawValue) — \
             comparing them means running the app, and this build is cross-compiled.
             """)
             return
         }
+        // The configuration being built, not a hardcoded release: a `--configuration
+        // debug` build would otherwise trigger a whole second compile just to be
+        // checked (measured at 9.0s against 1.1s on a warm scaffold), and the
+        // artifact that gets checked should be the artifact being produced.
         let dump = try await CommandCatalog.dumpAll(
-            projectRoot: projectRoot, manifest: manifest, configuration: "release", quiet: true
+            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: true
         )
         if let drift = PermissionCheck.drift(
-            declared: manifest.permissions?.web, compiled: dump.declaredPermissions
+            declared: manifest.permissions?.allDeclarations, compiled: dump.declaredPermissions
         ) {
             throw ValidationError(drift)
         }
     }
 
-    static func validateAgentSurface(manifest: PWAManifest, projectRoot: URL, target: BuildTarget) async throws {
+    static func validateAgentSurface(
+        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String
+    ) async throws {
         guard let expose = manifest.agent?.expose, !expose.isEmpty else { return }
         guard target == .host else {
             print("""
@@ -809,8 +826,12 @@ struct Build: AsyncParsableCommand {
             """)
             return
         }
+        // The configuration being built, not a hardcoded release: a `--configuration
+        // debug` build would otherwise trigger a whole second compile just to be
+        // checked (measured at 9.0s against 1.1s on a warm scaffold), and the
+        // artifact that gets checked should be the artifact being produced.
         let dump = try await CommandCatalog.dumpAll(
-            projectRoot: projectRoot, manifest: manifest, configuration: "release", quiet: true
+            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: true
         )
         try AgentCheck.report(AgentPolicy.resolve(manifest.agent, against: dump.commands), appName: manifest.name)
         try AgentCheck.reportDrift(AgentPolicy.drift(declared: manifest.agent, compiled: dump.agentTools))

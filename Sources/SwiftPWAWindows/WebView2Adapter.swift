@@ -595,7 +595,7 @@
         guard let policy = adapter.policyForPermissionRequests else { return 1 }
         let origin = originPtr.map { String(cString: $0) } ?? "the page"
 
-        let wanted: Set<WebPermission>? = switch WebView2PermissionKind(rawValue: kind) {
+        let wanted: Set<DevicePermission>? = switch WebView2PermissionKind(rawValue: kind) {
         case .microphone: [.microphone]
         case .camera: [.camera]
         case .geolocation: [.geolocation]

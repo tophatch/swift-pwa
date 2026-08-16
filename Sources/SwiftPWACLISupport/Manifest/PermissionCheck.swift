@@ -1,7 +1,7 @@
 import ArgumentParser
 import Foundation
 
-/// Build-time checks over `pwa.json`'s `permissions.web`.
+/// Build-time checks over `pwa.json`'s `permissions` block.
 ///
 /// Two separate jobs, because they can run in different circumstances:
 ///
@@ -13,25 +13,55 @@ import Foundation
 ///   really declared at runtime. That needs a headless run, so it's host-only,
 ///   exactly like `agent.expose`.
 enum PermissionCheck {
-    /// The names `WebPermission` accepts. Duplicated from Core rather than
-    /// imported because the CLI must be able to validate a manifest for a
-    /// platform whose runtime it can't link — and a mismatch here is caught by
-    /// `PermissionCheckTests`.
-    static let knownNames = ["camera", "geolocation", "microphone", "notifications"]
+    /// The names each key accepts, split the way `DevicePermission` documents
+    /// them: `web` is what a page can ask for on its own, `device` is what only
+    /// a plugin can reach.
+    ///
+    /// Duplicated from Core rather than imported because the CLI must be able
+    /// to validate a manifest for a platform whose runtime it can't link — and
+    /// a mismatch here is caught by `PermissionCheckTests`.
+    static let webNames = ["camera", "geolocation", "microphone", "notifications"]
+    static let deviceNames = ["bluetooth"]
+    static var knownNames: [String] {
+        (webNames + deviceNames).sorted()
+    }
 
     static func validateNames(_ manifest: PWAManifest) throws {
-        guard let declarations = manifest.permissions?.web else { return }
+        try validate(manifest.permissions?.web, key: "web", accepted: webNames, otherKey: "device")
+        try validate(manifest.permissions?.device, key: "device", accepted: deviceNames, otherKey: "web")
+    }
+
+    private static func validate(
+        _ declarations: PWAManifest.PermissionDeclarations?,
+        key: String,
+        accepted: [String],
+        otherKey: String
+    ) throws {
+        guard let declarations else { return }
+        // A name that exists but under the other key gets its own message: the
+        // fix is to move one line, and "isn't a permission this runtime knows"
+        // would send the reader looking for a typo that isn't there.
+        let misfiled = declarations.names.filter { !accepted.contains($0) && knownNames.contains($0) }
+        guard misfiled.isEmpty else {
+            throw ValidationError("""
+            pwa.json's permissions.\(key) names \(list(misfiled)), which \(misfiled.count == 1 ? "belongs" : "belong") \
+            under permissions.\(otherKey) instead. \(key == "web"
+                ? "No webview here exposes it to a page — it's reached through a plugin."
+                : "It's a permission a page asks for through an ordinary web API.")
+            """)
+        }
         let unknown = declarations.names.filter { !knownNames.contains($0) }
         guard unknown.isEmpty else {
             throw ValidationError("""
-            pwa.json's permissions.web names \(list(unknown)), which \(unknown.count == 1 ? "isn't a" : "aren't") \
-            permission this runtime knows. Valid names: \(knownNames.joined(separator: ", ")).
+            pwa.json's permissions.\(key) names \(list(unknown)), which \(unknown.count == 1 ? "isn't a" : "aren't") \
+            permission this runtime knows. Valid names: \(accepted.joined(separator: ", ")) \
+            (permissions.\(key)); \(knownNames.joined(separator: ", ")) in total.
             """)
         }
         var seen = Set<String>()
         let duplicates = declarations.names.filter { !seen.insert($0).inserted }
         guard duplicates.isEmpty else {
-            throw ValidationError("pwa.json's permissions.web lists \(list(duplicates)) more than once.")
+            throw ValidationError("pwa.json's permissions.\(key) lists \(list(duplicates)) more than once.")
         }
     }
 
@@ -45,7 +75,7 @@ enum PermissionCheck {
     /// demanding a purpose string from an app that only ships Linux would be
     /// make-work.
     static func validateAppleReasons(_ manifest: PWAManifest) throws {
-        guard let declarations = manifest.permissions?.web else { return }
+        guard let declarations = manifest.permissions?.allDeclarations else { return }
         let missing = declarations.names
             .filter { InfoPlistGenerator.appleUsageDescriptionKeys[$0] != nil }
             .filter { (declarations.detail(for: $0)?.reason ?? "").isEmpty }
@@ -55,7 +85,8 @@ enum PermissionCheck {
             is shown in the system prompt and the App Store rejects apps without one (on iOS the app is \
             terminated when it asks). Use the object form:
 
-              "permissions": { "web": { "\(missing[0])": { "reason": "…why your app needs this…" } } }
+              "permissions": { "\(deviceNames.contains(missing[0]) ? "device" : "web")": \
+            { "\(missing[0])": { "reason": "…why your app needs this…" } } }
             """)
         }
     }
@@ -71,7 +102,7 @@ enum PermissionCheck {
     ///   platform says no, because the manifest entry or usage description was
     ///   never emitted. On Android the request is refused; on Apple, a missing
     ///   usage description **terminates the app**.
-    static func drift(declared: PWAManifest.WebPermissionDeclarations?, compiled: [String]) -> String? {
+    static func drift(declared: PWAManifest.PermissionDeclarations?, compiled: [String]) -> String? {
         let manifestNames = Set(declared?.names ?? [])
         let compiledNames = Set(compiled)
         guard manifestNames != compiledNames else { return nil }
@@ -86,8 +117,10 @@ enum PermissionCheck {
         }
         let compiledOnly = compiledNames.subtracting(manifestNames).sorted()
         if !compiledOnly.isEmpty {
+            let keys = Set(compiledOnly.map { deviceNames.contains($0) ? "permissions.device" : "permissions.web" })
             lines.append("""
-              \(list(compiledOnly)) declared in Swift but missing from pwa.json's permissions.web, \
+              \(list(compiledOnly)) declared in Swift but missing from pwa.json's \
+            \(keys.sorted().joined(separator: " / ")), \
             so the platform artifact never asks for \(compiledOnly.count == 1 ? "it" : "them").
             """)
         }

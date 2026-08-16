@@ -20,6 +20,9 @@ public final class BridgeRuntime: @unchecked Sendable {
     private let lock = NSLock()
     private var pumpTask: Task<Void, Never>?
     private var subscriptions: [UInt64: Task<Void, Never>] = [:]
+    /// In-flight `invoke` handlers, so `stop()` can cancel work that would
+    /// otherwise keep running — and delivering — against a torn-down web view.
+    private var invocations: [UInt64: Task<Void, Never>] = [:]
     /// Inbound sinks for open duplex sessions (see `registerSession`). One is
     /// created per `subscribe` (before dispatch, so a `push` that the serial
     /// pump handles next always finds it); plain-stream handlers simply never
@@ -67,17 +70,20 @@ public final class BridgeRuntime: @unchecked Sendable {
     }
 
     public func stop() {
-        let (oldPump, oldSubs, oldInbound) = lock.withLock {
+        let (oldPump, oldSubs, oldInbound, oldInvokes) = lock.withLock {
             let p = pumpTask
             let s = subscriptions
             let i = sessionInbound
+            let v = invocations
             pumpTask = nil
             subscriptions.removeAll()
             sessionInbound.removeAll()
-            return (p, s, i)
+            invocations.removeAll()
+            return (p, s, i, v)
         }
         oldPump?.cancel()
         for (_, task) in oldSubs { task.cancel() }
+        for (_, task) in oldInvokes { task.cancel() }
         for (_, sink) in oldInbound { sink.continuation.finish() }
     }
 
@@ -88,11 +94,12 @@ public final class BridgeRuntime: @unchecked Sendable {
     }
 
     deinit {
-        let (oldPump, oldSubs, oldInbound) = lock.withLock {
-            (pumpTask, subscriptions, sessionInbound)
+        let (oldPump, oldSubs, oldInbound, oldInvokes) = lock.withLock {
+            (pumpTask, subscriptions, sessionInbound, invocations)
         }
         oldPump?.cancel()
         for (_, task) in oldSubs { task.cancel() }
+        for (_, task) in oldInvokes { task.cancel() }
         for (_, sink) in oldInbound { sink.continuation.finish() }
     }
 
@@ -101,7 +108,23 @@ public final class BridgeRuntime: @unchecked Sendable {
     private func handle(_ frame: InboundFrame) async {
         switch frame {
         case let .invoke(id, command, payload):
-            await dispatchInvoke(id: id, command: command, payload: payload)
+            // Concurrent, unlike everything below it. An `invoke` is
+            // independent and correlated by id, so awaiting it here only
+            // achieved one thing: one slow handler stalled every later frame on
+            // the window. Measured — `geo.current` pending on a first-run
+            // permission prompt, after which no other command could complete,
+            // including ones the page needed to *show* the prompt's outcome.
+            //
+            // The other three cases stay ordered on purpose: `subscribe`
+            // registers its inbound sink synchronously so a following `push`
+            // finds it, and `unsubscribe` has to find what `subscribe`
+            // registered. Making those concurrent would trade this bug for a
+            // race.
+            let task = Task { [weak self] in
+                await self?.dispatchInvoke(id: id, command: command, payload: payload)
+                self?.finishInvocation(id)
+            }
+            lock.withLock { invocations[id] = task }
         case let .subscribe(id, command, payload):
             await dispatchSubscribe(id: id, command: command, payload: payload)
         case let .unsubscribe(id):
@@ -109,6 +132,10 @@ public final class BridgeRuntime: @unchecked Sendable {
         case let .push(id, payload):
             routePush(id: id, payload: payload)
         }
+    }
+
+    private func finishInvocation(_ id: UInt64) {
+        _ = lock.withLock { invocations.removeValue(forKey: id) }
     }
 
     /// Route a client-pushed frame into its open session's inbound stream.

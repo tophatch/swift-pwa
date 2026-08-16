@@ -1,19 +1,35 @@
 import Foundation
 
-/// A permission a *page* asks for through an ordinary web API —
-/// `getUserMedia`, `navigator.geolocation`, `Notification.requestPermission`.
+/// A device capability an app has to ask for before it can use.
 ///
-/// Deliberately the page's vocabulary rather than any platform's. One page
-/// request maps to several OS permissions on Android (`geolocation` needs both
-/// `ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION`), reaches a different
-/// seam on every backend, and has no OS counterpart at all on Linux. What the
-/// five have in common is what the page asked for, so that's what this models.
-public enum WebPermission: String, Sendable, Codable, CaseIterable {
+/// Deliberately the *app's* vocabulary rather than any platform's. One request
+/// maps to several OS permissions on Android (`geolocation` needs both
+/// `ACCESS_FINE_LOCATION` and `ACCESS_COARSE_LOCATION`; `bluetooth` needs
+/// `BLUETOOTH_SCAN` and `BLUETOOTH_CONNECT`), reaches a different seam on every
+/// backend, and has no OS counterpart at all on Linux. What the five platforms
+/// have in common is what was asked for, so that's what this models.
+///
+/// Most of these arrive through an ordinary web API — `getUserMedia`,
+/// `navigator.geolocation`, `Notification.requestPermission` — and the runtime
+/// answers on the page's behalf at each backend's permission seam.
+/// ``bluetooth`` is the exception: no webview here exposes Web Bluetooth, so it
+/// is only ever reached through `ble.*`. It sits in the same policy anyway
+/// because everything downstream of the decision is identical — one veto, one
+/// undeclared diagnostic, one build-time cross-check.
+public enum DevicePermission: String, Sendable, Codable, CaseIterable {
     case camera
     case microphone
     case geolocation
     case notifications
+    /// Talking to Bluetooth LE peripherals through `ble.*`. Declared under
+    /// `permissions.device` in `pwa.json`, not `permissions.web`.
+    case bluetooth
 }
+
+/// The name this enum shipped under in 0.10.0, when everything in it came from
+/// a web API.
+@available(*, deprecated, renamed: "DevicePermission")
+public typealias WebPermission = DevicePermission
 
 /// Why the runtime refused a permission request before the platform ever saw it.
 ///
@@ -38,8 +54,9 @@ public enum PermissionDecision: Sendable, Equatable {
     case deny(PermissionDenial)
 }
 
-/// The app-wide answer to "may this page use the camera / microphone /
-/// location", consulted by every backend at its own permission seam.
+/// The app-wide answer to "may this app use the camera / microphone / location
+/// / Bluetooth", consulted by every backend at its own permission seam and by
+/// the plugins that reach a capability the webview can't.
 ///
 /// Two ceilings, in order:
 ///
@@ -62,9 +79,9 @@ public enum PermissionDecision: Sendable, Equatable {
 /// Swift's MainActor executor. Same reasoning as `CommandRegistry`.
 public final class PermissionPolicy: @unchecked Sendable {
     private let lock = NSLock()
-    private var declared: Set<WebPermission> = []
-    private var veto: (@Sendable (WebPermission, String) -> Bool)?
-    private var diagnosed: Set<WebPermission> = []
+    private var declared: Set<DevicePermission> = []
+    private var veto: (@Sendable (DevicePermission, String) -> Bool)?
+    private var diagnosed: Set<DevicePermission> = []
 
     public init() {}
 
@@ -74,24 +91,24 @@ public final class PermissionPolicy: @unchecked Sendable {
     /// Call it from `configure`, before any window exists — a page can request
     /// a permission as soon as it loads.
     ///
-    /// > Today this is the only declaration the runtime reads. `pwa.json`'s
-    /// > `permissions.web` is what drives the *platform* artifacts (the Android
-    /// > manifest entries, the Apple usage descriptions), and a later change
-    /// > will cross-check the two at build time and fail on drift — the stance
-    /// > `agent.expose` already takes, resolving a manifest claim against the
-    /// > live catalog rather than trusting it.
-    public func declare(_ permissions: WebPermission...) {
+    /// > This is the ceiling the *runtime* reads. `pwa.json`'s `permissions`
+    /// > block is what drives the *platform* artifacts (the Android manifest
+    /// > entries, the Apple usage descriptions, the MSIX device capabilities),
+    /// > and `swift-pwa build` cross-checks the two and fails on drift in
+    /// > either direction — the stance `agent.expose` takes, resolving a
+    /// > manifest claim against the live catalog rather than trusting it.
+    public func declare(_ permissions: DevicePermission...) {
         declare(permissions)
     }
 
-    public func declare(_ permissions: some Sequence<WebPermission>) {
+    public func declare(_ permissions: some Sequence<DevicePermission>) {
         lock.lock()
         defer { lock.unlock() }
         declared.formUnion(permissions)
     }
 
     /// Everything declared so far.
-    public var declaredPermissions: Set<WebPermission> {
+    public var declaredPermissions: Set<DevicePermission> {
         lock.lock()
         defer { lock.unlock() }
         return declared
@@ -106,7 +123,7 @@ public final class PermissionPolicy: @unchecked Sendable {
     /// Called on whichever thread the backend's permission callback fires on,
     /// so keep it quick and don't assume the main actor. Installing a second
     /// one replaces the first.
-    public func setVeto(_ veto: (@Sendable (WebPermission, String) -> Bool)?) {
+    public func setVeto(_ veto: (@Sendable (DevicePermission, String) -> Bool)?) {
         lock.lock()
         defer { lock.unlock() }
         self.veto = veto
@@ -119,7 +136,7 @@ public final class PermissionPolicy: @unchecked Sendable {
     /// which is indistinguishable from a user saying no, so the only place the
     /// real cause can surface is here. Logged once per permission so a page
     /// that retries in a loop doesn't bury the rest of the output.
-    public func decide(_ permission: WebPermission, origin: String) -> PermissionDecision {
+    public func decide(_ permission: DevicePermission, origin: String) -> PermissionDecision {
         lock.lock()
         let isDeclared = declared.contains(permission)
         // Copied out and called *outside* the lock: it's app code, and app code
@@ -143,7 +160,7 @@ public final class PermissionPolicy: @unchecked Sendable {
     /// An empty set is refused too: a request we couldn't classify is not one
     /// to wave through.
     public func decide(
-        all permissions: Set<WebPermission>, origin: String
+        all permissions: Set<DevicePermission>, origin: String
     ) -> PermissionDecision {
         guard !permissions.isEmpty else { return .deny(.undeclared) }
         var firstDenial: PermissionDenial?
@@ -167,7 +184,7 @@ public final class PermissionPolicy: @unchecked Sendable {
     /// `enumerateDevices` on load would otherwise print a diagnostic naming a
     /// permission its author never wanted.
     public func decide(
-        any permissions: Set<WebPermission>, origin: String
+        any permissions: Set<DevicePermission>, origin: String
     ) -> PermissionDecision {
         lock.lock()
         let candidates = declared.intersection(permissions)
@@ -182,7 +199,7 @@ public final class PermissionPolicy: @unchecked Sendable {
         return .deny(candidates.isEmpty ? .undeclared : .vetoed)
     }
 
-    private func diagnoseUndeclared(_ permission: WebPermission, origin: String) {
+    private func diagnoseUndeclared(_ permission: DevicePermission, origin: String) {
         lock.lock()
         let isFirst = diagnosed.insert(permission).inserted
         lock.unlock()

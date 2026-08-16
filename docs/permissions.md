@@ -147,7 +147,7 @@ before — nothing regresses, but a declaration buys nothing either.
 | **Linux GTK3 / GTK4** | ✅ fixed | ✅ fixed | **Yes** |
 | **Android** | ✅ fixed | ✅ fixed | **Yes** |
 | **iOS** | ✅ already prompted and granted | ✅ already prompted and granted | Not yet |
-| **Windows** | ✅ already prompted and granted | ✅ already prompted and granted | Not yet |
+| **Windows** | ✅ already prompted and granted | ✅ already prompted and granted | **Yes** (capture) |
 | **macOS** | ✅ already worked | ❌ denied — WKWebView exposes no public grant path on macOS | Not yet |
 
 Still to come: **macOS geolocation**, which can't be fixed through the web API
@@ -248,6 +248,25 @@ Linux can't do this.
 Expect coarse results where there's no WiFi source configured: both test boxes
 return an IP-class fix accurate to ~26 km.
 
+## Windows specifics
+
+WebView2's `PermissionRequested` carries the declaration and the veto, so an
+undeclared or vetoed capture request is refused in tens of milliseconds with no
+dialog, and an allowed one is left at `DEFAULT` for WebView2 to ask the user.
+
+**The refusal is deliberately not saved.** Chromium remembers a per-origin
+`DENY` in the WebView2 profile, and once it does it stops raising the event at
+all — so an app whose user turned a switch off and back on would find capture
+blocked forever, with nothing left to consult. Measured on Windows 11 arm64:
+without `SavesInProfile(FALSE)` the second run is denied in ~45 ms and the
+handler is never reached. With it, the same profile refuses while vetoed and
+prompts again once the veto lifts.
+
+Worth knowing when testing: that stored decision survives app restarts, so a
+stale block in `%LOCALAPPDATA%\<appID>\WebData` can make a fixed build look
+broken. Delete the profile directory when a Windows permission result doesn't
+match the code.
+
 ## Apple specifics — why the veto can't reach capture
 
 On macOS and iOS the **app-level veto does not gate the page's own
@@ -282,7 +301,7 @@ claim.
 | `geo.*` (all platforms) | Yes | Yes |
 | Capture — Linux, Android | Yes | Yes |
 | Capture — macOS, iOS | No — TCC decides | No |
-| Capture — Windows | No — WebView2 prompts | Not yet wired |
+| Capture — Windows | Yes | Yes |
 
 ## Android specifics
 

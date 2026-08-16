@@ -482,8 +482,8 @@
                 grant <code>navigator.geolocation</code> at all.</p>
                 <p>Each switch is the <em>app's</em> own control, above the OS
                 prompt. It reaches <code>geo.*</code> everywhere; capture is
-                gated on Linux and Android so far, and takes the platform's
-                own answer on macOS, iOS and Windows.</p>
+                gated on Linux, Android and Windows; on macOS and iOS
+                the OS decides, and WKWebView never asks the app.</p>
 
                 <div class="perm-row">
                     <label class="switch">

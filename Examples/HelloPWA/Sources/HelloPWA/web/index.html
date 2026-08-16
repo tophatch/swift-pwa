@@ -94,11 +94,12 @@
            affordance* rather than leaving buttons that error — which is
            what a real settings toggle does, and the behaviour the veto
            exists to support. */
+        .perm-row { margin-top: 1rem; }
         .group-label, .switch {
             display: flex;
             align-items: center;
             gap: .5rem;
-            margin: 1.1rem 0 .5rem;
+            margin: 0 0 .5rem;
             font-size: .8rem;
             font-weight: 600;
             text-transform: uppercase;
@@ -479,25 +480,51 @@
                 something finally answers the webview's permission request.
                 Location goes through <code>geo.*</code>, because macOS can't
                 grant <code>navigator.geolocation</code> at all.</p>
+                <p>Each switch is the <em>app's</em> own control, above the OS
+                prompt. It reaches <code>geo.*</code> everywhere; capture is
+                gated on Linux and Android so far, and takes the platform's
+                own answer on macOS, iOS and Windows.</p>
 
-                <p class="group-label">Capture</p>
-                <div class="actions">
-                    <button id="cap-mic">Microphone</button>
-                    <button id="cap-cam">Camera</button>
+                <div class="perm-row">
+                    <label class="switch">
+                        <input type="checkbox" id="sw-camera" checked
+                               data-permission="camera"
+                               data-requires="demo.setPermissionEnabled">
+                        <span>Camera</span>
+                    </label>
+                    <div class="actions" id="act-camera">
+                        <button id="cap-cam">Open camera</button>
+                    </div>
                 </div>
 
-                <label class="switch">
-                    <input type="checkbox" id="geo-enabled" checked
-                           data-requires="demo.setLocationEnabled">
-                    <span>Location</span>
-                </label>
-                <div class="actions" id="geo-actions">
-                    <button id="geo-current" data-requires="geo.current">Where am I?</button>
-                    <button id="geo-watch" data-requires="geo.watch">Watch</button>
+                <div class="perm-row">
+                    <label class="switch">
+                        <input type="checkbox" id="sw-microphone" checked
+                               data-permission="microphone"
+                               data-requires="demo.setPermissionEnabled">
+                        <span>Microphone</span>
+                    </label>
+                    <div class="actions" id="act-microphone">
+                        <button id="cap-mic">Open microphone</button>
+                    </div>
                 </div>
-                <p class="switch-note" id="geo-off-note" hidden>Enforced in
-                Swift, not by hiding these — <a href="#" id="geo-anyway">ask
-                anyway</a>.</p>
+
+                <div class="perm-row">
+                    <label class="switch">
+                        <input type="checkbox" id="sw-geolocation" checked
+                               data-permission="geolocation"
+                               data-requires="demo.setPermissionEnabled">
+                        <span>Location</span>
+                    </label>
+                    <div class="actions" id="act-geolocation">
+                        <button id="geo-current" data-requires="geo.current">Where am I?</button>
+                        <button id="geo-watch" data-requires="geo.watch">Watch</button>
+                    </div>
+                </div>
+
+                <p class="switch-note">Switched off, the buttons go — but it's
+                enforced in Swift, not by hiding them.
+                <a href="#" id="ask-anyway">Ask anyway</a>.</p>
 
                 <div class="sess-count" id="device-out">Nothing asked for yet.</div>
             </section>
@@ -720,19 +747,21 @@
                 btn.textContent = "Stop watching";
                 log("geo.watch started");
             },
-            geoToggle: async () => {
-                locationEnabled = document.getElementById("geo-enabled").checked;
-                await __SWIFT_PWA__.invoke("demo.setLocationEnabled", { enabled: locationEnabled });
-                // Stop any live watch on the way down: leaving one running
-                // would keep delivering fixes the switch just said no to.
-                if (!locationEnabled && geoStop) {
+            togglePermission: async (input) => {
+                const permission = input.dataset.permission;
+                await __SWIFT_PWA__.invoke("demo.setPermissionEnabled", {
+                    permission,
+                    enabled: input.checked,
+                });
+                // Stop a live watch on the way down: leaving one running would
+                // keep delivering fixes the switch just said no to.
+                if (!input.checked && permission === "geolocation" && geoStop) {
                     geoStop();
                     geoStop = null;
                     document.getElementById("geo-watch").textContent = "Watch";
                 }
-                document.getElementById("geo-actions").hidden = !locationEnabled;
-                document.getElementById("geo-off-note").hidden = locationEnabled;
-                log(`app-level location switch → ${locationEnabled ? "on" : "off"}`);
+                document.getElementById(`act-${permission}`).hidden = !input.checked;
+                log(`app switch: ${permission} → ${input.checked ? "on" : "off"}`);
             },
             capture: async (kind) => {
                 const out = document.getElementById("device-out");
@@ -1149,15 +1178,17 @@
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
         document.getElementById("geo-current").onclick = actions.geoCurrent;
         document.getElementById("geo-watch").onclick = actions.geoWatch;
-        document.getElementById("geo-enabled").onchange = actions.geoToggle;
-        // Proves the switch isn't cosmetic: the same call the hidden buttons
+        document.getElementById("cap-mic").onclick = () => actions.capture("microphone");
+        document.getElementById("cap-cam").onclick = () => actions.capture("camera");
+        document.querySelectorAll(".switch input[data-permission]").forEach((input) => {
+            input.onchange = () => actions.togglePermission(input);
+        });
+        // Proves the switches aren't cosmetic: the same call a hidden button
         // would make, refused natively with a distinguishable code.
-        document.getElementById("geo-anyway").onclick = (e) => {
+        document.getElementById("ask-anyway").onclick = (e) => {
             e.preventDefault();
             actions.geoCurrent();
         };
-        document.getElementById("cap-mic").onclick = () => actions.capture("microphone");
-        document.getElementById("cap-cam").onclick = () => actions.capture("camera");
         document.getElementById("notify").onclick = actions.notify;
         document.getElementById("toast").onclick  = actions.toast;
         document.getElementById("dialog-confirm").onclick = actions.dialogConfirm;

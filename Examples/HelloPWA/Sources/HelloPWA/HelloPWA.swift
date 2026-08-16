@@ -176,10 +176,10 @@ func configure(_ ctx: any AppContext) throws {
     // would drive. It sits *above* the OS prompt, so flipping it off refuses
     // without asking the user about something the app has already decided.
     ctx.permissions.setVeto { permission, _ in
-        permission == .geolocation && !LocationSwitch.shared.isOn
+        !PermissionSwitches.shared.isEnabled(permission.rawValue)
     }
-    ctx.registry.register("demo.setLocationEnabled", typed: { (args: LocationSwitchArgs, _) -> LocationSwitchArgs in
-        LocationSwitch.shared.isOn = args.enabled
+    ctx.registry.register("demo.setPermissionEnabled", typed: { (args: PermissionSwitchArgs, _) -> PermissionSwitchArgs in
+        PermissionSwitches.shared.set(args.permission, enabled: args.enabled)
         return args
     })
 
@@ -446,20 +446,31 @@ private let trayIconPNG: [UInt8] = [
     0xAE, 0x42, 0x60, 0x82
 ]
 
-/// Backs the "Device & location" card's in-app location toggle. A plain
-/// lock-guarded flag rather than anything clever: the point of the demo is
-/// that the veto is *the app's* decision, made wherever the app keeps its
-/// settings.
-final class LocationSwitch: @unchecked Sendable {
-    static let shared = LocationSwitch()
+/// Backs the "Device & location" card's in-app switches — the app's own
+/// privacy controls, one per permission. A plain lock-guarded set rather than
+/// anything clever: the point is that the veto is *the app's* decision, made
+/// wherever the app already keeps its settings.
+///
+/// It covers camera and microphone as well as location, which is the part worth
+/// seeing: the veto gates the page's **own** `getUserMedia`, not just the
+/// plugin. An app can turn its camera off and mean it.
+final class PermissionSwitches: @unchecked Sendable {
+    static let shared = PermissionSwitches()
     private let lock = NSLock()
-    private var value = true
-    var isOn: Bool {
-        get { lock.withLock { value } }
-        set { lock.withLock { value = newValue } }
+    private var disabled: Set<String> = []
+
+    func isEnabled(_ permission: String) -> Bool {
+        lock.withLock { !disabled.contains(permission) }
+    }
+
+    func set(_ permission: String, enabled: Bool) {
+        lock.withLock {
+            if enabled { disabled.remove(permission) } else { disabled.insert(permission) }
+        }
     }
 }
 
-struct LocationSwitchArgs: Codable, Sendable {
+struct PermissionSwitchArgs: Codable, Sendable {
+    var permission: String
     var enabled: Bool
 }

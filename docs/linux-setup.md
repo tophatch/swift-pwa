@@ -377,6 +377,17 @@ End-to-end functionality is in place on both — JS `__SWIFT_PWA__.invoke()` /
 `subscribe()` round-trip through the bridge — but a few rough edges
 remain:
 
+- **Camera, microphone and location need a declaration.** WebKitGTK asks the
+  embedder before letting a page use them, and an undeclared request is
+  refused — with a diagnostic on stderr naming the fix. Add
+  `ctx.permissions.declare(.microphone)` (etc.) in `configure`; see
+  [docs/permissions.md](permissions.md). Screen capture, pointer lock and
+  encrypted-media key systems are refused on every backend and have no
+  declaration. Two Linux-specific traps when testing capture: over SSH you must
+  export `XDG_RUNTIME_DIR=/run/user/$(id -u)` or WebKit sees no audio devices at
+  all, and geolocation needs a working GeoClue provider — with the permission
+  granted but no provider you get `POSITION_UNAVAILABLE` / `TIMEOUT` rather than
+  `PERMISSION_DENIED`.
 - **`Window.position()` / `setPosition` / `.didMove` are no-ops on the
   GTK4 backend.** GTK4 dropped the position APIs entirely (Wayland
   refuses to give apps their own position; CSD makes the concept

@@ -81,6 +81,11 @@
             webView = adapter
             self.app = app
 
+            // Before `load` below: a page can ask for the camera the moment it
+            // runs, and an unanswered request takes WebKit's silent-refuse
+            // default.
+            adapter.connectPermissionHandler(policy: app.permissions)
+
             // Native background before first paint (no white flash).
             if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
                 adapter.setBackgroundColor(rgb)

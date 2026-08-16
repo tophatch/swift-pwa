@@ -1,6 +1,13 @@
 # Proposal: a unified device surface — `permissions.*` and `geo.*`
 
-> **Status: proposed.** Written from measurements on real hardware on all five
+> **Status: in progress — Linux has landed.** Both GTK backends now answer
+> `permission-request` from a new app-wide `ctx.permissions` policy, so camera,
+> microphone and location work there for the first time; see
+> [docs/permissions.md](../permissions.md) for the adopter-facing API and
+> [Per-backend seam](#per-backend-seam) for what's left. The rest of this
+> document is unchanged from the proposal.
+>
+> Written from measurements on real hardware on all five
 > platforms rather than from reading the backends — the reading came second, and
 > confirmed it. Measuring changed the conclusion twice; see
 > [What the deliverable actually is](#what-the-deliverable-actually-is), which is
@@ -237,7 +244,7 @@ single surface — which is the thing worth building.
 | **Windows** | ✅ already prompts and grants | **None.** A handler on `ICoreWebView2::add_PermissionRequested` would only *remove* working behaviour. Add a regression test. |
 | **Android** | ❌ capture and location both denied | The whole slice: a `WebChromeClient` (`onPermissionRequest` + `onGeolocationPermissionsShowPrompt`), the manifest entries, and an OS **runtime** permission request behind them. |
 | **macOS** | ❌ location denied; capture already works | Geolocation only. WKWebView offers no public grant path on macOS, so this is `geo.*` rather than a bridged web API. |
-| **Linux** | ❌ **everything denied** — location *and* capture | `permission-request` on both GTK backends — one signal, subtype-switched (`WebKitUserMediaPermissionRequest`, `WebKitGeolocationPermissionRequest`, …). Cheapest fix of the three broken platforms: one signal covers every permission type. |
+| **Linux** | ✅ **done** — was everything denied, location *and* capture | `permission-request` on both GTK backends — one signal, subtype-switched (`WebKitUserMediaPermissionRequest`, `WebKitGeolocationPermissionRequest`, …). Cheapest fix of the three broken platforms, exactly as predicted: one signal covered every permission type, and the classification lives in the C shim because the `WEBKIT_IS_*` type checks are macros. |
 
 The Android runtime-request helper is shared ground with
 [ble-plugin.md](ble-plugin.md), which needs the same thing for `BLUETOOTH_SCAN` /
@@ -323,10 +330,23 @@ geolocation on macOS, Linux and Android; the `pwa.json` declaration and the
 manifest/plist emission it drives; `geo.*` on five platforms; regression tests on
 iOS and Windows so the two platforms that already work don't quietly stop.
 
-**Sequence:** **Linux first** — one `permission-request` handler fixes capture and
-location together on both GTK backends, so it's the largest gap closed by the
-smallest change. Then Android capture, which is the other outage and needs two
-layers. Then the declaration plumbing, then `geo.*` for macOS.
+**Sequence:** ~~**Linux first**~~ ✅ **done** — one `permission-request` handler
+fixed capture and location together on both GTK backends, the largest gap closed
+by the smallest change. **Next: Android capture**, the other outage, which needs
+two layers. Then the declaration plumbing, then `geo.*` for macOS.
+
+Two things the Linux slice settled that the rest inherits:
+
+- **The runtime policy is `ctx.permissions`, and it is per-app, not per-window.**
+  Declaration is additive and lock-guarded rather than actor-isolated, because
+  backends consult it from whatever thread their permission callback fires on —
+  a GTK main loop, a WebView2 callback, a JNI thread — none of which pumps
+  Swift's MainActor executor. Same reasoning as `CommandRegistry`.
+- **One request can carry several permissions.** `getUserMedia({audio: true,
+  video: true})` is a *single* WebKit request that can only be allowed or denied
+  whole, and `enumerateDevices()` labels are satisfied by *either* capture
+  permission. So the policy answers three shapes — one, all-of, any-of — and
+  every backend will need the same three.
 
 **Out:** Web Push (a server story, not a permission one), background location,
 screen capture, MIDI, clipboard *read* (the shipped `clipboard.*` plugin covers

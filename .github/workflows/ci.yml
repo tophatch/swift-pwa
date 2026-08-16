@@ -102,6 +102,15 @@ jobs:
             "typeof __SWIFT_PWA__")
           echo "$OUT"
           echo "$OUT" | grep -q object
+          # A promise-shaped script, because every other `drive eval` in this
+          # file is synchronous — so without this a green run says nothing about
+          # whether awaiting works. The delay is deliberate: it forces at least
+          # one poll to come back pending, exercising the park-on-a-global and
+          # read-it-back path rather than a promise that's already settled.
+          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            "new Promise(r => setTimeout(() => r('awaited'), 250))")
+          echo "$OUT"
+          echo "$OUT" | grep -q awaited
           # Don't leave it running — the job's cleanup reports it as an orphan,
           # which is noise in the log of the next thing that goes wrong.
           pkill -x BundleSmoke || true
@@ -181,6 +190,14 @@ jobs:
             "typeof __SWIFT_PWA__")
           echo "$OUT"
           echo "$OUT" | grep -q object
+          # See the macOS job: the one promise-shaped assertion in the file, and
+          # the only thing here that covers `drive eval` awaiting at all. Worth
+          # having on both desktop backends, since the await is client-side and
+          # WebKitGTK is the backend that surfaced the bug.
+          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            "new Promise(r => setTimeout(() => r('awaited'), 250))")
+          echo "$OUT"
+          echo "$OUT" | grep -q awaited
           pkill -x BundleSmoke || true
 
   # `drive --simulator`, on demand (workflow_dispatch) or weekly — NOT on every

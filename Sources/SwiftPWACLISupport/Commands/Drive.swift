@@ -131,6 +131,19 @@ struct DriveEval: AsyncParsableCommand {
 
     func run() async throws {
         try await DriveSession.run(options) { client in
+            // A promise is awaited automatically: no backend resolves one, so
+            // the alternative is failing with a serialization complaint that
+            // never mentions promises. Bounded by `--timeout`.
+            if let settled = try client.evalAwaitingPromise(
+                script,
+                timeout: options.timeout,
+                window: options.window
+            ) {
+                print(settled.prettyPrinted)
+                return
+            }
+            // The page's CSP forbids `eval`, so the script hasn't run yet.
+            // Evaluate it directly — the pre-0.10 path, minus promise support.
             var payload: [String: BridgeJSON] = ["js": .string(script)]
             if let window = options.window { payload["window"] = .string(window) }
             try print(client.invoke("eval", payload).prettyPrinted)

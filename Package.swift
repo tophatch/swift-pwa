@@ -128,13 +128,25 @@ let geoClueSystemLibraryTarget: Target = .systemLibrary(
     ]
 )
 
+/// BlueZ (the Linux `ble.*` backend) is the same story: its GATT interface is
+/// D-Bus, with no usable C library, so gio is the whole dependency and one
+/// target serves both backends.
+let blueZSystemLibraryTarget: Target = .systemLibrary(
+    name: "CBlueZShim",
+    path: "Sources/CBlueZShim",
+    pkgConfig: "gio-2.0",
+    providers: [
+        .apt(["libglib2.0-dev"])
+    ]
+)
+
 /// The GTK3-or-GTK4 tray system-library shim (exactly one is non-nil,
 /// gated on `useGtk4`). Combined into a single term so the big `targets:`
 /// literal keeps just one optional `+` splice — extending that chain
 /// further trips the type-checker on older Swift toolchains.
 let optionalLinuxTrayTargets: [Target] =
     [appIndicatorSystemLibraryTarget, statusNotifierSystemLibraryTarget].compactMap(\.self)
-        + [geoClueSystemLibraryTarget]
+        + [geoClueSystemLibraryTarget, blueZSystemLibraryTarget]
 
 /// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
 /// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit
@@ -160,7 +172,9 @@ let gtkBackendTarget: Target = useGtk4
             .target(name: "CZstd", condition: .when(platforms: [.linux])),
             // GeoClue 2 over D-Bus — the `geo.*` backend, shared by both
             // Linux backends because it needs no toolkit.
-            .target(name: "CGeoClueShim", condition: .when(platforms: [.linux]))
+            .target(name: "CGeoClueShim", condition: .when(platforms: [.linux])),
+            // BlueZ over D-Bus — the `ble.*` backend, likewise toolkit-free.
+            .target(name: "CBlueZShim", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK4",
         swiftSettings: swiftSettings
@@ -179,7 +193,9 @@ let gtkBackendTarget: Target = useGtk4
             .target(name: "CZstd", condition: .when(platforms: [.linux])),
             // GeoClue 2 over D-Bus — the `geo.*` backend, shared by both
             // Linux backends because it needs no toolkit.
-            .target(name: "CGeoClueShim", condition: .when(platforms: [.linux]))
+            .target(name: "CGeoClueShim", condition: .when(platforms: [.linux])),
+            // BlueZ over D-Bus — the `ble.*` backend, likewise toolkit-free.
+            .target(name: "CBlueZShim", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK",
         swiftSettings: swiftSettings

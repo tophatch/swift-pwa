@@ -217,7 +217,7 @@
         /* Compact running-total readout for the duplex-session card. */
         .sess-total { font-size: 2.2rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
         .sess-count { color: var(--muted); font-size: .85rem; min-height: 1.15em; margin-top: .15rem; }
-        #device-out { margin-top: .9rem; }
+        #capture-out, #geo-out { margin-top: .9rem; }
 
         /* Card style pulled from CritterFacts: dark surface, hairline
            border, generous radius. */
@@ -475,15 +475,14 @@
             </section>
 
             <section class="section">
-                <h2>Device &amp; location</h2>
+                <h2>Camera &amp; microphone</h2>
                 <p>Your page's own <code>getUserMedia</code> works because
-                something finally answers the webview's permission request.
-                Location goes through <code>geo.*</code>, because macOS can't
-                grant <code>navigator.geolocation</code> at all.</p>
-                <p>Each switch is the <em>app's</em> own control, above the OS
-                prompt. It reaches <code>geo.*</code> everywhere; capture is
-                gated on Linux, Android and Windows; on macOS and iOS
-                the OS decides, and WKWebView never asks the app.</p>
+                something finally answers the webview's permission request —
+                before 0.10 nothing did, and three platforms denied silently.</p>
+                <p>The switches are the <em>app's</em> own control, above the OS
+                prompt. They gate capture on Linux, Android and Windows; on
+                macOS and iOS the OS decides, because WKWebView never asks the
+                app about bundled content.</p>
 
                 <div class="perm-row">
                     <label class="switch">
@@ -509,24 +508,36 @@
                     </div>
                 </div>
 
+                <div class="sess-count" id="capture-out">Nothing asked for yet.</div>
+            </section>
+
+            <section class="section">
+                <h2>Location</h2>
+                <p><code>navigator.geolocation</code> can't be granted on macOS
+                at all — WKWebView gives an embedder no say — so location goes
+                through <code>geo.*</code> instead: one call, same shape, all
+                five platforms.</p>
+                <p>Unlike capture, the app's switch reaches location
+                <em>everywhere</em>, because the plugin checks it in Swift
+                before it touches the hardware.</p>
+
                 <div class="perm-row">
                     <label class="switch">
                         <input type="checkbox" id="sw-geolocation" checked
                                data-permission="geolocation"
                                data-requires="demo.setPermissionEnabled">
-                        <span>Location</span>
+                        <span>Enabled</span>
                     </label>
                     <div class="actions" id="act-geolocation">
                         <button id="geo-current" data-requires="geo.current">Where am I?</button>
                         <button id="geo-watch" data-requires="geo.watch">Watch</button>
                     </div>
                 </div>
-
-                <p class="switch-note">Switched off, the buttons go — but it's
-                enforced in Swift, not by hiding them.
+                <p class="switch-note" id="geo-off-note" hidden>Switched off, the
+                buttons go — but it's enforced in Swift, not by hiding them.
                 <a href="#" id="ask-anyway">Ask anyway</a>.</p>
 
-                <div class="sess-count" id="device-out">Nothing asked for yet.</div>
+                <div class="sess-count" id="geo-out">Nothing asked for yet.</div>
             </section>
 
             <section class="section">
@@ -716,7 +727,7 @@
                 log("tray " + (trayVisible ? "shown" : "hidden"));
             },
             geoCurrent: async () => {
-                const out = document.getElementById("device-out");
+                const out = document.getElementById("geo-out");
                 out.textContent = "asking…";
                 try {
                     const fix = await __SWIFT_PWA__.invoke("geo.current", { accuracy: "balanced" });
@@ -731,7 +742,7 @@
             },
             geoWatch: async () => {
                 const btn = document.getElementById("geo-watch");
-                const out = document.getElementById("device-out");
+                const out = document.getElementById("geo-out");
                 if (geoStop) {
                     geoStop();
                     geoStop = null;
@@ -761,10 +772,13 @@
                     document.getElementById("geo-watch").textContent = "Watch";
                 }
                 document.getElementById(`act-${permission}`).hidden = !input.checked;
+                if (permission === "geolocation") {
+                    document.getElementById("geo-off-note").hidden = input.checked;
+                }
                 log(`app switch: ${permission} → ${input.checked ? "on" : "off"}`);
             },
             capture: async (kind) => {
-                const out = document.getElementById("device-out");
+                const out = document.getElementById("capture-out");
                 out.textContent = `asking for the ${kind}…`;
                 try {
                     const stream = await navigator.mediaDevices.getUserMedia(

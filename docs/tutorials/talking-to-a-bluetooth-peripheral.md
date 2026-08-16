@@ -229,8 +229,11 @@ the whole reason the declaration lives in two places.
 ## See it running
 
 The **Bluetooth** card in [`Examples/HelloPWA`](../../Examples/HelloPWA) does
-everything above: scan, connect to whichever fixture is in range, subscribe,
-write, read, and the app's own on/off switch.
+everything above, and works without setting up a fixture at all: scan, then pick
+anything that turns up — a watch, headphones, a sensor — and it reads that
+device's GATT tree, which is where any real conversation starts. It only
+*writes* when the peripheral is one of the fixtures, which then gets the full
+subscribe / `ping` / read round trip.
 
 ```bash
 cd Examples/HelloPWA

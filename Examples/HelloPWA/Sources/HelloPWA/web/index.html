@@ -218,6 +218,23 @@
         .sess-total { font-size: 2.2rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
         .sess-count { color: var(--muted); font-size: .85rem; min-height: 1.15em; margin-top: .15rem; }
         #capture-out, #geo-out { margin-top: .9rem; }
+        .ble-found { margin-top: .75rem; max-height: 11rem; overflow-y: auto; }
+        .ble-found button {
+            display: block;
+            width: 100%;
+            margin: 0 0 .35rem;
+            padding: .45rem .6rem;
+            text-align: left;
+            font-size: .85rem;
+            font-weight: 500;
+            /* The same neutral chip the disabled buttons use, which is
+               defined against --muted so it reads in both themes — a
+               hard-coded translucent white would vanish on the light one. */
+            background: color-mix(in srgb, var(--muted) 18%, transparent);
+            color: inherit;
+            min-height: 0;
+        }
+        .ble-found .rssi { color: var(--muted); float: right; font-variant-numeric: tabular-nums; }
 
         /* Card style pulled from CritterFacts: dark surface, hairline
            border, generous radius. */
@@ -547,11 +564,12 @@
                 WebView doesn't expose it either. <code>ble.*</code> is the
                 whole of it — scan as a stream, a connection as a duplex
                 session.</p>
-                <p>Point it at <code>Scripts/ble-test-peripheral.*</code>
-                running on another machine. <strong>Scan</strong> lists what's
-                advertising; <strong>Connect</strong> opens the first swift-pwa
-                fixture in range, subscribes, writes <code>ping</code> and reads
-                back.</p>
+                <p><strong>Scan</strong>, then pick anything that turns up —
+                a watch, a pair of headphones, a sensor. Connecting reads its
+                GATT tree, which is what any real device conversation starts
+                with. Nothing is written unless it's the
+                <code>Scripts/ble-test-peripheral.*</code> fixture, which also
+                gets a <code>ping</code> and a subscription.</p>
 
                 <div class="perm-row">
                     <label class="switch">
@@ -562,11 +580,11 @@
                     </label>
                     <div class="actions" id="act-bluetooth">
                         <button id="ble-scan" data-requires="ble.scan">Scan</button>
-                        <button id="ble-connect" data-requires="ble.connect">Connect</button>
                         <button id="ble-close" data-requires="ble.connect" disabled>Close</button>
                     </div>
                 </div>
 
+                <div class="ble-found" id="ble-found" hidden></div>
                 <div class="sess-count" id="ble-out">Nothing asked for yet.</div>
             </section>
 
@@ -765,6 +783,7 @@
             },
             bleScan: async () => {
                 const out = document.getElementById("ble-out");
+                const list = document.getElementById("ble-found");
                 const btn = document.getElementById("ble-scan");
                 if (bleStopScan) {
                     bleStopScan();
@@ -772,14 +791,46 @@
                     btn.textContent = "Scan";
                     return;
                 }
+
+                const { isAvailable, reason } = await __SWIFT_PWA__.invoke("ble.availability", {});
+                if (!isAvailable) {
+                    // A switched-off adapter scans happily and finds nothing,
+                    // which is indistinguishable from an empty room.
+                    out.textContent = reason;
+                    return;
+                }
+
                 const seen = new Map();
                 out.textContent = "scanning…";
+                list.hidden = false;
                 bleStopScan = __SWIFT_PWA__.subscribe("ble.scan", {}, (found) => {
                     seen.set(found.id, found);
-                    // Raw, not de-duplicated by the runtime — watching RSSI
-                    // settle is how you'd build a device picker.
-                    const named = [...seen.values()].filter((p) => p.name).length;
-                    out.textContent = `${seen.size} peripheral${seen.size === 1 ? "" : "s"}, ${named} named`;
+                    out.textContent = `${seen.size} peripheral${seen.size === 1 ? "" : "s"} — pick one to connect`;
+                    // Only connectable ones, strongest first: a scan in a
+                    // populated room finds dozens, most of them beacons that
+                    // would refuse a connection anyway.
+                    //
+                    // The test fixture jumps the queue. Measured in an ordinary
+                    // room: 48 peripherals, and the one deliberately set up to
+                    // be connected to sat outside the top 8 on signal alone.
+                    const isFixture = (p) => (p.services || []).includes(BLE_SERVICE);
+                    const byStrength = (a, b) => (b.rssi ?? -999) - (a.rssi ?? -999);
+                    const connectable = [...seen.values()].filter((p) => p.isConnectable !== false);
+                    const pickable = [
+                        ...connectable.filter(isFixture).sort(byStrength),
+                        ...connectable.filter((p) => !isFixture(p)).sort(byStrength),
+                    ].slice(0, 8);
+                    list.replaceChildren(...pickable.map((p) => {
+                        const row = document.createElement("button");
+                        const label = document.createElement("span");
+                        label.textContent = p.name || p.id;
+                        const rssi = document.createElement("span");
+                        rssi.className = "rssi";
+                        rssi.textContent = p.rssi == null ? "" : `${p.rssi} dBm`;
+                        row.append(rssi, label);
+                        row.onclick = () => actions.bleConnect(p);
+                        return row;
+                    }));
                 }, (error) => {
                     out.textContent = `${error.code}: ${error.message}`;
                     bleStopScan = null;
@@ -788,30 +839,35 @@
                 btn.textContent = "Stop scanning";
                 log("ble.scan started");
             },
-            bleConnect: async () => {
+            bleConnect: (peripheral) => {
                 const out = document.getElementById("ble-out");
                 const close = document.getElementById("ble-close");
-                out.textContent = "looking for the fixture…";
-
-                let found = null;
-                const stop = __SWIFT_PWA__.subscribe("ble.scan", { services: [BLE_SERVICE] },
-                    (peripheral) => { found = found || peripheral; },
-                    (error) => { out.textContent = `${error.code}: ${error.message}`; });
-                await new Promise((resolve) => setTimeout(resolve, 5000));
-                stop();
-                if (!found) {
-                    out.textContent = "no swift-pwa test peripheral in range";
-                    return;
+                if (bleStopScan) {
+                    // One radio: stop looking before opening a link, so the
+                    // picker doesn't keep churning underneath the connection.
+                    bleStopScan();
+                    bleStopScan = null;
+                    document.getElementById("ble-scan").textContent = "Scan";
                 }
+                document.getElementById("ble-found").hidden = true;
+                if (bleLink) bleLink.close();
 
-                out.textContent = `connecting to ${found.name} (${found.rssi} dBm)…`;
-                bleLink = __SWIFT_PWA__.session("ble.connect", { id: found.id }, {
+                const name = peripheral.name || peripheral.id;
+                out.textContent = `connecting to ${name}…`;
+                bleLink = __SWIFT_PWA__.session("ble.connect", { id: peripheral.id }, {
                     onChunk: (event) => {
                         if (event.kind === "ready") {
-                            out.textContent = `connected — ${event.services.length} services`;
-                            // The token comes back on the ack, which is the only
-                            // way to tell which push was answered.
-                            bleLink.push({ kind: "subscribe", characteristic: BLE_NOTIFY, token: 1 });
+                            const characteristics = event.services
+                                .reduce((n, s) => n + s.characteristics.length, 0);
+                            out.textContent =
+                                `${name}: ${event.services.length} services, ${characteristics} characteristics`;
+                            log(`ble ready — ${event.services.map((s) => s.uuid.slice(4, 8)).join(" ")}`);
+                            // Reading a stranger's GATT tree is fair game;
+                            // writing to one is not. The round trip only runs
+                            // against our own fixture.
+                            if (event.services.some((s) => s.uuid === BLE_SERVICE)) {
+                                bleLink.push({ kind: "subscribe", characteristic: BLE_NOTIFY, token: 1 });
+                            }
                         } else if (event.kind === "ack" && event.token === 1) {
                             bleLink.push({
                                 kind: "write", characteristic: BLE_WRITE,
@@ -822,9 +878,9 @@
                         } else if (event.kind === "read") {
                             log(`ble read → ${atob(event.value)}`);
                         } else if (event.kind === "notify") {
-                            out.textContent = `notified: ${atob(event.value)}`;
+                            out.textContent = `${name} says: ${atob(event.value)}`;
                         } else if (event.kind === "state") {
-                            out.textContent = event.connected ? "connected" : "dropped — retrying";
+                            if (!event.connected) out.textContent = `${name} dropped — retrying`;
                         } else if (event.kind === "failed") {
                             log(`ble failed: ${event.message}`);
                         }
@@ -1313,7 +1369,6 @@
         document.getElementById("cap-mic").onclick = () => actions.capture("microphone");
         document.getElementById("cap-cam").onclick = () => actions.capture("camera");
         document.getElementById("ble-scan").onclick = actions.bleScan;
-        document.getElementById("ble-connect").onclick = actions.bleConnect;
         document.getElementById("ble-close").onclick = actions.bleClose;
         document.querySelectorAll(".switch input[data-permission]").forEach((input) => {
             input.onchange = () => actions.togglePermission(input);

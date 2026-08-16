@@ -86,6 +86,15 @@ enum AppxManifestGenerator {
         let description = xmlEscape(manifest.description ?? manifest.name)
         let executable = manifest.name + ".exe"
 
+        // `permissions.device.bluetooth` → the `bluetooth` device capability.
+        // A portable .exe needs nothing (an unpackaged Win32 app reaches the
+        // radio directly), but a packaged app is capability-gated: without this
+        // the WinRT calls fail rather than prompting, so the MSIX is the one
+        // Windows artifact the declaration has to reach.
+        let bluetoothCapability = (manifest.permissions?.device?.names ?? []).contains("bluetooth")
+            ? "\n            <DeviceCapability Name=\"bluetooth\" />"
+            : ""
+
         // File-type associations (windows.document_types) → a
         // `windows.fileTypeAssociation` extension per declared group, so the OS
         // associates the app with those extensions on install. Empty when none
@@ -135,7 +144,7 @@ enum AppxManifestGenerator {
           </Applications>
 
           <Capabilities>
-            <rescap:Capability Name="runFullTrust" />\(phiSilicaCapability)
+            <rescap:Capability Name="runFullTrust" />\(phiSilicaCapability)\(bluetoothCapability)
           </Capabilities>
 
         </Package>

@@ -56,6 +56,22 @@ struct AppxManifestGeneratorTests {
         #expect(xml.contains("MaxVersionTested=\"10.0.26100.0\""))
     }
 
+    @Test("permissions.device.bluetooth adds the bluetooth device capability")
+    func bluetoothCapability() {
+        var m = base()
+        m.permissions = .init(device: .init(names: ["bluetooth"]))
+        let xml = AppxManifestGenerator.render(manifest: m)
+        // A portable .exe reaches the radio with no declaration at all; a
+        // packaged app is capability-gated, and without this the WinRT calls
+        // fail instead of prompting.
+        #expect(xml.contains("<DeviceCapability Name=\"bluetooth\" />"))
+        // Not rescap-namespaced — `bluetooth` is a general device capability,
+        // and `<rescap:DeviceCapability>` wouldn't validate.
+        #expect(!xml.contains("rescap:DeviceCapability"))
+
+        #expect(!AppxManifestGenerator.render(manifest: base()).contains("DeviceCapability"))
+    }
+
     @Test("Without ai.phi_silica: no framework dependency, default min-OS")
     func noPhiSilicaDefaults() {
         let xml = AppxManifestGenerator.render(manifest: base())

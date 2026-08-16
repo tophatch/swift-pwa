@@ -72,8 +72,8 @@
 
         /// The bits this runtime models, or nil if the mask carries none —
         /// which is a request type to refuse, not an empty grant.
-        private static func permissions(in mask: UInt32) -> Set<WebPermission>? {
-            var wanted: Set<WebPermission> = []
+        private static func permissions(in mask: UInt32) -> Set<DevicePermission>? {
+            var wanted: Set<DevicePermission> = []
             if mask & SWIFTPWA_PERM_MICROPHONE != 0 { wanted.insert(.microphone) }
             if mask & SWIFTPWA_PERM_CAMERA != 0 { wanted.insert(.camera) }
             if mask & SWIFTPWA_PERM_GEOLOCATION != 0 { wanted.insert(.geolocation) }

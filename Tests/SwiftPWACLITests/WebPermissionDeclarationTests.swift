@@ -57,6 +57,55 @@ struct WebPermissionDeclarationTests {
         #expect(xml.contains(#"<uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION"/>"#))
     }
 
+    @Test("bluetooth emits the API-31 pair, promising not to infer location")
+    func androidBluetoothModern() {
+        let xml = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.app", label: "App", hasIcon: false,
+            webPermissions: ["bluetooth"], minSdk: 31
+        )
+        // Without `neverForLocation` the app has to hold ACCESS_FINE_LOCATION
+        // to scan at all — a location permission for a capability that has
+        // nothing to do with location.
+        #expect(xml.contains(
+            #"<uses-permission android:name="android.permission.BLUETOOTH_SCAN" android:usesPermissionFlags="neverForLocation"/>"#
+        ))
+        #expect(xml.contains(#"<uses-permission android:name="android.permission.BLUETOOTH_CONNECT"/>"#))
+        // An app that can't run below 31 shouldn't carry the superseded ones.
+        #expect(!xml.contains("BLUETOOTH_ADMIN"))
+        #expect(!xml.contains("ACCESS_FINE_LOCATION"))
+    }
+
+    @Test("below API 31 it also emits the superseded three, capped")
+    func androidBluetoothLegacy() {
+        let xml = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.app", label: "App", hasIcon: false,
+            webPermissions: ["bluetooth"], minSdk: 28
+        )
+        #expect(xml.contains(
+            #"<uses-permission android:name="android.permission.BLUETOOTH_ADMIN" android:maxSdkVersion="30"/>"#
+        ))
+        // Scanning genuinely needed location before 31, so it's declared — but
+        // capped, so a modern device is never asked for it.
+        #expect(xml.contains(
+            #"<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>"#
+        ))
+    }
+
+    @Test("declaring both bluetooth and geolocation doesn't cap location at API 30")
+    func androidLocationNotCappedByBluetooth() {
+        // `bluetooth` wants ACCESS_FINE_LOCATION only up to API 30 and
+        // `geolocation` needs it forever. First-seen-wins would silently break
+        // location on every modern device — and `bluetooth` sorts first.
+        let xml = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.app", label: "App", hasIcon: false,
+            webPermissions: ["bluetooth", "geolocation"], minSdk: 28
+        )
+        #expect(xml.contains(#"<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION"/>"#))
+        #expect(!xml.contains(
+            #"<uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" android:maxSdkVersion="30"/>"#
+        ))
+    }
+
     @Test("an app that declares nothing gains no permission lines")
     func androidManifestUnchanged() {
         // An undeclared permission in the manifest is a Play Store review

@@ -79,7 +79,7 @@ struct PermissionPolicyTests {
     @Test("an unclassifiable request is refused, not waved through")
     func emptyAllOfIsDenied() {
         let policy = PermissionPolicy()
-        policy.declare(WebPermission.allCases)
+        policy.declare(DevicePermission.allCases)
         #expect(policy.decide(all: [], origin: "o") == .deny(.undeclared))
     }
 
@@ -105,8 +105,8 @@ struct PermissionPolicyTests {
     func rawValuesAreStable() {
         // These names travel into `pwa.json` and the diagnostics, so a rename
         // is a breaking change rather than a tidy-up.
-        #expect(Set(WebPermission.allCases.map(\.rawValue)) == [
-            "camera", "microphone", "geolocation", "notifications"
+        #expect(Set(DevicePermission.allCases.map(\.rawValue)) == [
+            "camera", "microphone", "geolocation", "notifications", "bluetooth"
         ])
     }
 }

@@ -230,27 +230,35 @@ enum AndroidTemplates {
         customTheme: Bool = false,
         documentTypes: [PWAManifest.AndroidSection.DocumentType] = [],
         networkConfigStaged: Bool = false,
-        webPermissions: [String] = []
+        webPermissions: [String] = [],
+        minSdk: Int = 28
     ) -> String {
-        // `permissions.web` → `uses-permission`. Emitted only for what the app
-        // declares: an undeclared permission in the manifest is a Play Store
-        // review question and a scarier install screen, for a capability the
-        // runtime would refuse anyway.
-        var androidPermissions: [String] = []
+        // `permissions` in pwa.json → `uses-permission`. Emitted only for what
+        // the app declares: an undeclared permission in the manifest is a Play
+        // Store review question and a scarier install screen, for a capability
+        // the runtime would refuse anyway.
+        var androidPermissions: [AndroidUsesPermission] = []
         for permission in webPermissions {
-            for name in androidPermissionNames(for: permission) where !androidPermissions.contains(name) {
-                androidPermissions.append(name)
+            for entry in androidPermissionNames(for: permission, minSdk: minSdk) {
+                guard let existing = androidPermissions.firstIndex(where: { $0.name == entry.name }) else {
+                    androidPermissions.append(entry)
+                    continue
+                }
+                // Two declarations can want the same Android permission on
+                // different terms — `bluetooth` asks for ACCESS_FINE_LOCATION
+                // capped at API 30, `geolocation` needs it uncapped forever.
+                // Keeping whichever was seen first would silently break the
+                // other, so the widest grant wins.
+                androidPermissions[existing] = widest(androidPermissions[existing], entry)
             }
         }
         var webPermissionBlock = ""
         if !androidPermissions.isEmpty {
-            let comment = "\n    <!-- permissions.web in pwa.json. Declaring here grants nothing on"
+            let comment = "\n    <!-- permissions in pwa.json. Declaring here grants nothing on"
                 + "\n         its own: the WebView still asks the app per request"
                 + "\n         (WebChromeClient.onPermissionRequest), answered from"
                 + "\n         ctx.permissions, and Android still prompts the user. -->"
-            let lines = androidPermissions
-                .map { "\n    <uses-permission android:name=\"\($0)\"/>" }
-                .joined()
+            let lines = androidPermissions.map { "\n    " + $0.xml }.joined()
             webPermissionBlock = comment + lines
         }
         // When the project ships an icon, reference the launcher mipmap the
@@ -344,10 +352,47 @@ enum AndroidTemplates {
     /// is exactly the local-file open-with case. Returns `""` when no document
     /// types are declared, so the manifest is byte-for-byte unchanged for apps
     /// that don't opt in. The leading newline joins onto the LAUNCHER filter.
-    /// The Android permissions one page-level permission needs. Location
+    /// One `<uses-permission>` line. Most need nothing but a name; Bluetooth
+    /// needs both of the other two attributes, which is why this isn't a
+    /// `[String]`.
+    struct AndroidUsesPermission: Equatable {
+        var name: String
+        /// `android:usesPermissionFlags`, e.g. `neverForLocation`.
+        var flags: String?
+        /// `android:maxSdkVersion` — for a permission superseded on a later
+        /// API level, so a modern device isn't asked for the legacy one.
+        var maxSdkVersion: Int?
+
+        var xml: String {
+            var attributes = "android:name=\"\(name)\""
+            if let flags { attributes += " android:usesPermissionFlags=\"\(flags)\"" }
+            if let maxSdkVersion { attributes += " android:maxSdkVersion=\"\(maxSdkVersion)\"" }
+            return "<uses-permission \(attributes)/>"
+        }
+    }
+
+    /// The same permission asked for twice, resolved to the grant that
+    /// satisfies both: no version cap beats a cap, a later cap beats an earlier
+    /// one, and a flag is only kept if *both* asked for it (`neverForLocation`
+    /// is a promise, and one caller keeping it while another needs the location
+    /// would be a promise the app doesn't keep).
+    private static func widest(
+        _ a: AndroidUsesPermission, _ b: AndroidUsesPermission
+    ) -> AndroidUsesPermission {
+        let maxSdkVersion: Int? = if let x = a.maxSdkVersion, let y = b.maxSdkVersion { max(x, y) } else { nil }
+        return AndroidUsesPermission(
+            name: a.name,
+            flags: a.flags == b.flags ? a.flags : nil,
+            maxSdkVersion: maxSdkVersion
+        )
+    }
+
+    /// The Android permissions one declared permission needs. Location
     /// declares both precision levels: with only `ACCESS_FINE_LOCATION`, the
     /// system dialog never offers the user the coarse-only choice.
-    private static func androidPermissionNames(for webPermission: String) -> [String] {
+    private static func androidPermissionNames(
+        for webPermission: String, minSdk: Int
+    ) -> [AndroidUsesPermission] {
         switch webPermission {
         // MODIFY_AUDIO_SETTINGS as well as RECORD_AUDIO: Chromium's Android
         // audio manager requires *both* before it will open a recording
@@ -357,18 +402,45 @@ enum AndroidTemplates {
         // missing declaration. It's an install-time permission, so it adds no
         // prompt and stays out of the runtime request.
         case "microphone": [
-                "android.permission.RECORD_AUDIO",
-                "android.permission.MODIFY_AUDIO_SETTINGS"
+                AndroidUsesPermission(name: "android.permission.RECORD_AUDIO"),
+                AndroidUsesPermission(name: "android.permission.MODIFY_AUDIO_SETTINGS")
             ]
-        case "camera": ["android.permission.CAMERA"]
+        case "camera": [AndroidUsesPermission(name: "android.permission.CAMERA")]
         case "geolocation": [
-                "android.permission.ACCESS_FINE_LOCATION",
-                "android.permission.ACCESS_COARSE_LOCATION"
+                AndroidUsesPermission(name: "android.permission.ACCESS_FINE_LOCATION"),
+                AndroidUsesPermission(name: "android.permission.ACCESS_COARSE_LOCATION")
             ]
+        case "bluetooth": bluetoothPermissions(minSdk: minSdk)
         // `notifications` is already declared unconditionally above for the
         // native notifications plugin, so it adds nothing here.
         default: []
         }
+    }
+
+    /// Bluetooth is declared twice over, because Android 12 (API 31) replaced
+    /// the whole scheme.
+    ///
+    /// Before 31 a BLE *scan* needed `ACCESS_FINE_LOCATION` — scanning reveals
+    /// where you are — so an app that only ever talks to a peripheral had to
+    /// ask for location anyway. From 31 there's a Bluetooth-specific pair, and
+    /// `neverForLocation` is the app promising not to infer a position from
+    /// scan results, which is what lets it skip the location permission.
+    ///
+    /// The legacy three carry `maxSdkVersion` so a modern device doesn't see
+    /// them at all, and they're only emitted when the app's `minSdk` can
+    /// actually reach that far back.
+    private static func bluetoothPermissions(minSdk: Int) -> [AndroidUsesPermission] {
+        var permissions = [
+            AndroidUsesPermission(name: "android.permission.BLUETOOTH_SCAN", flags: "neverForLocation"),
+            AndroidUsesPermission(name: "android.permission.BLUETOOTH_CONNECT")
+        ]
+        guard minSdk < 31 else { return permissions }
+        permissions += [
+            AndroidUsesPermission(name: "android.permission.BLUETOOTH", maxSdkVersion: 30),
+            AndroidUsesPermission(name: "android.permission.BLUETOOTH_ADMIN", maxSdkVersion: 30),
+            AndroidUsesPermission(name: "android.permission.ACCESS_FINE_LOCATION", maxSdkVersion: 30)
+        ]
+        return permissions
     }
 
     private static func documentTypeFilters(_ documentTypes: [PWAManifest.AndroidSection.DocumentType]) -> String {

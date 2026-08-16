@@ -782,10 +782,10 @@ struct Build: AsyncParsableCommand {
         if target == .macos || target == .ios {
             try PermissionCheck.validateAppleReasons(manifest)
         }
-        guard manifest.permissions?.web != nil else { return }
+        guard manifest.permissions?.allDeclarations != nil else { return }
         guard target == .host else {
             print("""
-            swift-pwa: permissions.web not checked against the app for --target \(target.rawValue) — \
+            swift-pwa: pwa.json permissions not checked against the app for --target \(target.rawValue) — \
             comparing them means running the app, and this build is cross-compiled.
             """)
             return
@@ -794,7 +794,7 @@ struct Build: AsyncParsableCommand {
             projectRoot: projectRoot, manifest: manifest, configuration: "release", quiet: true
         )
         if let drift = PermissionCheck.drift(
-            declared: manifest.permissions?.web, compiled: dump.declaredPermissions
+            declared: manifest.permissions?.allDeclarations, compiled: dump.declaredPermissions
         ) {
             throw ValidationError(drift)
         }

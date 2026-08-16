@@ -34,10 +34,10 @@ let serviceUUID = CBUUID(string: "5057AB00-0000-4000-B000-000000000001")
 let writeUUID = CBUUID(string: "5057AB00-0000-4000-B000-000000000002")
 let notifyUUID = CBUUID(string: "5057AB00-0000-4000-B000-000000000003")
 let readUUID = CBUUID(string: "5057AB00-0000-4000-B000-000000000004")
-// Kept in step with the BlueZ fixture, which can't go longer: 31 bytes of
-// advertisement, minus 3 for flags and 18 for a 128-bit service UUID, leaves
-// exactly 10 for the name. CoreBluetooth would spill the rest into the scan
-// response; BlueZ hands it to the controller, which refuses.
+/// Kept in step with the BlueZ fixture, which can't go longer: 31 bytes of
+/// advertisement, minus 3 for flags and 18 for a 128-bit service UUID, leaves
+/// exactly 10 for the name. CoreBluetooth would spill the rest into the scan
+/// response; BlueZ hands it to the controller, which refuses.
 let localName = "swiftpwa"
 
 final class TestPeripheral: NSObject, CBPeripheralManagerDelegate {

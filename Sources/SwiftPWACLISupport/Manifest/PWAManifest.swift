@@ -37,6 +37,10 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var ai: AISection?
     public var agent: AgentSection?
 
+    /// Device permissions the platform artifact must declare. See
+    /// ``PermissionsSection``; the runtime ceiling is `ctx.permissions`.
+    public var permissions: PermissionsSection?
+
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
     /// `ExecutableNameResolver` (which asks SwiftPM for the real product

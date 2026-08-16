@@ -91,6 +91,20 @@
                 OpenFile.emit(payload.paths, on: context.events)
             }
 
+            // Core's diagnostics default to stderr, which Android discards.
+            // Installed first so nothing emitted during setup is lost.
+            RuntimeDiagnostics.installSink { message in
+                // logcat prints the `swift-pwa` tag itself, so the prefix that
+                // identifies the line on stderr would read twice here.
+                let prefix = "swift-pwa: "
+                swiftPWALog(message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message)
+            }
+
+            // Also before `configure`: the WebView is already live by the time
+            // this thread starts, so a page that asks for the camera on load
+            // must find someone listening.
+            AndroidWebPermissions.install(policy: context.permissions)
+
             // Host events: Kotlin-side asynchronous pushes that don't
             // fit the JS bridge envelope or the RPC request/response
             // shape — `BroadcastReceiver` payloads, lifecycle hooks,

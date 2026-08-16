@@ -187,11 +187,14 @@ public final class PermissionPolicy: @unchecked Sendable {
         let isFirst = diagnosed.insert(permission).inserted
         lock.unlock()
         guard isFirst else { return }
-        FileHandle.standardError.writeQuietly(Data("""
+        // Through the sink rather than straight to stderr: on Android stderr
+        // goes to /dev/null, and a message explaining a silent refusal must
+        // not itself be silent.
+        RuntimeDiagnostics.emit("""
         swift-pwa: refused a '\(permission.rawValue)' permission request from \(origin) \
         because this app has not declared it. Add \
         `ctx.permissions.declare(.\(permission.rawValue))` to your configure closure. \
-        The page sees an ordinary denial, which looks exactly like the user saying no.\n
-        """.utf8))
+        The page sees an ordinary denial, which looks exactly like the user saying no.
+        """)
     }
 }

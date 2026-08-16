@@ -171,7 +171,8 @@ struct AndroidBundler {
         try AndroidTemplates.androidManifestXml(
             packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil,
             documentTypes: manifest.android?.documentTypes ?? [],
-            networkConfigStaged: networkSecurityConfig != nil
+            networkConfigStaged: networkSecurityConfig != nil,
+            webPermissions: manifest.permissions?.web?.names ?? []
         ).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
             atomically: true, encoding: .utf8

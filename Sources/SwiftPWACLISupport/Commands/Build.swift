@@ -286,6 +286,7 @@ struct Build: AsyncParsableCommand {
         let prebuildRan = !skipPrebuild
             && (pwa.build?.prebuild?.trimmingCharacters(in: .whitespaces).isEmpty == false)
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
+        try await Self.validatePermissions(manifest: pwa, projectRoot: cwd, target: target)
         try await Self.validateAgentSurface(manifest: pwa, projectRoot: cwd, target: target)
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -768,6 +769,34 @@ struct Build: AsyncParsableCommand {
     ///
     /// Uses the release configuration the bundlers build with, so the dump
     /// warms the same build products instead of adding a second one.
+    /// Check `pwa.json`'s `permissions.web` — its names always, and its
+    /// agreement with the app's own `ctx.permissions.declare` when this build
+    /// can run the app. See ``PermissionCheck``.
+    ///
+    /// The name check runs even when cross-compiling, because Android is
+    /// precisely where a typo does damage: the manifest entry silently isn't
+    /// emitted and the device denies a permission the adopter believes they
+    /// declared.
+    static func validatePermissions(manifest: PWAManifest, projectRoot: URL, target: BuildTarget) async throws {
+        try PermissionCheck.validateNames(manifest)
+        guard manifest.permissions?.web != nil else { return }
+        guard target == .host else {
+            print("""
+            swift-pwa: permissions.web not checked against the app for --target \(target.rawValue) — \
+            comparing them means running the app, and this build is cross-compiled.
+            """)
+            return
+        }
+        let dump = try await CommandCatalog.dumpAll(
+            projectRoot: projectRoot, manifest: manifest, configuration: "release", quiet: true
+        )
+        if let drift = PermissionCheck.drift(
+            declared: manifest.permissions?.web, compiled: dump.declaredPermissions
+        ) {
+            throw ValidationError(drift)
+        }
+    }
+
     static func validateAgentSurface(manifest: PWAManifest, projectRoot: URL, target: BuildTarget) async throws {
         guard let expose = manifest.agent?.expose, !expose.isEmpty else { return }
         guard target == .host else {

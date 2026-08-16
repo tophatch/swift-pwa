@@ -1000,6 +1000,19 @@ staged.
 
 ## 8. Known limitations
 
+- **Camera, microphone and location need a declaration in two places.**
+  `permissions.web` in `pwa.json` emits the `uses-permission` entries;
+  `ctx.permissions.declare(…)` is the runtime ceiling. `swift-pwa build`
+  cross-checks them on host builds and says so when cross-compiling (it
+  can't run the app to compare). Undeclared requests are refused and the
+  reason goes to `adb logcat` under the `swift-pwa` tag — an app process's
+  stderr goes to `/dev/null` on Android, so that's the only place it can
+  surface. Full API: [docs/permissions.md](permissions.md). Note a
+  microphone declaration emits **`MODIFY_AUDIO_SETTINGS` as well as
+  `RECORD_AUDIO`**, because Chromium's audio manager needs both — with only
+  the latter, `getUserMedia` fails `NotReadableError` ("Could not start
+  audio source") *after* the user grants the permission.
+
 - **`dialog.openDirectory` multi-select is desktop-only.** The
   cross-platform `multiple` flag (added in 0.7.7) is honored on macOS /
   Windows / GTK / iOS, but Android's `ACTION_OPEN_DOCUMENT_TREE` grants

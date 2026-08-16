@@ -229,8 +229,30 @@ enum AndroidTemplates {
         hasIcon: Bool,
         customTheme: Bool = false,
         documentTypes: [PWAManifest.AndroidSection.DocumentType] = [],
-        networkConfigStaged: Bool = false
+        networkConfigStaged: Bool = false,
+        webPermissions: [String] = []
     ) -> String {
+        // `permissions.web` → `uses-permission`. Emitted only for what the app
+        // declares: an undeclared permission in the manifest is a Play Store
+        // review question and a scarier install screen, for a capability the
+        // runtime would refuse anyway.
+        var androidPermissions: [String] = []
+        for permission in webPermissions {
+            for name in androidPermissionNames(for: permission) where !androidPermissions.contains(name) {
+                androidPermissions.append(name)
+            }
+        }
+        var webPermissionBlock = ""
+        if !androidPermissions.isEmpty {
+            let comment = "\n    <!-- permissions.web in pwa.json. Declaring here grants nothing on"
+                + "\n         its own: the WebView still asks the app per request"
+                + "\n         (WebChromeClient.onPermissionRequest), answered from"
+                + "\n         ctx.permissions, and Android still prompts the user. -->"
+            let lines = androidPermissions
+                .map { "\n    <uses-permission android:name=\"\($0)\"/>" }
+                .joined()
+            webPermissionBlock = comment + lines
+        }
         // When the project ships an icon, reference the launcher mipmap the
         // bundler drops into res/mipmap/. aapt/Gradle handle density scaling
         // from the single source PNG at build time — no pre-resizing needed.
@@ -277,7 +299,7 @@ enum AndroidTemplates {
                  system installer surfaces a dialog routing the user there
                  if it's off. Apps that don't ship updater.installAndRelaunch
                  may delete this line, but the plugin won't work without it. -->
-            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>
+            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\(webPermissionBlock)
 
             <application
                 android:label="\(label)"\(iconAttr)
@@ -322,6 +344,33 @@ enum AndroidTemplates {
     /// is exactly the local-file open-with case. Returns `""` when no document
     /// types are declared, so the manifest is byte-for-byte unchanged for apps
     /// that don't opt in. The leading newline joins onto the LAUNCHER filter.
+    /// The Android permissions one page-level permission needs. Location
+    /// declares both precision levels: with only `ACCESS_FINE_LOCATION`, the
+    /// system dialog never offers the user the coarse-only choice.
+    private static func androidPermissionNames(for webPermission: String) -> [String] {
+        switch webPermission {
+        // MODIFY_AUDIO_SETTINGS as well as RECORD_AUDIO: Chromium's Android
+        // audio manager requires *both* before it will open a recording
+        // device, and without it `getUserMedia` fails `NotReadableError`
+        // ("Could not start audio source") with the runtime permission
+        // granted — a failure that looks like broken hardware rather than a
+        // missing declaration. It's an install-time permission, so it adds no
+        // prompt and stays out of the runtime request.
+        case "microphone": [
+                "android.permission.RECORD_AUDIO",
+                "android.permission.MODIFY_AUDIO_SETTINGS"
+            ]
+        case "camera": ["android.permission.CAMERA"]
+        case "geolocation": [
+                "android.permission.ACCESS_FINE_LOCATION",
+                "android.permission.ACCESS_COARSE_LOCATION"
+            ]
+        // `notifications` is already declared unconditionally above for the
+        // native notifications plugin, so it adds nothing here.
+        default: []
+        }
+    }
+
     private static func documentTypeFilters(_ documentTypes: [PWAManifest.AndroidSection.DocumentType]) -> String {
         // Flatten + de-dup the MIME types, preserving first-seen order.
         var seen = Set<String>()
@@ -774,7 +823,10 @@ enum AndroidTemplates {
         import android.app.Activity
         import android.os.Handler
         import android.os.Looper
+        import android.webkit.GeolocationPermissions
         import android.webkit.JavascriptInterface
+        import android.webkit.PermissionRequest
+        import android.webkit.WebChromeClient
         import android.webkit.WebResourceRequest
         import android.webkit.WebResourceResponse
         import android.webkit.WebView
@@ -879,6 +931,58 @@ enum AndroidTemplates {
                         super.onPageStarted(view, url, favicon)
                         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                             view.evaluateJavascript(bridgeJs, null)
+                        }
+                    }
+                }
+
+                // Without a WebChromeClient at all, `onPermissionRequest` and
+                // `onGeolocationPermissionsShowPrompt` take their default —
+                // which is to deny, silently. That's why camera, microphone
+                // and location never worked in a WebView app: the page saw
+                // `NotAllowedError` / `PERMISSION_DENIED`, indistinguishable
+                // from the user refusing, having never been asked.
+                webView.webChromeClient = object : WebChromeClient() {
+                    override fun onPermissionRequest(request: PermissionRequest) {
+                        val kinds = ArrayList<String>()
+                        for (resource in request.resources) {
+                            when (resource) {
+                                PermissionRequest.RESOURCE_AUDIO_CAPTURE -> kinds.add("microphone")
+                                PermissionRequest.RESOURCE_VIDEO_CAPTURE -> kinds.add("camera")
+                                // MIDI sysex and protected media are not
+                                // modelled; leaving them out of `kinds` denies
+                                // the whole request, which is what they got
+                                // before this client existed.
+                                else -> {}
+                            }
+                        }
+                        if (kinds.size != request.resources.size) {
+                            request.deny()
+                            return
+                        }
+                        systemPlugins.requestWebPermission(kinds, request.origin.toString()) { allowed ->
+                            // One request, all-or-nothing: `getUserMedia({audio,
+                            // video})` arrives here as a single request carrying
+                            // both resources.
+                            if (allowed) request.grant(request.resources) else request.deny()
+                        }
+                    }
+
+                    override fun onPermissionRequestCanceled(request: PermissionRequest) {
+                        // The page navigated or dropped the request. Nothing to
+                        // revoke — the parked entry resolves harmlessly if the
+                        // policy answers late.
+                    }
+
+                    override fun onGeolocationPermissionsShowPrompt(
+                        origin: String,
+                        callback: GeolocationPermissions.Callback
+                    ) {
+                        systemPlugins.requestWebPermission(listOf("geolocation"), origin) { allowed ->
+                            // `retain: false` — the decision isn't cached across
+                            // launches, so a revoked app-level veto takes effect
+                            // immediately rather than being masked by WebView's
+                            // own memory of a past grant.
+                            callback.invoke(origin, allowed, false)
                         }
                     }
                 }
@@ -1188,6 +1292,15 @@ enum AndroidTemplates {
         private var pendingSaveFile: ((String) -> Unit)? = null
         private var pendingOpenDirectory: ((String) -> Unit)? = null
         private var pendingNotificationPerm: ((Boolean) -> Unit)? = null
+        // Web permission requests (camera / microphone / location) waiting on
+        // the Swift-side policy, keyed by the id sent with the host event.
+        // A map rather than a single slot: a page may ask for the camera and
+        // for location at once, and neither is modal.
+        private var pendingWebPermissions = HashMap<Int, (Boolean) -> Unit>()
+        private var nextWebPermissionId = 1
+        // Set while the OS runtime-permission dialog is up, so a second web
+        // request queues behind it instead of racing the launcher's single slot.
+        private var pendingOsPermission: ((Boolean) -> Unit)? = null
         // exportFile: the create-document callback plus the bytes to
         // write into the chosen document once the user picks a location.
         private var pendingExportFile: ((String?, String?) -> Unit)? = null
@@ -1273,6 +1386,21 @@ enum AndroidTemplates {
                 cb?.invoke(granted)
             }
 
+        // Camera / microphone / location, which the WebView cannot request
+        // for itself: `onPermissionRequest` fires *after* Android has already
+        // decided the app has no such permission, so the app has to ask.
+        private val webPermLauncher: ActivityResultLauncher<Array<String>> =
+            appActivity.registerForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { results ->
+                val cb = pendingOsPermission
+                pendingOsPermission = null
+                // Every requested permission must land: a page asking for
+                // audio *and* video can't be half-granted through one
+                // MediaStream request.
+                cb?.invoke(results.isNotEmpty() && results.values.all { it })
+            }
+
         // Receiver for PackageInstaller status broadcasts. Lazily
         // registered on first install attempt; stays for the
         // Activity's lifetime once installed.
@@ -1296,6 +1424,7 @@ enum AndroidTemplates {
                     done(null, null)
                 }
                 "notifications.requestAuthorization" -> notificationsRequestAuth(done)
+                "permissions.resolve" -> permissionsResolve(json, done)
                 "notifications.send" -> notificationsSend(json, done)
                 "dialog.message" -> dialogMessage(json, done)
                 "dialog.confirm" -> dialogConfirm(json, done)
@@ -1433,6 +1562,97 @@ enum AndroidTemplates {
                 notificationPermLauncher.launch(perm)
             } else {
                 done(JSONObject().put("granted", notificationsAuthorized()).toString(), null)
+            }
+        }
+
+        // -----------------------------------------------------------
+        // Web permissions (camera / microphone / location)
+        // -----------------------------------------------------------
+
+        // Two gates stand between a page's `getUserMedia` and the hardware,
+        // and both have to be crossed: the app's own policy (declared +
+        // not vetoed, decided in Swift) and Android's runtime permission.
+        // The WebView asks for the first via `WebChromeClient`; the second is
+        // the app's job, because by the time `onPermissionRequest` fires
+        // Android has already established the app doesn't hold it.
+        //
+        // The policy lives in Swift, so the answer is asynchronous: this
+        // pushes a host event and parks the request until `permissions.resolve`
+        // comes back. `PermissionRequest.grant` may be called from any thread
+        // and at any time, so parking it costs nothing.
+        fun requestWebPermission(
+            kinds: List<String>,
+            origin: String,
+            complete: (Boolean) -> Unit
+        ) {
+            val id = nextWebPermissionId++
+            pendingWebPermissions[id] = complete
+            val array = JSONArray()
+            for (kind in kinds) array.put(kind)
+            val payload = JSONObject()
+                .put("channel", "permissions.request")
+                .put("id", id)
+                .put("kinds", array)
+                .put("origin", origin)
+            bridge.nativeHostEvent(payload.toString())
+        }
+
+        // The Swift policy's answer. `allow: false` ends it here — a refusal
+        // by the app must not surface an OS dialog, since the user would be
+        // answering a question whose outcome is already decided.
+        private fun permissionsResolve(json: JSONObject, done: (String?, String?) -> Unit) {
+            val id = json.optInt("id", -1)
+            val complete = pendingWebPermissions.remove(id)
+            if (complete == null) {
+                done(null, "swift-pwa: no web permission request with id $id")
+                return
+            }
+            if (!json.optBoolean("allow", false)) {
+                appActivity.runOnUiThread { complete(false) }
+                done(null, null)
+                return
+            }
+
+            val needed = ArrayList<String>()
+            val kinds = json.optJSONArray("kinds")
+            if (kinds != null) {
+                for (i in 0 until kinds.length()) {
+                    for (perm in osPermissionsFor(kinds.optString(i))) {
+                        val held = ContextCompat.checkSelfPermission(activity, perm) ==
+                            android.content.pm.PackageManager.PERMISSION_GRANTED
+                        if (!held && !needed.contains(perm)) needed.add(perm)
+                    }
+                }
+            }
+            if (needed.isEmpty()) {
+                appActivity.runOnUiThread { complete(true) }
+                done(null, null)
+                return
+            }
+            if (pendingOsPermission != null) {
+                // The launcher holds one callback; a second dialog would drop
+                // the first. Refuse rather than lose it — the page can retry.
+                appActivity.runOnUiThread { complete(false) }
+                done(null, null)
+                return
+            }
+            pendingOsPermission = complete
+            appActivity.runOnUiThread { webPermLauncher.launch(needed.toTypedArray()) }
+            done(null, null)
+        }
+
+        // A page-level permission can need more than one Android permission,
+        // and location needs both precision levels declared or the coarse-only
+        // grant is never offered.
+        private fun osPermissionsFor(kind: String): List<String> {
+            return when (kind) {
+                "microphone" -> listOf(android.Manifest.permission.RECORD_AUDIO)
+                "camera" -> listOf(android.Manifest.permission.CAMERA)
+                "geolocation" -> listOf(
+                    android.Manifest.permission.ACCESS_FINE_LOCATION,
+                    android.Manifest.permission.ACCESS_COARSE_LOCATION
+                )
+                else -> emptyList()
             }
         }
 

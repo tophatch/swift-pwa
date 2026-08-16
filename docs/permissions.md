@@ -31,6 +31,60 @@ func configure(_ ctx: any AppContext) throws {
 Declaring is additive, so separate features can each declare what they need
 without coordinating.
 
+### And in `pwa.json`
+
+The Swift call is the *runtime* ceiling. The **platform artifact** needs its own
+declaration — the Android `uses-permission` entries, the Apple usage-description
+strings — and that comes from `pwa.json`:
+
+```json
+"permissions": {
+  "web": ["microphone", "geolocation"]
+}
+```
+
+or, when a platform needs more detail:
+
+```json
+"permissions": {
+  "web": {
+    "microphone":  { "reason": "Record a voice note." },
+    "geolocation": { "reason": "Show jobs near you." }
+  }
+}
+```
+
+`reason` is Apple's per-permission purpose string, which is mandatory there. The
+list form is shorthand for "no detail needed yet", the same way
+`window.background_color` takes a hex string *or* a `{light, dark}` pair.
+
+**Why two places.** Building for Android or iOS cross-compiles, so the build
+can't run the app to ask what it declared — the same limit `agent.expose` has.
+The artifact therefore needs a declaration the build can read without executing
+anything. To stop the two drifting, `swift-pwa build` **fails** when they
+disagree:
+
+```text
+pwa.json and the app disagree about permissions:
+  'microphone' declared in pwa.json but never passed to `ctx.permissions.declare`,
+so the app refuses it at runtime.
+```
+
+Both directions are caught, and they fail differently: a permission in
+`pwa.json` only means the artifact asks the user's OS for something the app will
+then refuse; a permission in Swift only means the runtime says yes while the
+platform says no — and on Apple a missing usage description **terminates the
+app**. An unknown name is refused too, before anything is built, since a typo
+would otherwise silently omit a manifest entry:
+
+```text
+pwa.json's permissions.web names 'microfone', which isn't a permission this
+runtime knows. Valid names: camera, geolocation, microphone, notifications.
+```
+
+The comparison needs to run the app, so it happens on host builds; a
+cross-compiled build says so rather than pretending it checked.
+
 A declaration is a **ceiling, not a grant**. It says the app may ask. On
 platforms whose OS prompts the user (iOS, Windows, Android) the prompt still
 happens and the user still decides; the runtime never invents consent UI of its
@@ -41,7 +95,7 @@ declaration is the whole decision — the same as any native Linux app opening
 Undeclared requests are refused, and the refusal prints a one-off diagnostic
 naming the fix:
 
-```
+```text
 swift-pwa: refused a 'microphone' permission request from pwa://localhost/index.html
 because this app has not declared it. Add `ctx.permissions.declare(.microphone)`
 to your configure closure. The page sees an ordinary denial, which looks exactly
@@ -90,19 +144,18 @@ before — nothing regresses, but a declaration buys nothing either.
 
 | Platform | Capture (camera / mic) | Geolocation | Consults `ctx.permissions` |
 | :--- | :--- | :--- | :--- |
-| **Linux GTK3 / GTK4** | ✅ fixed in this slice | ✅ fixed in this slice | **Yes** |
+| **Linux GTK3 / GTK4** | ✅ fixed | ✅ fixed | **Yes** |
+| **Android** | ✅ fixed | ✅ fixed | **Yes** |
 | **iOS** | ✅ already prompted and granted | ✅ already prompted and granted | Not yet |
 | **Windows** | ✅ already prompted and granted | ✅ already prompted and granted | Not yet |
 | **macOS** | ✅ already worked | ❌ denied — WKWebView exposes no public grant path on macOS | Not yet |
-| **Android** | ❌ denied — no `WebChromeClient`, and the manifest requests neither permission | ❌ denied | Not yet |
 
-Still to come, in order: Android capture (the other real outage, and the one
-that needs two layers — the `WebChromeClient` *and* the manifest entries plus a
-runtime request); the `pwa.json` `permissions.web` declaration that drives the
-platform artifacts and is cross-checked against the Swift declaration at build
-time; and a `geo.*` plugin, since macOS can't be fixed through the web API at
-all. See [the proposal](proposals/permissions-bridge.md) for the measurements
-behind each of those cells — every one was taken on real hardware.
+Still to come: **macOS geolocation**, which can't be fixed through the web API
+at all and needs the `geo.*` plugin; and wiring iOS / Windows / macOS to the
+policy, so the declaration means the same thing on all five rather than being
+ignored where the platform already happens to work. See
+[the proposal](proposals/permissions-bridge.md) for the measurements behind each
+cell — every one was taken on real hardware.
 
 ## Linux specifics
 
@@ -129,3 +182,24 @@ Notes from verifying it:
 
 `Scripts/verify-linux-permissions.sh` runs the whole matrix (undeclared /
 declared / vetoed) against a freshly scaffolded app on a real box.
+
+## Android specifics
+
+Android needed two layers, not one: a `WebChromeClient` (there was none at all,
+and its absence is what denied every request) *and* the manifest entries, since
+by the time `onPermissionRequest` fires Android has already established that the
+app doesn't hold `CAMERA` / `RECORD_AUDIO`. The app has to ask, and only an
+Activity can — so the decision round-trips: Kotlin pushes a host event, the Swift
+policy answers, and Kotlin then raises Android's own runtime prompt.
+
+- **A microphone needs `MODIFY_AUDIO_SETTINGS` as well as `RECORD_AUDIO`.**
+  Chromium's Android audio manager requires both before it will open a recording
+  device. Without it, `getUserMedia` fails **`NotReadableError` ("Could not
+  start audio source") with the runtime permission granted** — which reads as
+  broken hardware, not a missing declaration. `permissions.web: ["microphone"]`
+  emits both; the extra one is install-time, so it adds no prompt.
+- **A veto is refused without a prompt**, so an app-level "microphone: off"
+  switch never shows the user a dialog whose answer is already decided.
+- **The undeclared diagnostic goes to `adb logcat`**, not stderr — an Android
+  app process's stdout and stderr go to `/dev/null`, so a message explaining a
+  silent refusal would itself have been silent.

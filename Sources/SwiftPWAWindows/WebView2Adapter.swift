@@ -13,6 +13,15 @@
     /// kicked off env / controller creation), and the C shim guards
     /// its own state with a per-process mutex.
     public final class WebView2Adapter: PWAWebView, @unchecked Sendable {
+        /// The app's permission policy, consulted from WebView2's
+        /// `PermissionRequested` handler. Optional so an embedder constructing
+        /// an adapter directly keeps WebView2's own default behaviour.
+        private nonisolated(unsafe) var permissionPolicy: PermissionPolicy?
+
+        /// Read by the C trampoline, which can't reach private state.
+        fileprivate var policyForPermissionRequests: PermissionPolicy? {
+            permissionPolicy
+        }
         private let environment: OpaquePointer
         private let parent: HWND
         /// Applied once the controller is ready (RGBColor is Sendable).

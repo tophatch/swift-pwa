@@ -72,6 +72,12 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         send(.subscribe(id: id, command: command, payload: data))
     }
 
+    /// Close an open subscription or session, as `unsubscribe()` / `close()`
+    /// does from JS — the path a handler's teardown (`onTermination`) runs on.
+    public func sendUnsubscribe(id: UInt64) {
+        send(.unsubscribe(id: id))
+    }
+
     /// Convenience: build and send a `push` frame (a client frame into an open
     /// duplex session) from a typed payload.
     public func sendPush(id: UInt64, payload: some Encodable) throws {

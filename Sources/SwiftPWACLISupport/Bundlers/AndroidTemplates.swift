@@ -1529,6 +1529,14 @@ enum AndroidTemplates {
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
                 "system.memory" -> systemMemory(done)
+                "ble.availability" -> bleAvailability(done)
+                "ble.scan.start" -> bleScanStart(json, done)
+                "ble.scan.stop" -> bleScanStop(done)
+                "ble.connect" -> bleConnect(json, done)
+                "ble.disconnect" -> bleDisconnect(json, done)
+                "ble.write" -> bleWrite(json, done)
+                "ble.read" -> bleRead(json, done)
+                "ble.setNotify" -> bleSetNotify(json, done)
                 /*__SWIFT_PWA_GENAI_DISPATCH__*/
                 else -> done(null, "swift-pwa: unknown rpc method $method")
             }
@@ -1638,6 +1646,611 @@ enum AndroidTemplates {
             } else {
                 done(JSONObject().put("granted", notificationsAuthorized()).toString(), null)
             }
+        }
+
+        // -----------------------------------------------------------
+        // Bluetooth LE (ble.*)
+        // -----------------------------------------------------------
+
+        // One GATT operation at a time, per connection. Android's stack has a
+        // single outstanding request per `BluetoothGatt`, and a second one
+        // issued before the first completes doesn't queue — `writeCharacteristic`
+        // returns false and nothing is reported, which reads as a peripheral
+        // that ignored the write. So every operation goes through this queue
+        // and the next starts only when the callback for the last one arrives.
+        private class GattQueue {
+            private val pending = java.util.ArrayDeque<() -> Boolean>()
+            private var running = false
+
+            @Synchronized fun submit(operation: () -> Boolean) {
+                pending.add(operation)
+                if (!running) next()
+            }
+
+            @Synchronized fun completed() {
+                running = false
+                next()
+            }
+
+            @Synchronized fun clear() {
+                pending.clear()
+                running = false
+            }
+
+            private fun next() {
+                while (!running) {
+                    val operation = pending.poll() ?: return
+                    running = true
+                    // A `false` means the stack refused to even start it, so
+                    // no callback is coming and the queue would stall here.
+                    if (!operation()) running = false
+                }
+            }
+        }
+
+        private class BleLink(
+            val address: String,
+            val channel: String
+        ) {
+            var gatt: android.bluetooth.BluetoothGatt? = null
+            var device: android.bluetooth.BluetoothDevice? = null
+            /// Whether this link has ever been up. A first attempt that fails
+            /// is retried differently from a drop.
+            var connectedOnce = false
+            val queue = GattQueue()
+            /// Callbacks waiting on the operation currently in flight, keyed by
+            /// characteristic UUID, so a reply resumes the right caller.
+            val reads = HashMap<String, ArrayDeque<(String?, String?) -> Unit>>()
+            val writes = HashMap<String, ArrayDeque<(String?, String?) -> Unit>>()
+            val notifies = HashMap<String, ArrayDeque<(String?, String?) -> Unit>>()
+            var released = false
+        }
+
+        private val bleLinks = HashMap<String, BleLink>()
+        // Devices as the scanner handed them over. `getRemoteDevice(address)`
+        // builds one from a string and assumes a public address type, so a
+        // peripheral advertising a random address is unreachable that way —
+        // the connection fails with the catch-all status 133 and looks like a
+        // peripheral that refused. The scanner's own object carries the type.
+        private val bleDiscovered = HashMap<String, android.bluetooth.BluetoothDevice>()
+        private var bleScanCallback: android.bluetooth.le.ScanCallback? = null
+        private var bleScanChannel: String? = null
+
+        private fun bleAdapter(): android.bluetooth.BluetoothAdapter? {
+            val manager = activity.getSystemService(Context.BLUETOOTH_SERVICE)
+                as? android.bluetooth.BluetoothManager
+            return manager?.adapter
+        }
+
+        // BLUETOOTH_SCAN + BLUETOOTH_CONNECT from API 31; before that, scanning
+        // was gated on ACCESS_FINE_LOCATION because scan results reveal where
+        // you are. Both sets are declared in the manifest (the legacy ones
+        // capped at API 30), so what's asked for here depends on the device.
+        private fun blePermissions(): Array<String> =
+            if (android.os.Build.VERSION.SDK_INT >= 31) {
+                arrayOf(
+                    android.Manifest.permission.BLUETOOTH_SCAN,
+                    android.Manifest.permission.BLUETOOTH_CONNECT
+                )
+            } else {
+                arrayOf(android.Manifest.permission.ACCESS_FINE_LOCATION)
+            }
+
+        private fun hasBluetoothPermission(): Boolean = blePermissions().all {
+            ContextCompat.checkSelfPermission(activity, it) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        }
+
+        // Reuses the launcher the web-permission path already owns rather than
+        // growing a second one: only one runtime request can be in flight, and
+        // two launchers would silently drop whichever asked first.
+        private fun ensureBluetoothPermission(complete: (Boolean) -> Unit) {
+            if (hasBluetoothPermission()) { complete(true); return }
+            if (pendingOsPermission != null) { complete(false); return }
+            pendingOsPermission = { _ -> complete(hasBluetoothPermission()) }
+            appActivity.runOnUiThread { webPermLauncher.launch(blePermissions()) }
+        }
+
+        private fun bleFailure(kind: String, message: String): String =
+            JSONObject().put("ok", false).put("kind", kind).put("message", message).toString()
+
+        private fun bleAvailability(done: (String?, String?) -> Unit) {
+            val adapter = bleAdapter()
+            val result = JSONObject()
+            when {
+                adapter == null ->
+                    result.put("isAvailable", false).put("reason", "this device has no Bluetooth adapter")
+                !adapter.isEnabled ->
+                    result.put("isAvailable", false).put("reason", "Bluetooth is switched off")
+                else -> result.put("isAvailable", true)
+            }
+            done(result.toString(), null)
+        }
+
+        private fun bleScanStart(json: JSONObject, done: (String?, String?) -> Unit) {
+            val channel = json.optString("channel", "")
+            if (channel.isEmpty()) {
+                done(bleFailure("unavailable", "ble.scan needs a channel"), null)
+                return
+            }
+            ensureBluetoothPermission { granted ->
+                if (!granted) {
+                    done(bleFailure("denied", "the user or system denied Bluetooth access"), null)
+                    return@ensureBluetoothPermission
+                }
+                val adapter = bleAdapter()
+                val scanner = adapter?.bluetoothLeScanner
+                if (adapter == null || !adapter.isEnabled || scanner == null) {
+                    done(bleFailure("unavailable", "Bluetooth is switched off or unavailable"), null)
+                    return@ensureBluetoothPermission
+                }
+                if (bleScanCallback != null) {
+                    done(bleFailure("unavailable", "a scan is already running"), null)
+                    return@ensureBluetoothPermission
+                }
+                val filters = ArrayList<android.bluetooth.le.ScanFilter>()
+                val services = json.optJSONArray("services")
+                if (services != null) {
+                    for (i in 0 until services.length()) {
+                        filters.add(
+                            android.bluetooth.le.ScanFilter.Builder()
+                                .setServiceUuid(android.os.ParcelUuid.fromString(services.optString(i)))
+                                .build()
+                        )
+                    }
+                }
+                val namePrefix = json.optString("namePrefix", "")
+                val settings = android.bluetooth.le.ScanSettings.Builder()
+                    .setScanMode(android.bluetooth.le.ScanSettings.SCAN_MODE_LOW_LATENCY)
+                    // Every advertisement, not the first per device: RSSI has to
+                    // keep updating or a picker can't show a device getting nearer.
+                    .setCallbackType(android.bluetooth.le.ScanSettings.CALLBACK_TYPE_ALL_MATCHES)
+                    .setReportDelay(0)
+                    .build()
+                val callback = object : android.bluetooth.le.ScanCallback() {
+                    override fun onScanResult(callbackType: Int, result: android.bluetooth.le.ScanResult) {
+                        val record = result.scanRecord
+                        // `scanRecord.deviceName`, not `device.name`: the latter
+                        // reads the bonded-device cache and needs
+                        // BLUETOOTH_CONNECT on API 31+, throwing SecurityException
+                        // during a scan that only asked to scan.
+                        val name = record?.deviceName
+                        if (namePrefix.isNotEmpty() && (name == null || !name.startsWith(namePrefix))) return
+                        val uuids = JSONArray()
+                        record?.serviceUuids?.forEach { uuids.put(it.uuid.toString()) }
+                        bleDiscovered[result.device.address] = result.device
+                        val advertisement = JSONObject()
+                            .put("id", result.device.address)
+                            .put("rssi", result.rssi)
+                            .put("services", uuids)
+                            .put("timestamp", System.currentTimeMillis() / 1000.0)
+                        if (name != null) advertisement.put("name", name)
+                        if (android.os.Build.VERSION.SDK_INT >= 26) {
+                            advertisement.put("isConnectable", result.isConnectable)
+                        }
+                        val manufacturer = record?.manufacturerSpecificData
+                        if (manufacturer != null && manufacturer.size() > 0) {
+                            // Android splits this per company id; the contract
+                            // carries the raw field, so put the id back in front
+                            // of the bytes the way it arrives over the air.
+                            val id = manufacturer.keyAt(0)
+                            val bytes = manufacturer.valueAt(0) ?: ByteArray(0)
+                            val combined = ByteArray(bytes.size + 2)
+                            combined[0] = (id and 0xFF).toByte()
+                            combined[1] = ((id shr 8) and 0xFF).toByte()
+                            System.arraycopy(bytes, 0, combined, 2, bytes.size)
+                            advertisement.put(
+                                "manufacturerDataBase64",
+                                android.util.Base64.encodeToString(combined, android.util.Base64.NO_WRAP)
+                            )
+                        }
+                        bridge.nativeHostEvent(
+                            JSONObject().put("channel", channel).put("advertisement", advertisement).toString()
+                        )
+                    }
+
+                    override fun onScanFailed(errorCode: Int) {
+                        bridge.nativeHostEvent(
+                            JSONObject().put("channel", channel)
+                                .put("failed", "the scan could not start (error $errorCode)")
+                                .toString()
+                        )
+                    }
+                }
+                try {
+                    scanner.startScan(filters, settings, callback)
+                } catch (e: SecurityException) {
+                    done(bleFailure("denied", "Bluetooth permission was revoked: ${e.message}"), null)
+                    return@ensureBluetoothPermission
+                }
+                bleScanCallback = callback
+                bleScanChannel = channel
+                done(JSONObject().put("ok", true).toString(), null)
+            }
+        }
+
+        private fun bleScanStop(done: (String?, String?) -> Unit) {
+            val callback = bleScanCallback
+            bleScanCallback = null
+            bleScanChannel = null
+            if (callback != null) {
+                try {
+                    bleAdapter()?.bluetoothLeScanner?.stopScan(callback)
+                } catch (e: SecurityException) { /* the radio is already beyond our reach */ }
+            }
+            done(JSONObject().put("ok", true).toString(), null)
+        }
+
+        private fun bleEmit(link: BleLink, payload: JSONObject) {
+            bridge.nativeHostEvent(payload.put("channel", link.channel).toString())
+        }
+
+        private fun bleConnect(json: JSONObject, done: (String?, String?) -> Unit) {
+            val address = json.optString("id", "")
+            val channel = json.optString("channel", "")
+            if (address.isEmpty() || channel.isEmpty()) {
+                done(bleFailure("notFound", "ble.connect needs an id and a channel"), null)
+                return
+            }
+            ensureBluetoothPermission { granted ->
+                if (!granted) {
+                    done(bleFailure("denied", "the user or system denied Bluetooth access"), null)
+                    return@ensureBluetoothPermission
+                }
+                val adapter = bleAdapter()
+                if (adapter == null || !adapter.isEnabled) {
+                    done(bleFailure("unavailable", "Bluetooth is switched off or unavailable"), null)
+                    return@ensureBluetoothPermission
+                }
+                val device = bleDiscovered[address] ?: try {
+                    adapter.getRemoteDevice(address)
+                } catch (e: IllegalArgumentException) {
+                    done(bleFailure("notFound", "'$address' isn't a Bluetooth address"), null)
+                    return@ensureBluetoothPermission
+                }
+                bleLinks[address]?.let { bleReleaseLink(it) }
+                val link = BleLink(address, channel)
+                link.device = device
+                bleLinks[address] = link
+                val callback = bleGattCallback(link)
+                // On the main thread: `connectGatt` from a binder or worker
+                // thread is a documented source of status 133, and the RPC that
+                // brought us here runs on neither.
+                appActivity.runOnUiThread {
+                    try {
+                        // `autoConnect = false` for the first attempt, which is
+                        // much faster; a later `gatt.connect()` after a drop
+                        // switches the stack into its own patient retry, which
+                        // is what a link that survives a drop needs.
+                        link.gatt = device.connectGatt(
+                            activity, false, callback, android.bluetooth.BluetoothDevice.TRANSPORT_LE
+                        )
+                    } catch (e: SecurityException) {
+                        bleLinks.remove(address)
+                    }
+                }
+                done(JSONObject().put("ok", true).toString(), null)
+            }
+        }
+
+        private fun bleGattCallback(link: BleLink) = object : android.bluetooth.BluetoothGattCallback() {
+            override fun onConnectionStateChange(gatt: android.bluetooth.BluetoothGatt, status: Int, newState: Int) {
+                if (newState == android.bluetooth.BluetoothProfile.STATE_CONNECTED) {
+                    link.connectedOnce = true
+                    bleEmit(link, JSONObject().put("kind", "state").put("connected", true))
+                    link.queue.clear()
+                    try { gatt.discoverServices() } catch (e: SecurityException) { }
+                    return
+                }
+                if (newState != android.bluetooth.BluetoothProfile.STATE_DISCONNECTED) return
+                link.queue.clear()
+                bleFailPending(link, "the peripheral disconnected (status $status)")
+                if (link.released) return
+                // A GATT client that never connected can't be revived with
+                // `connect()` — the stack wants the handle closed and a fresh
+                // one opened. Status 133 on a first attempt is common enough on
+                // Android that not retrying reads as "this peripheral doesn't
+                // work", so it gets one clean reopen before falling back to the
+                // patient path.
+                if (!link.connectedOnce) {
+                    try { gatt.close() } catch (e: SecurityException) { }
+                    link.gatt = null
+                    appActivity.runOnUiThread {
+                        try {
+                            link.gatt = link.device?.connectGatt(
+                                activity, true, this, android.bluetooth.BluetoothDevice.TRANSPORT_LE
+                            )
+                        } catch (e: SecurityException) { }
+                    }
+                    return
+                }
+                bleEmit(
+                    link,
+                    JSONObject().put("kind", "state").put("connected", false)
+                        .put("reason", "reconnecting (status $status)")
+                )
+                // The link outlives a drop, so ask for it back.
+                try { gatt.connect() } catch (e: SecurityException) { }
+            }
+
+            override fun onServicesDiscovered(gatt: android.bluetooth.BluetoothGatt, status: Int) {
+                val services = JSONArray()
+                for (service in gatt.services) {
+                    val characteristics = JSONArray()
+                    for (characteristic in service.characteristics) {
+                        characteristics.put(
+                            JSONObject()
+                                .put("uuid", characteristic.uuid.toString())
+                                .put("properties", bleProperties(characteristic.properties))
+                        )
+                    }
+                    services.put(
+                        JSONObject()
+                            .put("uuid", service.uuid.toString())
+                            .put("isPrimary", service.type == android.bluetooth.BluetoothGattService.SERVICE_TYPE_PRIMARY)
+                            .put("characteristics", characteristics)
+                    )
+                }
+                bleEmit(link, JSONObject().put("kind", "ready").put("services", services))
+            }
+
+            override fun onCharacteristicRead(
+                gatt: android.bluetooth.BluetoothGatt,
+                characteristic: android.bluetooth.BluetoothGattCharacteristic,
+                value: ByteArray,
+                status: Int
+            ) {
+                bleResume(link.reads, characteristic.uuid.toString(), status) {
+                    JSONObject().put("ok", true)
+                        .put("valueBase64", android.util.Base64.encodeToString(value, android.util.Base64.NO_WRAP))
+                }
+                link.queue.completed()
+            }
+
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicRead(
+                gatt: android.bluetooth.BluetoothGatt,
+                characteristic: android.bluetooth.BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                // The pre-API-33 overload, which hands the value back on the
+                // characteristic rather than as an argument. Both exist because
+                // min_sdk can be below 33; the platform calls exactly one.
+                if (android.os.Build.VERSION.SDK_INT >= 33) return
+                val value = characteristic.value ?: ByteArray(0)
+                bleResume(link.reads, characteristic.uuid.toString(), status) {
+                    JSONObject().put("ok", true)
+                        .put("valueBase64", android.util.Base64.encodeToString(value, android.util.Base64.NO_WRAP))
+                }
+                link.queue.completed()
+            }
+
+            override fun onCharacteristicWrite(
+                gatt: android.bluetooth.BluetoothGatt,
+                characteristic: android.bluetooth.BluetoothGattCharacteristic,
+                status: Int
+            ) {
+                bleResume(link.writes, characteristic.uuid.toString(), status) {
+                    JSONObject().put("ok", true)
+                }
+                link.queue.completed()
+            }
+
+            override fun onDescriptorWrite(
+                gatt: android.bluetooth.BluetoothGatt,
+                descriptor: android.bluetooth.BluetoothGattDescriptor,
+                status: Int
+            ) {
+                bleResume(link.notifies, descriptor.characteristic.uuid.toString(), status) {
+                    JSONObject().put("ok", true)
+                }
+                link.queue.completed()
+            }
+
+            override fun onCharacteristicChanged(
+                gatt: android.bluetooth.BluetoothGatt,
+                characteristic: android.bluetooth.BluetoothGattCharacteristic,
+                value: ByteArray
+            ) {
+                bleEmit(
+                    link,
+                    JSONObject().put("kind", "notify")
+                        .put("characteristic", characteristic.uuid.toString())
+                        .put("value", android.util.Base64.encodeToString(value, android.util.Base64.NO_WRAP))
+                )
+            }
+
+            @Suppress("DEPRECATION")
+            override fun onCharacteristicChanged(
+                gatt: android.bluetooth.BluetoothGatt,
+                characteristic: android.bluetooth.BluetoothGattCharacteristic
+            ) {
+                if (android.os.Build.VERSION.SDK_INT >= 33) return
+                val value = characteristic.value ?: ByteArray(0)
+                bleEmit(
+                    link,
+                    JSONObject().put("kind", "notify")
+                        .put("characteristic", characteristic.uuid.toString())
+                        .put("value", android.util.Base64.encodeToString(value, android.util.Base64.NO_WRAP))
+                )
+            }
+        }
+
+        private fun bleProperties(mask: Int): JSONArray {
+            val names = JSONArray()
+            if (mask and android.bluetooth.BluetoothGattCharacteristic.PROPERTY_READ != 0) names.put("read")
+            if (mask and android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE != 0) names.put("write")
+            if (mask and android.bluetooth.BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE != 0) {
+                names.put("writeWithoutResponse")
+            }
+            if (mask and android.bluetooth.BluetoothGattCharacteristic.PROPERTY_NOTIFY != 0) names.put("notify")
+            if (mask and android.bluetooth.BluetoothGattCharacteristic.PROPERTY_INDICATE != 0) names.put("indicate")
+            return names
+        }
+
+        private fun bleResume(
+            table: HashMap<String, ArrayDeque<(String?, String?) -> Unit>>,
+            uuid: String,
+            status: Int,
+            success: () -> JSONObject
+        ) {
+            val waiting = table[uuid.lowercase()] ?: return
+            val done = waiting.removeFirstOrNull() ?: return
+            if (waiting.isEmpty()) table.remove(uuid.lowercase())
+            if (status == android.bluetooth.BluetoothGatt.GATT_SUCCESS) {
+                done(success().toString(), null)
+            } else {
+                done(bleFailure("gatt", "the peripheral refused the operation (status $status)"), null)
+            }
+        }
+
+        private fun bleFailPending(link: BleLink, message: String) {
+            for (table in listOf(link.reads, link.writes, link.notifies)) {
+                for ((_, waiting) in table) {
+                    while (true) {
+                        val done = waiting.removeFirstOrNull() ?: break
+                        done(bleFailure("disconnected", message), null)
+                    }
+                }
+                table.clear()
+            }
+        }
+
+        private fun bleCharacteristic(
+            link: BleLink, uuid: String
+        ): android.bluetooth.BluetoothGattCharacteristic? {
+            val gatt = link.gatt ?: return null
+            for (service in gatt.services) {
+                for (characteristic in service.characteristics) {
+                    if (characteristic.uuid.toString().equals(uuid, ignoreCase = true)) return characteristic
+                }
+            }
+            return null
+        }
+
+        private fun bleWrite(json: JSONObject, done: (String?, String?) -> Unit) {
+            val link = bleLinks[json.optString("id", "")]
+            if (link == null) { done(bleFailure("notFound", "no open link to that peripheral"), null); return }
+            val uuid = json.optString("characteristic", "")
+            val characteristic = bleCharacteristic(link, uuid)
+            if (characteristic == null) {
+                done(bleFailure("gatt", "this peripheral has no characteristic $uuid"), null)
+                return
+            }
+            val value = android.util.Base64.decode(json.optString("valueBase64", ""), android.util.Base64.DEFAULT)
+            val withResponse = json.optBoolean("withResponse", false)
+            val type = if (withResponse) {
+                android.bluetooth.BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT
+            } else {
+                android.bluetooth.BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE
+            }
+            link.writes.getOrPut(uuid.lowercase()) { ArrayDeque() }.addLast(done)
+            link.queue.submit {
+                val gatt = link.gatt
+                if (gatt == null) {
+                    bleResume(link.writes, uuid, -1) { JSONObject() }
+                    false
+                } else {
+                    try {
+                        if (android.os.Build.VERSION.SDK_INT >= 33) {
+                            gatt.writeCharacteristic(characteristic, value, type) ==
+                                android.bluetooth.BluetoothStatusCodes.SUCCESS
+                        } else {
+                            @Suppress("DEPRECATION")
+                            run {
+                                characteristic.writeType = type
+                                characteristic.value = value
+                                gatt.writeCharacteristic(characteristic)
+                            }
+                        }
+                    } catch (e: SecurityException) {
+                        false
+                    }
+                }
+            }
+        }
+
+        private fun bleRead(json: JSONObject, done: (String?, String?) -> Unit) {
+            val link = bleLinks[json.optString("id", "")]
+            if (link == null) { done(bleFailure("notFound", "no open link to that peripheral"), null); return }
+            val uuid = json.optString("characteristic", "")
+            val characteristic = bleCharacteristic(link, uuid)
+            if (characteristic == null) {
+                done(bleFailure("gatt", "this peripheral has no characteristic $uuid"), null)
+                return
+            }
+            link.reads.getOrPut(uuid.lowercase()) { ArrayDeque() }.addLast(done)
+            link.queue.submit {
+                try { link.gatt?.readCharacteristic(characteristic) ?: false }
+                catch (e: SecurityException) { false }
+            }
+        }
+
+        private fun bleSetNotify(json: JSONObject, done: (String?, String?) -> Unit) {
+            val link = bleLinks[json.optString("id", "")]
+            if (link == null) { done(bleFailure("notFound", "no open link to that peripheral"), null); return }
+            val uuid = json.optString("characteristic", "")
+            val characteristic = bleCharacteristic(link, uuid)
+            if (characteristic == null) {
+                done(bleFailure("gatt", "this peripheral has no characteristic $uuid"), null)
+                return
+            }
+            val enabled = json.optBoolean("enabled", true)
+            // The Client Characteristic Configuration descriptor. This is the
+            // part that actually reaches the peripheral:
+            // `setCharacteristicNotification` only tells the local stack to stop
+            // discarding the packets, so on its own it looks like a peripheral
+            // that never notifies.
+            val cccd = characteristic.getDescriptor(
+                java.util.UUID.fromString("00002902-0000-1000-8000-00805f9b34fb")
+            )
+            if (cccd == null) {
+                done(bleFailure("gatt", "characteristic $uuid can't notify (no CCCD)"), null)
+                return
+            }
+            val indicate = characteristic.properties and
+                android.bluetooth.BluetoothGattCharacteristic.PROPERTY_INDICATE != 0
+            val value = when {
+                !enabled -> android.bluetooth.BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE
+                indicate -> android.bluetooth.BluetoothGattDescriptor.ENABLE_INDICATION_VALUE
+                else -> android.bluetooth.BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE
+            }
+            link.notifies.getOrPut(uuid.lowercase()) { ArrayDeque() }.addLast(done)
+            link.queue.submit {
+                val gatt = link.gatt ?: return@submit false
+                try {
+                    gatt.setCharacteristicNotification(characteristic, enabled)
+                    if (android.os.Build.VERSION.SDK_INT >= 33) {
+                        gatt.writeDescriptor(cccd, value) ==
+                            android.bluetooth.BluetoothStatusCodes.SUCCESS
+                    } else {
+                        @Suppress("DEPRECATION")
+                        run {
+                            cccd.value = value
+                            gatt.writeDescriptor(cccd)
+                        }
+                    }
+                } catch (e: SecurityException) {
+                    false
+                }
+            }
+        }
+
+        private fun bleReleaseLink(link: BleLink) {
+            link.released = true
+            link.queue.clear()
+            bleFailPending(link, "the link was closed")
+            try {
+                link.gatt?.disconnect()
+                link.gatt?.close()
+            } catch (e: SecurityException) { /* nothing left to release */ }
+            link.gatt = null
+            bleLinks.remove(link.address)
+        }
+
+        private fun bleDisconnect(json: JSONObject, done: (String?, String?) -> Unit) {
+            bleLinks[json.optString("id", "")]?.let { bleReleaseLink(it) }
+            done(JSONObject().put("ok", true).toString(), null)
         }
 
         // -----------------------------------------------------------

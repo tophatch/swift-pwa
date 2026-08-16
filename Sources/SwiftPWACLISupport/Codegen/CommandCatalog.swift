@@ -22,6 +22,10 @@ enum CommandCatalog {
     struct Dump {
         let commands: [CommandDescriptor]
         let agentTools: [AgentTool]?
+        /// The permissions the app declared via `ctx.permissions.declare`.
+        /// Empty when it declares none — which is a real answer, not a missing
+        /// one, so it's not optional.
+        let declaredPermissions: [String]
     }
 
     static func dump(
@@ -52,6 +56,11 @@ enum CommandCatalog {
         // Stale sidecar from a previous run would otherwise read as "the app
         // still compiles in an agent surface" after one was removed.
         try? fm.removeItem(at: URL(fileURLWithPath: catalogURL.path + HeadlessDescribe.agentCatalogSuffix))
+        // Same staleness trap: a leftover file would read as "still declared"
+        // after the declaration was deleted.
+        try? fm.removeItem(
+            at: URL(fileURLWithPath: catalogURL.path + HeadlessDescribe.permissionsCatalogSuffix)
+        )
 
         if !quiet {
             print("Building \(exe) (\(configuration)) for a headless catalog dump…")
@@ -81,7 +90,17 @@ enum CommandCatalog {
         let agentTools: [AgentTool]? = fm.contents(atPath: agentURL.path).flatMap {
             try? JSONDecoder().decode([AgentTool].self, from: $0)
         }
-        return try Dump(commands: decode(at: catalogURL), agentTools: agentTools)
+        let permissionsURL = URL(
+            fileURLWithPath: catalogURL.path + HeadlessDescribe.permissionsCatalogSuffix
+        )
+        let declaredPermissions = fm.contents(atPath: permissionsURL.path).flatMap {
+            try? JSONDecoder().decode([String].self, from: $0)
+        } ?? []
+        return try Dump(
+            commands: decode(at: catalogURL),
+            agentTools: agentTools,
+            declaredPermissions: declaredPermissions
+        )
     }
 
     static func decode(at url: URL) throws -> [CommandDescriptor] {

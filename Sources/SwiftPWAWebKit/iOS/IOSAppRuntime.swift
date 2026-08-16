@@ -53,6 +53,7 @@
         public let registry = CommandRegistry()
         public let assetProvider = AssetProvider()
         public let events = EventBus()
+        public let permissions = PermissionPolicy()
         public private(set) var windows: [WindowID: any Window] = [:]
         private var installedPlugins: Set<String> = []
 

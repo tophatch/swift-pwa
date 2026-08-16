@@ -650,6 +650,26 @@ The DevTools binding is cross-platform: `Cmd+Opt+J` on macOS via
 WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 `webkit_web_inspector_show`.
 
+## Location (`geo.*`)
+
+`Windows.Devices.Geolocation` is **built-in WinRT**, so unlike the Phi Silica
+tier it needs no NuGet package, no Windows App SDK bootstrapper and nothing to
+provision — the shim rides the `WindowsApp.lib` the WebView2 target already
+links.
+
+Access is governed by **Settings → Privacy & security → Location**. An
+unpackaged Win32 app doesn't get its own entry there; it's covered by the
+*desktop apps* toggle, so a refusal usually means location is off for desktop
+apps generally rather than for your app specifically. `E_GEO_DENIED` says so
+rather than just "denied", because otherwise you go looking for a per-app switch
+that doesn't exist.
+
+Verified on Windows 11 x64: `geo.current` returns a 115 m fix. Note that driving
+an app over SSH needs the `schtasks /it` launch described in
+[app-driver.md](app-driver.md) — a WebView2 controller can't be created in
+Session 0 — plus `SWIFT_PWA_WEB_ROOT` when running the bare SwiftPM binary
+rather than a bundle.
+
 ## Known limitations (Windows-specific)
 
 - **`swift-pwa drive` needs an interactive desktop, so it can't be run over

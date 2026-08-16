@@ -30,6 +30,14 @@ public enum HeadlessDescribe {
     /// check the binary's agent surface against `pwa.json`'s declaration.
     public static let agentCatalogSuffix = ".agent.json"
 
+    /// Appended to the requested path for the app's declared web permissions,
+    /// written only when it declares any. `swift-pwa build` reads it to check
+    /// the runtime ceiling (`ctx.permissions.declare`) against `pwa.json`'s
+    /// `permissions.web`, which is what drives the platform artifacts — the two
+    /// have to agree or an app ships a manifest entry it will refuse to use, or
+    /// asks for a device the artifact never declared.
+    public static let permissionsCatalogSuffix = ".permissions.json"
+
     /// The requested output path, or `nil` when no dump was requested. Apps can
     /// read this in `configure` to skip side-effectful work during codegen.
     public static var requestedPath: String? {
@@ -89,6 +97,18 @@ public enum HeadlessDescribe {
             }
         }
 
+        // Same reasoning as the agent surface above: a sibling file, so the
+        // catalog's shape stays `__bridge.describe`'s.
+        let declared = context.permissions.declaredPermissions
+        if !declared.isEmpty {
+            do {
+                let data = try encoder.encode(declared.map(\.rawValue).sorted())
+                try data.write(to: URL(fileURLWithPath: path + permissionsCatalogSuffix))
+            } catch {
+                fail("couldn't write declared permissions to \(path + permissionsCatalogSuffix): \(error)")
+            }
+        }
+
         // Success. Never fall through to the UI loop.
         exit(0)
     }
@@ -119,6 +139,7 @@ public final class HeadlessAppContext: AppContext {
     public let registry = CommandRegistry()
     public let assetProvider = AssetProvider()
     public let events = EventBus()
+    public let permissions = PermissionPolicy()
     public private(set) var windows: [WindowID: any Window] = [:]
     private var installedPlugins: Set<String> = []
 

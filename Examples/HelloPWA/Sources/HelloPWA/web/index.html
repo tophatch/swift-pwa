@@ -90,11 +90,43 @@
             color: var(--muted);
             cursor: not-allowed;
         }
+        /* An app's own privacy switch. Turning it off *removes the
+           affordance* rather than leaving buttons that error — which is
+           what a real settings toggle does, and the behaviour the veto
+           exists to support. */
+        .perm-row { margin-top: 1rem; }
+        .group-label, .switch {
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+            margin: 0 0 .5rem;
+            font-size: .8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--muted);
+        }
+        .switch { cursor: pointer; user-select: none; }
+        .switch input { accent-color: var(--accent); width: 1rem; height: 1rem; }
+        .switch-note {
+            color: var(--muted);
+            font-size: .85rem;
+            margin: .1rem 0 0;
+        }
+        .switch-note a {
+            color: var(--accent);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
         .actions {
             display: flex;
             flex-wrap: wrap;
             gap: .5rem;
         }
+        /* `display: flex` outranks the user-agent's `[hidden] { display: none }`,
+           so an `.actions` row marked hidden stays on screen. Anything that
+           sets `display` has to say this itself. */
+        [hidden] { display: none !important; }
         /* Touch-only devices (iPhone, iPad without pointer) fill the
            scene — window.setSize is a no-op there, so hide the resize
            controls rather than show buttons that visually do nothing. */
@@ -185,6 +217,7 @@
         /* Compact running-total readout for the duplex-session card. */
         .sess-total { font-size: 2.2rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
         .sess-count { color: var(--muted); font-size: .85rem; min-height: 1.15em; margin-top: .15rem; }
+        #capture-out, #geo-out { margin-top: .9rem; }
 
         /* Card style pulled from CritterFacts: dark surface, hairline
            border, generous radius. */
@@ -442,6 +475,72 @@
             </section>
 
             <section class="section">
+                <h2>Camera &amp; microphone</h2>
+                <p>Your page's own <code>getUserMedia</code> works because
+                something finally answers the webview's permission request —
+                before 0.10 nothing did, and three platforms denied silently.</p>
+                <p>The switches are the <em>app's</em> own control, above the OS
+                prompt. They gate capture on Linux, Android and Windows; on
+                macOS and iOS the OS decides, because WKWebView never asks the
+                app about bundled content.</p>
+
+                <div class="perm-row">
+                    <label class="switch">
+                        <input type="checkbox" id="sw-camera" checked
+                               data-permission="camera"
+                               data-requires="demo.setPermissionEnabled">
+                        <span>Camera</span>
+                    </label>
+                    <div class="actions" id="act-camera">
+                        <button id="cap-cam">Open camera</button>
+                    </div>
+                </div>
+
+                <div class="perm-row">
+                    <label class="switch">
+                        <input type="checkbox" id="sw-microphone" checked
+                               data-permission="microphone"
+                               data-requires="demo.setPermissionEnabled">
+                        <span>Microphone</span>
+                    </label>
+                    <div class="actions" id="act-microphone">
+                        <button id="cap-mic">Open microphone</button>
+                    </div>
+                </div>
+
+                <div class="sess-count" id="capture-out">Nothing asked for yet.</div>
+            </section>
+
+            <section class="section">
+                <h2>Location</h2>
+                <p><code>navigator.geolocation</code> can't be granted on macOS
+                at all — WKWebView gives an embedder no say — so location goes
+                through <code>geo.*</code> instead: one call, same shape, all
+                five platforms.</p>
+                <p>Unlike capture, the app's switch reaches location
+                <em>everywhere</em>, because the plugin checks it in Swift
+                before it touches the hardware.</p>
+
+                <div class="perm-row">
+                    <label class="switch">
+                        <input type="checkbox" id="sw-geolocation" checked
+                               data-permission="geolocation"
+                               data-requires="demo.setPermissionEnabled">
+                        <span>Enabled</span>
+                    </label>
+                    <div class="actions" id="act-geolocation">
+                        <button id="geo-current" data-requires="geo.current">Where am I?</button>
+                        <button id="geo-watch" data-requires="geo.watch">Watch</button>
+                    </div>
+                </div>
+                <p class="switch-note" id="geo-off-note" hidden>Switched off, the
+                buttons go — but it's enforced in Swift, not by hiding them.
+                <a href="#" id="ask-anyway">Ask anyway</a>.</p>
+
+                <div class="sess-count" id="geo-out">Nothing asked for yet.</div>
+            </section>
+
+            <section class="section">
                 <h2>Duplex session</h2>
                 <p>Two-way over one open subscription: push frames <em>in</em>
                 while the Swift handler streams a running total back — a plain
@@ -522,6 +621,8 @@
         // module-scope `platformInfo` so action handlers can branch
         // on `platformInfo.tempDir` etc. without re-issuing the
         // invoke.
+        let geoStop = null;
+        let locationEnabled = true;
         let platformInfo = null;
         (async () => {
             try {
@@ -624,6 +725,76 @@
                 document.getElementById("toggle-tray").textContent =
                     trayVisible ? "Hide tray" : "Show tray";
                 log("tray " + (trayVisible ? "shown" : "hidden"));
+            },
+            geoCurrent: async () => {
+                const out = document.getElementById("geo-out");
+                out.textContent = "asking…";
+                try {
+                    const fix = await __SWIFT_PWA__.invoke("geo.current", { accuracy: "balanced" });
+                    out.textContent = `±${Math.round(fix.accuracy)} m`;
+                    log(`geo.current → ±${Math.round(fix.accuracy)} m`);
+                } catch (e) {
+                    // E_GEO_DENIED is the app's own gate (undeclared or vetoed);
+                    // E_GEO_UNAVAILABLE is this machine right now.
+                    out.textContent = `${e.code}: ${e.message}`;
+                    log(`geo.current failed: ${e.code}`);
+                }
+            },
+            geoWatch: async () => {
+                const btn = document.getElementById("geo-watch");
+                const out = document.getElementById("geo-out");
+                if (geoStop) {
+                    geoStop();
+                    geoStop = null;
+                    btn.textContent = "Watch";
+                    log("geo.watch stopped");
+                    return;
+                }
+                let seen = 0;
+                geoStop = __SWIFT_PWA__.subscribe("geo.watch", { accuracy: "balanced" }, (fix) => {
+                    seen += 1;
+                    out.textContent = `watching — ${seen} fix${seen === 1 ? "" : "es"}, ±${Math.round(fix.accuracy)} m`;
+                });
+                btn.textContent = "Stop watching";
+                log("geo.watch started");
+            },
+            togglePermission: async (input) => {
+                const permission = input.dataset.permission;
+                await __SWIFT_PWA__.invoke("demo.setPermissionEnabled", {
+                    permission,
+                    enabled: input.checked,
+                });
+                // Stop a live watch on the way down: leaving one running would
+                // keep delivering fixes the switch just said no to.
+                if (!input.checked && permission === "geolocation" && geoStop) {
+                    geoStop();
+                    geoStop = null;
+                    document.getElementById("geo-watch").textContent = "Watch";
+                }
+                document.getElementById(`act-${permission}`).hidden = !input.checked;
+                if (permission === "geolocation") {
+                    document.getElementById("geo-off-note").hidden = input.checked;
+                }
+                log(`app switch: ${permission} → ${input.checked ? "on" : "off"}`);
+            },
+            capture: async (kind) => {
+                const out = document.getElementById("capture-out");
+                out.textContent = `asking for the ${kind}…`;
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia(
+                        kind === "camera" ? { video: true } : { audio: true }
+                    );
+                    const tracks = stream.getTracks();
+                    out.textContent = `${kind}: ${tracks.length} live track${tracks.length === 1 ? "" : "s"}`;
+                    log(`getUserMedia(${kind}) → ${tracks.length} track(s)`);
+                    // Release it again — this card is a permission demo, not a
+                    // recorder, and holding the device would keep the OS
+                    // indicator lit.
+                    tracks.forEach((t) => t.stop());
+                } catch (e) {
+                    out.textContent = `${e.name}: ${e.message}`;
+                    log(`getUserMedia(${kind}) failed: ${e.name}`);
+                }
             },
             notify: async () => {
                 try {
@@ -1019,6 +1190,19 @@
         document.getElementById("paste").onclick      = actions.paste;
         document.getElementById("cycle-tray").onclick = actions.cycleTray;
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
+        document.getElementById("geo-current").onclick = actions.geoCurrent;
+        document.getElementById("geo-watch").onclick = actions.geoWatch;
+        document.getElementById("cap-mic").onclick = () => actions.capture("microphone");
+        document.getElementById("cap-cam").onclick = () => actions.capture("camera");
+        document.querySelectorAll(".switch input[data-permission]").forEach((input) => {
+            input.onchange = () => actions.togglePermission(input);
+        });
+        // Proves the switches aren't cosmetic: the same call a hidden button
+        // would make, refused natively with a distinguishable code.
+        document.getElementById("ask-anyway").onclick = (e) => {
+            e.preventDefault();
+            actions.geoCurrent();
+        };
         document.getElementById("notify").onclick = actions.notify;
         document.getElementById("toast").onclick  = actions.toast;
         document.getElementById("dialog-confirm").onclick = actions.dialogConfirm;

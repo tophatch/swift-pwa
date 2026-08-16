@@ -492,4 +492,68 @@ static inline void swiftpwa_uri_request_finish_range_not_satisfiable(
     g_object_unref(empty);
 }
 
+// ---------------------------------------------------------------------
+// Permission requests (camera / microphone / location / notifications)
+// ---------------------------------------------------------------------
+
+// A bitmask of what one `WebKitPermissionRequest` is asking for. A single
+// `getUserMedia({audio: true, video: true})` is *one* request needing two
+// permissions, and WebKit only lets it be allowed or denied as a whole —
+// which is why this is a mask rather than an enum.
+// File-scope constants rather than `#define`s: the clang importer surfaces
+// these to Swift as plain `let`s, where a macro's arithmetic may not survive.
+static const unsigned int SWIFTPWA_PERM_MICROPHONE    = 1u << 0;
+static const unsigned int SWIFTPWA_PERM_CAMERA        = 1u << 1;
+static const unsigned int SWIFTPWA_PERM_GEOLOCATION   = 1u << 2;
+static const unsigned int SWIFTPWA_PERM_NOTIFICATIONS = 1u << 3;
+// `enumerateDevices()` asking for device *labels*. Not a capture grant, but
+// it does reveal what hardware exists, which is why WebKit gives it its own
+// request type rather than folding it into user-media.
+static const unsigned int SWIFTPWA_PERM_DEVICE_INFO   = 1u << 4;
+
+/// Classify a `WebKitPermissionRequest`. Returns 0 for a request type we
+/// don't model (screen capture, media-key system, pointer lock), which the
+/// caller must refuse rather than wave through.
+///
+/// In C because the `G_TYPE_CHECK_INSTANCE_TYPE` macros behind
+/// `WEBKIT_IS_*_PERMISSION_REQUEST` don't survive the clang importer. Takes
+/// `gpointer` so Swift never needs the request types imported at all.
+static inline unsigned int swiftpwa_permission_request_kinds(gpointer request) {
+    if (!request) return 0;
+    unsigned int mask = 0;
+    if (WEBKIT_IS_USER_MEDIA_PERMISSION_REQUEST(request)) {
+        WebKitUserMediaPermissionRequest *media =
+            WEBKIT_USER_MEDIA_PERMISSION_REQUEST(request);
+        if (webkit_user_media_permission_is_for_audio_device(media)) {
+            mask |= SWIFTPWA_PERM_MICROPHONE;
+        }
+        if (webkit_user_media_permission_is_for_video_device(media)) {
+            mask |= SWIFTPWA_PERM_CAMERA;
+        }
+    } else if (WEBKIT_IS_GEOLOCATION_PERMISSION_REQUEST(request)) {
+        mask |= SWIFTPWA_PERM_GEOLOCATION;
+    } else if (WEBKIT_IS_NOTIFICATION_PERMISSION_REQUEST(request)) {
+        mask |= SWIFTPWA_PERM_NOTIFICATIONS;
+    } else if (WEBKIT_IS_DEVICE_INFO_PERMISSION_REQUEST(request)) {
+        mask |= SWIFTPWA_PERM_DEVICE_INFO;
+    }
+    return mask;
+}
+
+static inline void swiftpwa_permission_request_allow(gpointer request) {
+    if (request) webkit_permission_request_allow(WEBKIT_PERMISSION_REQUEST(request));
+}
+
+static inline void swiftpwa_permission_request_deny(gpointer request) {
+    if (request) webkit_permission_request_deny(WEBKIT_PERMISSION_REQUEST(request));
+}
+
+/// The page URI a request came from, for the diagnostic. Freshly allocated;
+/// the caller must `g_free` it. NULL when the view has no URI yet.
+static inline char *swiftpwa_web_view_uri_copy(gpointer web_view) {
+    if (!web_view) return NULL;
+    const char *uri = webkit_web_view_get_uri(WEBKIT_WEB_VIEW(web_view));
+    return uri ? g_strdup(uri) : NULL;
+}
+
 #endif

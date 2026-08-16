@@ -48,6 +48,11 @@ public protocol AppContext: AnyObject, Sendable {
     /// the JS `on(channel, cb)` / `emit(channel, payload)` API. Prefer the
     /// typed ``emit(_:_:retain:)`` convenience for Swift-side pushes.
     var events: EventBus { get }
+
+    /// Whether a page may use the camera, microphone or location — consulted
+    /// by every backend at its own permission seam, so one declaration governs
+    /// all five. Nothing is permitted until declared; see ``PermissionPolicy``.
+    var permissions: PermissionPolicy { get }
 }
 
 public extension AppContext {

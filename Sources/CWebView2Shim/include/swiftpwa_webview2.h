@@ -50,6 +50,14 @@ typedef void (*swiftpwa_w2_controller_ready_cb)(
 // duration of the callback — copy it if needed.
 typedef void (*swiftpwa_w2_message_cb)(const char *utf8_json, void *user);
 
+// Decides one WebView2 permission request. `kind` is WebView2's own
+// COREWEBVIEW2_PERMISSION_KIND. Return 1 to let the request proceed to
+// WebView2's own prompt, 0 to refuse it outright.
+//
+// Synchronous on purpose: the app's policy is a lock-guarded lookup, and
+// deferring would mean holding a COM deferral across the bridge for no gain.
+typedef int (*swiftpwa_w2_permission_cb)(int kind, const char *utf8_origin, void *user);
+
 // `eval_complete` fires when ExecuteScript resolves. `result_json` is
 // either NULL or the script's JSON-stringified return value (UTF-8).
 // `error_message` is NULL on success or a UTF-8 description on failure.
@@ -151,6 +159,15 @@ void swiftpwa_w2_view_post_web_message_string(
 void swiftpwa_w2_view_set_web_message_handler(
     swiftpwa_w2_view *view,
     swiftpwa_w2_message_cb cb,
+    void *user);
+
+/// Route WebView2 permission requests (camera, microphone, geolocation)
+/// through `cb`. Without this WebView2 keeps its own default, which is to
+/// prompt — fine on its own, but it leaves the app's declaration and veto
+/// meaning nothing on Windows.
+void swiftpwa_w2_view_set_permission_handler(
+    swiftpwa_w2_view *view,
+    swiftpwa_w2_permission_cb cb,
     void *user);
 
 // Map a virtual host (e.g. "localhost") to a folder on disk. Combined

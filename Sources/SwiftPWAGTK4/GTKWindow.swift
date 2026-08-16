@@ -77,6 +77,11 @@
             self.adapter = adapter
             webView = adapter
 
+            // Before `load` below: a page can ask for the camera the moment it
+            // runs, and an unanswered request takes WebKit's silent-refuse
+            // default.
+            adapter.connectPermissionHandler(policy: app.permissions)
+
             // Place the WebKit view inside the window. GTK4 windows have
             // exactly one child slot.
             gtk_window_set_child(windowPtr, adapter.viewWidget)

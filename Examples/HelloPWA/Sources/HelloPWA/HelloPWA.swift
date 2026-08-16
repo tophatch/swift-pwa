@@ -164,6 +164,25 @@ func configure(_ ctx: any AppContext) throws {
         runUpdaterSmoke(updater)
     }
 
+    // Device surface: the permission policy plus `geo.*`. Declaring is a
+    // ceiling, not a grant — the page's own getUserMedia works because
+    // something now answers the webview's request, and location goes through
+    // the plugin because macOS WKWebView can't be told to allow the web API.
+    // See the "Device & location" card in web/index.html.
+    ctx.permissions.declare(.camera, .microphone, .geolocation)
+    ctx.use(GeoPlugin(SystemGeolocation()))
+
+    // The app's own privacy switch, the thing an in-app "location: off" toggle
+    // would drive. It sits *above* the OS prompt, so flipping it off refuses
+    // without asking the user about something the app has already decided.
+    ctx.permissions.setVeto { permission, _ in
+        !PermissionSwitches.shared.isEnabled(permission.rawValue)
+    }
+    ctx.registry.register("demo.setPermissionEnabled", typed: { (args: PermissionSwitchArgs, _) -> PermissionSwitchArgs in
+        PermissionSwitches.shared.set(args.permission, enabled: args.enabled)
+        return args
+    })
+
     // Duplex-session demo (bidirectional bridge sessions). A `registerSession`
     // command that keeps per-session state: the page pushes numbers into the
     // open session (`session.push({ add })`) and the handler streams back the
@@ -426,3 +445,32 @@ private let trayIconPNG: [UInt8] = [
     0x04, 0x87, 0x90, 0x6A, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
     0xAE, 0x42, 0x60, 0x82
 ]
+
+/// Backs the "Device & location" card's in-app switches — the app's own
+/// privacy controls, one per permission. A plain lock-guarded set rather than
+/// anything clever: the point is that the veto is *the app's* decision, made
+/// wherever the app already keeps its settings.
+///
+/// It covers camera and microphone as well as location, which is the part worth
+/// seeing: the veto gates the page's **own** `getUserMedia`, not just the
+/// plugin. An app can turn its camera off and mean it.
+final class PermissionSwitches: @unchecked Sendable {
+    static let shared = PermissionSwitches()
+    private let lock = NSLock()
+    private var disabled: Set<String> = []
+
+    func isEnabled(_ permission: String) -> Bool {
+        lock.withLock { !disabled.contains(permission) }
+    }
+
+    func set(_ permission: String, enabled: Bool) {
+        lock.withLock {
+            if enabled { disabled.remove(permission) } else { disabled.insert(permission) }
+        }
+    }
+}
+
+struct PermissionSwitchArgs: Codable, Sendable {
+    var permission: String
+    var enabled: Bool
+}

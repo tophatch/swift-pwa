@@ -66,7 +66,8 @@ struct AgentCheck: AsyncParsableCommand {
             // check is skipped rather than reported as "the app has none".
             try CommandCatalog.Dump(
                 commands: CommandCatalog.decode(at: URL(fileURLWithPath: catalog)),
-                agentTools: nil
+                agentTools: nil,
+                declaredPermissions: []
             )
         } else {
             try await CommandCatalog.dumpAll(projectRoot: cwd, manifest: pwa, configuration: configuration)

@@ -35,6 +35,7 @@
         // content-packs design doc.
         public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
         public let events = EventBus()
+        public let permissions = PermissionPolicy()
         public private(set) nonisolated(unsafe) var windows: [WindowID: any Window] = [:]
         // `pendingExitCode` is read by the runtime worker thread
         // (in `AndroidAppRuntime.run`) right after `runSemaphore`

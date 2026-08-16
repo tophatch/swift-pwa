@@ -13,6 +13,15 @@
     /// kicked off env / controller creation), and the C shim guards
     /// its own state with a per-process mutex.
     public final class WebView2Adapter: PWAWebView, @unchecked Sendable {
+        /// The app's permission policy, consulted from WebView2's
+        /// `PermissionRequested` handler. Optional so an embedder constructing
+        /// an adapter directly keeps WebView2's own default behaviour.
+        private nonisolated(unsafe) var permissionPolicy: PermissionPolicy?
+
+        /// Read by the C trampoline, which can't reach private state.
+        fileprivate var policyForPermissionRequests: PermissionPolicy? {
+            permissionPolicy
+        }
         private let environment: OpaquePointer
         private let parent: HWND
         /// Applied once the controller is ready (RGBColor is Sendable).
@@ -76,8 +85,10 @@
             parent: HWND,
             content _: WindowContent,
             backgroundColor: RGBColor? = nil,
-            sharedProvider: AssetProvider
+            sharedProvider: AssetProvider,
+            permissions: PermissionPolicy? = nil
         ) throws {
+            permissionPolicy = permissions
             self.environment = environment
             self.parent = parent
             self.backgroundColor = backgroundColor
@@ -142,6 +153,9 @@
                 }
                 let user = Unmanaged.passUnretained(self).toOpaque()
                 swiftpwa_w2_view_set_web_message_handler(view, messageReceivedTrampoline, user)
+                if permissionPolicy != nil {
+                    swiftpwa_w2_view_set_permission_handler(view, permissionRequestedTrampoline, user)
+                }
 
                 // Intercept requests to the bundle origin so directories
                 // added via `ctx.serveDirectory(_:at:)` are served (with
@@ -560,6 +574,38 @@
         MainActor.assumeIsolated {
             adapter._onControllerReady(ctrl)
         }
+    }
+
+    /// WebView2's own permission kinds. Mirrors `COREWEBVIEW2_PERMISSION_KIND`,
+    /// which the shim passes through as a plain int so Swift needn't import the
+    /// WebView2 headers.
+    private enum WebView2PermissionKind: Int32 {
+        case microphone = 1
+        case camera = 2
+        case geolocation = 3
+    }
+
+    /// `@convention(c)` callback from `swiftpwa_w2_view_set_permission_handler`.
+    /// Returns 1 to let WebView2 ask the user, 0 to refuse outright.
+    let permissionRequestedTrampoline: @convention(c) (
+        Int32, UnsafePointer<CChar>?, UnsafeMutableRawPointer?
+    ) -> Int32 = { kind, originPtr, userData in
+        guard let userData else { return 1 }
+        let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
+        guard let policy = adapter.policyForPermissionRequests else { return 1 }
+        let origin = originPtr.map { String(cString: $0) } ?? "the page"
+
+        let wanted: Set<WebPermission>? = switch WebView2PermissionKind(rawValue: kind) {
+        case .microphone: [.microphone]
+        case .camera: [.camera]
+        case .geolocation: [.geolocation]
+        // Anything else — clipboard read, notifications, sensors — keeps
+        // WebView2's own behaviour rather than being refused by a policy that
+        // has no opinion about it.
+        default: nil
+        }
+        guard let wanted else { return 1 }
+        return policy.decide(all: wanted, origin: origin) == .allow ? 1 : 0
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_set_web_message_handler`.

@@ -90,11 +90,42 @@
             color: var(--muted);
             cursor: not-allowed;
         }
+        /* An app's own privacy switch. Turning it off *removes the
+           affordance* rather than leaving buttons that error — which is
+           what a real settings toggle does, and the behaviour the veto
+           exists to support. */
+        .group-label, .switch {
+            display: flex;
+            align-items: center;
+            gap: .5rem;
+            margin: 1.1rem 0 .5rem;
+            font-size: .8rem;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: .04em;
+            color: var(--muted);
+        }
+        .switch { cursor: pointer; user-select: none; }
+        .switch input { accent-color: var(--accent); width: 1rem; height: 1rem; }
+        .switch-note {
+            color: var(--muted);
+            font-size: .85rem;
+            margin: .1rem 0 0;
+        }
+        .switch-note a {
+            color: var(--accent);
+            text-decoration: underline;
+            text-underline-offset: 2px;
+        }
         .actions {
             display: flex;
             flex-wrap: wrap;
             gap: .5rem;
         }
+        /* `display: flex` outranks the user-agent's `[hidden] { display: none }`,
+           so an `.actions` row marked hidden stays on screen. Anything that
+           sets `display` has to say this itself. */
+        [hidden] { display: none !important; }
         /* Touch-only devices (iPhone, iPad without pointer) fill the
            scene — window.setSize is a no-op there, so hide the resize
            controls rather than show buttons that visually do nothing. */
@@ -185,6 +216,7 @@
         /* Compact running-total readout for the duplex-session card. */
         .sess-total { font-size: 2.2rem; font-weight: 700; color: var(--accent); line-height: 1.1; }
         .sess-count { color: var(--muted); font-size: .85rem; min-height: 1.15em; margin-top: .15rem; }
+        #device-out { margin-top: .9rem; }
 
         /* Card style pulled from CritterFacts: dark surface, hairline
            border, generous radius. */
@@ -443,21 +475,31 @@
 
             <section class="section">
                 <h2>Device &amp; location</h2>
-                <p>The page's <em>own</em> <code>getUserMedia</code> works because
-                something now answers the webview's permission request — before
-                0.10 nothing did, and every backend's default was a silent no.
-                Location goes through <code>geo.*</code> instead, because macOS
-                gives an embedder no way to grant <code>navigator.geolocation</code>
-                at all. <strong>Location off</strong> is the app's own switch: it
-                sits above the OS prompt, so a refusal costs no dialog.</p>
-                <div class="sess-count" id="device-out">Nothing asked for yet.</div>
+                <p>Your page's own <code>getUserMedia</code> works because
+                something finally answers the webview's permission request.
+                Location goes through <code>geo.*</code>, because macOS can't
+                grant <code>navigator.geolocation</code> at all.</p>
+
+                <p class="group-label">Capture</p>
                 <div class="actions">
-                    <button id="geo-current" data-requires="geo.current">Where am I?</button>
-                    <button id="geo-watch" data-requires="geo.watch">Watch</button>
-                    <button id="geo-veto" data-requires="demo.setLocationEnabled">Location off</button>
                     <button id="cap-mic">Microphone</button>
                     <button id="cap-cam">Camera</button>
                 </div>
+
+                <label class="switch">
+                    <input type="checkbox" id="geo-enabled" checked
+                           data-requires="demo.setLocationEnabled">
+                    <span>Location</span>
+                </label>
+                <div class="actions" id="geo-actions">
+                    <button id="geo-current" data-requires="geo.current">Where am I?</button>
+                    <button id="geo-watch" data-requires="geo.watch">Watch</button>
+                </div>
+                <p class="switch-note" id="geo-off-note" hidden>Enforced in
+                Swift, not by hiding these — <a href="#" id="geo-anyway">ask
+                anyway</a>.</p>
+
+                <div class="sess-count" id="device-out">Nothing asked for yet.</div>
             </section>
 
             <section class="section">
@@ -678,11 +720,18 @@
                 btn.textContent = "Stop watching";
                 log("geo.watch started");
             },
-            geoVeto: async () => {
-                const btn = document.getElementById("geo-veto");
-                locationEnabled = !locationEnabled;
+            geoToggle: async () => {
+                locationEnabled = document.getElementById("geo-enabled").checked;
                 await __SWIFT_PWA__.invoke("demo.setLocationEnabled", { enabled: locationEnabled });
-                btn.textContent = locationEnabled ? "Location off" : "Location on";
+                // Stop any live watch on the way down: leaving one running
+                // would keep delivering fixes the switch just said no to.
+                if (!locationEnabled && geoStop) {
+                    geoStop();
+                    geoStop = null;
+                    document.getElementById("geo-watch").textContent = "Watch";
+                }
+                document.getElementById("geo-actions").hidden = !locationEnabled;
+                document.getElementById("geo-off-note").hidden = locationEnabled;
                 log(`app-level location switch → ${locationEnabled ? "on" : "off"}`);
             },
             capture: async (kind) => {
@@ -1100,7 +1149,13 @@
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
         document.getElementById("geo-current").onclick = actions.geoCurrent;
         document.getElementById("geo-watch").onclick = actions.geoWatch;
-        document.getElementById("geo-veto").onclick = actions.geoVeto;
+        document.getElementById("geo-enabled").onchange = actions.geoToggle;
+        // Proves the switch isn't cosmetic: the same call the hidden buttons
+        // would make, refused natively with a distinguishable code.
+        document.getElementById("geo-anyway").onclick = (e) => {
+            e.preventDefault();
+            actions.geoCurrent();
+        };
         document.getElementById("cap-mic").onclick = () => actions.capture("microphone");
         document.getElementById("cap-cam").onclick = () => actions.capture("camera");
         document.getElementById("notify").onclick = actions.notify;

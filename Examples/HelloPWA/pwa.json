@@ -2,14 +2,17 @@
   "id": "com.swiftpwa.hello",
   "name": "HelloPWA",
   "version": "0.1.0",
-  "description": "A swift-pwa demo app — a thin Swift wrapper around a WKWebView that shows the JS↔Swift bridge round-tripping invoke and subscribe calls.",
+  "description": "A swift-pwa demo app \u2014 a thin Swift wrapper around a WKWebView that shows the JS\u2194Swift bridge round-tripping invoke and subscribe calls.",
   "web": {
     "directory": "Sources/HelloPWA/web",
     "entry": "index.html"
   },
   "build": {
     "serve": [
-      { "mount": "/packs", "from": "data/packs" }
+      {
+        "mount": "/packs",
+        "from": "data/packs"
+      }
     ]
   },
   "agent": {
@@ -37,12 +40,15 @@
     "height": 768,
     "resizable": true,
     "fullscreen": false,
-    "background_color": { "light": "#f4f6f9", "dark": "#0e1116" }
+    "background_color": {
+      "light": "#f4f6f9",
+      "dark": "#0e1116"
+    }
   },
   "macos": {
     "bundle_identifier": "com.swiftpwa.hello",
     "minimum_system_version": "15.0",
-    "copyright": "© 2026 swift-pwa contributors"
+    "copyright": "\u00a9 2026 swift-pwa contributors"
   },
   "ios": {
     "bundle_identifier": "com.swiftpwa.hello",
@@ -60,7 +66,22 @@
     "package_id": "com.swiftpwa.hello",
     "min_sdk": 28,
     "target_sdk": 34,
-    "abis": ["arm64-v8a"],
+    "abis": [
+      "arm64-v8a"
+    ],
     "version_code": 1
+  },
+  "permissions": {
+    "web": {
+      "camera": {
+        "reason": "Take a photo to attach to a note."
+      },
+      "microphone": {
+        "reason": "Record a voice note."
+      },
+      "geolocation": {
+        "reason": "Stamp a note with where you made it."
+      }
+    }
   }
 }

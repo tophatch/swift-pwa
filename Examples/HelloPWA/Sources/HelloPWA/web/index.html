@@ -442,6 +442,25 @@
             </section>
 
             <section class="section">
+                <h2>Device &amp; location</h2>
+                <p>The page's <em>own</em> <code>getUserMedia</code> works because
+                something now answers the webview's permission request — before
+                0.10 nothing did, and every backend's default was a silent no.
+                Location goes through <code>geo.*</code> instead, because macOS
+                gives an embedder no way to grant <code>navigator.geolocation</code>
+                at all. <strong>Location off</strong> is the app's own switch: it
+                sits above the OS prompt, so a refusal costs no dialog.</p>
+                <div class="sess-count" id="device-out">Nothing asked for yet.</div>
+                <div class="actions">
+                    <button id="geo-current" data-requires="geo.current">Where am I?</button>
+                    <button id="geo-watch" data-requires="geo.watch">Watch</button>
+                    <button id="geo-veto" data-requires="demo.setLocationEnabled">Location off</button>
+                    <button id="cap-mic">Microphone</button>
+                    <button id="cap-cam">Camera</button>
+                </div>
+            </section>
+
+            <section class="section">
                 <h2>Duplex session</h2>
                 <p>Two-way over one open subscription: push frames <em>in</em>
                 while the Swift handler streams a running total back — a plain
@@ -522,6 +541,8 @@
         // module-scope `platformInfo` so action handlers can branch
         // on `platformInfo.tempDir` etc. without re-issuing the
         // invoke.
+        let geoStop = null;
+        let locationEnabled = true;
         let platformInfo = null;
         (async () => {
             try {
@@ -624,6 +645,64 @@
                 document.getElementById("toggle-tray").textContent =
                     trayVisible ? "Hide tray" : "Show tray";
                 log("tray " + (trayVisible ? "shown" : "hidden"));
+            },
+            geoCurrent: async () => {
+                const out = document.getElementById("device-out");
+                out.textContent = "asking…";
+                try {
+                    const fix = await __SWIFT_PWA__.invoke("geo.current", { accuracy: "balanced" });
+                    out.textContent = `±${Math.round(fix.accuracy)} m`;
+                    log(`geo.current → ±${Math.round(fix.accuracy)} m`);
+                } catch (e) {
+                    // E_GEO_DENIED is the app's own gate (undeclared or vetoed);
+                    // E_GEO_UNAVAILABLE is this machine right now.
+                    out.textContent = `${e.code}: ${e.message}`;
+                    log(`geo.current failed: ${e.code}`);
+                }
+            },
+            geoWatch: async () => {
+                const btn = document.getElementById("geo-watch");
+                const out = document.getElementById("device-out");
+                if (geoStop) {
+                    geoStop();
+                    geoStop = null;
+                    btn.textContent = "Watch";
+                    log("geo.watch stopped");
+                    return;
+                }
+                let seen = 0;
+                geoStop = __SWIFT_PWA__.subscribe("geo.watch", { accuracy: "balanced" }, (fix) => {
+                    seen += 1;
+                    out.textContent = `watching — ${seen} fix${seen === 1 ? "" : "es"}, ±${Math.round(fix.accuracy)} m`;
+                });
+                btn.textContent = "Stop watching";
+                log("geo.watch started");
+            },
+            geoVeto: async () => {
+                const btn = document.getElementById("geo-veto");
+                locationEnabled = !locationEnabled;
+                await __SWIFT_PWA__.invoke("demo.setLocationEnabled", { enabled: locationEnabled });
+                btn.textContent = locationEnabled ? "Location off" : "Location on";
+                log(`app-level location switch → ${locationEnabled ? "on" : "off"}`);
+            },
+            capture: async (kind) => {
+                const out = document.getElementById("device-out");
+                out.textContent = `asking for the ${kind}…`;
+                try {
+                    const stream = await navigator.mediaDevices.getUserMedia(
+                        kind === "camera" ? { video: true } : { audio: true }
+                    );
+                    const tracks = stream.getTracks();
+                    out.textContent = `${kind}: ${tracks.length} live track${tracks.length === 1 ? "" : "s"}`;
+                    log(`getUserMedia(${kind}) → ${tracks.length} track(s)`);
+                    // Release it again — this card is a permission demo, not a
+                    // recorder, and holding the device would keep the OS
+                    // indicator lit.
+                    tracks.forEach((t) => t.stop());
+                } catch (e) {
+                    out.textContent = `${e.name}: ${e.message}`;
+                    log(`getUserMedia(${kind}) failed: ${e.name}`);
+                }
             },
             notify: async () => {
                 try {
@@ -1019,6 +1098,11 @@
         document.getElementById("paste").onclick      = actions.paste;
         document.getElementById("cycle-tray").onclick = actions.cycleTray;
         document.getElementById("toggle-tray").onclick = actions.toggleTray;
+        document.getElementById("geo-current").onclick = actions.geoCurrent;
+        document.getElementById("geo-watch").onclick = actions.geoWatch;
+        document.getElementById("geo-veto").onclick = actions.geoVeto;
+        document.getElementById("cap-mic").onclick = () => actions.capture("microphone");
+        document.getElementById("cap-cam").onclick = () => actions.capture("camera");
         document.getElementById("notify").onclick = actions.notify;
         document.getElementById("toast").onclick  = actions.toast;
         document.getElementById("dialog-confirm").onclick = actions.dialogConfirm;

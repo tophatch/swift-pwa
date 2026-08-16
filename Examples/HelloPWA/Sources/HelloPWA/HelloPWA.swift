@@ -164,6 +164,25 @@ func configure(_ ctx: any AppContext) throws {
         runUpdaterSmoke(updater)
     }
 
+    // Device surface: the permission policy plus `geo.*`. Declaring is a
+    // ceiling, not a grant — the page's own getUserMedia works because
+    // something now answers the webview's request, and location goes through
+    // the plugin because macOS WKWebView can't be told to allow the web API.
+    // See the "Device & location" card in web/index.html.
+    ctx.permissions.declare(.camera, .microphone, .geolocation)
+    ctx.use(GeoPlugin(SystemGeolocation()))
+
+    // The app's own privacy switch, the thing an in-app "location: off" toggle
+    // would drive. It sits *above* the OS prompt, so flipping it off refuses
+    // without asking the user about something the app has already decided.
+    ctx.permissions.setVeto { permission, _ in
+        permission == .geolocation && !LocationSwitch.shared.isOn
+    }
+    ctx.registry.register("demo.setLocationEnabled", typed: { (args: LocationSwitchArgs, _) -> LocationSwitchArgs in
+        LocationSwitch.shared.isOn = args.enabled
+        return args
+    })
+
     // Duplex-session demo (bidirectional bridge sessions). A `registerSession`
     // command that keeps per-session state: the page pushes numbers into the
     // open session (`session.push({ add })`) and the handler streams back the
@@ -426,3 +445,21 @@ private let trayIconPNG: [UInt8] = [
     0x04, 0x87, 0x90, 0x6A, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4E, 0x44,
     0xAE, 0x42, 0x60, 0x82
 ]
+
+/// Backs the "Device & location" card's in-app location toggle. A plain
+/// lock-guarded flag rather than anything clever: the point of the demo is
+/// that the veto is *the app's* decision, made wherever the app keeps its
+/// settings.
+final class LocationSwitch: @unchecked Sendable {
+    static let shared = LocationSwitch()
+    private let lock = NSLock()
+    private var value = true
+    var isOn: Bool {
+        get { lock.withLock { value } }
+        set { lock.withLock { value = newValue } }
+    }
+}
+
+struct LocationSwitchArgs: Codable, Sendable {
+    var enabled: Bool
+}

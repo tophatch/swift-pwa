@@ -54,6 +54,57 @@ struct PermissionCheckTests {
         #expect(PermissionCheck.knownNames == ["camera", "geolocation", "microphone", "notifications"])
     }
 
+    // MARK: - Apple purpose strings
+
+    @Test("an Apple build refuses a declaration with no reason")
+    func appleNeedsReason() throws {
+        let pwa = try manifest(web: .init(names: ["microphone"]))
+        #expect(throws: ValidationError.self) { try PermissionCheck.validateAppleReasons(pwa) }
+        do {
+            try PermissionCheck.validateAppleReasons(pwa)
+        } catch let error as ValidationError {
+            // The message has to show the fix, since the object form isn't
+            // guessable from the list form.
+            #expect("\(error)".contains("reason"))
+            #expect("\(error)".contains("microphone"))
+        }
+    }
+
+    @Test("a reason satisfies it, and reaches the Info.plist")
+    func appleReasonEmitted() throws {
+        let declarations = PWAManifest.WebPermissionDeclarations(
+            names: ["geolocation"],
+            details: ["geolocation": .init(reason: "Show jobs near you.")]
+        )
+        let pwa = try manifest(web: declarations)
+        try PermissionCheck.validateAppleReasons(pwa)
+        let plist = InfoPlistGenerator.macOS(manifest: pwa, executableName: "App")
+        #expect(plist["NSLocationWhenInUseUsageDescription"] as? String == "Show jobs near you.")
+    }
+
+    @Test("notifications needs no purpose string")
+    func notificationsNeedNoReason() throws {
+        // UserNotifications prompts without one, so demanding it would be
+        // make-work that teaches adopters the rule wrong.
+        try PermissionCheck.validateAppleReasons(manifest(web: .init(names: ["notifications"])))
+    }
+
+    @Test("an explicit info_plist override still wins over the generated string")
+    func passthroughWins() throws {
+        var pwa = try manifest(web: .init(
+            names: ["camera"], details: ["camera": .init(reason: "Generated.")]
+        ))
+        // pwa.json is decoded with `.convertFromSnakeCase`, so `info_plist`
+        // only reaches `infoPlist` through that strategy.
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        pwa.macos = try decoder.decode(PWAManifest.MacOSSection.self, from: Data("""
+        {"info_plist": {"NSCameraUsageDescription": "Hand-written."}}
+        """.utf8))
+        let plist = InfoPlistGenerator.macOS(manifest: pwa, executableName: "App")
+        #expect(plist["NSCameraUsageDescription"] as? String == "Hand-written.")
+    }
+
     // MARK: - Drift
 
     @Test("matching declarations don't drift")

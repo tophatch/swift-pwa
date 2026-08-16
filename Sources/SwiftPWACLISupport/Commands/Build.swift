@@ -779,6 +779,9 @@ struct Build: AsyncParsableCommand {
     /// declared.
     static func validatePermissions(manifest: PWAManifest, projectRoot: URL, target: BuildTarget) async throws {
         try PermissionCheck.validateNames(manifest)
+        if target == .macos || target == .ios {
+            try PermissionCheck.validateAppleReasons(manifest)
+        }
         guard manifest.permissions?.web != nil else { return }
         guard target == .host else {
             print("""

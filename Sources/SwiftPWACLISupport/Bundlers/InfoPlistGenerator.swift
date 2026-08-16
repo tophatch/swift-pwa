@@ -28,6 +28,7 @@ enum InfoPlistGenerator {
         if manifest.icon != nil {
             plist["CFBundleIconFile"] = "AppIcon.icns"
         }
+        applyUsageDescriptions(manifest, into: &plist)
         merge(manifest.macos?.infoPlist, into: &plist)
         return plist
     }
@@ -79,8 +80,36 @@ enum InfoPlistGenerator {
         } else {
             plist["UILaunchScreen"] = [String: Any]()
         }
+        applyUsageDescriptions(manifest, into: &plist)
         merge(manifest.ios?.infoPlist, into: &plist)
         return plist
+    }
+
+    /// The `NS…UsageDescription` string Apple requires for each declared
+    /// permission, from `permissions.web`'s `reason`.
+    ///
+    /// Emitted before the `info_plist` passthrough so an app can still override
+    /// a specific string by hand. A declaration with no `reason` emits nothing
+    /// here — ``PermissionCheck`` is what refuses that, with a message, rather
+    /// than this quietly inventing a purpose string on the developer's behalf.
+    /// Apple shows it to the user verbatim and rejects apps that don't have one.
+    static let appleUsageDescriptionKeys: [String: String] = [
+        "camera": "NSCameraUsageDescription",
+        "microphone": "NSMicrophoneUsageDescription",
+        "geolocation": "NSLocationWhenInUseUsageDescription"
+        // `notifications` has no usage-description key: UserNotifications
+        // prompts without one.
+    ]
+
+    private static func applyUsageDescriptions(_ manifest: PWAManifest, into plist: inout InfoPlist) {
+        guard let declarations = manifest.permissions?.web else { return }
+        for name in declarations.names {
+            guard let key = appleUsageDescriptionKeys[name],
+                  let reason = declarations.detail(for: name)?.reason,
+                  !reason.isEmpty
+            else { continue }
+            plist[key] = reason
+        }
     }
 
     /// Merge a `pwa.json` `info_plist` passthrough over the generated keys

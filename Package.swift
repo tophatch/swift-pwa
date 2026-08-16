@@ -115,12 +115,26 @@ let statusNotifierSystemLibraryTarget: Target? = useGtk4
     )
     : nil
 
+/// GeoClue 2 (the Linux `geo.*` backend) speaks D-Bus, so it needs gio and
+/// nothing else — no GeoClue development package, no GTK. That's why this is a
+/// single target both backends depend on, unlike the tray shims which are tied
+/// to a toolkit version.
+let geoClueSystemLibraryTarget: Target = .systemLibrary(
+    name: "CGeoClueShim",
+    path: "Sources/CGeoClueShim",
+    pkgConfig: "gio-2.0",
+    providers: [
+        .apt(["libglib2.0-dev"])
+    ]
+)
+
 /// The GTK3-or-GTK4 tray system-library shim (exactly one is non-nil,
 /// gated on `useGtk4`). Combined into a single term so the big `targets:`
 /// literal keeps just one optional `+` splice — extending that chain
 /// further trips the type-checker on older Swift toolchains.
 let optionalLinuxTrayTargets: [Target] =
     [appIndicatorSystemLibraryTarget, statusNotifierSystemLibraryTarget].compactMap(\.self)
+        + [geoClueSystemLibraryTarget]
 
 /// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
 /// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit
@@ -143,7 +157,10 @@ let gtkBackendTarget: Target = useGtk4
             // libzstd for delta (binary-patch) update reconstruction. Linux
             // only (the AppImage updater is the sole consumer); needs
             // libzstd-dev at build time.
-            .target(name: "CZstd", condition: .when(platforms: [.linux]))
+            .target(name: "CZstd", condition: .when(platforms: [.linux])),
+            // GeoClue 2 over D-Bus — the `geo.*` backend, shared by both
+            // Linux backends because it needs no toolkit.
+            .target(name: "CGeoClueShim", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK4",
         swiftSettings: swiftSettings
@@ -159,7 +176,10 @@ let gtkBackendTarget: Target = useGtk4
             // libzstd for delta (binary-patch) update reconstruction. Linux
             // only (the AppImage updater is the sole consumer); needs
             // libzstd-dev at build time.
-            .target(name: "CZstd", condition: .when(platforms: [.linux]))
+            .target(name: "CZstd", condition: .when(platforms: [.linux])),
+            // GeoClue 2 over D-Bus — the `geo.*` backend, shared by both
+            // Linux backends because it needs no toolkit.
+            .target(name: "CGeoClueShim", condition: .when(platforms: [.linux]))
         ],
         path: "Sources/SwiftPWAGTK",
         swiftSettings: swiftSettings

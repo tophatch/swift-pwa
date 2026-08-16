@@ -183,6 +183,31 @@ Notes from verifying it:
 `Scripts/verify-linux-permissions.sh` runs the whole matrix (undeclared /
 declared / vetoed) against a freshly scaffolded app on a real box.
 
+### `geo.*` on Linux needs a GeoClue agent
+
+The backend speaks GeoClue 2 over the system bus, so it needs no GeoClue
+development package and no toolkit — but GeoClue will not hand out a position
+unless an **agent** is running for the session. A desktop session normally has
+one (GNOME and KDE start it); an SSH or headless session does not, and the
+refusal is specific:
+
+```text
+E_GEO_UNAVAILABLE: GeoClue2.Client.Start failed: GDBus.Error:
+org.freedesktop.DBus.Error.AccessDenied: Geolocation disabled for UID 1000
+```
+
+Start one with `/usr/libexec/geoclue-2.0/demos/agent` and the same call returns
+a fix. A second shape of the same problem is `GetClient failed: Timeout was
+reached`, which means the daemon itself never came up.
+
+Both are `E_GEO_UNAVAILABLE` carrying the daemon's own sentence, because they're
+*this machine, right now* conditions — a missing agent, a `geoclue.conf` that
+doesn't allowlist the app's `DesktopId`, no usable source. None of them means
+Linux can't do this.
+
+Expect coarse results where there's no WiFi source configured: both test boxes
+return an IP-class fix accurate to ~26 km.
+
 ## Android specifics
 
 Android needed two layers, not one: a `WebChromeClient` (there was none at all,

@@ -190,6 +190,12 @@ that comes from `pwa.json`:
 }
 ```
 
+> **There's a sibling key, `permissions.device`.** `web` is for what a page can
+> ask for on its own; `device` is for what only a plugin can reach — today just
+> `bluetooth`, which no webview here exposes. Everything below works the same
+> way for both. See [Talking to a Bluetooth
+> peripheral](talking-to-a-bluetooth-peripheral.md).
+
 `reason` is Apple's per-permission purpose string, shown to the user verbatim.
 There's a list shorthand — `"web": ["microphone"]` — for when no platform needs
 detail, but an Apple build refuses it: the App Store rejects apps without a
@@ -222,7 +228,9 @@ A typo fails before anything is built:
 
 ```text
 pwa.json's permissions.web names 'microfone', which isn't a permission this
-runtime knows. Valid names: camera, geolocation, microphone, notifications.
+runtime knows. Valid names: camera, geolocation, microphone, notifications
+(permissions.web); bluetooth, camera, geolocation, microphone, notifications
+in total.
 ```
 
 > The comparison needs to run your app, so it happens on host builds. A

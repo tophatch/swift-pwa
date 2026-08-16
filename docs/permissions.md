@@ -79,11 +79,16 @@ would otherwise silently omit a manifest entry:
 
 ```text
 pwa.json's permissions.web names 'microfone', which isn't a permission this
-runtime knows. Valid names: camera, geolocation, microphone, notifications.
+runtime knows. Valid names: camera, geolocation, microphone, notifications
+(permissions.web); bluetooth, camera, geolocation, microphone, notifications
+in total.
 ```
 
 The comparison needs to run the app, so it happens on host builds; a
-cross-compiled build says so rather than pretending it checked.
+cross-compiled build says so rather than pretending it checked. It runs
+**whether or not `pwa.json` has a `permissions` block** — an app that declares
+in Swift alone is exactly what it's for, and that's the shape `swift-pwa init`
+produces.
 
 A declaration is a **ceiling, not a grant**. It says the app may ask. On
 platforms whose OS prompts the user (iOS, Windows, Android) the prompt still

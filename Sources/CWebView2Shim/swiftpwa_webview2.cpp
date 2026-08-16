@@ -557,9 +557,9 @@ extern "C" void swiftpwa_w2_view_set_permission_handler(
                 // raising the event at all — so turning the app's switch back
                 // on leaves capture blocked forever, with nothing left to
                 // consult. `SavesInProfile` is WebView2's own answer to that.
-                ComPtr<ICoreWebView2PermissionRequestedEventArgs2> args2;
-                if (SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&args2))) && args2) {
-                    args2->put_SavesInProfile(FALSE);
+                ComPtr<ICoreWebView2PermissionRequestedEventArgs3> args3;
+                if (SUCCEEDED(args->QueryInterface(IID_PPV_ARGS(&args3))) && args3) {
+                    args3->put_SavesInProfile(FALSE);
                 }
 
                 if (cb_local(static_cast<int>(kind), utf8.c_str(), user_local)) {

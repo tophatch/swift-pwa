@@ -5,6 +5,18 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **One pending `invoke` froze the whole bridge for that window.** `BridgeRuntime`'s pump was `for await frame in stream { await handle(frame) }`, and `handle` awaited the command to completion — so every `invoke` was serialised, and one slow handler stalled every frame behind it, including other invokes, `subscribe` and `unsubscribe`. Found while verifying the v0.10.0 release by running the published assets: `__platform.info` answers, then `geo.current` parks on the first-run location prompt, and `__platform.info` never returns again. The app looks hung, and the page can't even render the outcome of the prompt it's waiting on.
+
+  **Pre-existing rather than a 0.10 regression** — that pump long predates the device surface. `geo.*` is simply the first command that can pend *indefinitely on user input*; `ai.generateImage` takes ~35 s but nothing else is usually invoked meanwhile, which is why it went unnoticed. Any adopter whose handler awaits a network call or a dialog has been paying a quieter version of it.
+
+  Invokes now dispatch concurrently, tracked so `stop()` can cancel work that would otherwise keep running against a torn-down web view. **`subscribe`, `unsubscribe` and `push` deliberately stay ordered**: `dispatchSubscribe` registers its inbound sink *synchronously before* dispatch precisely so a following `push` finds it, and `unsubscribe` has to find what `subscribe` registered — making those concurrent would trade this bug for a race.
+
+  Two consequences worth knowing. Replies may now arrive out of request order, which is correct for a promise-based API (each `invoke` correlates by id) but is a change if anything downstream assumed otherwise. And two invokes of the same command can now overlap, so a handler that quietly relied on being serialised needs its own synchronisation — the registry's lock protects registration, not handler bodies.
+
 ## [0.10.0] - 2026-08-16
 
 ### Added

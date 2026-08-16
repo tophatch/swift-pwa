@@ -177,6 +177,35 @@ const fix = await __SWIFT_PWA__.invoke('geo.current', { accuracy: 'high' });
 const stop = __SWIFT_PWA__.subscribe('geo.watch', {}, (fix) => { /* … */ });
 ```
 
+## `bluetooth` is in the same policy, under a different key
+
+`ble.*` reaches something no webview here exposes at all, so it can't arrive
+through a page request the way camera and microphone do. It's declared under
+**`permissions.device`**:
+
+```json
+"permissions": {
+  "web":    { "camera": { "reason": "…" } },
+  "device": { "bluetooth": { "reason": "Send jobs to your plotter." } }
+}
+```
+
+Everything downstream is identical — the same `declare`, the same veto, the same
+build-time cross-check, the same undeclared diagnostic. Only the key differs,
+and a name filed under the wrong one is refused with the key to move it to:
+
+```text
+pwa.json's permissions.web names 'bluetooth', which belongs under
+permissions.device instead. No webview here exposes it to a page — it's
+reached through a plugin.
+```
+
+The Swift enum is `DevicePermission` for the same reason. `WebPermission` still
+compiles as a deprecated alias; it shipped in 0.10.0, when every case in it did
+come from a web API.
+
+See [bluetooth.md](bluetooth.md).
+
 `GeoFix` deliberately mirrors the web platform's `GeolocationCoordinates` —
 same field names, same units — so moving off `navigator.geolocation` isn't a
 re-learn. The one difference is `timestamp`, in seconds rather than JS

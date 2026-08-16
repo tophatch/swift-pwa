@@ -929,6 +929,41 @@ you; this is a thin, audited bridge to the OS store. Common pairing: a remote
 `ImagenProvider(apiKey: { try? await store.get("google-ai") })`. Full reference
 and the per-platform store table: [docs/secrets.md](secrets.md).
 
+### `ble.*` — Bluetooth LE (all platforms)
+
+Opt-in (`BLEPlugin`), gated on the `bluetooth` permission. Central role only.
+The one capability here with **no web fallback**: Web Bluetooth has never
+shipped in WKWebView, and Android's embedded WebView doesn't expose it.
+
+```js
+const { isAvailable, reason } = await __SWIFT_PWA__.invoke('ble.availability', {});
+
+// Raw, not de-duplicated — watching RSSI settle is how a picker gets built.
+const stop = __SWIFT_PWA__.subscribe('ble.scan',
+    { services: ['ffe0'], namePrefix: 'Plotter-', timeoutMs: 15000 },
+    (p) => { /* { id, name, rssi, services, manufacturerDataBase64, isConnectable, timestamp } */ });
+stop();                                        // stops the radio, not just delivery
+
+// A connection is a duplex session; closing it disconnects.
+const link = __SWIFT_PWA__.session('ble.connect', { id, timeoutMs: 15000 }, {
+    onChunk: (e) => { /* ready | notify | read | ack | state | failed */ },
+});
+link.push({ kind: 'subscribe', characteristic: 'ffe1', token: 1 });
+link.push({ kind: 'write', characteristic: 'ffe1', valueBase64, withResponse: true, token: 2 });
+link.push({ kind: 'read', characteristic: 'ffe1', token: 3 });
+link.close();
+```
+
+UUIDs are **always full 128-bit lower-case on the wire**, in both directions —
+each platform spells them differently, and a page comparing against one form
+silently matches nothing on the others. Short forms are accepted as input.
+
+A `failed` event is one operation failing; the link stays open. A dropped link
+emits `state{connected:false}` and keeps retrying, re-emitting `ready` on
+reconnect. Errors: `E_BLE_DENIED`, `E_BLE_UNAVAILABLE` (this machine, right
+now), `E_BLE_NOT_FOUND`, `E_BLE_DISCONNECTED`, `E_BLE_GATT`, `E_BLE_TIMEOUT`.
+Full reference: [bluetooth.md](bluetooth.md).
+
 ### `agent.*` — let a user offer your commands to an AI agent (desktop only)
 
 Turns your app's *own* commands into MCP tools an agent can call — `book.open`,

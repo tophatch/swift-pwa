@@ -672,6 +672,17 @@ rather than a bundle.
 
 ## Known limitations (Windows-specific)
 
+- **`ble.*` in an MSIX build needs the `bluetooth` device capability**, which
+  `swift-pwa build` emits from `permissions.device` in `pwa.json`. A portable
+  `.exe` reaches the radio with no declaration at all, so an app that declares
+  Bluetooth in Swift and forgets `pwa.json` works from a folder and fails once
+  installed — the build's cross-check is what catches that.
+- **Windows closes an idle LE link.** There is no `Connect()` in WinRT: reading
+  the service tree is what opens the connection, and the OS drops it again as
+  soon as nothing needs it. The backend holds a `GattSession` with
+  `MaintainConnection` for you; without one you'd see `ready` fire repeatedly as
+  the link re-establishes on each call.
+
 - **`swift-pwa drive` needs an interactive desktop, so it can't be run over
   SSH.** Windows OpenSSH puts your shell in **session 0**, the non-interactive
   services session, and WebView2 refuses to create a controller there. The

@@ -372,6 +372,18 @@ for the full matrix. Vendoring the GPU libs yourself uses
 
 ## Known limitations on Linux
 
+- **`ble.connect` to a dual-mode peripheral fails.** A Mac, a phone, anything
+  that also speaks classic Bluetooth advertises over LE from the same address
+  its classic radio uses, so BlueZ keeps a single device object carrying both
+  identities and `Device1.Connect()` takes the classic route — ending at
+  `br-connection-key-missing`, a pairing error about a transport nobody asked
+  for. Pairing the device once (`bluetoothctl pair <address>`) is the usual fix,
+  and the error message says so. Measured rather than inferred: removing the
+  cached device and rebuilding it from an LE-only scan doesn't change BlueZ's
+  mind, and `bluetoothctl connect` "succeeds" only by starting that classic
+  pairing. An LE-only peripheral — which is what a real device is — never takes
+  this path, and both GTK backends drive one end-to-end.
+
 The Linux backends are hand-rolled against the GTK / WebKitGTK C APIs.
 End-to-end functionality is in place on both — JS `__SWIFT_PWA__.invoke()` /
 `subscribe()` round-trip through the bridge — but a few rough edges

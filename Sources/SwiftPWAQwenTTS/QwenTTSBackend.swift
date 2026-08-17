@@ -117,7 +117,8 @@
                 backend: AIBackendID.qwenTTS,
                 model: "qwen3-tts-12hz-0.6b-customvoice",
                 audioGeneration: true,
-                models: [modelInfo()]
+                models: [modelInfo()],
+                provider: activeProvider
             )
         }
 
@@ -241,6 +242,7 @@
             vocoder = nil
             embeddings = nil
             tokenizer = nil
+            activeProvider = nil
         }
 
         // MARK: - Pipeline
@@ -519,10 +521,11 @@
         }
 
         /// The execution provider the most recently created session actually
-        /// loaded on (`"cpu"` / `"coreml"` / a GPU EP). Requesting `coreML` is
-        /// not the same as getting it — ONNX Runtime falls back to CPU when the
-        /// EP can't be appended — so read this rather than assuming, especially
-        /// when benchmarking. `nil` before any session has been created.
+        /// loaded on (`"cpu"` / `"coreml"` / a GPU EP), surfaced to JS as
+        /// `ai.info().provider`. Requesting `coreML` is not the same as getting
+        /// it — ONNX Runtime falls back to CPU when the EP can't be appended —
+        /// so read this rather than assuming, especially when benchmarking.
+        /// `nil` before any session has been created.
         public private(set) var activeProvider: String?
 
         private func session(_ file: String, _ runtime: OrtRuntime) throws -> OrtModelSession {

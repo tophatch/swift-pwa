@@ -186,6 +186,13 @@ public final class MultiModelImageBackend: AIBackend, @unchecked Sendable {
         // non-routed text/audio verbs. The coarse modality flags and the model
         // list are the union across every routed model.
         let base = await defaultBackend.info()
+        // The provider of whichever backend is currently *resident* — the router
+        // keeps one model loaded at a time, so the default backend's answer is
+        // only right until the first switch.
+        var residentProvider: String?
+        if let resident = lock.withLock({ activeID }).flatMap({ byID[$0] }) {
+            residentProvider = await resident.info().provider
+        }
         let caps = entries.reduce(into: Set<AIModelCapability>()) { $0.formUnion($1.info.capabilities) }
         let available = entries.contains { $0.info.availability.isAvailableNow }
         return AICapabilities(
@@ -200,7 +207,9 @@ public final class MultiModelImageBackend: AIBackend, @unchecked Sendable {
             audioInput: caps.contains(.speechToText) || base.audioInput,
             audioGeneration: caps.contains(.textToSpeech) || caps.contains(.audioGeneration),
             voiceCloning: base.voiceCloning,
-            models: entries.map(\.info)
+            models: entries.map(\.info),
+            // Falls back to the default backend's when nothing has been routed.
+            provider: residentProvider ?? base.provider
         )
     }
 }

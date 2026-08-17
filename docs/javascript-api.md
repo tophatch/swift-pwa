@@ -594,7 +594,11 @@ provider-agnostic. Probe once at startup and route on `available`.
 
 ```js
 const info = await __SWIFT_PWA__.invoke('ai.info', {});
-// → { available, backend, model?, streaming, structuredOutput }
+// → { available, backend, model?, streaming, structuredOutput, provider? }
+// provider? — which execution provider an ONNX-tier backend actually loaded
+//   on ("cpu" | "coreml" | "cuda" | "directml"); absent until a session
+//   exists. Diagnostic: an accelerator that fails to initialize falls back to
+//   CPU silently, so this is the only way to tell the two apart.
 if (!info.available) { /* fall back to your own (e.g. cloud) tier */ }
 
 // One-shot structured generation — returns a parsed, schema-valid object.

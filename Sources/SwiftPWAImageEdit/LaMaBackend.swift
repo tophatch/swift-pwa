@@ -82,7 +82,8 @@
                 available: true,
                 backend: AIBackendID.lamaONNX,
                 model: spec == .bigLama ? "big-lama" : "lama",
-                imageEditing: true
+                imageEditing: true,
+                provider: activeProvider?.rawValue
             )
         }
 

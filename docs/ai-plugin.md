@@ -34,7 +34,7 @@ sugar.
 const info = await __SWIFT_PWA__.invoke('ai.info', {});
 // → { available, backend, model?, streaming, structuredOutput,
 //     vision, imageGeneration, audioInput, audioGeneration, voiceCloning,
-//     models? }
+//     models?, provider? }
 //   backend ∈ none | apple-foundation-models | gemini-nano | phi-silica
 //           | gemma-mlx | gemma-mediapipe | gemma-onnx | gemma-llamacpp
 //           | apple-image-playground | stable-diffusion-mlx
@@ -48,6 +48,12 @@ if (!info.available) {
 //   vision          → image input honored      imageGeneration → text→image
 //   audioInput      → audio input honored       audioGeneration → text→audio
 //   voiceCloning    → referenceAudio/-Text honored on ai.generateAudio(Stream)
+// provider? → which execution provider an ONNX-tier backend actually loaded on
+//   ("cpu" | "coreml" | "cuda" | "directml"); absent until a session exists,
+//   and on backends that don't model it. Diagnostic, not a routing signal: an
+//   accelerator that fails to initialize falls back to CPU transparently, so
+//   this is the only way to tell a working GPU/CoreML build from a silent
+//   fallback. The vision surface reports the same field on ai.vision.info.
 
 // One-shot text.
 const { text, backend } = await __SWIFT_PWA__.invoke('ai.generate', {

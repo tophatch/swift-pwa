@@ -61,6 +61,10 @@
         private var unet: OrtModelSession?
         private var vaeDecoder: OrtModelSession?
         private var tokenizer: CLIPTokenizer?
+        /// The execution provider the UNet — the session that dominates the
+        /// run — actually loaded on, surfaced as `ai.info().provider`. `nil`
+        /// until the first generation creates it.
+        private var activeProvider: OrtExecutionProvider?
 
         /// Back a pipeline already present on disk (bundled, or fetched by
         /// the caller). `ensureModel` throws `.unsupportedPlatform`.
@@ -119,7 +123,8 @@
                 backend: AIBackendID.stableDiffusionONNX,
                 model: spec == .sdTurbo ? "sd-turbo" : "stable-diffusion",
                 streaming: true,
-                imageGeneration: true
+                imageGeneration: true,
+                provider: activeProvider?.rawValue
             )
         }
 
@@ -470,6 +475,7 @@
             unet = nil
             vaeDecoder = nil
             tokenizer = nil
+            activeProvider = nil
         }
 
         /// The graph-optimization level for this backend's ONNX sessions. On
@@ -512,6 +518,7 @@
                 )
             }
             unet = session
+            activeProvider = session.provider
             return session
         }
 

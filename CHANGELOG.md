@@ -5,6 +5,28 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+
+- **On-device TTS is ~1.5x faster on Apple and desktop** — `QwenTTSBackend` now derives its ONNX graph-optimization level per platform (`.basic` on Android, `.all` everywhere else) instead of pinning every platform to `.basic`.
+
+  The `.basic` ceiling was inherited from a real Android constraint and never revisited: the extended fusions rewrite standard ops into `com.microsoft.*` contrib ops, the Android ONNX Runtime package has no **float16** kernels for those, and this pipeline's talker is fp16 — so a fused fp16 Gelu has no kernel and the session fails outright (the same root cause as the Stable-Diffusion Gelu-fusion gotcha). Apple and desktop packages *do* carry the fp16 contrib kernels, and those transformer fusions are precisely what this pipeline is made of, so holding every platform to Android's ceiling was leaving the win on the floor.
+
+  Measured on an M-series MacBook (release build, 65-char prompt, best of 3 interleaved rounds): the real-time factor drops from **3.70 to 2.52** — and an adopter's independently reported 3.3x-slower-than-real-time matches the old number closely. **The audio is unchanged**: fusions are numerically approximate and this pipeline samples with a *seeded* RNG, so a small logit shift could have forked the token stream into different-but-plausible speech; a new test decodes both WAVs and compares them, giving 140,160 samples at correlation 0.999999999822609 with identical length. Override via `QwenTTSBackend(graphOptimization:)` if a specific model needs the old level.
+
+  Reference: [`docs/on-device-ai-performance.md`](docs/on-device-ai-performance.md), including the levers *not* yet pulled — on-device TTS is still ~2.5x slower than real time, so treat it as generate-then-play.
+
+### Added
+
+- **The CoreML execution provider can now be requested per ONNX session on Apple** (`OrtCoreMLOptions`, plus a `coreML:` parameter on `QwenTTSBackend`). The vendored Apple ONNX Runtime has always contained the EP — `_OrtSessionOptionsAppendExecutionProvider_CoreML` is in the binary and `coreml_provider_factory.h` is in the module map — but nothing ever appended it, so every ONNX session on Apple silently ran on the CPU EP, and `ai.vision.info` reporting `provider: "cpu"` there was accurate rather than a bug. It follows the same discipline as the existing desktop GPU tier: appended before the CPU EP, and a failure to append or create logs once and retries on CPU, so inference is never broken by an unusable accelerator.
+
+  **It defaults to off for the TTS pipeline, because it loses** — measured, not assumed. On the talker graph CoreML claims 2119 of 2629 nodes but spreads them across **170 partitions**, and this pipeline runs the talker plus 15 code-predictor calls *per audio frame* (~750 session runs for six seconds of speech), so handoff cost dominates before any arithmetic happens. Three of five configurations are refused at session creation (`error code: -14`); the `NeuralNetwork` format loads and then fails on the **first token**, naming the blocker outright — a zero-element KV-cache tensor, which is step 0 of every autoregressive generation and not an edge case to route around; and the one configuration that runs (`requireStaticInputShapes`) is slower than the CPU EP *and* changes the output. The transferable rule: CoreML pays off for one big static-shape graph invoked a few times, and loses for a small dynamic graph invoked hundreds of times. A vision encoder is the first thing and the obvious next candidate to measure, so `MobileSAMBackend` is deliberately untouched pending that measurement.
+
+  Two traps documented along the way. The vendored `coreml_provider_factory.h` documents the `MLComputeUnits` values as `MLComputeUnitsAll` / `MLComputeUnitsCPUAndGPU` / …, and **the implementation accepts none of those spellings** — ORT 1.27 takes the bare `CPUAndGPU` / `CPUAndNeuralEngine` / `CPUOnly`, with "all" not settable at all (it's the default you get by omitting the key). A documented-but-wrong value throws at session creation, which the fallback path turns into a *silent* CPU run: the first version of this benchmark produced a tidy table showing CoreML performing identically to CPU, because it was CPU. So `QwenTTSBackend.activeProvider` now reports what a session actually loaded on, and the benchmark asserts against that rather than against intent.
+
+- **A TTS performance benchmark in the normal test suite** (`QwenTTSBenchmarkTests`), opt-in via `QWEN_TTS_MODEL_DIR` + `QWEN_TTS_BENCH=1`: a timing matrix, the CoreML outcome probe, and the `.basic`-vs-`.all` audio-equivalence check. It interleaves configurations round-robin and reports the best sample per configuration rather than running each to completion in turn — a straight-through run measured everything ~1.5x slow once the laptop had heated up under sustained ORT load, which would have been read as a property of whichever configuration ran last.
+
 ## [0.10.1] - 2026-08-16
 
 ### Added

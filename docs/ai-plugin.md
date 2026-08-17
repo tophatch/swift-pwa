@@ -229,6 +229,15 @@ the backend side.
 > runtime (avoid the CPU-arena fp32 expansion) or run the two talker graphs in a
 > shared session — for tighter-RAM devices. Fine on ≥8 GB devices today.
 >
+> **Speed.** Expect a real-time factor around **2.5** on an M-series Mac — i.e.
+> six seconds of speech takes ~15 seconds to synthesize — so this is
+> generate-then-play, not streaming playback. Sessions run on the ONNX Runtime
+> **CPU** execution provider on every platform; CoreML is plumbed
+> (`QwenTTSBackend(coreML:)`) but off by default because it is measurably slower
+> for an autoregressive decoder, and mostly refuses to load at all. Benchmark,
+> numbers, and the reasoning: [on-device AI
+> performance](on-device-ai-performance.md).
+>
 > **Live, continuous audio streaming** (push mic frames into an open
 > session for real-time incremental results) is **not** part of this
 > contract — the bridge is request → server-stream-out, with no

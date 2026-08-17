@@ -393,6 +393,17 @@ public protocol AIBackend: Sendable {
 }
 ```
 
+> **If your backend is an `actor`, mark `info()` `nonisolated`.** This is the
+> one trap the protocol invites. Generation is typically many seconds of
+> synchronous compute *inside* the actor, and an isolated `info()` cannot be
+> serviced until it finishes — so a capability read that costs 6 ms idle
+> measured **9,873 ms** when called four seconds into a synthesis, which reached
+> an adopter as a settings panel that stayed blank for ten seconds. `info()`
+> normally reads only immutable configuration and the filesystem, so it needs no
+> isolation; put any mutable state it reports behind a lock instead. Keep the
+> *mutating* entry points isolated — `unload()` racing a generation would free
+> the sessions out from under it. All three shipped ONNX backends do this.
+
 The defaults mean a minimal backend (just `info` + `generate`) gets the
 whole `ai.*` command set:
 

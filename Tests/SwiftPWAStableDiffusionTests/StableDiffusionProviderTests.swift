@@ -58,5 +58,37 @@ import Testing
             await backend.unload()
             #expect(await backend.info().provider == nil)
         }
+
+        /// A capability read must not queue behind image generation. Same actor
+        /// bug an adopter hit on the TTS backend — worse here, because a real
+        /// image takes tens of seconds rather than ten.
+        @Test func infoAnswersWhileGenerating() async throws {
+            guard let dir = ProcessInfo.processInfo.environment["SD_MODEL_DIR"] else { return }
+            let base = URL(fileURLWithPath: dir)
+            let backend = StableDiffusionBackend(
+                textEncoderPath: base.appendingPathComponent("text_encoder.onnx").path,
+                unetPath: base.appendingPathComponent("unet.onnx").path,
+                vaeDecoderPath: base.appendingPathComponent("vae_decoder.onnx").path,
+                tokenizerVocabPath: base.appendingPathComponent("vocab.json").path,
+                tokenizerMergesPath: base.appendingPathComponent("merges.txt").path,
+                spec: .lcmDreamshaperFp16
+            )
+
+            async let generation = backend.generateImage(AIGenerateImageRequest(
+                prompt: "a red apple on a table",
+                steps: 4,
+                outputDirectory: FileManager.default.temporaryDirectory.path
+            ))
+            // Long enough that the actor is deep inside the denoise loop.
+            try await Task.sleep(for: .seconds(3))
+
+            let start = DispatchTime.now().uptimeNanoseconds
+            _ = await backend.info()
+            let busyMs = Double(DispatchTime.now().uptimeNanoseconds - start) / 1_000_000
+            _ = try await generation
+
+            print("[sd-concurrency] info() during generation: \(Int(busyMs)) ms")
+            #expect(busyMs < 1000, "ai.info queued behind generateImage: \(Int(busyMs)) ms")
+        }
     }
 #endif

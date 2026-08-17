@@ -110,7 +110,20 @@
 
         // MARK: AIBackend
 
-        public func info() async -> AICapabilities {
+        /// **`nonisolated` on purpose.** A capability read must not queue behind
+        /// a synthesis. The autoregressive loop is many seconds of synchronous
+        /// work *inside* the actor, so an isolated `info()` can't be serviced
+        /// until it finishes — measured here at **6 ms idle against 9,873 ms
+        /// four seconds into a `generateAudio`**, which reached an adopter as a
+        /// voice picker that stayed blank for ten seconds, opened (naturally)
+        /// while something was playing.
+        ///
+        /// Everything this reads is either immutable (`spec`, `modelDirectory`,
+        /// `download`), a filesystem probe, or the lock-guarded
+        /// `activeProvider` — so it needs no isolation. Mutating entry points
+        /// (`generateAudio`, `unload`, `ensureModel`) stay isolated, because
+        /// they do touch the session cache.
+        public nonisolated func info() async -> AICapabilities {
             guard OrtRuntime.shared != nil else { return .none }
             return AICapabilities(
                 available: true,
@@ -128,7 +141,7 @@
         /// download tier, availability is derived from whether every source file
         /// is already on disk (a cheap existence check, not a re-hash); the
         /// fixed-path init is always `.ready`.
-        private func modelInfo() -> AIModelInfo {
+        private nonisolated func modelInfo() -> AIModelInfo {
             let availability: AIModelAvailability
             if let download {
                 let present = download.files.allSatisfy {
@@ -242,7 +255,7 @@
             vocoder = nil
             embeddings = nil
             tokenizer = nil
-            activeProvider = nil
+            recordProvider(nil)
         }
 
         // MARK: - Pipeline
@@ -526,7 +539,19 @@
         /// it — ONNX Runtime falls back to CPU when the EP can't be appended —
         /// so read this rather than assuming, especially when benchmarking.
         /// `nil` before any session has been created.
-        public private(set) var activeProvider: String?
+        ///
+        /// Lock-guarded rather than actor-isolated because `info()` is
+        /// `nonisolated` and reads it; see the note there.
+        public nonisolated var activeProvider: String? {
+            providerLock.withLock { storedProvider }
+        }
+
+        private let providerLock = NSLock()
+        private nonisolated(unsafe) var storedProvider: String?
+
+        private nonisolated func recordProvider(_ provider: String?) {
+            providerLock.withLock { storedProvider = provider }
+        }
 
         private func session(_ file: String, _ runtime: OrtRuntime) throws -> OrtModelSession {
             let loaded = try mapOrt {
@@ -536,7 +561,7 @@
                     coreML: coreML
                 )
             }
-            activeProvider = loaded.provider.rawValue
+            recordProvider(loaded.provider.rawValue)
             return loaded
         }
 

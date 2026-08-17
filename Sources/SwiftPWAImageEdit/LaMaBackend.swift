@@ -41,7 +41,18 @@
         /// Loaded lazily on first use and reused (loading the graph is the
         /// expensive step; inference is one forward pass).
         private var session: OrtModelSession?
-        private var activeProvider: OrtExecutionProvider?
+        /// Lock-guarded rather than actor-isolated so the `nonisolated`
+        /// `info()` above can read it without entering the actor.
+        private let providerLock = NSLock()
+        private nonisolated(unsafe) var storedProvider: OrtExecutionProvider?
+
+        private nonisolated var activeProvider: OrtExecutionProvider? {
+            providerLock.withLock { storedProvider }
+        }
+
+        private nonisolated func recordProvider(_ provider: OrtExecutionProvider?) {
+            providerLock.withLock { storedProvider = provider }
+        }
 
         /// Release the cached inference session (dropping the `OrtModelSession`
         /// frees the ONNX Runtime session via its `deinit`); the next edit
@@ -49,7 +60,7 @@
         /// — free the model's memory.
         public func unload() async {
             session = nil
-            activeProvider = nil
+            recordProvider(nil)
         }
 
         /// Back a LaMa ONNX graph already present on disk (bundled, or fetched
@@ -76,7 +87,14 @@
 
         // MARK: AIBackend
 
-        public func info() async -> AICapabilities {
+        /// **`nonisolated` on purpose** — a capability read must not queue
+        /// behind a generation. The work below is many seconds of synchronous
+        /// compute *inside* the actor, so an isolated `info()` cannot be
+        /// serviced until it finishes (measured on the sibling TTS backend: 6 ms
+        /// idle against 9,873 ms mid-generation). Everything read here is
+        /// immutable or the lock-guarded provider record; the mutating entry
+        /// points stay isolated.
+        public nonisolated func info() async -> AICapabilities {
             guard OrtRuntime.shared != nil else { return .none }
             return AICapabilities(
                 available: true,
@@ -351,7 +369,7 @@
             }
             let loaded = try mapOrt { try OrtModelSession(modelPath: modelPath, runtime: runtime) }
             session = loaded
-            activeProvider = loaded.provider
+            recordProvider(loaded.provider)
             return loaded
         }
 

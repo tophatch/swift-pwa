@@ -23,6 +23,9 @@ import Testing
             #expect(caps.available)
             #expect(caps.audioGeneration)
             #expect(caps.backend == AIBackendID.qwenTTS)
+            // The provider is only decided at CreateSession, so it is unknown
+            // until something has actually run.
+            #expect(caps.provider == nil)
 
             let outDir = ProcessInfo.processInfo.environment["QWEN_TTS_OUT"] ?? dir
             let result = try await backend.generateAudio(
@@ -37,7 +40,12 @@ import Testing
             // terminated (not the maxFrames backstop) and isn't empty.
             #expect(ms > 500)
             #expect(ms < 40000)
-            print("[qwen-tts-e2e] wrote \(path) — \(wav.count) bytes, \(ms) ms")
+
+            // …and known once it has. Default build asks for no accelerator, so
+            // this is the CPU EP; a "coreml" here would mean the default changed.
+            let after = await backend.info()
+            #expect(after.provider == "cpu")
+            print("[qwen-tts-e2e] wrote \(path) — \(wav.count) bytes, \(ms) ms, provider \(after.provider ?? "nil")")
         }
 
         /// Opt-in end-to-end of the **download tier**: set `QWEN_TTS_SERVE_URL`

@@ -61,6 +61,7 @@ sudo apt-get install -y \
     libwebkit2gtk-4.1-dev \
     libayatana-appindicator3-dev \
     libglib2.0-dev \
+    libsecret-1-dev \
     xvfb \
     wget \
     file \
@@ -71,6 +72,12 @@ sudo apt-get install -y \
 over D-Bus, with a fallback to `GtkStatusIcon` on legacy desktops).
 It's a hard build dep of the GTK3 backend even if you don't use
 `TrayPlugin` — the C shim is part of the target.
+
+`libsecret-1-dev` is likewise unconditional on Linux — `SwiftPWACore`
+pulls in the `CSecretShim`/`CLibSecret` pair that backs
+`LinuxSecretStore` (the `secrets.*` plugin), so *any* Linux build needs
+it, both backends, whether or not the app registers `SecretsPlugin`.
+Without it the build stops at `'libsecret/secret.h' file not found`.
 
 > The library prints `libayatana-appindicator is deprecated. Please
 > use libayatana-appindicator-glib in newly written code.` to stderr
@@ -115,6 +122,7 @@ sudo apt-get install -y \
     libgtk-4-dev \
     libwebkitgtk-6.0-dev \
     libglib2.0-dev \
+    libsecret-1-dev \
     xvfb \
     wget \
     file \
@@ -186,21 +194,79 @@ the backend you're actually building. The Apple `WKWebViewTests` target
 won't build on Linux (gated by `#if canImport(WebKit)`), so SwiftPM
 skips it.
 
-### Ubuntu 26.04: libxml2 SONAME mismatch
+### libxml2 2.14+ (Ubuntu 25.10, 26.04): the toolchain needs a compat shim
 
-Ubuntu 26.04 ships `libxml2.so.16`, but Swiftly's bundled toolchain
-(at least through 6.0.x) was built against `libxml2.so.2` and refuses
-to start until it can find that SONAME. Symlink the new library to
-the old name:
+libxml2 2.14 bumped its SONAME to `libxml2.so.16` **and dropped the
+versioned symbols** (`LIBXML2_2.4.30` and friends). Swift's prebuilt
+`libFoundationXML.so` still has a `DT_NEEDED` on `libxml2.so.2` and
+imports those versioned symbols, so on any distro shipping libxml2 2.14
+or newer you hit this in two stages:
+
+1. **The toolchain won't start** — `libxml2.so.2: cannot open shared
+   object file`. A symlink fixes this much:
+
+   ```bash
+   sudo ln -s /usr/lib/x86_64-linux-gnu/libxml2.so.16 \
+              /usr/lib/x86_64-linux-gnu/libxml2.so.2
+   ```
+
+2. **`swift test` still won't link.** The symlink satisfies the *name*
+   but not the ABI, so linking the test bundle fails with a wall of
+   `undefined reference to 'xmlInitParser@LIBXML2_2.4.30'`. Two CLI test
+   files import `FoundationXML`, so this takes down the whole bundle.
+   Product builds are unaffected — only tests.
+
+   Distros no longer package a `.so.2` compat build, and the archived
+   one needs ICU 74, which those distros also no longer ship. The fix
+   that terminates is a user-local libxml2 2.12 (the last series with
+   the old SONAME and versioned symbols) built **without ICU**:
+
+   ```bash
+   curl -sLO https://download.gnome.org/sources/libxml2/2.12/libxml2-2.12.9.tar.xz
+   tar xf libxml2-2.12.9.tar.xz && cd libxml2-2.12.9
+   ./configure --prefix="$HOME/libxml2-compat" \
+               --without-icu --without-python --without-lzma --disable-static
+   make -j"$(nproc)" && make install
+   ```
+
+   Then point both the linker and the loader at it — `-rpath-link`
+   because the missing symbols come from `libFoundationXML.so`'s own
+   `DT_NEEDED` (plain `-L` / `LIBRARY_PATH` does *not* cover that case):
+
+   ```bash
+   XML="$HOME/libxml2-compat/lib"
+   LD_LIBRARY_PATH="$XML" swift test -Xlinker -rpath-link -Xlinker "$XML"
+   ```
+
+   `Scripts/remote-linux.sh provision` does all of the above on a remote
+   box, and its `build` / `test` commands wire the flags up automatically
+   when the shim is present.
+
+On distros still on libxml2 2.9–2.13 none of this applies; a
+`libxml2.so.2: no version information available` warning there is
+cosmetic.
+
+### Driving a Linux box from a non-Linux dev machine
+
+The GTK targets are `#if os(Linux)`, so they never compile on macOS or
+Windows, and CI only *compiles* them — no GUI. Runtime checks need a
+real box. `Scripts/remote-linux.sh` is the repeatable form of that:
 
 ```bash
-sudo ln -s /usr/lib/x86_64-linux-gnu/libxml2.so.16 \
-           /usr/lib/x86_64-linux-gnu/libxml2.so.2
+# One-time, only on libxml2 2.14+ distros (see above).
+Scripts/remote-linux.sh --host <ssh-host> provision
+
+# Sync the working tree, build, run the GUI-gated suite under Xvfb.
+Scripts/remote-linux.sh --host <ssh-host> --gtk4 build
+Scripts/remote-linux.sh --host <ssh-host> --gtk4 test --filter GTKFullscreenStateTests
 ```
 
-Cosmetic on 24.04 (a `libxml2.so.2: no version information available`
-warning was the original symptom of this drift); on 26.04 the toolchain
-won't run at all without the symlink.
+The host comes from `--host` or `$SWIFT_PWA_LINUX_HOST`. Pin
+`--toolchain` when the box has several installed: mixing toolchains in
+one `.build` fails with *module compiled with Swift X cannot be imported
+by the Swift Y compiler*, and the fix is `--clean`. Note that
+`--filter` matches swift-testing's *type* name
+(`GTKFullscreenStateTests`), not the `@Suite` display name.
 
 ## 5. Run the example
 
@@ -571,7 +637,15 @@ recrashes and fails the job.
 
 If you hit the hang locally, build once (`swift build --build-tests`) then
 invoke the wrapper (`bash Scripts/ci-test-linux.sh`), or just re-run `swift
-test`. See issue #39 for the full investigation, including the dead ends
+test`. The wrapper takes swift-testing filters as arguments — with none it
+uses CI's two backend-agnostic targets — so a **backend** suite gets the same
+handling: `bash Scripts/ci-test-linux.sh GTKFullscreenStateTests`. That isn't
+optional for the GUI-gated GTK suites. They're short enough that the
+crash-at-exit lands squarely on the buffered tail, so a plain `swift test`
+reports a fully passing run as `exited with unexpected signal code 6` with the
+passing lines missing — observed taking three attempts to get a clean verdict
+on a GTK3 box. `Scripts/remote-linux.sh test` routes through the wrapper for
+this reason. See issue #39 for the full investigation, including the dead ends
 (stdout `stdbuf`, `--xunit-output`, `| tee`, SIGCONT-nudging) and the one
 documented caveat: a test that hung *mid-run* with no output would be
 indistinguishable from the post-run park — the suite has no such test.

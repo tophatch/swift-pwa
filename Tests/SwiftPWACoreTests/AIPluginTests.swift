@@ -70,6 +70,20 @@ private struct VisionEchoBackend: AIBackend {
     }
 }
 
+/// Reports a fixed execution provider, standing in for an ONNX-tier backend
+/// that has (or hasn't) created a session yet.
+private struct ProviderEchoBackend: AIBackend {
+    let provider: String?
+
+    func info() async -> AICapabilities {
+        AICapabilities(available: true, backend: "onnx-echo", provider: provider)
+    }
+
+    func generate(_: AIGenerateRequest) async throws -> AIGenerateResult {
+        AIGenerateResult(text: "", backend: "onnx-echo")
+    }
+}
+
 /// Text→image backend using the default (single `done`) stream.
 private struct ImageBackend: AIBackend {
     func info() async -> AICapabilities {
@@ -225,6 +239,23 @@ struct AIPluginTests {
         let caps = try JSONDecoder().decode(AICapabilities.self, from: data)
         #expect(caps.available == false)
         #expect(caps.backend == AIBackendID.none)
+    }
+
+    /// `provider` is diagnostic — the only way a page can tell a working
+    /// GPU/CoreML build from one that fell back to CPU silently — so it has to
+    /// reach JS, and it has to be *absent* rather than `"cpu"` when unknown.
+    @Test("ai.info carries the execution provider to JS, and omits it when unknown")
+    func infoProvider() async throws {
+        let known = await dispatch(app(ProviderEchoBackend(provider: "coreml")), "ai.info", "{}")
+        guard case let .ok(data) = known else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AICapabilities.self, from: data).provider == "coreml")
+        // The wire, not just the Codable round-trip.
+        #expect(String(decoding: data, as: UTF8.self).contains("\"provider\":\"coreml\""))
+
+        let unknown = await dispatch(app(ProviderEchoBackend(provider: nil)), "ai.info", "{}")
+        guard case let .ok(none) = unknown else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AICapabilities.self, from: none).provider == nil)
+        #expect(!String(decoding: none, as: UTF8.self).contains("provider"))
     }
 
     @Test("AIPlugin() defaults to NoneBackend")

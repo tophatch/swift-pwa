@@ -61,6 +61,21 @@
         private var unet: OrtModelSession?
         private var vaeDecoder: OrtModelSession?
         private var tokenizer: CLIPTokenizer?
+        /// The execution provider the UNet — the session that dominates the
+        /// run — actually loaded on, surfaced as `ai.info().provider`. `nil`
+        /// until the first generation creates it.
+        /// Lock-guarded rather than actor-isolated so the `nonisolated`
+        /// `info()` above can read it without entering the actor.
+        private let providerLock = NSLock()
+        private nonisolated(unsafe) var storedProvider: OrtExecutionProvider?
+
+        private nonisolated var activeProvider: OrtExecutionProvider? {
+            providerLock.withLock { storedProvider }
+        }
+
+        private nonisolated func recordProvider(_ provider: OrtExecutionProvider?) {
+            providerLock.withLock { storedProvider = provider }
+        }
 
         /// Back a pipeline already present on disk (bundled, or fetched by
         /// the caller). `ensureModel` throws `.unsupportedPlatform`.
@@ -112,14 +127,22 @@
 
         // MARK: AIBackend
 
-        public func info() async -> AICapabilities {
+        /// **`nonisolated` on purpose** — a capability read must not queue
+        /// behind a generation. The work below is many seconds of synchronous
+        /// compute *inside* the actor, so an isolated `info()` cannot be
+        /// serviced until it finishes (measured on the sibling TTS backend: 6 ms
+        /// idle against 9,873 ms mid-generation). Everything read here is
+        /// immutable or the lock-guarded provider record; the mutating entry
+        /// points stay isolated.
+        public nonisolated func info() async -> AICapabilities {
             guard OrtRuntime.shared != nil else { return .none }
             return AICapabilities(
                 available: true,
                 backend: AIBackendID.stableDiffusionONNX,
                 model: spec == .sdTurbo ? "sd-turbo" : "stable-diffusion",
                 streaming: true,
-                imageGeneration: true
+                imageGeneration: true,
+                provider: activeProvider?.rawValue
             )
         }
 
@@ -470,6 +493,7 @@
             unet = nil
             vaeDecoder = nil
             tokenizer = nil
+            recordProvider(nil)
         }
 
         /// The graph-optimization level for this backend's ONNX sessions. On
@@ -512,6 +536,7 @@
                 )
             }
             unet = session
+            recordProvider(session.provider)
             return session
         }
 

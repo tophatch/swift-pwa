@@ -239,6 +239,18 @@ public struct AICapabilities: Sendable, Codable, Equatable {
     /// `model` above stays as "the active/default." Modality-agnostic, so a
     /// picker can present text/image/vision/audio models together.
     public let models: [AIModelInfo]?
+    /// The execution provider the backend is actually running on, once known —
+    /// `"cpu"`, `"coreml"` (Apple, opt-in), `"cuda"` (Linux GPU build on
+    /// NVIDIA), or `"directml"` (Windows GPU build on any DX12 GPU). The mirror
+    /// of `VisionCapabilities.provider`, and reported for the same reason: a
+    /// requested accelerator that couldn't be appended **falls back to CPU
+    /// silently**, so "what did I ask for" and "what am I running on" are
+    /// different questions and only this one answers the second.
+    ///
+    /// `nil` until a session has been created — the provider is only decided at
+    /// `CreateSession` — and on backends that don't model it (a cloud backend,
+    /// or a platform built-in where the OS chooses).
+    public let provider: String?
 
     public init(
         available: Bool,
@@ -252,7 +264,8 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         audioInput: Bool = false,
         audioGeneration: Bool = false,
         voiceCloning: Bool = false,
-        models: [AIModelInfo]? = nil
+        models: [AIModelInfo]? = nil,
+        provider: String? = nil
     ) {
         self.available = available
         self.backend = backend
@@ -266,6 +279,7 @@ public struct AICapabilities: Sendable, Codable, Equatable {
         self.audioGeneration = audioGeneration
         self.voiceCloning = voiceCloning
         self.models = models
+        self.provider = provider
     }
 
     /// The capabilities of a host with no usable backend.

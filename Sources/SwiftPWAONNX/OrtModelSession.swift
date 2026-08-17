@@ -8,7 +8,7 @@
     import ONNXRuntimeDesktop
 #endif
 import Foundation
-import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
+import SwiftPWACore // FileHandle.writeQuietly (log-once EP fallback)
 
 // See the matching comment in OrtRuntime.swift — this type references ONNX
 // Runtime C API types unconditionally, so the whole body is gated to
@@ -18,12 +18,88 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
 
     /// Which ONNX Runtime execution provider a session actually ran on. On
     /// desktop GPU builds (`ai.onnx_gpu`) `OrtModelSession` tries the platform
-    /// GPU provider first and falls back to CPU; this records the outcome so
-    /// `ai.vision.info` can surface it (see `MobileSAMBackend`). On Apple /
-    /// Android / desktop-CPU builds it is always `.cpu` — the OS-level EP choice
-    /// (CoreML/NNAPI) isn't modeled here.
+    /// GPU provider first and falls back to CPU; on Apple a backend may opt into
+    /// `.coreml` per session. This records the outcome so `ai.vision.info` can
+    /// surface it (see `MobileSAMBackend`). Android's NNAPI/XNNPACK choice isn't
+    /// modeled here.
     public enum OrtExecutionProvider: String {
-        case cpu, cuda, directml
+        case cpu, cuda, directml, coreml
+    }
+
+    /// Opt-in CoreML execution-provider configuration for a session (Apple only;
+    /// ignored elsewhere). CoreML is **not** a free win: the EP partitions the
+    /// graph and hands everything it can't take back to the CPU EP, it compiles
+    /// its partitions at `CreateSession` (seconds, on every launch, unless
+    /// `modelCacheDirectory` is set), and per-`Run` handoff costs are paid on
+    /// every call — so a graph invoked hundreds of times in an autoregressive
+    /// loop can come out *slower* than plain CPU. Measure before enabling; see
+    /// `docs/on-device-ai-performance.md`.
+    public struct OrtCoreMLOptions: Sendable, Equatable {
+        /// Which hardware CoreML may schedule onto (`MLComputeUnits`).
+        ///
+        /// > The values here are the ones ONNX Runtime's CoreML EP actually
+        /// > accepts (`CPUAndNeuralEngine` / `CPUAndGPU` / `CPUOnly`), *not* the
+        /// > `MLComputeUnitsAll`-style spellings the vendored
+        /// > `coreml_provider_factory.h` comment documents — those are rejected
+        /// > at session creation with "Invalid value for option
+        /// > `MLComputeUnits`", which (absent a check) reads as a silent CPU
+        /// > fallback. "All" isn't a settable name at all: it's what you get by
+        /// > omitting the option, which is what `.all` does.
+        public enum ComputeUnits: Sendable {
+            /// CPU + GPU + Neural Engine — CoreML's own default.
+            case all
+            case cpuAndGPU
+            case cpuAndNeuralEngine
+            /// Reference path — useful to isolate a precision difference from a
+            /// scheduling one, not for speed.
+            case cpuOnly
+
+            /// The provider-option value, or `nil` to leave the option unset.
+            var optionValue: String? {
+                switch self {
+                case .all: nil
+                case .cpuAndGPU: "CPUAndGPU"
+                case .cpuAndNeuralEngine: "CPUAndNeuralEngine"
+                case .cpuOnly: "CPUOnly"
+                }
+            }
+        }
+
+        /// Which CoreML model format the EP compiles its partitions into.
+        /// `MLProgram` is the modern one (Core ML 5+) and the default here.
+        ///
+        /// > Neither is a safe bet for a graph with dynamic shapes: measured
+        /// > against the Qwen3-TTS talker, `MLProgram` fails at session creation
+        /// > and `NeuralNetwork` loads but fails on the first `Run` (a
+        /// > zero-element KV cache). See `docs/on-device-ai-performance.md`.
+        public enum ModelFormat: String, Sendable {
+            case mlProgram = "MLProgram"
+            case neuralNetwork = "NeuralNetwork"
+        }
+
+        public var computeUnits: ComputeUnits
+        public var modelFormat: ModelFormat
+        /// Refuse nodes whose inputs have dynamic shapes. A decoder KV cache is
+        /// dynamic by construction, so leaving this `false` lets CoreML take
+        /// those nodes — which is often *worse*, because it reshapes and
+        /// recompiles as the sequence grows.
+        public var requireStaticInputShapes: Bool
+        /// Where CoreML caches the models it compiles from ONNX subgraphs.
+        /// Unset ⇒ a temp directory discarded when the session closes, i.e. the
+        /// compile cost is paid again on every launch.
+        public var modelCacheDirectory: String?
+
+        public init(
+            computeUnits: ComputeUnits = .all,
+            modelFormat: ModelFormat = .mlProgram,
+            requireStaticInputShapes: Bool = false,
+            modelCacheDirectory: String? = nil
+        ) {
+            self.computeUnits = computeUnits
+            self.modelFormat = modelFormat
+            self.requireStaticInputShapes = requireStaticInputShapes
+            self.modelCacheDirectory = modelCacheDirectory
+        }
     }
 
     /// ONNX Runtime graph-optimization level for a session. The default,
@@ -35,7 +111,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
     /// fused fp16 `com.microsoft.Gelu` has no kernel there and the session
     /// fails to run, while the un-fused standard ops do run. Apple/desktop
     /// packages carry the fp16 contrib kernels, so they keep `.all`.
-    public enum OrtGraphOptimizationLevel {
+    public enum OrtGraphOptimizationLevel: Sendable {
         case disableAll, basic, extended, all
 
         fileprivate var ortValue: GraphOptimizationLevel {
@@ -48,20 +124,21 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         }
     }
 
-    /// Log-once sink for the "GPU EP unavailable → CPU fallback" notice, so a
-    /// machine without a usable GPU doesn't print the line for every model
-    /// (encoder + two decoders) on every session.
-    enum OrtGpuFallback {
+    /// Log-once sink for the "accelerated EP unavailable → CPU fallback" notice,
+    /// so a machine without a usable GPU (or CoreML) doesn't print the line for
+    /// every model (encoder + two decoders) on every session. Keyed by provider
+    /// name, so a CoreML notice doesn't suppress a later CUDA one.
+    enum OrtProviderFallback {
         private static let lock = NSLock()
-        private nonisolated(unsafe) static var logged = false
+        private nonisolated(unsafe) static var logged: Set<String> = []
 
-        static func note(_ error: any Error) {
+        static func note(_ provider: String, _ error: any Error) {
             lock.lock()
             defer { lock.unlock() }
-            guard !logged else { return }
-            logged = true
+            guard logged.insert(provider).inserted else { return }
             FileHandle.standardError.writeQuietly(Data(
-                "[swift-pwa] ONNX Runtime GPU execution provider unavailable — running on CPU (\(error))\n".utf8
+                "[swift-pwa] ONNX Runtime \(provider) execution provider unavailable — running on CPU (\(error))\n"
+                    .utf8
             ))
         }
     }
@@ -95,14 +172,17 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         ///
         /// On a desktop GPU build (`SWIFT_PWA_ONNXRUNTIME_GPU`) the platform GPU
         /// execution provider (DirectML on Windows, CUDA on Linux) is appended
-        /// before the default CPU EP. If it can't be appended or the session
-        /// fails to create with it — no capable GPU, no driver, or (Linux) no
-        /// CUDA/cuDNN runtime present — we log once and retry on CPU. Inference
-        /// is never broken by the absence of a usable GPU.
+        /// before the default CPU EP; on Apple, passing `coreML` appends the
+        /// CoreML EP the same way. If the provider can't be appended or the
+        /// session fails to create with it — no capable GPU, no driver, (Linux)
+        /// no CUDA/cuDNN runtime, or a graph CoreML rejects outright — we log
+        /// once and retry on CPU. Inference is never broken by the absence of a
+        /// usable accelerator.
         public init(
             modelPath: String,
             runtime: OrtRuntime,
-            graphOptimizationLevel: OrtGraphOptimizationLevel = .all
+            graphOptimizationLevel: OrtGraphOptimizationLevel = .all,
+            coreML: OrtCoreMLOptions? = nil
         ) throws {
             self.runtime = runtime
             let api = runtime.api
@@ -111,16 +191,26 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             #if SWIFT_PWA_ONNXRUNTIME_GPU
                 do {
                     made = try Self.createSession(
-                        modelPath: modelPath, runtime: runtime, gpu: true,
+                        modelPath: modelPath, runtime: runtime, gpu: true, coreML: nil,
                         optimization: graphOptimizationLevel
                     )
                 } catch {
-                    OrtGpuFallback.note(error)
+                    OrtProviderFallback.note("GPU", error)
                 }
             #endif
+            if made == nil, let coreML {
+                do {
+                    made = try Self.createSession(
+                        modelPath: modelPath, runtime: runtime, gpu: false, coreML: coreML,
+                        optimization: graphOptimizationLevel
+                    )
+                } catch {
+                    OrtProviderFallback.note("CoreML", error)
+                }
+            }
             if made == nil {
                 made = try Self.createSession(
-                    modelPath: modelPath, runtime: runtime, gpu: false,
+                    modelPath: modelPath, runtime: runtime, gpu: false, coreML: nil,
                     optimization: graphOptimizationLevel
                 )
             }
@@ -140,7 +230,7 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
         /// compiled in). Throws if session options / the GPU EP / `CreateSession`
         /// fail — the GPU attempt's throw is what drives the CPU fallback above.
         private static func createSession(
-            modelPath: String, runtime: OrtRuntime, gpu: Bool,
+            modelPath: String, runtime: OrtRuntime, gpu: Bool, coreML: OrtCoreMLOptions?,
             optimization: OrtGraphOptimizationLevel
         ) throws -> (OpaquePointer, OrtExecutionProvider) {
             let api = runtime.api
@@ -155,6 +245,12 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             var provider: OrtExecutionProvider = .cpu
             #if SWIFT_PWA_ONNXRUNTIME_GPU
                 if gpu { provider = try appendGpuProvider(options: options, runtime: runtime) }
+            #endif
+            #if canImport(ONNXRuntime) && (os(macOS) || os(iOS))
+                if let coreML {
+                    try appendCoreMLProvider(coreML, options: options, runtime: runtime)
+                    provider = .coreml
+                }
             #endif
 
             var sessionPtr: OpaquePointer?
@@ -176,6 +272,51 @@ import SwiftPWACore // FileHandle.writeQuietly (log-once GPU fallback)
             guard let sessionPtr else { throw OrtError.failed("CreateSession returned no session") }
             return (sessionPtr, provider)
         }
+
+        #if canImport(ONNXRuntime) && (os(macOS) || os(iOS))
+            /// Append the CoreML execution provider to `options`. Uses ONNX
+            /// Runtime's string-keyed provider-options API rather than the older
+            /// `OrtSessionOptionsAppendExecutionProvider_CoreML` bit flags — the
+            /// flags enum can't express `MLComputeUnits` or a model cache
+            /// directory, and the header marks it as superseded.
+            private static func appendCoreMLProvider(
+                _ coreML: OrtCoreMLOptions, options: OpaquePointer, runtime: OrtRuntime
+            ) throws {
+                var pairs: [(String, String)] = [
+                    (String(cString: kCoremlProviderOption_ModelFormat), coreML.modelFormat.rawValue),
+                    (
+                        String(cString: kCoremlProviderOption_RequireStaticInputShapes),
+                        coreML.requireStaticInputShapes ? "1" : "0"
+                    )
+                ]
+                if let units = coreML.computeUnits.optionValue {
+                    pairs.append((String(cString: kCoremlProviderOption_MLComputeUnits), units))
+                }
+                if let dir = coreML.modelCacheDirectory {
+                    // CoreML only writes here if the directory exists.
+                    try? FileManager.default.createDirectory(
+                        atPath: dir, withIntermediateDirectories: true
+                    )
+                    pairs.append((String(cString: kCoremlProviderOption_ModelCacheDirectory), dir))
+                }
+
+                // ORT copies the strings out of these arrays, so freeing them
+                // right after the call is safe.
+                let keyBuffers = pairs.map { strdup($0.0) }
+                let valueBuffers = pairs.map { strdup($0.1) }
+                defer { (keyBuffers + valueBuffers).forEach { free($0) } }
+                let keys = keyBuffers.map { UnsafePointer($0) }
+                let values = valueBuffers.map { UnsafePointer($0) }
+
+                try keys.withUnsafeBufferPointer { k in
+                    try values.withUnsafeBufferPointer { v in
+                        try runtime.check(runtime.api.pointee.SessionOptionsAppendExecutionProvider(
+                            options, "CoreML", k.baseAddress, v.baseAddress, pairs.count
+                        ))
+                    }
+                }
+            }
+        #endif
 
         #if SWIFT_PWA_ONNXRUNTIME_GPU
             /// Append the platform GPU execution provider to `options`, returning

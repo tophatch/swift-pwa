@@ -414,5 +414,6 @@ The end result is indistinguishable from a packaged model to your page: `ai.gene
 
 - **[`ai.*` plugin reference](../ai-plugin.md)** — every command, every field, the `AIBackend` protocol in full, and a worked guide to writing a native (TTS) backend.
 - **[`Examples/CritterFacts`](../../Examples/CritterFacts)** — a live app: streamed local-LLM fun facts, tap-to-segment, tap-to-erase (LaMa inpaint), and prompt-to-image (Stable Diffusion), all behind one composed `ai.*` surface.
+- **[On-device AI performance](../on-device-ai-performance.md)** — what actually makes the ONNX tier fast (measured), how to benchmark it yourself, and why CoreML isn't the answer for a text-to-speech decoder.
 - **[JavaScript API](../javascript-api.md)** and **[Swift API](../swift-api.md)** — the bridge and `AppContext` reference behind everything above.
 - **Per-platform build setup** — the [`*-setup.md`](../) docs (each notes any AI-specific packaging, e.g. the MSIX build Phi Silica needs, or the ONNX GPU tier).

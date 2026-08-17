@@ -45,6 +45,10 @@
         /// (device-verified: the peak that killed the app was exactly this
         /// stack). Defaults `false`: desktop keeps the resident-cache latency win.
         private let lowMemory: Bool
+        /// Session tuning — `nil` graph level means "the platform default"
+        /// (see `graphOptimizationLevel`), `nil` `coreML` means the CPU EP.
+        private let graphOptimizationOverride: OrtGraphOptimizationLevel?
+        private let coreML: OrtCoreMLOptions?
 
         private var talker: OrtModelSession?
         private var codePredictor: OrtModelSession?
@@ -61,10 +65,18 @@
         /// layout: the three graphs at the root, `embeddings/` + `tokenizer/`
         /// subdirs). `ai.ensureModel` throws `.unsupportedPlatform`. The default
         /// `spec` is the device-verified fp16-talker config.
-        public init(modelDirectory: URL, spec: QwenTTSModelSpec = .customVoice0_6B, lowMemory: Bool = false) {
+        public init(
+            modelDirectory: URL,
+            spec: QwenTTSModelSpec = .customVoice0_6B,
+            lowMemory: Bool = false,
+            graphOptimization: OrtGraphOptimizationLevel? = nil,
+            coreML: OrtCoreMLOptions? = nil
+        ) {
             self.modelDirectory = modelDirectory
             self.spec = spec
             self.lowMemory = lowMemory
+            graphOptimizationOverride = graphOptimization
+            self.coreML = coreML
             download = nil
         }
 
@@ -79,11 +91,15 @@
             cacheDirectory: URL,
             source: QwenTTSModelSource = .customVoice0_6B,
             spec: QwenTTSModelSpec = .customVoice0_6B,
-            lowMemory: Bool = false
+            lowMemory: Bool = false,
+            graphOptimization: OrtGraphOptimizationLevel? = nil,
+            coreML: OrtCoreMLOptions? = nil
         ) {
             modelDirectory = cacheDirectory
             self.spec = spec
             self.lowMemory = lowMemory
+            graphOptimizationOverride = graphOptimization
+            self.coreML = coreML
             download = (ModelDownloader(directory: cacheDirectory), source.files)
         }
 
@@ -94,14 +110,28 @@
 
         // MARK: AIBackend
 
-        public func info() async -> AICapabilities {
+        /// **`nonisolated` on purpose.** A capability read must not queue behind
+        /// a synthesis. The autoregressive loop is many seconds of synchronous
+        /// work *inside* the actor, so an isolated `info()` can't be serviced
+        /// until it finishes — measured here at **6 ms idle against 9,873 ms
+        /// four seconds into a `generateAudio`**, which reached an adopter as a
+        /// voice picker that stayed blank for ten seconds, opened (naturally)
+        /// while something was playing.
+        ///
+        /// Everything this reads is either immutable (`spec`, `modelDirectory`,
+        /// `download`), a filesystem probe, or the lock-guarded
+        /// `activeProvider` — so it needs no isolation. Mutating entry points
+        /// (`generateAudio`, `unload`, `ensureModel`) stay isolated, because
+        /// they do touch the session cache.
+        public nonisolated func info() async -> AICapabilities {
             guard OrtRuntime.shared != nil else { return .none }
             return AICapabilities(
                 available: true,
                 backend: AIBackendID.qwenTTS,
                 model: "qwen3-tts-12hz-0.6b-customvoice",
                 audioGeneration: true,
-                models: [modelInfo()]
+                models: [modelInfo()],
+                provider: activeProvider
             )
         }
 
@@ -111,7 +141,7 @@
         /// download tier, availability is derived from whether every source file
         /// is already on disk (a cheap existence check, not a re-hash); the
         /// fixed-path init is always `.ready`.
-        private func modelInfo() -> AIModelInfo {
+        private nonisolated func modelInfo() -> AIModelInfo {
             let availability: AIModelAvailability
             if let download {
                 let present = download.files.allSatisfy {
@@ -225,6 +255,7 @@
             vocoder = nil
             embeddings = nil
             tokenizer = nil
+            recordProvider(nil)
         }
 
         // MARK: - Pipeline
@@ -480,22 +511,58 @@
 
         // MARK: - Loading
 
-        /// Graph-optimization level: `.basic` everywhere. The pipeline was
-        /// verified under `ORT_ENABLE_BASIC`, and it avoids the extended
-        /// transformer fusions that rewrite standard ops into fused
-        /// `com.microsoft.*` contrib ops — which the **Android** ONNX Runtime
-        /// package has no fp16 kernels for (the SD Gelu-fusion gotcha).
+        /// Graph-optimization level: `.basic` on **Android**, `.all` elsewhere.
+        ///
+        /// The extended fusions rewrite standard ops into fused
+        /// `com.microsoft.*` contrib ops, and the Android ONNX Runtime package
+        /// has no **float16** kernels for those — a fused fp16 Gelu fails the
+        /// session outright (the Stable-Diffusion Gelu-fusion gotcha). The
+        /// talker here is fp16, so Android must stay at `.basic`.
+        ///
+        /// Apple/desktop packages *do* carry the fp16 contrib kernels, and those
+        /// fusions are exactly the transformer ones this pipeline is made of.
+        /// Holding every platform to Android's ceiling was leaving that on the
+        /// table; measured on an M-series Mac it is the single biggest win
+        /// available here (see `docs/on-device-ai-performance.md`).
         private var graphOptimizationLevel: OrtGraphOptimizationLevel {
-            .basic
+            if let graphOptimizationOverride { return graphOptimizationOverride }
+            #if os(Android)
+                return .basic
+            #else
+                return .all
+            #endif
+        }
+
+        /// The execution provider the most recently created session actually
+        /// loaded on (`"cpu"` / `"coreml"` / a GPU EP), surfaced to JS as
+        /// `ai.info().provider`. Requesting `coreML` is not the same as getting
+        /// it — ONNX Runtime falls back to CPU when the EP can't be appended —
+        /// so read this rather than assuming, especially when benchmarking.
+        /// `nil` before any session has been created.
+        ///
+        /// Lock-guarded rather than actor-isolated because `info()` is
+        /// `nonisolated` and reads it; see the note there.
+        public nonisolated var activeProvider: String? {
+            providerLock.withLock { storedProvider }
+        }
+
+        private let providerLock = NSLock()
+        private nonisolated(unsafe) var storedProvider: String?
+
+        private nonisolated func recordProvider(_ provider: String?) {
+            providerLock.withLock { storedProvider = provider }
         }
 
         private func session(_ file: String, _ runtime: OrtRuntime) throws -> OrtModelSession {
-            try mapOrt {
+            let loaded = try mapOrt {
                 try OrtModelSession(
                     modelPath: modelDirectory.appendingPathComponent(file).path,
-                    runtime: runtime, graphOptimizationLevel: graphOptimizationLevel
+                    runtime: runtime, graphOptimizationLevel: graphOptimizationLevel,
+                    coreML: coreML
                 )
             }
+            recordProvider(loaded.provider.rawValue)
+            return loaded
         }
 
         private func loadedTalker(_ runtime: OrtRuntime) throws -> OrtModelSession {

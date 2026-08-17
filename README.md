@@ -288,7 +288,7 @@ On-device and cloud AI is a first-class part of the framework, not a bring-your-
 - **Cloud and LAN image generation, no rebuild** — point a running app at any JSON image API from a descriptor, with presets for Imagen, Gemini image ("nano banana"), OpenAI, and Qwen. API keys live in the OS keychain (Keychain / Keystore / DPAPI / libsecret), never in JS.
 - **Run imported AI workflows from the web app** — `ai.run` / `ai.describeInputs` import a ComfyUI graph (or drive Imagen / on-device models) and run it with live per-step progress, cancel, and job recovery — the graph and the connection travel in each call.
 
-Tap-to-segment, tap-to-erase, prompt-to-image, and a live model switcher are all demoed in `Examples/CritterFacts`. Deep dives live in [docs/remote-ai.md](docs/remote-ai.md), [docs/ai-plugin.md](docs/ai-plugin.md), and the [on-device AI tutorial](docs/tutorials/on-device-ai.md).
+Tap-to-segment, tap-to-erase, prompt-to-image, and a live model switcher are all demoed in `Examples/CritterFacts`. Deep dives live in [docs/remote-ai.md](docs/remote-ai.md), [docs/ai-plugin.md](docs/ai-plugin.md), [docs/on-device-ai-performance.md](docs/on-device-ai-performance.md), and the [on-device AI tutorial](docs/tutorials/on-device-ai.md).
 
 ## API at a glance
 

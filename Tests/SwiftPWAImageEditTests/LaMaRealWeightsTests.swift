@@ -56,6 +56,9 @@
                 .write(to: URL(fileURLWithPath: maskPath))
 
             let backend = LaMaBackend(modelPath: modelPath)
+            // Unknown before a session exists — the EP is only decided at
+            // CreateSession — and reported once one does.
+            #expect(await backend.info().provider == nil)
             let result = try await backend.generateImage(AIGenerateImageRequest(
                 outputDirectory: dir.path, image: .file(imagePath), mask: .file(maskPath)
             ))
@@ -82,6 +85,10 @@
             // An unmasked corner pixel is pristine (composite left it alone).
             let cornerPristine = out.pixels[0] == 128 && out.pixels[1] == 128 && out.pixels[2] == 128
             #expect(cornerPristine)
+
+            // This is a CPU-EP build, so anything else would mean a GPU tier
+            // engaged silently — exactly what `provider` exists to reveal.
+            #expect(await backend.info().provider == "cpu")
         }
     }
 #endif

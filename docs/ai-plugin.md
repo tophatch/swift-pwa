@@ -34,7 +34,7 @@ sugar.
 const info = await __SWIFT_PWA__.invoke('ai.info', {});
 // → { available, backend, model?, streaming, structuredOutput,
 //     vision, imageGeneration, audioInput, audioGeneration, voiceCloning,
-//     models? }
+//     models?, provider? }
 //   backend ∈ none | apple-foundation-models | gemini-nano | phi-silica
 //           | gemma-mlx | gemma-mediapipe | gemma-onnx | gemma-llamacpp
 //           | apple-image-playground | stable-diffusion-mlx
@@ -48,6 +48,12 @@ if (!info.available) {
 //   vision          → image input honored      imageGeneration → text→image
 //   audioInput      → audio input honored       audioGeneration → text→audio
 //   voiceCloning    → referenceAudio/-Text honored on ai.generateAudio(Stream)
+// provider? → which execution provider an ONNX-tier backend actually loaded on
+//   ("cpu" | "coreml" | "cuda" | "directml"); absent until a session exists,
+//   and on backends that don't model it. Diagnostic, not a routing signal: an
+//   accelerator that fails to initialize falls back to CPU transparently, so
+//   this is the only way to tell a working GPU/CoreML build from a silent
+//   fallback. The vision surface reports the same field on ai.vision.info.
 
 // One-shot text.
 const { text, backend } = await __SWIFT_PWA__.invoke('ai.generate', {
@@ -229,6 +235,15 @@ the backend side.
 > runtime (avoid the CPU-arena fp32 expansion) or run the two talker graphs in a
 > shared session — for tighter-RAM devices. Fine on ≥8 GB devices today.
 >
+> **Speed.** Expect a real-time factor around **2.5** on an M-series Mac — i.e.
+> six seconds of speech takes ~15 seconds to synthesize — so this is
+> generate-then-play, not streaming playback. Sessions run on the ONNX Runtime
+> **CPU** execution provider on every platform; CoreML is plumbed
+> (`QwenTTSBackend(coreML:)`) but off by default because it is measurably slower
+> for an autoregressive decoder, and mostly refuses to load at all. Benchmark,
+> numbers, and the reasoning: [on-device AI
+> performance](on-device-ai-performance.md).
+>
 > **Live, continuous audio streaming** (push mic frames into an open
 > session for real-time incremental results) is **not** part of this
 > contract — the bridge is request → server-stream-out, with no
@@ -377,6 +392,17 @@ public protocol AIBackend: Sendable {
     func generateAudioStream(_ request: AIGenerateAudioRequest) -> AsyncThrowingStream<AIAudioChunk, any Error>
 }
 ```
+
+> **If your backend is an `actor`, mark `info()` `nonisolated`.** This is the
+> one trap the protocol invites. Generation is typically many seconds of
+> synchronous compute *inside* the actor, and an isolated `info()` cannot be
+> serviced until it finishes — so a capability read that costs 6 ms idle
+> measured **9,873 ms** when called four seconds into a synthesis, which reached
+> an adopter as a settings panel that stayed blank for ten seconds. `info()`
+> normally reads only immutable configuration and the filesystem, so it needs no
+> isolation; put any mutable state it reports behind a lock instead. Keep the
+> *mutating* entry points isolated — `unload()` racing a generation would free
+> the sessions out from under it. All three shipped ONNX backends do this.
 
 The defaults mean a minimal backend (just `info` + `generate`) gets the
 whole `ai.*` command set:

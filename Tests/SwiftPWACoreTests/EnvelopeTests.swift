@@ -15,7 +15,7 @@ struct EnvelopeTests {
     func decodeInvokeNull() throws {
         let json = #"{"v":1,"kind":"invoke","id":7,"cmd":"window.id","payload":null}"#
         let frame = try Envelope.decode(Data(json.utf8))
-        guard case let .invoke(id, cmd, payload) = frame else {
+        guard case let .invoke(id, cmd, payload, _) = frame else {
             Issue.record("expected .invoke"); return
         }
         #expect(id == 7)
@@ -27,7 +27,7 @@ struct EnvelopeTests {
     func subscribeUnsubscribe() throws {
         let sub = try Envelope
             .decode(Data(#"{"v":1,"kind":"subscribe","id":3,"cmd":"window.subscribe","payload":{}}"#.utf8))
-        guard case let .subscribe(id, cmd, _) = sub else {
+        guard case let .subscribe(id, cmd, _, _) = sub else {
             Issue.record("expected .subscribe"); return
         }
         #expect(id == 3 && cmd == "window.subscribe")
@@ -40,7 +40,7 @@ struct EnvelopeTests {
     func decodePush() throws {
         let push = try Envelope
             .decode(Data(#"{"v":1,"kind":"push","id":7,"payload":{"pcm":[1,2,3]}}"#.utf8))
-        guard case let .push(id, payload) = push else {
+        guard case let .push(id, payload, _) = push else {
             Issue.record("expected .push"); return
         }
         #expect(id == 7)
@@ -52,6 +52,43 @@ struct EnvelopeTests {
     func decodePushNull() throws {
         let push = try Envelope.decode(Data(#"{"v":1,"kind":"push","id":8}"#.utf8))
         #expect(push == .push(id: 8, payload: Data("null".utf8)))
+    }
+
+    @Test("hello frame carries the document epoch")
+    func decodeHello() throws {
+        let hello = try Envelope.decode(Data(#"{"v":1,"ep":"doc-a","kind":"hello","id":0}"#.utf8))
+        #expect(hello == .hello(epoch: "doc-a"))
+    }
+
+    @Test("rejects a hello with no epoch")
+    func helloWithoutEpoch() {
+        #expect(throws: EnvelopeError.missingField("ep")) {
+            try Envelope.decode(Data(#"{"v":1,"kind":"hello","id":0}"#.utf8))
+        }
+    }
+
+    @Test("every inbound kind carries the epoch it was stamped with")
+    func decodeCarriesEpoch() throws {
+        let frames = [
+            #"{"v":1,"ep":"doc-a","kind":"invoke","id":1,"cmd":"x","payload":null}"#,
+            #"{"v":1,"ep":"doc-a","kind":"subscribe","id":2,"cmd":"x","payload":null}"#,
+            #"{"v":1,"ep":"doc-a","kind":"unsubscribe","id":3}"#,
+            #"{"v":1,"ep":"doc-a","kind":"push","id":4,"payload":null}"#
+        ]
+        for json in frames {
+            #expect(try Envelope.decode(Data(json.utf8)).epoch == "doc-a")
+        }
+    }
+
+    @Test("outbound frames encode the epoch, and omit it when there is none")
+    func encodeEpoch() throws {
+        let stamped = try Envelope.encode(.end(id: 5, epoch: "doc-a"))
+        let object = try #require(try JSONSerialization.jsonObject(with: stamped) as? [String: Any])
+        #expect(object["ep"] as? String == "doc-a")
+
+        let plain = try Envelope.encode(.end(id: 5))
+        let plainObject = try #require(try JSONSerialization.jsonObject(with: plain) as? [String: Any])
+        #expect(plainObject["ep"] == nil)
     }
 
     @Test("rejects unsupported version")

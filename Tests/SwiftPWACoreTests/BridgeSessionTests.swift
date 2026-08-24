@@ -46,7 +46,7 @@ struct BridgeSessionTests {
 
     private func echoEvents(_ webView: MockWebView, id: UInt64) -> [EchoEvent] {
         webView.deliveredFrames.compactMap { frame -> EchoEvent? in
-            guard case let .event(eid, chunk) = frame, eid == id else { return nil }
+            guard case let .event(eid, chunk, _) = frame, eid == id else { return nil }
             return try? JSONDecoder().decode(EchoEvent.self, from: chunk)
         }
     }
@@ -191,7 +191,7 @@ struct BridgeSessionTests {
 
         let events = { () -> [DrainEvent] in
             webView.deliveredFrames.compactMap { frame -> DrainEvent? in
-                guard case let .event(eid, chunk) = frame, eid == 500 else { return nil }
+                guard case let .event(eid, chunk, _) = frame, eid == 500 else { return nil }
                 return try? JSONDecoder().decode(DrainEvent.self, from: chunk)
             }
         }

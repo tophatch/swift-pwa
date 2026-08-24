@@ -52,8 +52,8 @@ struct BridgeConcurrentInvokeTests {
 
     private func replied(_ webView: MockWebView, id: UInt64) -> Bool {
         webView.deliveredFrames.contains { frame in
-            if case let .reply(replyID, _) = frame, replyID == id { return true }
-            if case let .replyError(replyID, _) = frame, replyID == id { return true }
+            if case let .reply(replyID, _, _) = frame, replyID == id { return true }
+            if case let .replyError(replyID, _, _) = frame, replyID == id { return true }
             return false
         }
     }
@@ -124,7 +124,7 @@ struct BridgeConcurrentInvokeTests {
 
         try await waitFor {
             webView.deliveredFrames.contains { frame in
-                if case let .end(id) = frame, id == 11 { return true }
+                if case let .end(id, _) = frame, id == 11 { return true }
                 return false
             }
         }

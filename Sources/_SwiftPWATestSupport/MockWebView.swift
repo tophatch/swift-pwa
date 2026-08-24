@@ -61,28 +61,34 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         inboundContinuation?.yield(frame)
     }
 
-    /// Convenience: build and send an `invoke` frame from a typed payload.
-    public func sendInvoke(id: UInt64, command: String, payload: some Encodable) throws {
-        let data = try JSONEncoder().encode(payload)
-        send(.invoke(id: id, command: command, payload: data))
+    /// Announce a document, as `bridge.js` does at document start. Sending a
+    /// second, different epoch is how a test spells "the window navigated".
+    public func sendHello(epoch: String) {
+        send(.hello(epoch: epoch))
     }
 
-    public func sendSubscribe(id: UInt64, command: String, payload: some Encodable) throws {
+    /// Convenience: build and send an `invoke` frame from a typed payload.
+    public func sendInvoke(id: UInt64, command: String, payload: some Encodable, epoch: String? = nil) throws {
         let data = try JSONEncoder().encode(payload)
-        send(.subscribe(id: id, command: command, payload: data))
+        send(.invoke(id: id, command: command, payload: data, epoch: epoch))
+    }
+
+    public func sendSubscribe(id: UInt64, command: String, payload: some Encodable, epoch: String? = nil) throws {
+        let data = try JSONEncoder().encode(payload)
+        send(.subscribe(id: id, command: command, payload: data, epoch: epoch))
     }
 
     /// Close an open subscription or session, as `unsubscribe()` / `close()`
     /// does from JS — the path a handler's teardown (`onTermination`) runs on.
-    public func sendUnsubscribe(id: UInt64) {
-        send(.unsubscribe(id: id))
+    public func sendUnsubscribe(id: UInt64, epoch: String? = nil) {
+        send(.unsubscribe(id: id, epoch: epoch))
     }
 
     /// Convenience: build and send a `push` frame (a client frame into an open
     /// duplex session) from a typed payload.
-    public func sendPush(id: UInt64, payload: some Encodable) throws {
+    public func sendPush(id: UInt64, payload: some Encodable, epoch: String? = nil) throws {
         let data = try JSONEncoder().encode(payload)
-        send(.push(id: id, payload: data))
+        send(.push(id: id, payload: data, epoch: epoch))
     }
 
     public func endInbound() { inboundContinuation?.finish() }

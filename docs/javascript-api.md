@@ -29,9 +29,40 @@ sess.push(frame);   // client → server, into the open session
 sess.close();
 ```
 
-The wire envelope (`{v, kind, id, cmd, payload}`) is identical across
+The wire envelope (`{v, ep, kind, id, cmd, payload}`) is identical across
 WKWebView, WebKitGTK, and WebView2 — same JS code runs unchanged on
 every backend.
+
+## Navigating away
+
+Everything a page subscribes belongs to *that document*, not to the window.
+Navigate the window — a link, `location.assign`, a router that does a real page
+load — and the runtime cancels every stream, session, and in-flight `invoke`
+the old document opened, before the new document's scripts run. Nothing to
+unsubscribe on the way out, and no need for a `pagehide` handler.
+
+That works because `bridge.js` mints an **epoch** per document and announces it
+on the channel at document start; `ep` on every frame in both directions is the
+same value. A frame stamped with a departed document's epoch is dropped rather
+than resolved, which matters because correlation ids restart at `1` in each
+document: without it a stream that outlived its document would deliver against
+whatever the *new* document has since put in that id — its own handler, for a
+different channel, with no error anywhere. Since the epoch travels on the wire
+rather than through a per-backend navigation callback, all five platforms behave
+identically, including the three whose webviews expose no `didCommit` equivalent.
+
+Only the top frame takes part. `bridge.js` is injected into subframes too, and
+a subframe announcing its own epoch would read as a navigation and cancel the
+parent's subscriptions — so a subframe sends unstamped frames instead and keeps
+the behaviour it has always had here: its correlation ids share the window's id
+space, and replies are delivered to the top frame. Don't drive the bridge from
+an iframe.
+
+One limit: the teardown is triggered by the new document announcing itself, so
+a window navigated to content that runs no JavaScript at all (a PDF or an image
+loaded directly into the webview) keeps the previous document's streams alive
+until the next real document or until the window closes. They can't misroute —
+nothing is there to receive them — but they do keep running.
 
 To discover what's actually wired up at runtime — which opt-in plugins
 the Swift side installed, plus any custom commands — call `__platform.info`.

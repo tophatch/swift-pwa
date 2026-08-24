@@ -8,12 +8,14 @@
 //   .on(channel, cb)               -> () => void  (server-push subscribe)
 //   .emit(channel, payload)        -> Promise<void>  (publish to a channel)
 //
-// Wire envelope (matches Sources/SwiftPWACore/Bridge/Invocation.swift):
-//   in : {v:1, kind:"invoke"|"subscribe"|"unsubscribe", id, cmd?, payload?}
-//      | {v:1, kind:"push", id, payload}   (client frame into an open session)
-//   out: {v:1, kind:"reply", id, ok?, err?}
-//      | {v:1, kind:"event", id, chunk}
-//      | {v:1, kind:"end",   id}
+// Wire envelope (matches Sources/SwiftPWACore/Bridge/Invocation.swift).
+// Every frame carries `ep`, the epoch of the document that owns it:
+//   in : {v:1, ep, kind:"hello", id:0}   (this document is taking over the window)
+//      | {v:1, ep, kind:"invoke"|"subscribe"|"unsubscribe", id, cmd?, payload?}
+//      | {v:1, ep, kind:"push", id, payload}   (client frame into an open session)
+//   out: {v:1, ep, kind:"reply", id, ok?, err?}
+//      | {v:1, ep, kind:"event", id, chunk}
+//      | {v:1, ep, kind:"end",   id}
 (function () {
     if (globalThis.__SWIFT_PWA__) return;
 
@@ -22,7 +24,43 @@
     const invokes = new Map();      // id -> {resolve, reject}
     const subscribes = new Map();   // id -> {onChunk, onError, onEnd}
 
+    // Per-document epoch. This file is injected at document *start*, so a fresh
+    // document mints a fresh one — which is the only signal the native side
+    // needs to notice that a window navigated, and it arrives identically on
+    // all five backends without any of them observing navigation themselves.
+    //
+    // It does two jobs. The `hello` frame below hands it over before the page's
+    // own scripts run, and the runtime tears down everything the previous
+    // document subscribed. And every frame carries it in both directions, so a
+    // native stream that outlives its document can never bind to a live
+    // subscription: correlation ids restart at 1 in each document, so without
+    // this a leaked stream's frames resolve against whatever the *new* document
+    // has since put in that slot — reproducibly, not as a race.
+    //
+    // Only the top frame takes part. This script is injected into subframes
+    // too, and a subframe minting its own epoch would announce itself as the
+    // window's new document and tear the *parent's* subscriptions down. A
+    // subframe therefore sends unstamped frames, which the runtime accepts
+    // as-is — the same (id-colliding, main-frame-delivered) behaviour subframes
+    // have always had here; fixing that needs per-frame delivery, which is a
+    // different change.
+    const IS_TOP = (function () {
+        try { return window.top === window; } catch (e) { return false; }
+    })();
+    const EPOCH = IS_TOP ? mintEpoch() : null;
+
+    function mintEpoch() {
+        const c = globalThis.crypto;
+        if (c && typeof c.randomUUID === "function") return c.randomUUID();
+        if (c && typeof c.getRandomValues === "function") {
+            return Array.from(c.getRandomValues(new Uint8Array(16)), (b) =>
+                b.toString(16).padStart(2, "0")).join("");
+        }
+        return Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
+    }
+
     function post(frame) {
+        if (EPOCH) frame.ep = EPOCH;
         // Four native message channels, picked by what the platform
         // exposes:
         //   - WKWebView (macOS/iOS):
@@ -59,6 +97,11 @@
             console.error("swift-pwa bridge: unsupported version", frame.v);
             return;
         }
+        // A frame the native side stamped with a previous document's epoch: a
+        // stream that outlived the document that opened it. Its correlation id
+        // means nothing here, so resolving it would fire *this* document's
+        // handler for whatever now holds that id.
+        if (frame.ep && frame.ep !== EPOCH) return;
         const id = frame.id;
         switch (frame.kind) {
             case "reply": {
@@ -211,4 +254,13 @@
         configurable: false,
         enumerable: false,
     });
+
+    // Tell the runtime this document owns the window now. First frame on the
+    // channel, and it runs before the page's own scripts, so the previous
+    // document's subscriptions are cancelled before this one opens any.
+    if (IS_TOP) {
+        try { post({ v: VERSION, kind: "hello", id: 0 }); } catch (e) {
+            console.error("swift-pwa bridge: could not announce document", e);
+        }
+    }
 })();

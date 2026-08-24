@@ -120,14 +120,14 @@ struct BLEPluginTests {
 
     private func events(_ webView: MockWebView, id: UInt64) -> [[String: Any]] {
         webView.deliveredFrames.compactMap { frame in
-            guard case let .event(eventID, data) = frame, eventID == id else { return nil }
+            guard case let .event(eventID, data, _) = frame, eventID == id else { return nil }
             return try? JSONSerialization.jsonObject(with: data) as? [String: Any]
         }
     }
 
     private func error(_ webView: MockWebView, id: UInt64) -> BridgeError? {
         webView.deliveredFrames.compactMap { frame in
-            if case let .replyError(errorID, error) = frame, errorID == id { return error }
+            if case let .replyError(errorID, error, _) = frame, errorID == id { return error }
             return nil
         }.first
     }
@@ -313,7 +313,7 @@ struct BLEPluginTests {
         central.link.emit(.state(connected: false, reason: "out of range"))
         try await waitFor { events(webView, id: 1).contains { $0["kind"] as? String == "state" } }
         #expect(!webView.deliveredFrames.contains { frame in
-            if case let .end(id) = frame, id == 1 { return true }
+            if case let .end(id, _) = frame, id == 1 { return true }
             return false
         })
 

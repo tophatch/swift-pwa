@@ -5,6 +5,24 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A document's bridge state no longer outlives the document.** Navigating a window — a link, `location.assign`, a router doing a real page load — used to leave every stream, session, and in-flight `invoke` the old document opened still running natively. `BridgeRuntime.stop()` was the only thing that cancelled a window's subscriptions and it ran from `windowWillClose`, so nothing observed a navigation on *any* of the five backends. Reproduced here on a real `WKWebView`: with three documents loaded in turn, one `emit` was delivered **three times** — once per document ever loaded in that window — and both native tasks and `EventBus` sinks accumulated without bound. Reported by an adopter porting a desktop e-reader, who measured the same 1:1 growth.
+
+  **The half that made it a correctness bug, not a leak:** `bridge.js` allocates correlation ids from a per-document counter that restarts at `1`, and `deliver()` routes an inbound frame by that id alone. A leaked stream keeps emitting frames stamped with the *old* document's id, which the *new* document resolves against its own table — so as soon as two pages allocate ids in a different order, a live channel is delivered to a handler for something else entirely. Not a race and it does not self-correct: same two pages, same misroute, every time. What it looked like in the adopter's app was a `prefs:changed` payload arriving at a `permission:denied` handler, which drew a "can't read this folder" warning naming no folder — for a channel nothing in the app could even emit — and read as a TCC bug for as long as the channel name was believed.
+
+  Both halves are closed on the wire rather than at each backend's navigation seam. `bridge.js` mints an **epoch** per document (it is injected at document start, so a fresh document mints a fresh one) and announces it with a `hello` frame before the page's own scripts run; the runtime treats a new epoch as a navigation and tears down everything the previous document opened, then drops any later frame still stamped with it. Every frame carries the epoch in both directions, so a stream torn down mid-`deliver` — cancellation is cooperative, so that window exists — cannot bind to whatever the new document has since put in that id. Doing it in Core means all five platforms behave identically, including the three whose webviews expose no `WKNavigationDelegate` equivalent, and it needed no per-backend code at all.
+
+  Only the top frame takes part: `bridge.js` is injected into subframes as well (`forMainFrameOnly: false` on Apple, and the equivalent elsewhere), and a subframe announcing its own epoch would read as a navigation and cancel the parent's subscriptions. Subframes therefore send unstamped frames and keep exactly the behaviour they had — sharing the window's id space, with replies delivered to the top frame — which is its own latent hazard, but a different change.
+
+  **Verified on four of the five engines by driving a real two-page app**, each against a control build with the epoch protocol neutered, so the measurement isn't vacuous: macOS/`WKWebView` (in the test suite, three documents → 3 deliveries before, 1 after), WebKitGTK 4.1 and 6.0 via `swift-pwa drive`, and Android's `WebView` on a device over CDP — 2 before, 1 after on each. Windows/WebView2 is inferred rather than driven: nothing in the change is platform-specific, and `AddScriptToExecuteOnDocumentCreated` gives the same per-document injection Android's Chromium `WebView` was just measured doing.
+
+  The teardown is triggered by the *new* document announcing itself, so a window navigated to content that runs no JavaScript (a PDF or an image loaded straight into the webview) keeps the previous document's streams alive until the next real document or the window closes; they can no longer misroute, but they do keep running. Documented in [`docs/javascript-api.md`](docs/javascript-api.md#navigating-away).
+
+  One thing the fix had to grow on the way: because ids are reused across a navigation and cancellation is cooperative, a task torn down by the navigation runs its own cleanup *afterwards*, by id — deleting the entry the new document had since put in that slot. That took the emit count from 3 to **0** before subscription bookkeeping was tagged with a document generation.
+
 ## [0.10.2] - 2026-08-17
 
 ### Changed

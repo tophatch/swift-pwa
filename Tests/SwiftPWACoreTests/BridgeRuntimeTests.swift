@@ -37,12 +37,12 @@ struct BridgeRuntimeTests {
 
         // Wait for the reply frame to land in deliveredFrames.
         try await waitFor { webView.deliveredFrames.contains(where: { frame in
-            if case let .reply(id, _) = frame, id == 100 { return true }
+            if case let .reply(id, _, _) = frame, id == 100 { return true }
             return false
         }) }
 
         #expect(win.title() == "from JS")
-        guard case let .reply(id, _) = webView.deliveredFrames.first(where: {
+        guard case let .reply(id, _, _) = webView.deliveredFrames.first(where: {
             if case .reply = $0 { true } else { false }
         }) else { Issue.record("expected reply"); return }
         #expect(id == 100)
@@ -58,7 +58,7 @@ struct BridgeRuntimeTests {
             if case .replyError = frame { return true }
             return false
         }) }
-        guard case let .replyError(_, err) = webView.deliveredFrames.first(where: {
+        guard case let .replyError(_, err, _) = webView.deliveredFrames.first(where: {
             if case .replyError = $0 { true } else { false }
         }) else { Issue.record("expected error"); return }
         #expect(err.code == BridgeError.notFound)
@@ -79,19 +79,19 @@ struct BridgeRuntimeTests {
         win.emit(.didBlur)
         try await waitForCondition {
             webView.deliveredFrames.count(where: { frame in
-                if case let .event(id, _) = frame, id == 300 { true } else { false }
+                if case let .event(id, _, _) = frame, id == 300 { true } else { false }
             }) >= 2
         }
         // Now unsubscribe; the bridge should not deliver further events.
         webView.send(.unsubscribe(id: 300))
         try await waitForCondition { !bridge.hasActiveSubscription(id: 300) }
         let countBefore = webView.deliveredFrames.count(where: { frame in
-            if case let .event(id, _) = frame, id == 300 { true } else { false }
+            if case let .event(id, _, _) = frame, id == 300 { true } else { false }
         })
         win.emit(.didFocus)
         try await Task.sleep(for: .milliseconds(50))
         let countAfter = webView.deliveredFrames.count(where: { frame in
-            if case let .event(id, _) = frame, id == 300 { true } else { false }
+            if case let .event(id, _, _) = frame, id == 300 { true } else { false }
         })
         #expect(countAfter == countBefore)
     }

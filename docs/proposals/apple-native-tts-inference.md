@@ -4,6 +4,10 @@
 Runtime CoreML execution provider and found it unusable for this pipeline
 ([`docs/on-device-ai-performance.md`](../on-device-ai-performance.md)).
 
+> **Every cheap option here has since been measured and ruled out.** What
+> remains is a yes/no on an Apple-only TTS backend — see
+> [Recommendation](#recommendation).
+
 ## The problem
 
 `SwiftPWAQwenTTS` synthesizes speech on the ONNX Runtime **CPU** execution
@@ -94,48 +98,74 @@ accelerator bolted onto the existing one.
 That is the honest headline. It should be decided as "do we want an Apple-only
 TTS backend?", not as "can we turn on the GPU?".
 
-## Option A — fp16 the code-predictor (do this first)
+## Option A — fp16 the code-predictor: measured, and it loses
 
-The code-predictor is **fp32** while the talker was already converted to fp16.
-It is 55.1% of wall time, it is bound by streaming its own 420 MB of weights,
-and halving those bytes is the most direct lever available.
+The code-predictor is fp32 and 420 MB while the talker was already fp16, and a
+single-token decode streams essentially all of it per call (420 MB / 8.06 ms ≈
+52 GB/s). That read said "bandwidth-bound", and predicted ~1.38× overall from
+halving the bytes.
 
-- **Estimated ceiling:** if fp16 halves the stream time, ~2× on 55.1% of the
-  run → **~1.38× overall**, which is most of the way to real-time playback.
-  Estimated, not measured — a bandwidth-bound stage should scale close to
-  linearly with weight bytes, but that wants confirming rather than assuming.
-- **Cost:** a re-export using tooling we already have.
-  `Scripts/vendor-qwen-tts.sh` already converts the talker and text-embedding
-  to fp16; this extends the same step to the code-predictor (and possibly the
-  vocoder, though it is `Conv`-bound rather than bandwidth-bound, so expect
-  less).
-- **Platform-independent** — it speeds up all five platforms, where a CoreML or
-  MLX backend helps exactly one.
-- **Risks.** Precision: the sampler is *seeded*, so numerics that drift fork the
-  token stream into different-but-plausible speech — reuse v0.10.2's
-  `graphOptimizationPreservesAudio` waveform-correlation test as the gate.
-  Android: fp16 contrib-op kernels are missing there, which is why that platform
-  runs `ORT_ENABLE_BASIC`; a second fp16 graph should be fine under that
-  existing constraint but needs device verification, since this is exactly the
-  Stable-Diffusion Gelu-fusion failure mode.
+**Measured, it is 2× slower.** Converting the code-predictor to fp16
+(`onnxruntime.transformers.float16`, `keep_io_types=False`, `op_block_list=[]`
+— the same flags `Scripts/vendor-qwen-tts.sh` uses for the talker), feeding
+fp16 tensors from Swift, best of 3 warm runs, both sides at `ORT_ENABLE_BASIC`:
 
-### Not: fusing the 15 codebook calls
+| code-predictor | warm wall | speedup |
+| --- | --- | --- |
+| fp32 (shipping) | 21,595 ms | — |
+| fp16 | 41,832 ms | **0.52×** |
 
-The earlier draft of this document proposed collapsing the code-predictor's 15
-sequential calls into one graph invocation. **The profiling rules that out.**
-Only **7.5%** of a code-predictor `Run` is spent outside kernels, so removing
-14 of every 15 `Run` boundaries recovers at most ~7.5% of 55.1% ≈ **4% of wall
-time** — and that is the optimistic bound, since the fused graph still executes
-the same operators.
+**Why.** ONNX Runtime's **CPU** execution provider has no native fp16 kernels
+for most of these operators; it emulates them by casting up to fp32, computing,
+and casting back. Halving the weight bytes buys nothing when every operator
+pays a conversion, and the 52 GB/s figure was a coincidence rather than a
+bandwidth ceiling. fp16 is an optimisation for GPU-class execution providers and
+for model size — the talker is fp16 for the download budget and for future
+accelerator work, not because it is faster on CPU.
 
-It is also harder than it looks: `QwenSampler.sampleCP` draws a token **in
-Swift between every step**, so fusing means moving top-k + temperature + our
-seeded RNG inside the graph, changing both the model contract and our
-determinism story. Bad ratio: upstream export work for ~4%.
+The output also **forked**: 140,160 samples against 147,840, so the reduced
+precision changed the seeded sampler's path. Even a positive result here would
+have needed that resolving.
 
-The same 7.5–10.1% figure caps the other "cheap" idea — ORT IO binding and
-reused input buffers. Both target the `Run` boundary, and the `Run` boundary is
-not where the time is.
+**A second blocker found on the way.** ONNX Runtime **1.27** — the version we
+vendor — cannot even load an fp16 code-predictor at `ORT_ENABLE_ALL`:
+`SimplifiedLayerNormFusion` fails with `Attempting to get index by a name which
+does not exist: InsertedPrecisionFreeCast_…`, naming a node the graph does not
+contain. Reproduced in Python against 1.27 (fails at `ALL`, fine at `BASIC`) and
+**fixed by 1.29**. Anyone revisiting fp16 anywhere in this tier needs the
+runtime bumped first.
+
+### Also ruled out: fusing the 15 codebook calls
+
+An earlier draft proposed collapsing the code-predictor's 15 sequential calls
+into one graph invocation. The profiling rules it out: only **7.5%** of a
+code-predictor `Run` is spent outside kernels, so removing 14 of every 15 `Run`
+boundaries recovers at most ~7.5% of 55.1% ≈ **4% of wall time** — optimistic,
+since the fused graph still executes the same operators.
+
+It is also harder than it looks: `QwenSampler.sampleCP` draws a token **in Swift
+between every step**, so fusing means moving top-k, temperature and the seeded
+RNG inside the graph, changing both the model contract and our determinism
+story. Upstream export work for ~4%.
+
+The same 7.5–10.1% figure caps ORT IO binding and reused input buffers. Both
+target the `Run` boundary, and the `Run` boundary is not where the time is.
+
+### What that leaves
+
+Every lever that keeps the work on ONNX Runtime's CPU provider is now measured
+and exhausted:
+
+| lever | result |
+| --- | --- |
+| graph optimization `.basic` → `.all` | **~1.5×, shipped in v0.10.2** |
+| fuse the 15 codebook calls | ≤4%, and needs sampling moved into the graph |
+| IO binding / buffer reuse | ≤4% (same `Run` boundary) |
+| fp16 the code-predictor | **0.52× — actively worse** |
+
+There is no cheap platform-independent win left. The remaining distance is a
+different execution engine, which is Option B or C — or accepting the current
+speed.
 
 ## Option B — CoreML via a native export
 
@@ -182,22 +212,29 @@ decode.
 
 ## Recommendation
 
-1. **fp16 the code-predictor** (Option A). Cheapest, uses tooling we already
-   have, benefits all five platforms, and attacks the largest single share.
-   ~1.38× estimated — worth measuring before anything else is decided.
-2. **Evaluate `FluidInference/qwen3-tts-coreml`** (hours). It decides whether
-   Option B is "convert three graphs" or "adopt an existing export", and every
-   estimate below it is provisional until someone has run it.
-3. **Only then** decide B vs C, as an explicit "do we want an Apple-only TTS
-   backend?" call. Do not start either expecting an incremental accelerator:
-   the numbers say partial ports cannot reach the target.
+The cheap options are gone — measured, not assumed. What remains is a binary
+choice, and it should be made as one:
 
-**Why the GPU is still the endgame.** Single-token decode is `MatMul`-bound and
-weight-bandwidth-bound, which is precisely the shape Apple's GPU answers better
-than its CPU cores. That is the mechanism behind the adopter's 8×, and neither
-fp16 nor any `Run`-boundary tuning changes which processor the matmuls run on.
-Options A and B/C are complementary, not alternatives — but A is a fraction of
-the cost and should be measured first.
+1. **Evaluate `FluidInference/qwen3-tts-coreml`** (hours). It decides whether
+   Option B is "convert three graphs" or "adopt an existing export", and it is
+   the only remaining cheap step in this document.
+2. **Then decide: build an Apple-only TTS backend, or ship at current speed.**
+   With v0.10.2's ~1.5× the pipeline runs at roughly 1.8–2.5× slower than real
+   time depending on machine load. That is usable for generate-then-play and is
+   not usable for streaming playback, which is the adopter's blocker.
+3. If yes, **B before C**: CoreML needs no new dependency and no re-implemented
+   model, where MLX needs both. C's advantage is that its 8× is observed rather
+   than estimated.
+
+**Why the GPU is the only lever left.** Single-token decode is `MatMul`-bound;
+the CPU provider computes those matmuls in fp32 and cannot be talked out of it
+(fp16 makes it worse, fusion saves 4%). Moving them to the GPU or ANE is the
+one change that alters the arithmetic itself, and it is the mechanism behind
+the adopter's 8×.
+
+**If the answer is "not now",** say so to the adopter explicitly. Their
+read-aloud feature does not ship on the current path, and they should not wait
+on a release expecting it to.
 
 ## What this does not change
 
@@ -209,8 +246,11 @@ path.
 
 ## Open questions
 
-- Does fp16 actually halve the code-predictor's time, and does the waveform
-  survive it? (Blocks Option A; measurable with tooling in the repo.)
+- **Answered:** fp16 on the code-predictor is 0.52× (2× slower) on the CPU
+  provider, and forks the seeded token stream. See Option A.
+- ONNX Runtime **1.27** cannot load an fp16 code-predictor at
+  `ORT_ENABLE_ALL` (`SimplifiedLayerNormFusion`); **1.29** can. Worth bumping
+  the vendored runtime independently of this proposal?
 - Is `FluidInference/qwen3-tts-coreml` current, correctly licensed
   (Apache-2.0 upstream), and does it match the 12 Hz 0.6B CustomVoice pipeline
   we ship — including the 9 preset voices?
@@ -218,6 +258,8 @@ path.
   **seeded**, so numerics that drift will fork the token stream into
   different-but-plausible speech. v0.10.2's
   `graphOptimizationPreservesAudio` (waveform correlation) is the test to reuse.
-- Is the vocoder worth converting too? It is 9.7% and `Conv`-bound rather than
-  bandwidth-bound, so fp16 should help less there — but it is the same export
-  step, so the marginal cost is near zero.
+- Would an **fp32 talker** be *faster* on CPU, given fp16 is emulated there?
+  It is 31.6% of the run and currently fp16 for download size. The reverse
+  experiment is cheap, but the payoff is capped around 1.14× and it roughly
+  doubles the 846 MB talker download — probably not worth it, recorded so it
+  is not re-derived.

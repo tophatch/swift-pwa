@@ -163,20 +163,36 @@ loaded on, and the benchmark asserts against it rather than against intent.
 ## Where the remaining time goes
 
 `.all` on the CPU EP is the best configuration available today, and it is still
-~2.5x slower than real time. The cost is structural rather than a missing flag:
-synthesizing N frames of audio means N talker runs and 15N code-predictor runs,
-each a separate `Run` call with a growing KV cache, driven from a Swift loop.
-Levers not yet pulled, roughly in order of expected payoff:
+slower than real time. The cost is structural rather than a missing flag.
+Profiling (ONNX Runtime's per-operator profiler, full synthesis) says where:
 
-1. **Batch the 15 code-predictor calls per frame.** They are sequential by data
-   dependency today, but the graph may admit a wider formulation.
-2. **Quantize the code-predictor and vocoder** (fp32 today) to fp16, halving
-   their bandwidth on the same kernels the talker already uses.
-3. **A CoreML-native export** rather than ONNX-via-CoreML-EP — converting the
-   talker to a single `.mlpackage` with bounded-range KV cache inputs sidesteps
-   the partitioning problem entirely, at the cost of a second export pipeline
-   and an Apple-only code path.
+| stage | share of wall | calls | in kernels | top op |
+| --- | --- | --- | --- | --- |
+| code-predictor | 55.1% | 1,095 | 92.5% | `MatMul` 55.0% |
+| talker (AR + prefill) | 31.6% | 96 | 89.9% | `MatMul` 59.9% |
+| vocoder | 9.7% | 1 | 99.9% | `Conv` 75.9% |
+| Swift (tokenizer, sampler, embeddings) | 3.6% | — | — | — |
 
-Until one of those lands, treat on-device TTS as generate-then-play: synthesize
-to a WAV, then play it. See [`docs/ai-plugin.md`](ai-plugin.md) for the
+**Levers that have been measured and ruled out** — recorded so they are not
+re-derived:
+
+| lever | result |
+| --- | --- |
+| Fuse the 15 code-predictor calls per frame | **≤4% of wall.** Only 7.5% of a `Run` is outside kernels, so removing `Run` boundaries recovers almost nothing — and the 15 steps have `QwenSampler.sampleCP` between them, so fusing means moving top-k, temperature and the seeded RNG into the graph. |
+| ORT IO binding / reused input buffers | **≤4%.** Targets the same `Run` boundary. |
+| fp16 the code-predictor | **0.52× — 2× slower.** ORT's CPU provider has no native fp16 kernels for these ops and emulates them via fp32, so halving weight bytes buys nothing while every op pays a conversion. It also forked the seeded token stream (140,160 vs 147,840 samples). |
+
+> **Trap:** ONNX Runtime **1.27** (the version vendored here) cannot load an
+> fp16 code-predictor at `ORT_ENABLE_ALL` at all — `SimplifiedLayerNormFusion`
+> fails naming an `InsertedPrecisionFreeCast_…` node the graph does not
+> contain. Fixed in **1.29**. Bump the runtime before revisiting fp16 anywhere
+> in this tier.
+
+Single-token decode is `MatMul`-bound and the CPU provider computes those in
+fp32. **Moving them to the GPU or ANE is the only remaining lever that changes
+the arithmetic** — which is a native CoreML or MLX backend, scoped in
+[`docs/proposals/apple-native-tts-inference.md`](proposals/apple-native-tts-inference.md).
+
+Until that lands, treat on-device TTS as generate-then-play: synthesize to a
+WAV, then play it. See [`docs/ai-plugin.md`](ai-plugin.md) for the
 `ai.generateAudio` contract and the memory notes (~3 GB peak, `lowMemory:`).

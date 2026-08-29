@@ -44,30 +44,26 @@ frame (one per codebook) against the talker's once. Everyone's intuition —
 including mine before measuring — is that the big fp16 talker is the cost. It
 isn't; it's second.
 
-**2. The pipeline is op-dispatch bound, not compute bound.** Per-call cost of
-the code-predictor, averaged over 73 frames:
+**2. It is compute bound, and the compute is `MatMul`.** ONNX Runtime's own
+per-operator profiler, over a full synthesis:
 
-```text
-group  1: 12.81 ms      <- feeds 2 tokens, builds KV from empty
-group  2:  7.28 ms
-group  3:  7.24 ms
-...
-group 15:  7.29 ms
-```
+| graph | Runs | ms/Run | in kernels | Run-boundary overhead | top op |
+| --- | --- | --- | --- | --- | --- |
+| code-predictor | 1,035 | 8.06 | **92.5%** | 7.5% | `MatMul` 55.0% |
+| talker | 89 | 47.29 | **89.9%** | 10.1% | `MatMul` 59.9% |
+| vocoder | 1 | 1,709.71 | **99.9%** | 0.1% | `Conv` 75.9% |
 
-**Flat.** The KV cache grows from 1 to 15 entries across those calls and the
-time does not move, so attention over the cache is not what's being paid for.
-Normalising by graph size says the same thing from the other side: the talker
-is 2,629 nodes at 37 ms (**14 µs/node**) and the code-predictor 721 nodes at
-7.3 ms (**10 µs/node**) — near-identical per-node cost across two very
-differently-shaped graphs. That is the signature of per-operator dispatch
-overhead, not of matmuls.
+This was worth measuring because the intuitive reading of the earlier evidence
+was wrong. Code-predictor cost *is* flat at ~7.3 ms across all 15 codebook
+steps while its KV cache grows 1→15 — but that is not dispatch overhead, it is
+that the weight matmuls dwarf attention over a 15-entry cache. Only **7.5%** of
+a code-predictor `Run` is spent outside kernels.
 
-This explains the CoreML EP result rather than contradicting it. A runtime
-already spending its time on per-op overhead gets *worse* when you add 170
-partition boundaries to it. It also explains the MLX number: MLX's win on this
-shape is lazy evaluation plus kernel fusion collapsing thousands of tiny
-dispatches, not raw GPU FLOPs.
+**Which weights?** The code-predictor is **fp32, 420 MB**, and a single-token
+decode reads essentially all of it per call: 420 MB / 8.06 ms ≈ **52 GB/s**,
+i.e. it is bound by streaming its own weights, not by arithmetic intensity.
+The talker was already converted to fp16; the code-predictor and vocoder
+were not.
 
 ## What each option can possibly buy
 
@@ -98,25 +94,48 @@ accelerator bolted onto the existing one.
 That is the honest headline. It should be decided as "do we want an Apple-only
 TTS backend?", not as "can we turn on the GPU?".
 
-## Option A — fewer calls, same runtime (do this first)
+## Option A — fp16 the code-predictor (do this first)
 
-Before any port: the 1,095 code-predictor invocations are the single largest
-cost, and they are *overhead*, not work. Collapsing the 15 sequential codebook
-steps into one graph invocation per frame would remove ~14/15 of that overhead.
+The code-predictor is **fp32** while the talker was already converted to fp16.
+It is 55.1% of wall time, it is bound by streaming its own 420 MB of weights,
+and halving those bytes is the most direct lever available.
 
-- **Ceiling:** ~2.2× if the fused call costs what one step costs today; less in
-  practice. Enough for real-time playback, not for MLX parity.
-- **Cost:** a re-export, not new Swift. The 15 steps are a loop over codebooks
-  inside the code-predictor; whether it can be expressed as one graph
-  (a scan/loop op, or a batched form) is an **open question for whoever owns
-  the export**, and is the first thing to establish.
-- **Why it ranks first anyway:** it is platform-independent. It speeds up
-  Android, Linux and Windows by the same proportion, where a CoreML or MLX
-  backend helps exactly one platform. It also shrinks the portion a later port
-  would need to cover.
+- **Estimated ceiling:** if fp16 halves the stream time, ~2× on 55.1% of the
+  run → **~1.38× overall**, which is most of the way to real-time playback.
+  Estimated, not measured — a bandwidth-bound stage should scale close to
+  linearly with weight bytes, but that wants confirming rather than assuming.
+- **Cost:** a re-export using tooling we already have.
+  `Scripts/vendor-qwen-tts.sh` already converts the talker and text-embedding
+  to fp16; this extends the same step to the code-predictor (and possibly the
+  vocoder, though it is `Conv`-bound rather than bandwidth-bound, so expect
+  less).
+- **Platform-independent** — it speeds up all five platforms, where a CoreML or
+  MLX backend helps exactly one.
+- **Risks.** Precision: the sampler is *seeded*, so numerics that drift fork the
+  token stream into different-but-plausible speech — reuse v0.10.2's
+  `graphOptimizationPreservesAudio` waveform-correlation test as the gate.
+  Android: fp16 contrib-op kernels are missing there, which is why that platform
+  runs `ORT_ENABLE_BASIC`; a second fp16 graph should be fine under that
+  existing constraint but needs device verification, since this is exactly the
+  Stable-Diffusion Gelu-fusion failure mode.
 
-The same argument applies more weakly to the talker (73 calls; inherently
-sequential, so there is nothing to fuse).
+### Not: fusing the 15 codebook calls
+
+The earlier draft of this document proposed collapsing the code-predictor's 15
+sequential calls into one graph invocation. **The profiling rules that out.**
+Only **7.5%** of a code-predictor `Run` is spent outside kernels, so removing
+14 of every 15 `Run` boundaries recovers at most ~7.5% of 55.1% ≈ **4% of wall
+time** — and that is the optimistic bound, since the fused graph still executes
+the same operators.
+
+It is also harder than it looks: `QwenSampler.sampleCP` draws a token **in
+Swift between every step**, so fusing means moving top-k + temperature + our
+seeded RNG inside the graph, changing both the model contract and our
+determinism story. Bad ratio: upstream export work for ~4%.
+
+The same 7.5–10.1% figure caps the other "cheap" idea — ORT IO binding and
+reused input buffers. Both target the `Run` boundary, and the `Run` boundary is
+not where the time is.
 
 ## Option B — CoreML via a native export
 
@@ -147,8 +166,9 @@ through the CoreML Swift API.
 
 ## Option C — MLX
 
-MLX Swift (`mlx-swift`) is what the adopter's reference implementation used, and
-its lazy-eval + fusion model is the direct answer to a dispatch-bound workload.
+MLX Swift (`mlx-swift`) is what the adopter's reference implementation used,
+and its GPU kernels are the direct answer to a `MatMul`- and bandwidth-bound
+decode.
 
 - **Upside:** the measured 8× came from this stack, so it is the only option
   with a real-world number attached rather than an estimate.
@@ -162,15 +182,22 @@ its lazy-eval + fusion model is the direct answer to a dispatch-bound workload.
 
 ## Recommendation
 
-1. **Evaluate `FluidInference/qwen3-tts-coreml`** (hours, not days). It decides
-   whether Option B is "convert three graphs" or "adopt an existing export",
-   and every estimate above is provisional until someone has run it.
-2. **Ask the export owner whether the code-predictor's 15 steps can be one
-   graph call** (Option A). Cheapest real win, helps all five platforms, and
-   reduces whatever a later port has to cover.
-3. **Only then** decide B vs C, as an explicit "Apple-only TTS backend" call.
-   Do not start either expecting an incremental accelerator: the numbers say
-   partial ports cannot reach the target.
+1. **fp16 the code-predictor** (Option A). Cheapest, uses tooling we already
+   have, benefits all five platforms, and attacks the largest single share.
+   ~1.38× estimated — worth measuring before anything else is decided.
+2. **Evaluate `FluidInference/qwen3-tts-coreml`** (hours). It decides whether
+   Option B is "convert three graphs" or "adopt an existing export", and every
+   estimate below it is provisional until someone has run it.
+3. **Only then** decide B vs C, as an explicit "do we want an Apple-only TTS
+   backend?" call. Do not start either expecting an incremental accelerator:
+   the numbers say partial ports cannot reach the target.
+
+**Why the GPU is still the endgame.** Single-token decode is `MatMul`-bound and
+weight-bandwidth-bound, which is precisely the shape Apple's GPU answers better
+than its CPU cores. That is the mechanism behind the adopter's 8×, and neither
+fp16 nor any `Run`-boundary tuning changes which processor the matmuls run on.
+Options A and B/C are complementary, not alternatives — but A is a fraction of
+the cost and should be measured first.
 
 ## What this does not change
 
@@ -182,8 +209,8 @@ path.
 
 ## Open questions
 
-- Can the code-predictor's codebook loop be expressed as a single graph
-  invocation? (Blocks Option A; needs the export owner.)
+- Does fp16 actually halve the code-predictor's time, and does the waveform
+  survive it? (Blocks Option A; measurable with tooling in the repo.)
 - Is `FluidInference/qwen3-tts-coreml` current, correctly licensed
   (Apache-2.0 upstream), and does it match the 12 Hz 0.6B CustomVoice pipeline
   we ship — including the 9 preset voices?
@@ -191,7 +218,6 @@ path.
   **seeded**, so numerics that drift will fork the token stream into
   different-but-plausible speech. v0.10.2's
   `graphOptimizationPreservesAudio` (waveform correlation) is the test to reuse.
-- Is per-op dispatch overhead partly ours? ORT is being handed one `Run` per
-  step with freshly-built input tensors; IO binding and reused buffers might
-  recover some of the 10 µs/node without any port. **Untested, and cheap to
-  test** — worth a measurement before committing to anything above.
+- Is the vocoder worth converting too? It is 9.7% and `Conv`-bound rather than
+  bandwidth-bound, so fp16 should help less there — but it is the same export
+  step, so the marginal cost is near zero.

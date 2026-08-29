@@ -215,6 +215,11 @@ let package = Package(
         // `ZIPExtractor()` into `FsPlugin`; everyone else links neither it
         // nor ZIPFoundation.
         .library(name: "SwiftPWAArchive", targets: ["SwiftPWAArchive"]),
+        // Optional image transcoder for `image.*`. Apps that accept photos the
+        // webview can't render (HEIC is the common one) add this product and
+        // inject `PlatformImageTranscoder()` into `ImagePlugin`; everyone else
+        // links neither it nor the platform codec.
+        .library(name: "SwiftPWAImage", targets: ["SwiftPWAImage"]),
         // Optional on-device AI backend (Apple Foundation Models) for the
         // `ai.*` plugin. Apps that want on-device inference add this product
         // and inject `FoundationModelsBackend()` into `AIPlugin`; everyone
@@ -343,6 +348,40 @@ let package = Package(
         // that opt into content-pack import. `SwiftPWACore` defines the
         // `ArchiveExtractor` protocol; this target provides the concrete
         // `ZIPExtractor`. The umbrella deliberately does NOT depend on it.
+        // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
+        // internal — reused by `SwiftPWAImageEdit` (LaMa) and
+        // `SwiftPWAStableDiffusion` so both share one platform implementation
+        // (CoreGraphics on Apple, stb_image on desktop, BitmapFactory-over-RPC
+        // on Android) rather than duplicating it. Declared unconditionally
+        // rather than under the ONNX gate it used to sit in: it has no ONNX
+        // dependency, and `SwiftPWAImage` (the `image.*` plugin's backend)
+        // needs it in builds that want nothing to do with the AI tier.
+        .target(
+            name: "SwiftPWAImageIO",
+            dependencies: [
+                .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
+                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAImageIOTests",
+            dependencies: ["SwiftPWAImageIO"],
+            swiftSettings: swiftSettings
+        ),
+        // The platform image transcoder behind `image.*`. Its own target so an
+        // app that never transcodes links neither this nor stb_image — the
+        // same shape as `SwiftPWAArchive` backing `fs.extractZip`.
+        .target(
+            name: "SwiftPWAImage",
+            dependencies: ["SwiftPWACore", "SwiftPWAImageIO"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAImageTests",
+            dependencies: ["SwiftPWAImage", "SwiftPWACore", "_SwiftPWATestSupport"],
+            swiftSettings: swiftSettings
+        ),
         .target(
             name: "SwiftPWAArchive",
             dependencies: [
@@ -1112,25 +1151,6 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         // (The target itself is declared in the static `targets:` array so the
         // static `SwiftPWACLISupport` — the Windows icon builder — can reference
         // it; a static target can't resolve a forward-`append`ed one.)
-        // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
-        // internal — reused by `SwiftPWAImageEdit` (LaMa) and
-        // `SwiftPWAStableDiffusion` so both share one platform implementation
-        // (CoreGraphics on Apple, stb_image on desktop, BitmapFactory-over-RPC
-        // on Android) rather than duplicating it. No ONNX dependency; its
-        // per-platform files gate on `canImport(CoreGraphics)` etc.
-        .target(
-            name: "SwiftPWAImageIO",
-            dependencies: [
-                .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
-                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
-            ],
-            swiftSettings: swiftSettings
-        ),
-        .testTarget(
-            name: "SwiftPWAImageIOTests",
-            dependencies: ["SwiftPWAImageIO"],
-            swiftSettings: swiftSettings
-        ),
         .target(
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,

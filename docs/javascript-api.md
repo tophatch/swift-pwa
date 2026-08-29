@@ -964,6 +964,63 @@ plain `http://` to a LAN host also needs the host allow-listed via
 `android.network.cleartext_domains` in `pwa.json` (HTTPS needs nothing). Full
 reference: [docs/net-plugin.md](net-plugin.md).
 
+### `image.*` — convert an image the webview can't display
+
+The webview is often the least capable image decoder on the device. Measured by
+driving a real app on each engine this project ships on:
+
+| | HEIC | AVIF |
+|---|---|---|
+| WKWebView (macOS, iOS) | renders | renders |
+| WebKitGTK 4.1 / 6.0 | never | never |
+| WebView2 (Chromium) | never | renders |
+| Android `WebView` (Chromium) | never | renders |
+
+So **HEIC renders in exactly one of the four** — and HEIC is what every photo an
+iPhone writes to iCloud Drive actually is. The platform *underneath* the webview
+is another matter: Apple's ImageIO and Android's `BitmapFactory` both decode
+HEIC and AVIF. `image.*` exposes that decoder, so an app taking photos from a
+user's filesystem can convert on import instead of refusing the format.
+
+Opt-in — add the `SwiftPWAImage` product and register it:
+
+```swift
+ctx.use(ImagePlugin(PlatformImageTranscoder()))
+```
+
+```js
+// Ask first. The answer is per-platform, and on Windows per-machine.
+const { decode, encode } = await __SWIFT_PWA__.invoke('image.info');
+// e.g. { decode: ["avif","heic","heif","jpeg","png",…], encode: ["png","jpeg"] }
+
+if (decode.includes('heic')) {
+    const out = await __SWIFT_PWA__.invoke('image.transcode', {
+        path: pickedPath,              // or dataBase64
+        format: 'jpeg',                // 'png' | 'jpeg', default 'png'
+        maxSide: 2048,                 // bound the longest edge
+        quality: 0.85,                 // jpeg only
+        outputPath: `${cacheDir}/${id}.jpg`,   // omit to get dataBase64 back
+    });
+    img.src = out.path;                // { path, width, height, bytes }
+}
+```
+
+Notes worth knowing before you use it:
+
+- **Pass `maxSide` for anything camera-sized.** A 24-megapixel photo is ~72 MB
+  of RGB per buffer, and on Android that has to cross a JNI RPC. The transcoder
+  bounds decodes at 4096 by default for exactly this reason.
+- **Prefer `outputPath` to inline bytes** for large images — without it the
+  result crosses the bridge as base64.
+- `width` / `height` in the result are the **output** dimensions, so a caller
+  that passed `maxSide` learns what it actually got.
+- A format this build can't read or write throws **`E_IMAGE_UNSUPPORTED`**;
+  anything else that fails throws `E_IMAGE`. The two are distinct because the
+  first is a question `image.info` could have answered first.
+- **This is not a rendering fix for Linux.** WebKitGTK links no HEIF or AVIF
+  decoder, and neither does the desktop `stb_image` build behind `image.*`, so
+  there a HEIC is undecodable at both layers. `image.info` will tell you so.
+
 ### `secrets.*` — secure secret storage
 
 Store small secrets — an API token, a sync credential, a license key — in the

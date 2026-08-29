@@ -31,7 +31,14 @@ unsigned char *swiftpwa_decode_image_rgba(const unsigned char *data, int len,
 unsigned char *swiftpwa_encode_png_rgb(const unsigned char *pixels, int width,
                                        int height, int *out_len);
 
-// Free a buffer returned by swiftpwa_encode_png_rgb.
+// Encode tightly-packed RGB8 pixels to an in-memory JPEG at `quality` (1-100).
+// Returns a freshly allocated buffer (free with swiftpwa_free_png) and writes
+// its byte length to *out_len; returns NULL on failure. stb only exposes a
+// callback-based JPEG writer, so this accumulates into a growing buffer.
+unsigned char *swiftpwa_encode_jpg_rgb(const unsigned char *pixels, int width,
+                                       int height, int quality, int *out_len);
+
+// Free a buffer returned by swiftpwa_encode_png_rgb or swiftpwa_encode_jpg_rgb.
 void swiftpwa_free_png(unsigned char *data);
 
 // Like swiftpwa_encode_png_rgb, but for tightly-packed RGBA8 pixels

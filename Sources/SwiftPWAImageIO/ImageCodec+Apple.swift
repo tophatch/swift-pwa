@@ -52,6 +52,62 @@
             return try await decodeRGB(path: nil, dataBase64: png.base64EncodedString(), size: (width, height))
         }
 
+        /// What ImageIO on *this* OS version can actually read and write.
+        /// Enumerated rather than hard-coded: the list genuinely moves between
+        /// OS releases (AVIF read arrived in macOS 13 / iOS 16), and a wrong
+        /// answer here is a page told it can convert something it can't.
+        static func capabilities() -> (decode: [String], encode: [String]) {
+            func extensions(for identifiers: [String]) -> [String] {
+                var seen: Set<String> = []
+                for id in identifiers {
+                    guard let type = UTType(id) else { continue }
+                    for ext in type.tags[.filenameExtension] ?? [] {
+                        seen.insert(ext.lowercased())
+                    }
+                }
+                return seen.sorted()
+            }
+            let readable = CGImageSourceCopyTypeIdentifiers() as? [String] ?? []
+            let writable = CGImageDestinationCopyTypeIdentifiers() as? [String] ?? []
+            // Encode is narrowed to what `encode(_:format:quality:)` implements,
+            // not everything ImageIO could write.
+            let supportedOut = extensions(for: writable)
+            return (
+                decode: extensions(for: readable),
+                encode: ["png", "jpeg", "jpg"].filter { supportedOut.contains($0) }
+            )
+        }
+
+        /// Encode tightly-packed RGB pixels as PNG or JPEG.
+        static func encode(_ image: RawImage, format: ImageEncoding, quality: Double?) async throws -> Data {
+            let png = try await encodePNG(image)
+            guard format == .jpeg else { return png }
+            // Re-encode through ImageIO rather than building a second CGImage by
+            // hand: the PNG path above already resolved the packed-RGB → RGBA
+            // and orientation questions, and getting those subtly different
+            // between the two formats is exactly the bug class that produced
+            // upside-down output once before.
+            guard let source = CGImageSourceCreateWithData(png as CFData, nil),
+                  let cgImage = CGImageSourceCreateImageAtIndex(source, 0, nil)
+            else {
+                throw ImageCodecError.encodeFailed("could not re-read intermediate bitmap for JPEG output")
+            }
+            let data = NSMutableData()
+            guard let dest = CGImageDestinationCreateWithData(
+                data, UTType.jpeg.identifier as CFString, 1, nil
+            ) else {
+                throw ImageCodecError.encodeFailed("could not create a JPEG destination")
+            }
+            let options: [CFString: Any] = [
+                kCGImageDestinationLossyCompressionQuality: min(max(quality ?? 0.85, 0), 1)
+            ]
+            CGImageDestinationAddImage(dest, cgImage, options as CFDictionary)
+            guard CGImageDestinationFinalize(dest) else {
+                throw ImageCodecError.encodeFailed("JPEG finalize failed")
+            }
+            return data as Data
+        }
+
         /// Encode tightly-packed RGB pixels to PNG bytes.
         static func encodePNG(_ image: RawImage) async throws -> Data {
             guard image.channels == 3 else {

@@ -7,6 +7,61 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`image.*` — convert an image the webview can't display.** The webview is
+  routinely the least capable image decoder on the device. Measured by driving a
+  real app on each of the four engines this project ships on, **HEIC renders in
+  exactly one of them** — Apple's; WebKitGTK links no HEIF or AVIF decoder at
+  all, and Chromium (WebView2 and Android's `WebView`) has AVIF but not HEIC.
+  Since HEIC is what every photo an iPhone writes to iCloud Drive actually is,
+  an app that accepts photos from a user's filesystem previously had to ship
+  Apple-only or write per-platform native code — the work this framework exists
+  to absorb. Reported by an adopter who had left both formats out of their
+  importers because of it.
+
+  The decoder was already there. `ImageCodec`'s Apple path is ImageIO, which
+  reads HEIC and AVIF today, and its Android path is `BitmapFactory`, which
+  decodes both on a modern device — it was `package`-internal, reachable only by
+  the on-device AI backends. So this exposes what a build already contains
+  rather than adding a codec: opt-in `ImagePlugin(PlatformImageTranscoder())`
+  (add the `SwiftPWAImage` product) serving `image.info` and `image.transcode`.
+
+  **`image.info` is load-bearing, not decoration** — what a build can read is
+  genuinely not uniform, so it is *derived*, never assumed: Apple enumerates
+  ImageIO's real type list (AVIF read arrived in macOS 13 / iOS 16), Android
+  asks the device because `minSdk` can be 28 while HEIF needs 28 and AVIF needs
+  31, and desktop reports the two formats the vendored stb build is actually
+  compiled for (`STBI_ONLY_PNG` + `STBI_ONLY_JPEG` — so Linux and Windows can
+  convert and resize but cannot rescue a HEIC, at either layer). A format this
+  build can't handle throws `E_IMAGE_UNSUPPORTED`, kept distinct from `E_IMAGE`
+  because it is a question `image.info` could have answered first.
+
+  `ImageCodec` gained JPEG output on all three platform codecs to go with it
+  (ImageIO, `Bitmap.compress`, and a new `stbi_write_jpg` shim), since PNG is
+  the wrong output for a photo. Decodes are bounded at 4096px by default:
+  a 24-megapixel photo is ~72 MB of RGB per buffer and on Android that crosses a
+  JNI RPC, which is the same wall `LaMaBackend` hit. `SwiftPWAImageIO` moved out
+  from behind the ONNX gate it used to sit under — it never had an ONNX
+  dependency, and `image.*` must not drag in the AI tier.
+
+  **Verified by driving a scaffolded app on real hardware, not just in tests.**
+  On a Galaxy Z Fold7 the end-to-end claim is demonstrated in one measurement:
+  the HEIC reports `naturalWidth: 0` in Android's `WebView`, and after
+  `image.transcode` the resulting 2,934-byte JPEG renders at 240 — the format
+  the engine refuses, converted by the decoder underneath it, displayed. The
+  same file to PNG is 42,000 bytes, which is how we know `format` genuinely
+  reaches `Bitmap.compress` rather than quietly writing PNG twice. On macOS a
+  real HEIC converts to a 240×240 baseline JPEG on disk (confirmed with `file`)
+  and renders from the page. On Linux the transcoder's suite runs against the
+  real stb build, where the unsupported-source path is meaningful rather than
+  skipped.
+
+  Docs: [`docs/javascript-api.md`](docs/javascript-api.md); proposal
+  [`docs/proposals/image-transcode.md`](docs/proposals/image-transcode.md).
+  Phase 1 of that proposal — Windows via WIC and Linux via libheif/libavif are
+  phases 2 and 3, and both are capability-reported rather than assumed.
+
 ### Fixed
 
 - **The same record now always crosses the bridge as the same bytes.** Two

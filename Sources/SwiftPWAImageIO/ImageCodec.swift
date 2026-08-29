@@ -17,6 +17,13 @@ package struct RawImage: Equatable {
     }
 }
 
+/// The encodings `ImageCodec.encode` can write. Deliberately just the two a
+/// webview is guaranteed to render — the whole reason a transcode exists.
+package enum ImageEncoding: String, Equatable {
+    case png
+    case jpeg
+}
+
 package enum ImageCodecError: Error, Equatable {
     case decodeFailed(String)
     case encodeFailed(String)

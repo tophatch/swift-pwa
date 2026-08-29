@@ -28,6 +28,14 @@
             throw ImageCodecError.encodeFailed("PNG encode is not implemented on this platform")
         }
 
+        static func capabilities() -> (decode: [String], encode: [String]) {
+            (decode: [], encode: [])
+        }
+
+        static func encode(_: RawImage, format _: ImageEncoding, quality _: Double?) async throws -> Data {
+            throw ImageCodecError.encodeFailed("image encode is not implemented on this platform")
+        }
+
         static func decodeRGBFit(path _: String?, dataBase64 _: String?, maxSide _: Int) async throws -> RawImage {
             throw ImageCodecError.decodeFailed("image decode is not implemented on this platform")
         }

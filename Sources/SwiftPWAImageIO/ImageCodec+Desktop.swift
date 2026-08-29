@@ -35,6 +35,36 @@
             return RawImage(pixels: gray, width: rgb.width, height: rgb.height, channels: 1)
         }
 
+        /// stb_image's format list is fixed at compile time, so this is a
+        /// constant rather than a probe — and it is the reason HEIC and AVIF
+        /// are unavailable on desktop: stb contains no code for either.
+        static func capabilities() -> (decode: [String], encode: [String]) {
+            (
+                // `CStbImage` compiles stb with STBI_ONLY_PNG + STBI_ONLY_JPEG,
+                // so this is two formats, not stb's full list.
+                decode: ["jpeg", "jpg", "png"],
+                encode: ["jpeg", "jpg", "png"]
+            )
+        }
+
+        static func encode(_ image: RawImage, format: ImageEncoding, quality: Double?) async throws -> Data {
+            guard format == .jpeg else { return try await encodePNG(image) }
+            guard image.channels == 3 else {
+                throw ImageCodecError.encodeFailed("encode expects RGB (3 channels), got \(image.channels)")
+            }
+            // stb takes quality as 1...100.
+            let q = Int32(min(max((quality ?? 0.85) * 100, 1), 100).rounded())
+            var outLen: Int32 = 0
+            let encoded: UnsafeMutablePointer<UInt8>? = image.pixels.withUnsafeBufferPointer { buffer in
+                swiftpwa_encode_jpg_rgb(buffer.baseAddress, Int32(image.width), Int32(image.height), q, &outLen)
+            }
+            guard let encoded, outLen > 0 else {
+                throw ImageCodecError.encodeFailed("stb_image_write returned no JPEG bytes")
+            }
+            defer { swiftpwa_free_png(encoded) }
+            return Data(bytes: encoded, count: Int(outLen))
+        }
+
         static func encodePNG(_ image: RawImage) async throws -> Data {
             guard image.channels == 3 else {
                 throw ImageCodecError.encodeFailed("encodePNG expects RGB (3 channels), got \(image.channels)")

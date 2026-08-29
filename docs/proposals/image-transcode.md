@@ -1,6 +1,8 @@
 # Proposal: Image transcode plugin (`image.*`)
 
-> **Status: proposed**, from adopter feedback. Prompted by a reader app that
+> **Status: phase 1 shipped** (see the `image.*` entry in
+> [CHANGELOG.md](../../CHANGELOG.md)); phases 2 and 3 remain. Originally from
+> adopter feedback. Prompted by a reader app that
 > wanted to serve a folder of iPhone photos and found HEIC unusable — see the
 > `## [Unreleased]` HEIC/AVIF entry in [CHANGELOG.md](../../CHANGELOG.md), which
 > records the measurements this proposal builds on.

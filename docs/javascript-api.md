@@ -33,6 +33,34 @@ The wire envelope (`{v, ep, kind, id, cmd, payload}`) is identical across
 WKWebView, WebKitGTK, and WebView2 — same JS code runs unchanged on
 every backend.
 
+## Record shape on the wire
+
+**Object keys arrive in alphabetical order, and the same value always encodes to
+the same bytes.** Swift's `JSONEncoder` does not preserve declaration order for
+synthesized `CodingKeys` — it emits them in hash order, which differs *per
+encode* and again per process — so before this was pinned, two `invoke` calls
+returning an identical record could put its fields in different orders, and
+`JSON.stringify(a) === JSON.stringify(b)` (the obvious way for a page to ask
+"did this change?") never matched. Every frame is now serialized with sorted
+keys at the single point all five backends deliver through, nested objects
+included.
+
+So this is safe:
+
+```js
+const before = JSON.stringify(await __SWIFT_PWA__.invoke('items.list'));
+// ...later...
+const after = JSON.stringify(await __SWIFT_PWA__.invoke('items.list'));
+if (before === after) { /* genuinely unchanged */ }
+```
+
+Two things this does *not* promise. Key **order** is fixed, but an optional
+Swift property that is `nil` is still omitted rather than sent as `null`, so a
+record's key **set** can differ between calls when a field goes from absent to
+present — a real change, correctly reflected. And ordering applies to what
+crosses the bridge; a plugin that hands you a pre-serialized string is
+responsible for its own contents.
+
 ## Navigating away
 
 Everything a page subscribes belongs to *that document*, not to the window.

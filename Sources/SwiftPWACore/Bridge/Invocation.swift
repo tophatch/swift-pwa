@@ -198,7 +198,15 @@ public enum Envelope {
             dict["kind"] = "end"
             dict["id"] = NSNumber(value: id)
         }
-        return try JSONSerialization.data(withJSONObject: dict, options: [.fragmentsAllowed])
+        // `.sortedKeys` is part of the wire contract: `JSONEncoder` does not
+        // preserve declaration order for synthesized `CodingKeys` and varies
+        // per encode, so identical records reached the page with their fields
+        // in different orders and `JSON.stringify(a) === JSON.stringify(b)`
+        // — the obvious way to ask "did this change?" — never matched. It is
+        // applied here, at the one choke point every backend delivers through,
+        // because this re-serialization would otherwise undo a sort done by
+        // the handler's own encoder. It sorts nested objects too.
+        return try JSONSerialization.data(withJSONObject: dict, options: [.fragmentsAllowed, .sortedKeys])
     }
 
     // MARK: - helpers

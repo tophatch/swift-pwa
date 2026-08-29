@@ -89,6 +89,20 @@ struct AssetProviderTests {
         #expect(try provider.resolve(#require(URL(string: "pwa://localhost/index.html"))) != nil)
     }
 
+    @Test("serves modern image formats with a type the webview will render")
+    func modernImageMimeTypes() {
+        func mime(_ name: String) -> String {
+            AssetProvider.mimeType(for: URL(fileURLWithPath: "/tmp/\(name)"))
+        }
+        // These fell through to `application/octet-stream`, which is a lie a
+        // save/download path and any non-sniffing consumer has to believe —
+        // and HEIC is what every iPhone photo in a served folder actually is.
+        #expect(mime("photo.heic") == "image/heic")
+        #expect(mime("PHOTO.HEIC") == "image/heic")
+        #expect(mime("photo.heif") == "image/heif")
+        #expect(mime("photo.avif") == "image/avif")
+    }
+
     @Test("a mounted root keeps its own traversal guard")
     func mountTraversalGuarded() throws {
         let bundle = try tempBundle()

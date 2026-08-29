@@ -9,6 +9,88 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **The same record now always crosses the bridge as the same bytes.** Two
+  `invoke` calls returning an identical value could serialize its keys in
+  different orders, so `JSON.stringify(a) === JSON.stringify(b)` — the obvious
+  way for a page to ask "did this change?" — never matched. Reported by an
+  adopter whose virtualized gallery reuses a card when its record is unchanged:
+  with the comparison always false, **every card on screen was rebuilt on every
+  re-list**, and a rebuilt card is a new `<img>` that decodes again. On an iPad,
+  re-listing every couple of seconds while covers generated, that read as the
+  whole grid flashing about once a second — a visual symptom whose cause was on
+  the wire.
+
+  The source is `JSONEncoder`, which does not preserve declaration order for
+  synthesized `CodingKeys`: it emits them in hash order, which varies per encode
+  *and* per process. Measured here on one struct: **6 distinct key orders across
+  200 encodes** with a single reused encoder, and a different order again in
+  each of six fresh processes.
+
+  The fix is `.sortedKeys` in `Envelope.encode`, not on the handler's encoder as
+  originally suggested — `Envelope.encode` parses each payload back to
+  `Any` and re-serializes it, so a sort done upstream was **undone** on the way
+  out. Applied at the envelope it is also the one choke point every backend
+  delivers through, so it covers unary replies, stream and session chunks, and
+  `events.*` pushes on all five platforms, nested objects included, in one line.
+  Pre-fix that path emitted **6 distinct frames** for one identical record
+  (the envelope's own keys varied too); it now emits one. Key *sets* still
+  differ when an optional Swift property is `nil`, since `JSONEncoder` omits it
+  rather than sending `null` — that is a real difference, correctly reflected.
+  Cost is a sort per object: on a deliberately large 685 KB reply carrying ~6,000
+  records, frame serialization goes 6.4 ms → 11.3 ms; on ordinary payloads it is
+  noise. The contract is now written down in
+  [`docs/javascript-api.md`](docs/javascript-api.md#record-shape-on-the-wire),
+  since "the same call returns the same object" is what everyone assumes.
+
+  **Verified by driving a scaffolded app on two engines against a control build
+  of the released CLI**, calling one typed command 400 times and comparing what
+  the page received: on `WKWebView` the control produced 3 distinct
+  serializations of an unchanged record (the `JSON.stringify` comparison false),
+  and the fixed build 1, with keys alphabetical; WebKitGTK 6.0 and WebView2
+  likewise each returned a single alphabetical order. A scaffolded app, not an
+  Example, since the Examples carry fallbacks the scaffold never emits.
+
+- **HEIC, HEIF and AVIF are served as themselves, not `application/octet-stream`.**
+  `AssetProvider.mimeType(for:)` had no case for any of the three, so a file the
+  platform decodes perfectly well was announced as an opaque byte stream — the
+  one thing a save path, a download, or any consumer that doesn't sniff has to
+  take at face value. HEIC is not exotic: it is what every photo an iPhone puts
+  in an iCloud Drive folder actually is. The Android file-dialog filter table
+  gained the same three, so a picker filtered on those extensions no longer
+  widens to `*/*`.
+
+  **This is a correctness fix, not a rendering fix, and the reporting adopter's
+  premise for holding the formats out of their importers does not survive
+  measurement.** Driving a scaffolded app serving real HEIC and AVIF files:
+  Apple's WebKit renders both *even under the octet-stream fallback* — `<img>`,
+  a blob URL, and `createImageBitmap` all decoded at full size on macOS and on
+  the iOS Simulator, before this change. It sniffs, so the wrong type cost
+  nothing there. WebKitGTK is the opposite: with the correct type served, both
+  formats fail on GTK4/WebKitGTK 6.0 — `<img>` `naturalWidth: 0`, blob URL
+  broken, `createImageBitmap` `InvalidStateError` — while PNG in the same page
+  renders fine. That is not the fixtures: neither WebKitGTK 6.0 nor 4.1 links
+  libheif or libavif in the builds the distros ship (they carry JPEG XL
+  instead), so those engines have no decoder to reach at any MIME type. On
+  WebView2, AVIF renders and HEIC does not (Chromium has no HEIC decoder). So
+  HEIC renders on exactly one of the three desktop engines — Apple's, where it
+  already worked before this change — and an app that must show iPhone photos
+  everywhere has to transcode on import.
+
+  Windows also turns out not to consult this table for bundle assets at all:
+  the bundle is served natively by `SetVirtualHostNameToFolderMapping`, so
+  Chromium picks the type from its own extension mapping (measured: `.avif` →
+  `image/avif`, `.heic` → `application/octet-stream`, whatever `AssetProvider`
+  says). The table governs the interception path — `serveDirectory` mounts, the
+  SPA fallback, single-file embedded assets — and every other backend end to
+  end. Both facts recorded in
+  [`docs/swift-api.md`](docs/swift-api.md#serving-extra-directories-content-packs).
+
+  `swift-pwa dev` had its **own second copy** of the MIME table, which had
+  already drifted — it was missing every audio and video type the bundled app
+  serves, so a `<video>` that streams from a built app would not stream under
+  `dev`. It now calls the same `AssetProvider.mimeType(for:)`, deleting the
+  copy rather than adding a third place to fix.
+
 - **A document's bridge state no longer outlives the document.** Navigating a window — a link, `location.assign`, a router doing a real page load — used to leave every stream, session, and in-flight `invoke` the old document opened still running natively. `BridgeRuntime.stop()` was the only thing that cancelled a window's subscriptions and it ran from `windowWillClose`, so nothing observed a navigation on *any* of the five backends. Reproduced here on a real `WKWebView`: with three documents loaded in turn, one `emit` was delivered **three times** — once per document ever loaded in that window — and both native tasks and `EventBus` sinks accumulated without bound. Reported by an adopter porting a desktop e-reader, who measured the same 1:1 growth.
 
   **The half that made it a correctness bug, not a leak:** `bridge.js` allocates correlation ids from a per-document counter that restarts at `1`, and `deliver()` routes an inbound frame by that id alone. A leaked stream keeps emitting frames stamped with the *old* document's id, which the *new* document resolves against its own table — so as soon as two pages allocate ids in a different order, a live channel is delivered to a handler for something else entirely. Not a race and it does not self-correct: same two pages, same misroute, every time. What it looked like in the adopter's app was a `prefs:changed` payload arriving at a `permission:denied` handler, which drew a "can't read this folder" warning naming no folder — for a channel nothing in the app could even emit — and read as a TCC bug for as long as the channel name was believed.

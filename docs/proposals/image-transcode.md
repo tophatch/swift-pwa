@@ -18,7 +18,7 @@ Measured by driving a scaffolded app serving real HEIC and AVIF files:
 | WKWebView (macOS, iOS) | renders | renders | `<img>`, blob URL and `createImageBitmap`, all at full size |
 | WebKitGTK 4.1 / 6.0 | **never** | **never** | `naturalWidth: 0`, blob URL broken, `InvalidStateError`; PNG fine in the same page |
 | WebView2 (Chromium) | **never** | renders | same page, same fixtures |
-| Android `WebView` | *unverified* | *unverified* | see [Open questions](#open-questions) |
+| Android `WebView` | **never** | renders | same page on a Galaxy Z Fold7 (Android 16) over CDP |
 
 WebKitGTK's failure is structural, not a codec-negotiation problem: neither the
 6.0 nor the 4.1 build that distros ship links `libheif` or `libavif` (they carry
@@ -40,7 +40,7 @@ per-platform decoders are not equal:
 | Platform | `ImageCodec` uses | Decodes HEIC/AVIF? |
 |---|---|---|
 | Apple | `CGImageSourceCreateWithURL` (ImageIO) | **yes, today** — measured, both at full size; ImageIO will *encode* both too |
-| Android | `BitmapFactory` over the Kotlin `image.decode` RPC | expected yes (HEIF API 28+, AVIF API 31+) — **unverified** |
+| Android | `BitmapFactory` over the Kotlin `image.decode` RPC | **yes, measured** — HEIC and AVIF both decoded 240×240 and re-encoded to PNG on a Fold7 |
 | Linux / Windows | vendored `stb_image` | **no** — stb does JPEG/PNG/TGA/BMP/PSD/GIF/HDR/PIC/PNM and contains no HEIC or AVIF code at all |
 
 The decoder an adopter needs is therefore already compiled into their Apple and
@@ -53,7 +53,7 @@ that the first kind gets closed.
 | Platform | Webview renders HEIC | Platform can decode HEIC | Via |
 |---|---|---|---|
 | Apple | yes | yes | ImageIO — already wired |
-| Android | unverified | expected, API-gated | BitmapFactory — already wired |
+| Android | no | **yes — measured** | BitmapFactory — already wired |
 | Windows | no | **yes — measured** | WIC, but see below |
 | Linux | no | not without a new dependency | `libheif`/`libavif` present on both test boxes, unlinked |
 
@@ -149,17 +149,25 @@ worked, and not on the three that need help.
 
 ## Open questions
 
-1. **Android's two unverified rows** — whether its `WebView` renders HEIC (expected
-   not: it is Chromium) and whether `BitmapFactory` decodes it on a modern device
-   (expected yes). Both blocked at the time of writing: the Fold7 has been offline
-   for three days and the Tab S10+ is LAN-only. These are the first thing to
-   settle, because if Android decode fails, phase 1 is Apple-only and the
-   phasing should be reconsidered.
+1. ~~Android's two unverified rows.~~ **Settled on a Galaxy Z Fold7 (Android 16,
+   API 36).** Its `WebView` renders AVIF and not HEIC, as Chromium does
+   elsewhere; `BitmapFactory` decodes **both**, and a full decode→encode round
+   trip through the existing `image.decode` / `image.encodePng` RPCs returned
+   240×240 and a valid PNG for each. So Android is exactly the shape this
+   proposal is for — the webview cannot show the file, the platform underneath
+   it can, and the plumbing is already generated into every app. Phase 1 covers
+   Apple *and* Android as hoped. (Verified by calling the RPCs straight from a
+   scaffolded app: `AndroidRPC` is public and the umbrella re-exports it, so no
+   framework change was needed to test it.)
 2. **Should `image.*` also expose plain resize / re-encode** for formats that
    already render? It falls out of the same code, and thumbnail generation is
    what an importing app is doing anyway — but it widens a capability surface
    beyond the problem that justified it.
-3. **Does the Windows bundle path even matter here?** On Windows the bundle is
+3. **Android does honour the MIME table** — `image/heic` and `image/avif` were
+   served correctly there (measured), unlike Windows, whose bundle bypasses it.
+   Not a question so much as a note for whoever writes phase 1's tests.
+
+4. **Does the Windows bundle path even matter here?** On Windows the bundle is
    served natively by `SetVirtualHostNameToFolderMapping`, so Chromium picks the
    Content-Type and our table is bypassed (measured). A transcode output written
    to a served directory sidesteps that entirely — but see the unrelated

@@ -71,10 +71,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   renders fine. That is not the fixtures: neither WebKitGTK 6.0 nor 4.1 links
   libheif or libavif in the builds the distros ship (they carry JPEG XL
   instead), so those engines have no decoder to reach at any MIME type. On
-  WebView2, AVIF renders and HEIC does not (Chromium has no HEIC decoder). So
-  HEIC renders on exactly one of the three desktop engines — Apple's, where it
-  already worked before this change — and an app that must show iPhone photos
-  everywhere has to transcode on import.
+  WebView2 and on Android's `WebView`, AVIF renders and HEIC does not (Chromium
+  has no HEIC decoder on either). So across all four engines HEIC renders on
+  exactly one — Apple's, where it already worked before this change — and an app
+  that must show iPhone photos everywhere has to transcode on import. Android
+  *does* honour this table (`image/heic` and `image/avif` served correctly on a
+  Fold7); Windows is the one backend that doesn't, see below.
 
   Windows also turns out not to consult this table for bundle assets at all:
   the bundle is served natively by `SetVirtualHostNameToFolderMapping`, so
@@ -93,9 +95,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Queued as a follow-up: [`docs/proposals/image-transcode.md`](docs/proposals/image-transcode.md),
   an `image.*` plugin that would let an app transcode on import. The decoder is
-  already there on two of the platforms — Apple's `ImageCodec` path is ImageIO,
-  which reads HEIC and AVIF today — so it is mostly a matter of exposing what a
-  build already contains rather than adding a codec.
+  already there on two of the platforms, both now measured: Apple's `ImageCodec`
+  path is ImageIO, which reads HEIC and AVIF today, and Android's is
+  `BitmapFactory`, which decoded both on a Fold7 and round-tripped them to PNG
+  through the `image.decode` / `image.encodePng` RPCs every generated app
+  already carries. So it is mostly a matter of exposing what a build already
+  contains rather than adding a codec.
 
 - **A document's bridge state no longer outlives the document.** Navigating a window — a link, `location.assign`, a router doing a real page load — used to leave every stream, session, and in-flight `invoke` the old document opened still running natively. `BridgeRuntime.stop()` was the only thing that cancelled a window's subscriptions and it ran from `windowWillClose`, so nothing observed a navigation on *any* of the five backends. Reproduced here on a real `WKWebView`: with three documents loaded in turn, one `emit` was delivered **three times** — once per document ever loaded in that window — and both native tasks and `EventBus` sinks accumulated without bound. Reported by an adopter porting a desktop e-reader, who measured the same 1:1 growth.
 

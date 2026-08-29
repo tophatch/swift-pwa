@@ -284,12 +284,16 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   | WKWebView (macOS, iOS) | renders | renders |
   | WebKitGTK 4.1 / 6.0 | never | never |
   | WebView2 (Chromium) | never | renders |
+  | Android `WebView` (Chromium) | never | renders |
 
   Apple's WebKit also *sniffs*, so both render there even when the declared type
   is wrong. WebKitGTK decodes neither at any type: the builds distros ship link
   no libheif or libavif (they carry JPEG XL instead), so there is no decoder to
-  reach. Chromium has AVIF but no HEIC. A picture-heavy app that must run
-  everywhere should transcode HEIC on import rather than rely on the webview.
+  reach. Chromium has AVIF but no HEIC, on both desktop and Android. A
+  picture-heavy app that must run everywhere should transcode HEIC on import
+  rather than rely on the webview — note that the *platform* underneath usually
+  can decode it even where its webview cannot, which is what
+  [image-transcode.md](proposals/image-transcode.md) proposes exposing.
 
 - **On Windows the bundle's content types come from Chromium, not this table.**
   The bundle is served natively by `SetVirtualHostNameToFolderMapping`, so

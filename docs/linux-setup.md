@@ -438,6 +438,20 @@ for the full matrix. Vendoring the GPU libs yourself uses
 
 ## Known limitations on Linux
 
+**HEIC / AVIF need libheif at runtime, and the webview can't render them at
+all.** WebKitGTK (both 4.1 and 6.0, as distros ship them) links no HEIF or AVIF
+decoder — verified with `ldd`, they carry JPEG XL instead — so an `<img>` for
+either format shows nothing, whatever `Content-Type` it is served with. The
+`image.*` plugin converts them instead, decoding through **libheif**, which is
+`dlopen`ed at runtime rather than linked: nothing to install to *build*, nothing
+bundled in the AppImage, and no build flag. On a machine with `libheif1` plus
+its codec plugins (`libheif-libde265` for HEIC, `libheif-aomdec` for AVIF — both
+present by default on the Ubuntu boxes this is tested on) the formats appear in
+`image.info` and decode; on a machine without, they are simply absent from that
+list and a conversion fails with `E_IMAGE_UNSUPPORTED` rather than producing a
+broken image. The vendored stb decoder behind `image.*` covers PNG and JPEG
+only, so libheif is the whole story for these two formats here.
+
 - **`ble.connect` to a dual-mode peripheral fails.** A Mac, a phone, anything
   that also speaks classic Bluetooth advertises over LE from the same address
   its classic radio uses, so BlueZ keeps a single device object carrying both

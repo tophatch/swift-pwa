@@ -1,7 +1,7 @@
 # Proposal: Image transcode plugin (`image.*`)
 
-> **Status: phases 1 and 2 shipped** (see the `image.*` entries in
-> [CHANGELOG.md](../../CHANGELOG.md)); phase 3 (Linux) remains. Originally from
+> **Status: shipped, all three phases** (see the `image.*` entries in
+> [CHANGELOG.md](../../CHANGELOG.md)). Originally from
 > adopter feedback. Prompted by a reader app that
 > wanted to serve a folder of iPhone photos and found HEIC unusable — see the
 > `## [Unreleased]` HEIC/AVIF entry in [CHANGELOG.md](../../CHANGELOG.md), which
@@ -118,11 +118,18 @@ dependency. Confirmed on a real box: WIC enumerated 66 decodable extensions
 converted JPEG rendered, and capability reporting is per-machine as required —
 the HEVC extension gates HEIC and is not assumed.
 
-**Phase 3 — Linux via `libheif`/`libavif`.** The only cell that is a real new
-system dependency. Best as an opt-in build flag in the shape of
-`ai.local_onnx_runtime` rather than a hard requirement, because it adds
-`-dev` packages at build time, AppImage bundling, and CI provisioning in several
-places — the `libsecret` change is the precedent for how much that costs.
+**Phase 3 — Linux via `libheif`. Shipped, and this section was wrong.** It
+predicted a real new system dependency and an opt-in build flag to contain the
+cost. Neither was needed: loading libheif with `dlopen` gives the capability
+with no `-dev` package, no link-time dependency, no bundling and no flag, and
+degrades to "format absent from `image.info`" on a machine without it. libheif
+covers *both* families (libde265 for HEIC, aomdec for AVIF), so `libavif` was
+never needed separately. Verified on both Linux boxes.
+
+The transferable lesson: when a capability is optional *and* the library is
+commonly present, `dlopen` converts what looks like a packaging problem into a
+runtime probe — which is the same shape the Windows cell already needed for a
+different reason.
 
 ## Verification
 

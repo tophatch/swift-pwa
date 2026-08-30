@@ -360,6 +360,7 @@ let package = Package(
             name: "SwiftPWAImageIO",
             dependencies: [
                 .target(name: "CStbImage", condition: .when(platforms: [.linux])),
+                .target(name: "CHeifShim", condition: .when(platforms: [.linux])),
                 .target(name: "CWicShim", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
             ],
@@ -381,6 +382,11 @@ let package = Package(
         .testTarget(
             name: "SwiftPWAImageTests",
             dependencies: ["SwiftPWAImage", "SwiftPWACore", "_SwiftPWATestSupport"],
+            // Real HEIC/AVIF files (1.4 KB each): the only way to check that a
+            // build which *claims* a format can actually decode it. Which
+            // platforms can is genuinely uneven, so the tests branch on
+            // `image.info` rather than assuming.
+            resources: [.copy("Fixtures")],
             swiftSettings: swiftSettings
         ),
         .target(
@@ -537,6 +543,20 @@ let package = Package(
         // `Microsoft.Web.WebView2` NuGet package; see
         // `docs/windows-setup.md` for how to put it on the link path.
 
+        // HEIC / AVIF on Linux via libheif, loaded with dlopen rather than
+        // linked: no libheif-dev at build time, no hard .so requirement in an
+        // AppImage, and `image.info` simply omits the formats on a machine
+        // without it. Linux is the only target with no system image codec, so
+        // this is the one place the capability has to be earned rather than
+        // inherited.
+        .target(
+            name: "CHeifShim",
+            path: "Sources/CHeifShim",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedLibrary("dl", .when(platforms: [.linux]))
+            ]
+        ),
         // Windows Imaging Component — the platform image codec behind
         // `image.*` on Windows, and the reason Windows can convert a HEIC its
         // own webview refuses to render. Plain Win32/COM headers from the

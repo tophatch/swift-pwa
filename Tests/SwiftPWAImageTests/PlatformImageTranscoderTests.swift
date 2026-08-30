@@ -76,6 +76,11 @@ struct PlatformImageTranscoderTests {
     @Test("reports what this build can read and write")
     func capabilities() async {
         let caps = await PlatformImageTranscoder().capabilities()
+        // Printed because the answer is per-platform and, on Windows and Linux,
+        // per-machine — and because a capability-branching test below passes
+        // either way, so this is how a run says which branch it took.
+        print("image.info decode: \(caps.decode.joined(separator: ","))")
+        print("image.info encode: \(caps.encode.joined(separator: ","))")
         // PNG is the one format every platform codec in this package handles.
         #expect(caps.decode.contains("png"))
         #expect(caps.encode.contains("png"))
@@ -140,6 +145,38 @@ struct PlatformImageTranscoderTests {
         // genuinely different bytes rather than PNG twice, which is the failure
         // mode if a `format` argument is quietly dropped somewhere.
         #expect(asJPEG.bytes != asPNG.bytes)
+    }
+
+    /// The load-bearing test for the whole plugin: **a build that claims a
+    /// format in `image.info` must actually decode it.** Which platforms can is
+    /// genuinely uneven — ImageIO always, `BitmapFactory` by API level, WIC only
+    /// with the right codec extension installed, libheif only when present with
+    /// its plugin — so this branches on the reported capability rather than
+    /// asserting one. Either way something is checked: that the claim holds, or
+    /// that the refusal is clean.
+    @Test("a format image.info claims is one it can really decode", arguments: ["heic", "avif"])
+    func claimedFormatsReallyDecode(_ ext: String) async throws {
+        let url = try #require(
+            Bundle.module.url(forResource: "Fixtures/sample", withExtension: ext),
+            "missing the \(ext) fixture"
+        )
+        let transcoder = PlatformImageTranscoder()
+        let claimed = await transcoder.capabilities().decode.contains(ext)
+
+        if claimed {
+            let result = try await transcoder.transcode(
+                ImageTranscodeRequest(path: url.path, format: .png)
+            )
+            #expect(result.width == 240)
+            #expect(result.height == 240)
+            #expect(result.bytes > 0)
+        } else {
+            // Not a gap in the test: on a machine with no decoder this is the
+            // behaviour that matters — a named refusal, not a broken image.
+            await #expect(throws: ImageTranscodeError.self) {
+                try await transcoder.transcode(ImageTranscodeRequest(path: url.path, format: .png))
+            }
+        }
     }
 
     @Test("rejects a request with neither or both sources")

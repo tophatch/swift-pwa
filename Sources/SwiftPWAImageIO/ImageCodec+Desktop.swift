@@ -1,4 +1,5 @@
 #if os(Linux)
+    import CHeifShim
     import CStbImage
     import Foundation
 
@@ -35,16 +36,21 @@
             return RawImage(pixels: gray, width: rgb.width, height: rgb.height, channels: 1)
         }
 
-        /// stb_image's format list is fixed at compile time, so this is a
-        /// constant rather than a probe — and it is the reason HEIC and AVIF
-        /// are unavailable on desktop: stb contains no code for either.
+        /// stb covers PNG and JPEG (it is compiled `STBI_ONLY_PNG` +
+        /// `STBI_ONLY_JPEG`); HEIC/HEIF/AVIF appear only when libheif is
+        /// present *and* its codec plugin for that family is installed, which
+        /// is asked at runtime rather than assumed — libheif without libde265
+        /// is a real configuration, and Linux is the one platform where this
+        /// capability is not inherited from the OS.
         static func capabilities() -> (decode: [String], encode: [String]) {
-            (
-                // `CStbImage` compiles stb with STBI_ONLY_PNG + STBI_ONLY_JPEG,
-                // so this is two formats, not stb's full list.
-                decode: ["jpeg", "jpg", "png"],
-                encode: ["jpeg", "jpg", "png"]
-            )
+            var decode = ["jpeg", "jpg", "png"]
+            if swiftpwa_heif_can_decode(0) != 0 {
+                decode.append(contentsOf: ["heic", "heif"])
+            }
+            if swiftpwa_heif_can_decode(1) != 0 {
+                decode.append("avif")
+            }
+            return (decode: decode.sorted(), encode: ["jpeg", "jpg", "png"])
         }
 
         static func encode(_ image: RawImage, format: ImageEncoding, quality: Double?) async throws -> Data {
@@ -118,6 +124,10 @@
                 )
             }
             guard let pixels, width > 0, height > 0 else {
+                // stb reads PNG and JPEG only. Anything else gets one more
+                // chance through libheif, which is where HEIC and AVIF are
+                // decoded when the machine has it.
+                if let heif = try decodeViaHeif(data) { return heif }
                 throw ImageCodecError.decodeFailed(path ?? "<in-memory image data>")
             }
             defer { swiftpwa_free_image(pixels) }
@@ -130,6 +140,28 @@
 
         /// Bilinear resample of a packed multi-channel `RawImage` (pixel-center
         /// mapping, align_corners = false — matching the Apple/Android paths).
+        /// Decode via libheif, or `nil` when it isn't available / can't read
+        /// this data — so the caller can report its own decode failure with the
+        /// original context rather than a misleading libheif one.
+        private static func decodeViaHeif(_ data: Data) throws -> RawImage? {
+            guard swiftpwa_heif_available() != 0 else { return nil }
+            var width: Int32 = 0
+            var height: Int32 = 0
+            var length: Int32 = 0
+            let pixels: UnsafeMutablePointer<UInt8>? = data.withUnsafeBytes { raw in
+                swiftpwa_heif_decode_rgb(
+                    raw.bindMemory(to: UInt8.self).baseAddress, Int32(data.count),
+                    &width, &height, &length
+                )
+            }
+            guard let pixels, width > 0, height > 0, length > 0 else { return nil }
+            defer { swiftpwa_heif_free(pixels) }
+            return RawImage(
+                pixels: Array(UnsafeBufferPointer(start: pixels, count: Int(length))),
+                width: Int(width), height: Int(height), channels: 3
+            )
+        }
+
         private static func resample(_ image: RawImage, toWidth: Int, height dstH: Int) -> RawImage {
             let c = image.channels, srcW = image.width, srcH = image.height
             let dstW = toWidth

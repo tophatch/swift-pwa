@@ -9,6 +9,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Linux decodes HEIC and AVIF through libheif — and it cost no new
+  dependency after all.** The last platform, and the one the proposal expected
+  to be expensive: Linux is the only target with no system image codec (the
+  vendored stb build reads PNG and JPEG only), and WebKitGTK links no HEIF or
+  AVIF decoder either, so a HEIC was undecodable at *both* layers there.
+
+  The plan was a `libheif-dev` build dependency, AppImage bundling, CI
+  provisioning in several places, and an opt-in build flag to keep all that off
+  everyone else's build. None of it was necessary: `CHeifShim` loads libheif
+  with **`dlopen`**. No `-dev` package, no link-time dependency, no hard
+  `libheif.so.1` requirement in an AppImage, and no flag to set — an app gains
+  the formats on a machine that has libheif and doesn't on one that doesn't.
+
+  That also makes the capability honest in the same way Windows already is:
+  libheif `dlopen`s its *own* codec plugins (libde265 for HEVC/HEIC, aomdec for
+  AV1/AVIF), so having libheif installed does not mean a given format decodes.
+  `capabilities()` calls `heif_have_decoder_for_format` per family, and
+  `image.info` reports exactly that.
+
+  The ABI is bound by hand from libheif 1.21's headers — opaque pointers,
+  scalars and one small by-value struct — read from the real headers
+  (`apt-get download libheif-dev` + `dpkg-deb -x`, no install needed) rather
+  than assumed, because a wrong struct layout here is a crash rather than an
+  error. An unresolvable symbol disables the feature instead. stb stays the
+  first decoder and libheif is tried only for what stb can't read, so the common
+  PNG/JPEG path is untouched.
+
+  **Verified on both Linux boxes** — Ubuntu 26.04 with GTK4/WebKitGTK 6.0 and
+  Ubuntu 25.10 with GTK3/WebKitGTK 4.1 — each reporting
+  `decode: avif,heic,heif,jpeg,jpg,png` and decoding real fixtures of both
+  formats at full size.
+
+  With this, `image.*` covers **all five platforms**, and the tests gained the
+  check that matters most for a capability-reporting API: a build that *claims*
+  a format in `image.info` must actually decode it, asserted against committed
+  1.4 KB HEIC and AVIF fixtures. On a platform that doesn't claim it, the same
+  test asserts the refusal is clean rather than a broken image.
+
 - **Windows decodes through WIC, so `image.*` can rescue a HEIC there too.**
   Phase 2 of the transcode proposal. Chromium has no HEIC decoder, so a WebView2
   app cannot display an iPhone photo — but the machine underneath usually can,

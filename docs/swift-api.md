@@ -213,7 +213,7 @@ then fetches the three ONNX files (default `MobileSAMModelSource.mobileSAM`,
 resumable + checksum-pinned via `ModelDownloader`) into `cacheDirectory` on
 first use. Image decode/resize is per-platform: CoreGraphics/ImageIO on Apple,
 a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` on Android, and a
-vendored stb_image + pure-Swift bilinear resize on Linux/Windows desktop (no
+vendored stb_image (plus libheif when present) + pure-Swift bilinear resize on Linux, WIC on Windows (no
 CoreGraphics there). Desktop links Microsoft's prebuilt CPU ONNX Runtime,
 staged into the AppImage / next to the `.exe` automatically (Linux needs Swift
 6.1+ to build the segmentation target). `MobileSAMBackend` also implements

@@ -1022,9 +1022,13 @@ Notes worth knowing before you use it:
   paid/OEM-supplied one) and simply isn't in `image.info`'s list when it isn't.
   That also buys TIFF, JPEG XL and camera RAW for free — a real box enumerated
   66 decodable extensions.
-- **This is not a rendering fix for Linux.** WebKitGTK links no HEIF or AVIF
-  decoder, and neither does the vendored `stb_image` build behind `image.*`
-  there, so a HEIC is undecodable at both layers. `image.info` will tell you so.
+- **Linux decodes HEIC/AVIF only if the machine has libheif.** WebKitGTK links
+  no HEIF or AVIF decoder, and the vendored `stb_image` behind `image.*` reads
+  PNG/JPEG only — so the formats come from **libheif**, which is `dlopen`ed at
+  runtime rather than linked. Nothing to install at build time and nothing
+  bundled; on a machine with libheif and its codec plugins (both test boxes had
+  them) HEIC and AVIF decode, and on one without they are simply missing from
+  `image.info`.
 
 ### `secrets.*` — secure secret storage
 

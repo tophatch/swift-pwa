@@ -672,6 +672,23 @@ rather than a bundle.
 
 ## Known limitations (Windows-specific)
 
+**HEIC decoding depends on a codec extension the machine may not have.** WebView2
+is Chromium, which has AVIF but no HEIC decoder, so an iPhone photo won't render
+in an `<img>`. The `image.*` plugin converts it using **WIC**, the platform
+codec — but what WIC can read is a property of the *machine*: HEIC is HEVC-coded
+and needs Microsoft's HEVC Video Extension (the paid / OEM-supplied one), and
+AVIF needs the AV1 Video Extension. `image.info` enumerates the decoders
+actually registered rather than claiming a fixed list, so **ask before relying
+on a format** — on the test box that list ran to 66 extensions including TIFF,
+JPEG XL and camera RAW, but a bare install can be much shorter. A format that
+isn't there fails with `E_IMAGE_UNSUPPORTED` rather than a broken image.
+
+Note also that this table governs only the interception path (`serveDirectory`
+mounts, the SPA fallback, single-file embedded assets): the **bundle** is served
+natively by `SetVirtualHostNameToFolderMapping`, so Chromium picks its own
+`Content-Type` for those files (measured: `.avif` → `image/avif`, `.heic` →
+`application/octet-stream`).
+
 - **`ble.*` in an MSIX build needs the `bluetooth` device capability**, which
   `swift-pwa build` emits from `permissions.device` in `pwa.json`. A portable
   `.exe` reaches the radio with no declaration at all, so an app that declares

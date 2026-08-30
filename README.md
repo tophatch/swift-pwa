@@ -2,7 +2,7 @@
 
 Build your app as a web frontend — HTML/CSS/JS, or React/Vue/Svelte — and ship it as a genuine native app on macOS, iOS, Linux, Windows, and Android, all from one Swift package. `swift-pwa` wraps each platform's own system webview in a thin native shell, so there's no bundled browser and downloads stay small (5–15 MB). It's Tauri or Wails for the Swift world, with on-device AI built in.
 
-> **Status:** [`v0.10.2`](https://github.com/tophatch/swift-pwa/releases/tag/v0.10.2) is the current release. macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class — one Swift package, one JS API, one CLI, five platforms from the same source.
+> **Status:** [`v0.10.3`](https://github.com/tophatch/swift-pwa/releases/tag/v0.10.3) is the current release. macOS 15+, iOS 18+, Linux (GTK3 / GTK4), Windows 11 (WebView2), and Android (API 28+) are all first-class — one Swift package, one JS API, one CLI, five platforms from the same source.
 >
 > This is young, fast-moving software (pre-1.0, under heavy active development) — expect rapid iteration and the occasional breaking change before 1.0. **Feedback, [issues](https://github.com/tophatch/swift-pwa/issues), and contributions are very welcome** — real-world usage reports are especially valuable at this stage.
 
@@ -21,7 +21,7 @@ If you want to ship a web frontend as a real native app on every platform, today
 `swift-pwa` matches Tauri on the fundamentals — a system webview, a 5–15 MB bundle, and all five of macOS, iOS, Linux, Windows, and Android from one source — and then wins on three fronts:
 
 - **You build in web; the native shell is a thin slice of Swift.** The whole frontend is the web stack you already know — plain HTML/CSS/JS or React/Vue/Svelte — and the wrapper is a small Swift package you rarely touch, shipped everywhere by one CLI (`.app`, `.ipa`, `.AppImage`, a portable Windows `.exe`, MSIX, and an Android project → APK / AAB) with one JS API (`__SWIFT_PWA__.invoke()`). Tauri and Wails wrap a web frontend too, but their shell is Rust or Go — a second systems language to pick up (or hire for) just to get a native window. Swift is a gentle on-ramp if you've ever opened an Xcode project, and for a team already on Apple platforms it's the stack, packages, and models you use every day, now driving Linux, Windows, and Android as well.
-- **The native capabilities a real app needs are built in.** A web page can't touch the filesystem, the system tray, or a fingerprint reader — swift-pwa hands them to your JS through opt-in plugins: local files and native Open/Save dialogs, secrets in the OS keychain (Keychain / Keystore / DPAPI / libsecret), biometric auth (Touch/Face ID, Windows Hello, Android fingerprint), clipboard, tray icons, native notifications, subprocesses, server-push events, and a CORS-free HTTP client — each adapted to every platform's conventions and App Store friendly (it bundles to store-ready `.ipa`, `.aab`, and MSIX artifacts, using the system webview and sanctioned native APIs). See the [feature matrix](#feature-matrix) for what lands where.
+- **The native capabilities a real app needs are built in.** A web page can't touch the filesystem, the system tray, or a fingerprint reader — swift-pwa hands them to your JS through opt-in plugins: local files and native Open/Save dialogs, secrets in the OS keychain (Keychain / Keystore / DPAPI / libsecret), biometric auth (Touch/Face ID, Windows Hello, Android fingerprint), clipboard, tray icons, native notifications, subprocesses, server-push events, and a CORS-free HTTP client — each adapted to every platform's conventions and App Store friendly (it bundles to store-ready `.ipa`, `.aab`, and MSIX artifacts, using the system webview and sanctioned native APIs). See the [feature matrix](#feature-matrix) for what lands where, and **image conversion** for photos the webview itself cannot display (`image.*` — HEIC renders in only one of the four engines, while the platform underneath usually decodes it).
 - **AI is a framework feature, not an integration you assemble.** The whole [`ai.*` API](#on-device--cloud-ai) — on-device text, image generation / editing / segmentation, and cloud and LAN providers — ships with the framework, cross-platform. In Electron / Tauri / Wails, local inference is DIY: bundle a sidecar, stand up a Python backend, or reach for a third-party plugin. The same goes for the other direction: your app can [offer its own commands to an AI agent](docs/tutorials/letting-an-agent-use-your-app.md) as MCP tools, behind a build-checked allowlist and your user's consent, without writing a server.
 
 |                   | **swift-pwa**       | Tauri    | Wails    | Electron |
@@ -302,6 +302,10 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (e) => { /* ... */
 // Server-push events (Swift → JS, all windows) and subprocesses (desktop):
 const off = __SWIFT_PWA__.on('library:changed', (payload) => { /* ... */ });
 __SWIFT_PWA__.subscribe('process.stream', { command: 'ffmpeg', args: [/* … */] }, (f) => { /* ... */ });
+
+// An iPhone photo the webview can't render, converted by the platform codec:
+const { path } = await __SWIFT_PWA__.invoke('image.transcode',
+    { path: picked, format: 'jpeg', maxSide: 2048, outputPath: cached });
 
 // Device memory — exact/uncapped RAM (beats navigator.deviceMemory, works on iOS):
 const { availableBytes } = await __SWIFT_PWA__.invoke('system.memory');

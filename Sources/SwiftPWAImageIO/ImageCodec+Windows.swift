@@ -1,20 +1,27 @@
-#if os(Linux)
-    import CStbImage
+#if os(Windows)
+    import CWicShim
     import Foundation
 
-    /// Linux `ImageCodec` — no CoreGraphics/ImageIO, so decode
-    /// goes through the vendored public-domain stb_image and encode through
-    /// stb_image_write (both in `CStbImage`); resize is a pure-Swift bilinear
-    /// resample (the same convention `SwiftPWASegmentation`'s
-    /// `DesktopImagePreprocessing` uses). Produces the same `RawImage` / PNG
-    /// bytes as the Apple path.
+    /// Windows `ImageCodec`, over the Windows Imaging Component — the platform
+    /// codec, and the counterpart to ImageIO on Apple and BitmapFactory on
+    /// Android. It replaced the vendored stb_image here (which stays on Linux,
+    /// the one target with no system codec) because WIC reads far more than
+    /// stb's PNG + JPEG, and because HEIC is the whole point: Chromium has no
+    /// HEIC decoder, so a WebView2 app cannot display an iPhone photo, but the
+    /// machine underneath usually can.
+    ///
+    /// **What it can read is a property of the machine, not the build.** HEIC
+    /// needs the HEVC codec extension — the paid/OEM-supplied one — and AVIF
+    /// needs the AV1 extension, so ``capabilities()`` enumerates the registered
+    /// decoders instead of claiming a fixed list. Never advertise HEIC on
+    /// Windows statically; ask.
     package extension ImageCodec {
         static func decodeRGB(
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
         ) async throws -> RawImage {
-            let native = try decodeNativeRGB(path: path, dataBase64: dataBase64)
+            let native = try decodeNative(path: path, dataBase64: dataBase64, maxSide: 0)
             guard let size, size.width != native.width || size.height != native.height else { return native }
             return resample(native, toWidth: size.width, height: size.height)
         }
@@ -35,59 +42,51 @@
             return RawImage(pixels: gray, width: rgb.width, height: rgb.height, channels: 1)
         }
 
-        /// stb_image's format list is fixed at compile time, so this is a
-        /// constant rather than a probe — and it is the reason HEIC and AVIF
-        /// are unavailable on desktop: stb contains no code for either.
+        /// Asks WIC which decoders are registered right now. On a machine
+        /// without the HEVC extension this simply won't contain `heic`, which
+        /// is the honest answer and what `image.info` reports to the page.
         static func capabilities() -> (decode: [String], encode: [String]) {
-            (
-                // `CStbImage` compiles stb with STBI_ONLY_PNG + STBI_ONLY_JPEG,
-                // so this is two formats, not stb's full list.
-                decode: ["jpeg", "jpg", "png"],
-                encode: ["jpeg", "jpg", "png"]
-            )
+            var buffer = [CChar](repeating: 0, count: 2048)
+            let written = swiftpwa_wic_decode_extensions(&buffer, Int32(buffer.count))
+            guard written > 0 else {
+                // WIC unavailable (or COM refused): claim only what the encoder
+                // side is built on rather than inventing a decode list.
+                return (decode: [], encode: ["png", "jpeg", "jpg"])
+            }
+            let joined = String(cString: buffer)
+            let decode = joined.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            return (decode: decode, encode: ["png", "jpeg", "jpg"])
         }
 
         static func encode(_ image: RawImage, format: ImageEncoding, quality: Double?) async throws -> Data {
-            guard format == .jpeg else { return try await encodePNG(image) }
             guard image.channels == 3 else {
                 throw ImageCodecError.encodeFailed("encode expects RGB (3 channels), got \(image.channels)")
             }
-            // stb takes quality as 1...100.
-            let q = Int32(min(max((quality ?? 0.85) * 100, 1), 100).rounded())
+            let isJPEG = format == .jpeg
+            let clamped = Int32(min(max((quality ?? 0.85) * 100, 1), 100).rounded())
             var outLen: Int32 = 0
             let encoded: UnsafeMutablePointer<UInt8>? = image.pixels.withUnsafeBufferPointer { buffer in
-                swiftpwa_encode_jpg_rgb(buffer.baseAddress, Int32(image.width), Int32(image.height), q, &outLen)
+                swiftpwa_wic_encode_rgb(
+                    buffer.baseAddress, Int32(image.width), Int32(image.height),
+                    isJPEG ? 1 : 0, clamped, &outLen
+                )
             }
             guard let encoded, outLen > 0 else {
-                throw ImageCodecError.encodeFailed("stb_image_write returned no JPEG bytes")
+                throw ImageCodecError.encodeFailed("WIC returned no \(format.rawValue) bytes")
             }
-            defer { swiftpwa_free_png(encoded) }
+            defer { swiftpwa_wic_free(encoded) }
             return Data(bytes: encoded, count: Int(outLen))
         }
 
         static func encodePNG(_ image: RawImage) async throws -> Data {
-            guard image.channels == 3 else {
-                throw ImageCodecError.encodeFailed("encodePNG expects RGB (3 channels), got \(image.channels)")
-            }
-            var outLen: Int32 = 0
-            let encoded: UnsafeMutablePointer<UInt8>? = image.pixels.withUnsafeBufferPointer { buffer in
-                swiftpwa_encode_png_rgb(buffer.baseAddress, Int32(image.width), Int32(image.height), &outLen)
-            }
-            guard let encoded, outLen > 0 else {
-                throw ImageCodecError.encodeFailed("stb_image_write returned no PNG bytes")
-            }
-            defer { swiftpwa_free_png(encoded) }
-            return Data(bytes: encoded, count: Int(outLen))
+            try await encode(image, format: .png, quality: nil)
         }
 
         static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
-            let native = try decodeNativeRGB(path: path, dataBase64: dataBase64)
-            let longest = max(native.width, native.height)
-            guard maxSide > 0, longest > maxSide else { return native }
-            let scale = Double(maxSide) / Double(longest)
-            let w = max(1, Int((Double(native.width) * scale).rounded()))
-            let h = max(1, Int((Double(native.height) * scale).rounded()))
-            return resample(native, toWidth: w, height: h)
+            // WIC scales during decode, so a large photo never exists at full
+            // size in memory — unlike the resample-after-decode path the other
+            // desktop backend has to take.
+            try decodeNative(path: path, dataBase64: dataBase64, maxSide: maxSide)
         }
 
         static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
@@ -95,7 +94,9 @@
             return resample(image, toWidth: width, height: height)
         }
 
-        private static func decodeNativeRGB(path: String?, dataBase64: String?) throws -> RawImage {
+        // MARK: - Internals
+
+        private static func decodeNative(path: String?, dataBase64: String?, maxSide: Int) throws -> RawImage {
             let data: Data
             if let path {
                 guard let contents = FileManager.default.contents(atPath: path) else {
@@ -110,26 +111,28 @@
 
             var width: Int32 = 0
             var height: Int32 = 0
-            // stb returns a freshly malloc'd RGB8 buffer (alpha dropped),
-            // independent of `data`'s storage — safe to copy out then free.
+            var length: Int32 = 0
             let pixels: UnsafeMutablePointer<UInt8>? = data.withUnsafeBytes { raw in
-                swiftpwa_decode_image_rgb(
-                    raw.bindMemory(to: UInt8.self).baseAddress, Int32(data.count), &width, &height
+                swiftpwa_wic_decode_rgb(
+                    raw.bindMemory(to: UInt8.self).baseAddress, Int32(data.count),
+                    Int32(max(0, maxSide)), &width, &height, &length
                 )
             }
-            guard let pixels, width > 0, height > 0 else {
-                throw ImageCodecError.decodeFailed(path ?? "<in-memory image data>")
+            guard let pixels, width > 0, height > 0, length > 0 else {
+                // The common cause is a container this machine has no decoder
+                // for (HEIC without the HEVC extension), not a corrupt file.
+                throw ImageCodecError.decodeFailed(
+                    "\(path ?? "<in-memory image data>") — no registered WIC decoder, or the data is not an image"
+                )
             }
-            defer { swiftpwa_free_image(pixels) }
+            defer { swiftpwa_wic_free(pixels) }
             let w = Int(width), h = Int(height)
             return RawImage(
-                pixels: Array(UnsafeBufferPointer(start: pixels, count: w * h * 3)),
+                pixels: Array(UnsafeBufferPointer(start: pixels, count: Int(length))),
                 width: w, height: h, channels: 3
             )
         }
 
-        /// Bilinear resample of a packed multi-channel `RawImage` (pixel-center
-        /// mapping, align_corners = false — matching the Apple/Android paths).
         private static func resample(_ image: RawImage, toWidth: Int, height dstH: Int) -> RawImage {
             let c = image.channels, srcW = image.width, srcH = image.height
             let dstW = toWidth

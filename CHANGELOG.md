@@ -9,6 +9,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Windows decodes through WIC, so `image.*` can rescue a HEIC there too.**
+  Phase 2 of the transcode proposal. Chromium has no HEIC decoder, so a WebView2
+  app cannot display an iPhone photo — but the machine underneath usually can,
+  through the Windows Imaging Component. Windows now gets the same
+  platform-codec treatment Apple (ImageIO) and Android (`BitmapFactory`) already
+  had, via a new `CWicShim`: decode-to-RGB that **scales during decode** (so a
+  24-megapixel photo never exists at full size in memory, unlike the
+  resample-after-decode path), PNG/JPEG encode, and a decoder enumeration. Plain
+  Win32/COM headers from the Windows SDK — unlike `CWebView2Shim` it needs no
+  NuGet package, so it builds on any Swift-on-Windows install, and every entry
+  point catches its own exceptions because a C++ exception unwinding across a C
+  ABI into Swift kills the process with no message.
+
+  **What Windows can read is a property of the machine, not the build**, so
+  `capabilities()` enumerates the registered decoders at runtime rather than
+  claiming a list: HEIC needs the HEVC codec extension (the paid/OEM-supplied
+  one) and AVIF needs the AV1 extension. On a machine without them, `heic`
+  simply isn't in `image.info` — which is the honest answer, and why Windows
+  must never advertise the format statically.
+
+  `stb_image` stays on Linux, now the only target with no system codec, and
+  `ImageCodec+Desktop` is narrowed to `os(Linux)` to match. Windows gains a lot
+  more than HEIC from the switch: the test box enumerated **66 decodable
+  extensions** — TIFF, JPEG XL, and camera RAW from most manufacturers — where
+  stb was compiled for PNG and JPEG only.
+
+  **Verified on a real x64 box**, and the claim lands in one measurement: a HEIC
+  reports `naturalWidth: 0` in WebView2, and the 3,444-byte JPEG that
+  `image.transcode` returns renders at 240 (the same image as PNG is 35,794
+  bytes, which is how we know `format` reaches the encoder). The 5 new codec
+  tests live in `SwiftPWAWindowsTestRunner` — swift-testing cannot discover
+  tests on Windows, so that is the only place this path runs at all — and all 17
+  cases pass there.
+
 - **`image.*` — convert an image the webview can't display.** The webview is
   routinely the least capable image decoder on the device. Measured by driving a
   real app on each of the four engines this project ships on, **HEIC renders in

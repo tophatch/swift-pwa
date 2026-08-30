@@ -359,7 +359,8 @@ let package = Package(
         .target(
             name: "SwiftPWAImageIO",
             dependencies: [
-                .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
+                .target(name: "CStbImage", condition: .when(platforms: [.linux])),
+                .target(name: "CWicShim", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
             ],
             swiftSettings: swiftSettings
@@ -536,6 +537,28 @@ let package = Package(
         // `Microsoft.Web.WebView2` NuGet package; see
         // `docs/windows-setup.md` for how to put it on the link path.
 
+        // Windows Imaging Component — the platform image codec behind
+        // `image.*` on Windows, and the reason Windows can convert a HEIC its
+        // own webview refuses to render. Plain Win32/COM headers from the
+        // Windows SDK: unlike `CWebView2Shim` this needs no NuGet package, so
+        // it builds on any Swift-on-Windows install.
+        .target(
+            name: "CWicShim",
+            path: "Sources/CWicShim",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                // windows.h's min/max macros break std::max at the use site.
+                .define("NOMINMAX", .when(platforms: [.windows])),
+                .define("UNICODE", .when(platforms: [.windows])),
+                .define("_UNICODE", .when(platforms: [.windows])),
+                .define("WIN32_LEAN_AND_MEAN", .when(platforms: [.windows]))
+            ],
+            linkerSettings: [
+                .linkedLibrary("windowscodecs", .when(platforms: [.windows])),
+                .linkedLibrary("ole32", .when(platforms: [.windows])),
+                .linkedLibrary("oleaut32", .when(platforms: [.windows]))
+            ]
+        ),
         .target(
             name: "CWebView2Shim",
             path: "Sources/CWebView2Shim",
@@ -659,6 +682,10 @@ let package = Package(
             name: "SwiftPWAWindowsTestRunner",
             dependencies: [
                 .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
+                // The WIC codec behind `image.*` — these are the only tests
+                // that run it, since swift-testing can't discover on Windows.
+                .target(name: "SwiftPWAImage", condition: .when(platforms: [.windows])),
+                .target(name: "SwiftPWAImageIO", condition: .when(platforms: [.windows])),
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows]))
             ],
             swiftSettings: swiftSettings

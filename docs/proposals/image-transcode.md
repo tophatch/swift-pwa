@@ -1,7 +1,7 @@
 # Proposal: Image transcode plugin (`image.*`)
 
-> **Status: phase 1 shipped** (see the `image.*` entry in
-> [CHANGELOG.md](../../CHANGELOG.md)); phases 2 and 3 remain. Originally from
+> **Status: phases 1 and 2 shipped** (see the `image.*` entries in
+> [CHANGELOG.md](../../CHANGELOG.md)); phase 3 (Linux) remains. Originally from
 > adopter feedback. Prompted by a reader app that
 > wanted to serve a folder of iPhone photos and found HEIC unusable — see the
 > `## [Unreleased]` HEIC/AVIF entry in [CHANGELOG.md](../../CHANGELOG.md), which
@@ -112,8 +112,11 @@ Desktop returns `E_UNSUPPORTED` for HEIC/AVIF honestly.
 This alone covers the reporting adopter's deployment (iPad) and Android — most of
 the value for a fraction of the work.
 
-**Phase 2 — Windows via WIC.** An in-box COM API, so no third-party dependency,
-but a new decoder path in the shim and genuine per-machine capability reporting.
+**Phase 2 — Windows via WIC. Shipped.** An in-box COM API, so no third-party
+dependency. Confirmed on a real box: WIC enumerated 66 decodable extensions
+(HEIC, AVIF, JPEG XL, TIFF, camera RAW), WebView2 refused a HEIC while the
+converted JPEG rendered, and capability reporting is per-machine as required —
+the HEVC extension gates HEIC and is not assumed.
 
 **Phase 3 — Linux via `libheif`/`libavif`.** The only cell that is a real new
 system dependency. Best as an opt-in build flag in the shape of

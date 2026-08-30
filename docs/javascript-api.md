@@ -1017,9 +1017,14 @@ Notes worth knowing before you use it:
 - A format this build can't read or write throws **`E_IMAGE_UNSUPPORTED`**;
   anything else that fails throws `E_IMAGE`. The two are distinct because the
   first is a question `image.info` could have answered first.
+- **Windows reads what the machine has, not what the build has.** It goes
+  through WIC, so HEIC works when the HEVC codec extension is installed (the
+  paid/OEM-supplied one) and simply isn't in `image.info`'s list when it isn't.
+  That also buys TIFF, JPEG XL and camera RAW for free — a real box enumerated
+  66 decodable extensions.
 - **This is not a rendering fix for Linux.** WebKitGTK links no HEIF or AVIF
-  decoder, and neither does the desktop `stb_image` build behind `image.*`, so
-  there a HEIC is undecodable at both layers. `image.info` will tell you so.
+  decoder, and neither does the vendored `stb_image` build behind `image.*`
+  there, so a HEIC is undecodable at both layers. `image.info` will tell you so.
 
 ### `secrets.*` — secure secret storage
 

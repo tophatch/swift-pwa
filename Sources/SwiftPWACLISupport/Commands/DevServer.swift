@@ -135,9 +135,9 @@ import SwiftPWACore
                 writeAll(fd, Array("HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\nConnection: close\r\n\r\n".utf8))
                 return
             }
-            let mime = Self.mimeType(for: fileURL.pathExtension.lowercased())
+            let mime = AssetProvider.mimeType(for: fileURL)
             var body = [UInt8](data)
-            if mime == "text/html" {
+            if mime.hasPrefix("text/html") {
                 body = injectLiveReload(into: body)
             }
             var header = "HTTP/1.1 200 OK\r\n"
@@ -218,27 +218,6 @@ import SwiftPWACore
         }
 
         private static let livereloadPath = "/__swift_pwa_livereload__"
-
-        private static func mimeType(for ext: String) -> String {
-            switch ext {
-            case "html", "htm": "text/html"
-            case "js", "mjs": "text/javascript"
-            case "css": "text/css"
-            case "json": "application/json"
-            case "wasm": "application/wasm"
-            case "svg": "image/svg+xml"
-            case "png": "image/png"
-            case "jpg", "jpeg": "image/jpeg"
-            case "gif": "image/gif"
-            case "webp": "image/webp"
-            case "ico": "image/x-icon"
-            case "woff": "font/woff"
-            case "woff2": "font/woff2"
-            case "ttf": "font/ttf"
-            case "map": "application/json"
-            default: "application/octet-stream"
-            }
-        }
     }
 
     enum DevServerError: Error, CustomStringConvertible {

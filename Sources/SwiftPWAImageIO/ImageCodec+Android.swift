@@ -6,12 +6,12 @@
     /// SAF `content://` URIs, so decode/encode run Kotlin-side over the same
     /// generic JNI RPC bridge `SwiftPWASegmentation`'s `AndroidImagePreprocessing`
     /// uses: `image.decode` (BitmapFactory decode + optional exact resize →
-    /// raw RGB/gray bytes) and `image.encodePng` (Bitmap.compress) — both
+    /// raw RGB/gray bytes) and `image.encode` (Bitmap.compress) — both
     /// generated into the app's Kotlin `MainActivity` (see AndroidTemplates.swift).
     /// This is why the whole `ImageCodec` surface is `async`. `path` may be a
     /// plain path or a `content://` URI (Kotlin branches on the scheme).
-    extension ImageCodec {
-        package static func decodeRGB(
+    package extension ImageCodec {
+        static func decodeRGB(
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
@@ -19,7 +19,7 @@
             try await decode(path: path, dataBase64: dataBase64, size: size, maxSide: nil, channels: 3)
         }
 
-        package static func decodeGray(
+        static func decodeGray(
             path: String?,
             dataBase64: String?,
             size: (width: Int, height: Int)?
@@ -27,22 +27,46 @@
             try await decode(path: path, dataBase64: dataBase64, size: size, maxSide: nil, channels: 1)
         }
 
-        package static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
+        static func decodeRGBFit(path: String?, dataBase64: String?, maxSide: Int) async throws -> RawImage {
             try await decode(path: path, dataBase64: dataBase64, size: nil, maxSide: maxSide, channels: 3)
         }
 
-        package static func encodePNG(_ image: RawImage) async throws -> Data {
+        static func encodePNG(_ image: RawImage) async throws -> Data {
+            try await encode(image, format: .png, quality: nil)
+        }
+
+        /// What BitmapFactory on *this device* can read — an API-level fact
+        /// (HEIF needs 28, AVIF needs 31) and `minSdk` can be as low as 28, so
+        /// it is asked rather than assumed.
+        static func capabilities() async -> (decode: [String], encode: [String]) {
+            struct Caps: Decodable {
+                let decode: [String]
+                let encode: [String]
+            }
+            guard let caps = try? await AndroidRPC.call(
+                "image.capabilities", EmptyRPCArgs(), as: Caps.self
+            ) else {
+                // An older generated MainActivity has no such handler. Report
+                // only what has been true since minSdk rather than guessing up.
+                return (decode: ["png", "jpeg", "jpg"], encode: ["png", "jpeg", "jpg"])
+            }
+            return (decode: caps.decode, encode: caps.encode)
+        }
+
+        static func encode(_ image: RawImage, format: ImageEncoding, quality: Double?) async throws -> Data {
             guard image.channels == 3 else {
-                throw ImageCodecError.encodeFailed("encodePNG expects RGB (3 channels), got \(image.channels)")
+                throw ImageCodecError.encodeFailed("encode expects RGB (3 channels), got \(image.channels)")
             }
             let result: EncodeResult
             do {
                 result = try await AndroidRPC.call(
-                    "image.encodePng",
+                    "image.encode",
                     EncodeArgs(
                         rgbBase64: Data(image.pixels).base64EncodedString(),
                         width: image.width,
-                        height: image.height
+                        height: image.height,
+                        format: format.rawValue,
+                        quality: quality
                     ),
                     as: EncodeResult.self
                 )
@@ -55,7 +79,7 @@
             return data
         }
 
-        package static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
+        static func resizeRGB(_ image: RawImage, toWidth width: Int, height: Int) async throws -> RawImage {
             if image.width == width, image.height == height { return image }
             // Round-trip through the encode + resizing-decode RPCs (there's no
             // dedicated resize method; the decode path already resizes).
@@ -112,7 +136,11 @@
             let rgbBase64: String
             let width: Int
             let height: Int
+            let format: String
+            let quality: Double?
         }
+
+        private struct EmptyRPCArgs: Encodable {}
 
         private struct EncodeResult: Decodable {
             let dataBase64: String

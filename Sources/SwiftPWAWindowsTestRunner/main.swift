@@ -22,6 +22,8 @@
     // `@testable` (`verifyEd25519`, `verifySignature`, `currentExecutablePath`,
     // `msixIdentityName`, `applicationID`) are now `package`-access on
     // `WindowsUpdater` instead.
+    import SwiftPWAImage
+    import SwiftPWAImageIO
     import SwiftPWAWindows
 
     // MARK: - Harness
@@ -277,6 +279,128 @@
 
     // MARK: - Entry point
 
+    // MARK: - image.* (WIC)
+
+    //
+    // The Windows half of the `image.*` plugin. These exercise the real WIC
+    // codec, so they are the only place its decode/encode path runs at all —
+    // the swift-testing suites that cover it elsewhere cannot run on Windows.
+
+    /// A tiny PNG, built by hand so the runner needs no fixture file.
+    func makeTestPNG(width: Int, height: Int) -> Data {
+        func crc32(_ bytes: [UInt8]) -> UInt32 {
+            var table = [UInt32](repeating: 0, count: 256)
+            for i in 0 ..< 256 {
+                var c = UInt32(i)
+                for _ in 0 ..< 8 { c = (c & 1) != 0 ? 0xEDB8_8320 ^ (c >> 1) : c >> 1 }
+                table[i] = c
+            }
+            var c: UInt32 = 0xFFFF_FFFF
+            for b in bytes { c = table[Int((c ^ UInt32(b)) & 0xFF)] ^ (c >> 8) }
+            return c ^ 0xFFFF_FFFF
+        }
+        func chunk(_ tag: String, _ payload: [UInt8]) -> [UInt8] {
+            var out = withUnsafeBytes(of: UInt32(payload.count).bigEndian) { [UInt8]($0) }
+            let body = [UInt8](tag.utf8) + payload
+            out += body
+            out += withUnsafeBytes(of: crc32(body).bigEndian) { [UInt8]($0) }
+            return out
+        }
+        var raw: [UInt8] = []
+        for y in 0 ..< height {
+            raw.append(0)
+            for x in 0 ..< width {
+                raw.append(UInt8((x * 255) / max(width - 1, 1)))
+                raw.append(UInt8((y * 255) / max(height - 1, 1)))
+                raw.append(120)
+            }
+        }
+        var deflated: [UInt8] = [0x78, 0x01]
+        var offset = 0
+        while offset < raw.count {
+            let size = min(65535, raw.count - offset)
+            deflated.append(offset + size >= raw.count ? 1 : 0)
+            deflated.append(UInt8(size & 0xFF))
+            deflated.append(UInt8((size >> 8) & 0xFF))
+            deflated.append(UInt8(~size & 0xFF))
+            deflated.append(UInt8((~size >> 8) & 0xFF))
+            deflated += raw[offset ..< offset + size]
+            offset += size
+        }
+        var s1: UInt32 = 1, s2: UInt32 = 0
+        for b in raw {
+            s1 = (s1 + UInt32(b)) % 65521
+            s2 = (s2 + s1) % 65521
+        }
+        deflated += withUnsafeBytes(of: ((s2 << 16) | s1).bigEndian) { [UInt8]($0) }
+        var ihdr = withUnsafeBytes(of: UInt32(width).bigEndian) { [UInt8]($0) }
+        ihdr += withUnsafeBytes(of: UInt32(height).bigEndian) { [UInt8]($0) }
+        ihdr += [8, 2, 0, 0, 0]
+        let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
+        return Data(signature + chunk("IHDR", ihdr) + chunk("IDAT", deflated) + chunk("IEND", []))
+    }
+
+    func wicReportsRegisteredDecoders() async throws {
+        let caps = await PlatformImageTranscoder().capabilities()
+        // WIC always ships PNG/JPEG decoders; anything beyond that is a
+        // property of the machine and deliberately not asserted.
+        try expect(caps.decode.contains("png"), "expected png in \(caps.decode)")
+        try expect(
+            caps.decode.contains("jpg") || caps.decode.contains("jpeg"),
+            "expected jpeg in \(caps.decode)"
+        )
+        try expect(caps.encode.contains("png"), "expected png encode")
+        try expect(caps.encode.contains("jpeg"), "expected jpeg encode")
+        print("      WIC decodes: \(caps.decode.joined(separator: ","))")
+    }
+
+    func wicRoundTripsPNG() async throws {
+        let png = makeTestPNG(width: 40, height: 24)
+        let result = try await PlatformImageTranscoder().transcode(
+            ImageTranscodeRequest(dataBase64: png.base64EncodedString(), format: .png)
+        )
+        try expect(result.width == 40, "expected width 40, got \(result.width)")
+        try expect(result.height == 24, "expected height 24, got \(result.height)")
+        try expect(result.bytes > 0, "expected bytes")
+        try expect(result.dataBase64 != nil, "expected inline data")
+    }
+
+    func wicEncodesJPEGDistinctFromPNG() async throws {
+        let png = makeTestPNG(width: 96, height: 96)
+        let transcoder = PlatformImageTranscoder()
+        let asPNG = try await transcoder.transcode(
+            ImageTranscodeRequest(dataBase64: png.base64EncodedString(), format: .png)
+        )
+        let asJPEG = try await transcoder.transcode(
+            ImageTranscodeRequest(dataBase64: png.base64EncodedString(), format: .jpeg, quality: 0.6)
+        )
+        try expect(asJPEG.bytes > 0, "expected jpeg bytes")
+        // Different bytes is the point: it proves `format` reached the encoder
+        // rather than being dropped and writing PNG twice.
+        try expect(asJPEG.bytes != asPNG.bytes, "jpeg and png byte counts were identical")
+    }
+
+    func wicScalesDuringDecode() async throws {
+        let png = makeTestPNG(width: 200, height: 100)
+        let result = try await PlatformImageTranscoder().transcode(
+            ImageTranscodeRequest(dataBase64: png.base64EncodedString(), format: .png, maxSide: 50)
+        )
+        try expect(result.width == 50, "expected width 50, got \(result.width)")
+        try expect(result.height == 25, "expected height 25, got \(result.height)")
+    }
+
+    func wicRejectsNonImageData() async throws {
+        do {
+            _ = try await PlatformImageTranscoder().transcode(
+                ImageTranscodeRequest(dataBase64: Data([1, 2, 3, 4]).base64EncodedString(), format: .png)
+            )
+            throw TestFailure(message: "expected a decode failure for non-image bytes")
+        } catch is ImageTranscodeError {
+            // Expected — and importantly it is an error, not a crash: a C++
+            // exception crossing the shim's C ABI would take the process down.
+        }
+    }
+
     let cases: [(String, () async throws -> Void)] = [
         ("installAndRelaunch errors when no update has been staged", installAndRelaunchWithoutStagedUpdate),
         ("currentExecutablePath honours the explicit override", currentExecutablePathOverride),
@@ -289,7 +413,12 @@
         ("Portable mode requires a configured public key", portableRequiresKey),
         ("MSIX identity defaults to nil when not supplied", msixIdentityDefaultsNil),
         ("MSIX identity round-trips through the constructor", msixIdentityRoundtrip),
-        ("verifyEd25519 accepts minisign-format inputs", verifyEd25519MinisignInputs)
+        ("verifyEd25519 accepts minisign-format inputs", verifyEd25519MinisignInputs),
+        ("WIC reports the decoders registered on this machine", wicReportsRegisteredDecoders),
+        ("image.transcode round-trips a PNG through WIC", wicRoundTripsPNG),
+        ("WIC JPEG output differs from PNG (format is not dropped)", wicEncodesJPEGDistinctFromPNG),
+        ("WIC scales during decode when maxSide is set", wicScalesDuringDecode),
+        ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData)
     ]
 
     var passed = 0

@@ -26,4 +26,15 @@ public struct BridgeError: Error, Sendable, Codable, Equatable {
     /// access was denied, or a read/write failed. A *missing* key is not an
     /// error — `secrets.get` returns `{ value: null }`.
     public static let secrets = "E_SECRETS"
+
+    /// An `image.*` conversion failed — an undecodable file, a bad request
+    /// (neither or both of `path` / `dataBase64`), or an I/O error writing the
+    /// output.
+    public static let image = "E_IMAGE"
+
+    /// This build has no codec for the requested source or output format. Kept
+    /// distinct from ``image`` because it answers a question the page could
+    /// have asked first via `image.info`, and because it is a property of the
+    /// platform rather than of the file.
+    public static let imageUnsupported = "E_IMAGE_UNSUPPORTED"
 }

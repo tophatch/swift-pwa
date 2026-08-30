@@ -215,6 +215,11 @@ let package = Package(
         // `ZIPExtractor()` into `FsPlugin`; everyone else links neither it
         // nor ZIPFoundation.
         .library(name: "SwiftPWAArchive", targets: ["SwiftPWAArchive"]),
+        // Optional image transcoder for `image.*`. Apps that accept photos the
+        // webview can't render (HEIC is the common one) add this product and
+        // inject `PlatformImageTranscoder()` into `ImagePlugin`; everyone else
+        // links neither it nor the platform codec.
+        .library(name: "SwiftPWAImage", targets: ["SwiftPWAImage"]),
         // Optional on-device AI backend (Apple Foundation Models) for the
         // `ai.*` plugin. Apps that want on-device inference add this product
         // and inject `FoundationModelsBackend()` into `AIPlugin`; everyone
@@ -343,6 +348,47 @@ let package = Package(
         // that opt into content-pack import. `SwiftPWACore` defines the
         // `ArchiveExtractor` protocol; this target provides the concrete
         // `ZIPExtractor`. The umbrella deliberately does NOT depend on it.
+        // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
+        // internal — reused by `SwiftPWAImageEdit` (LaMa) and
+        // `SwiftPWAStableDiffusion` so both share one platform implementation
+        // (CoreGraphics on Apple, stb_image on desktop, BitmapFactory-over-RPC
+        // on Android) rather than duplicating it. Declared unconditionally
+        // rather than under the ONNX gate it used to sit in: it has no ONNX
+        // dependency, and `SwiftPWAImage` (the `image.*` plugin's backend)
+        // needs it in builds that want nothing to do with the AI tier.
+        .target(
+            name: "SwiftPWAImageIO",
+            dependencies: [
+                .target(name: "CStbImage", condition: .when(platforms: [.linux])),
+                .target(name: "CHeifShim", condition: .when(platforms: [.linux])),
+                .target(name: "CWicShim", condition: .when(platforms: [.windows])),
+                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
+            ],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAImageIOTests",
+            dependencies: ["SwiftPWAImageIO"],
+            swiftSettings: swiftSettings
+        ),
+        // The platform image transcoder behind `image.*`. Its own target so an
+        // app that never transcodes links neither this nor stb_image — the
+        // same shape as `SwiftPWAArchive` backing `fs.extractZip`.
+        .target(
+            name: "SwiftPWAImage",
+            dependencies: ["SwiftPWACore", "SwiftPWAImageIO"],
+            swiftSettings: swiftSettings
+        ),
+        .testTarget(
+            name: "SwiftPWAImageTests",
+            dependencies: ["SwiftPWAImage", "SwiftPWACore", "_SwiftPWATestSupport"],
+            // Real HEIC/AVIF files (1.4 KB each): the only way to check that a
+            // build which *claims* a format can actually decode it. Which
+            // platforms can is genuinely uneven, so the tests branch on
+            // `image.info` rather than assuming.
+            resources: [.copy("Fixtures")],
+            swiftSettings: swiftSettings
+        ),
         .target(
             name: "SwiftPWAArchive",
             dependencies: [
@@ -497,6 +543,42 @@ let package = Package(
         // `Microsoft.Web.WebView2` NuGet package; see
         // `docs/windows-setup.md` for how to put it on the link path.
 
+        // HEIC / AVIF on Linux via libheif, loaded with dlopen rather than
+        // linked: no libheif-dev at build time, no hard .so requirement in an
+        // AppImage, and `image.info` simply omits the formats on a machine
+        // without it. Linux is the only target with no system image codec, so
+        // this is the one place the capability has to be earned rather than
+        // inherited.
+        .target(
+            name: "CHeifShim",
+            path: "Sources/CHeifShim",
+            publicHeadersPath: "include",
+            linkerSettings: [
+                .linkedLibrary("dl", .when(platforms: [.linux]))
+            ]
+        ),
+        // Windows Imaging Component — the platform image codec behind
+        // `image.*` on Windows, and the reason Windows can convert a HEIC its
+        // own webview refuses to render. Plain Win32/COM headers from the
+        // Windows SDK: unlike `CWebView2Shim` this needs no NuGet package, so
+        // it builds on any Swift-on-Windows install.
+        .target(
+            name: "CWicShim",
+            path: "Sources/CWicShim",
+            publicHeadersPath: "include",
+            cxxSettings: [
+                // windows.h's min/max macros break std::max at the use site.
+                .define("NOMINMAX", .when(platforms: [.windows])),
+                .define("UNICODE", .when(platforms: [.windows])),
+                .define("_UNICODE", .when(platforms: [.windows])),
+                .define("WIN32_LEAN_AND_MEAN", .when(platforms: [.windows]))
+            ],
+            linkerSettings: [
+                .linkedLibrary("windowscodecs", .when(platforms: [.windows])),
+                .linkedLibrary("ole32", .when(platforms: [.windows])),
+                .linkedLibrary("oleaut32", .when(platforms: [.windows]))
+            ]
+        ),
         .target(
             name: "CWebView2Shim",
             path: "Sources/CWebView2Shim",
@@ -620,6 +702,10 @@ let package = Package(
             name: "SwiftPWAWindowsTestRunner",
             dependencies: [
                 .target(name: "SwiftPWAWindows", condition: .when(platforms: [.windows])),
+                // The WIC codec behind `image.*` — these are the only tests
+                // that run it, since swift-testing can't discover on Windows.
+                .target(name: "SwiftPWAImage", condition: .when(platforms: [.windows])),
+                .target(name: "SwiftPWAImageIO", condition: .when(platforms: [.windows])),
                 .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows]))
             ],
             swiftSettings: swiftSettings
@@ -1112,25 +1198,6 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         // (The target itself is declared in the static `targets:` array so the
         // static `SwiftPWACLISupport` — the Windows icon builder — can reference
         // it; a static target can't resolve a forward-`append`ed one.)
-        // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
-        // internal — reused by `SwiftPWAImageEdit` (LaMa) and
-        // `SwiftPWAStableDiffusion` so both share one platform implementation
-        // (CoreGraphics on Apple, stb_image on desktop, BitmapFactory-over-RPC
-        // on Android) rather than duplicating it. No ONNX dependency; its
-        // per-platform files gate on `canImport(CoreGraphics)` etc.
-        .target(
-            name: "SwiftPWAImageIO",
-            dependencies: [
-                .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows])),
-                .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
-            ],
-            swiftSettings: swiftSettings
-        ),
-        .testTarget(
-            name: "SwiftPWAImageIOTests",
-            dependencies: ["SwiftPWAImageIO"],
-            swiftSettings: swiftSettings
-        ),
         .target(
             name: "SwiftPWASegmentation",
             dependencies: segmentationDependencies,

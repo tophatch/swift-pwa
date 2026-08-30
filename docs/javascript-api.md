@@ -33,6 +33,34 @@ The wire envelope (`{v, ep, kind, id, cmd, payload}`) is identical across
 WKWebView, WebKitGTK, and WebView2 — same JS code runs unchanged on
 every backend.
 
+## Record shape on the wire
+
+**Object keys arrive in alphabetical order, and the same value always encodes to
+the same bytes.** Swift's `JSONEncoder` does not preserve declaration order for
+synthesized `CodingKeys` — it emits them in hash order, which differs *per
+encode* and again per process — so before this was pinned, two `invoke` calls
+returning an identical record could put its fields in different orders, and
+`JSON.stringify(a) === JSON.stringify(b)` (the obvious way for a page to ask
+"did this change?") never matched. Every frame is now serialized with sorted
+keys at the single point all five backends deliver through, nested objects
+included.
+
+So this is safe:
+
+```js
+const before = JSON.stringify(await __SWIFT_PWA__.invoke('items.list'));
+// ...later...
+const after = JSON.stringify(await __SWIFT_PWA__.invoke('items.list'));
+if (before === after) { /* genuinely unchanged */ }
+```
+
+Two things this does *not* promise. Key **order** is fixed, but an optional
+Swift property that is `nil` is still omitted rather than sent as `null`, so a
+record's key **set** can differ between calls when a field goes from absent to
+present — a real change, correctly reflected. And ordering applies to what
+crosses the bridge; a plugin that hands you a pre-serialized string is
+responsible for its own contents.
+
 ## Navigating away
 
 Everything a page subscribes belongs to *that document*, not to the window.
@@ -935,6 +963,72 @@ const off = __SWIFT_PWA__.subscribe('net.download',
 plain `http://` to a LAN host also needs the host allow-listed via
 `android.network.cleartext_domains` in `pwa.json` (HTTPS needs nothing). Full
 reference: [docs/net-plugin.md](net-plugin.md).
+
+### `image.*` — convert an image the webview can't display
+
+The webview is often the least capable image decoder on the device. Measured by
+driving a real app on each engine this project ships on:
+
+| | HEIC | AVIF |
+|---|---|---|
+| WKWebView (macOS, iOS) | renders | renders |
+| WebKitGTK 4.1 / 6.0 | never | never |
+| WebView2 (Chromium) | never | renders |
+| Android `WebView` (Chromium) | never | renders |
+
+So **HEIC renders in exactly one of the four** — and HEIC is what every photo an
+iPhone writes to iCloud Drive actually is. The platform *underneath* the webview
+is another matter: Apple's ImageIO and Android's `BitmapFactory` both decode
+HEIC and AVIF. `image.*` exposes that decoder, so an app taking photos from a
+user's filesystem can convert on import instead of refusing the format.
+
+Opt-in — add the `SwiftPWAImage` product and register it:
+
+```swift
+ctx.use(ImagePlugin(PlatformImageTranscoder()))
+```
+
+```js
+// Ask first. The answer is per-platform, and on Windows per-machine.
+const { decode, encode } = await __SWIFT_PWA__.invoke('image.info');
+// e.g. { decode: ["avif","heic","heif","jpeg","png",…], encode: ["png","jpeg"] }
+
+if (decode.includes('heic')) {
+    const out = await __SWIFT_PWA__.invoke('image.transcode', {
+        path: pickedPath,              // or dataBase64
+        format: 'jpeg',                // 'png' | 'jpeg', default 'png'
+        maxSide: 2048,                 // bound the longest edge
+        quality: 0.85,                 // jpeg only
+        outputPath: `${cacheDir}/${id}.jpg`,   // omit to get dataBase64 back
+    });
+    img.src = out.path;                // { path, width, height, bytes }
+}
+```
+
+Notes worth knowing before you use it:
+
+- **Pass `maxSide` for anything camera-sized.** A 24-megapixel photo is ~72 MB
+  of RGB per buffer, and on Android that has to cross a JNI RPC. The transcoder
+  bounds decodes at 4096 by default for exactly this reason.
+- **Prefer `outputPath` to inline bytes** for large images — without it the
+  result crosses the bridge as base64.
+- `width` / `height` in the result are the **output** dimensions, so a caller
+  that passed `maxSide` learns what it actually got.
+- A format this build can't read or write throws **`E_IMAGE_UNSUPPORTED`**;
+  anything else that fails throws `E_IMAGE`. The two are distinct because the
+  first is a question `image.info` could have answered first.
+- **Windows reads what the machine has, not what the build has.** It goes
+  through WIC, so HEIC works when the HEVC codec extension is installed (the
+  paid/OEM-supplied one) and simply isn't in `image.info`'s list when it isn't.
+  That also buys TIFF, JPEG XL and camera RAW for free — a real box enumerated
+  66 decodable extensions.
+- **Linux decodes HEIC/AVIF only if the machine has libheif.** WebKitGTK links
+  no HEIF or AVIF decoder, and the vendored `stb_image` behind `image.*` reads
+  PNG/JPEG only — so the formats come from **libheif**, which is `dlopen`ed at
+  runtime rather than linked. Nothing to install at build time and nothing
+  bundled; on a machine with libheif and its codec plugins (both test boxes had
+  them) HEIC and AVIF decode, and on one without they are simply missing from
+  `image.info`.
 
 ### `secrets.*` — secure secret storage
 

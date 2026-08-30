@@ -7,7 +7,227 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **Linux decodes HEIC and AVIF through libheif — and it cost no new
+  dependency after all.** The last platform, and the one the proposal expected
+  to be expensive: Linux is the only target with no system image codec (the
+  vendored stb build reads PNG and JPEG only), and WebKitGTK links no HEIF or
+  AVIF decoder either, so a HEIC was undecodable at *both* layers there.
+
+  The plan was a `libheif-dev` build dependency, AppImage bundling, CI
+  provisioning in several places, and an opt-in build flag to keep all that off
+  everyone else's build. None of it was necessary: `CHeifShim` loads libheif
+  with **`dlopen`**. No `-dev` package, no link-time dependency, no hard
+  `libheif.so.1` requirement in an AppImage, and no flag to set — an app gains
+  the formats on a machine that has libheif and doesn't on one that doesn't.
+
+  That also makes the capability honest in the same way Windows already is:
+  libheif `dlopen`s its *own* codec plugins (libde265 for HEVC/HEIC, aomdec for
+  AV1/AVIF), so having libheif installed does not mean a given format decodes.
+  `capabilities()` calls `heif_have_decoder_for_format` per family, and
+  `image.info` reports exactly that.
+
+  The ABI is bound by hand from libheif 1.21's headers — opaque pointers,
+  scalars and one small by-value struct — read from the real headers
+  (`apt-get download libheif-dev` + `dpkg-deb -x`, no install needed) rather
+  than assumed, because a wrong struct layout here is a crash rather than an
+  error. An unresolvable symbol disables the feature instead. stb stays the
+  first decoder and libheif is tried only for what stb can't read, so the common
+  PNG/JPEG path is untouched.
+
+  **Verified on both Linux boxes** — Ubuntu 26.04 with GTK4/WebKitGTK 6.0 and
+  Ubuntu 25.10 with GTK3/WebKitGTK 4.1 — each reporting
+  `decode: avif,heic,heif,jpeg,jpg,png` and decoding real fixtures of both
+  formats at full size.
+
+  With this, `image.*` covers **all five platforms**, and the tests gained the
+  check that matters most for a capability-reporting API: a build that *claims*
+  a format in `image.info` must actually decode it, asserted against committed
+  1.4 KB HEIC and AVIF fixtures. On a platform that doesn't claim it, the same
+  test asserts the refusal is clean rather than a broken image.
+
+- **Windows decodes through WIC, so `image.*` can rescue a HEIC there too.**
+  Phase 2 of the transcode proposal. Chromium has no HEIC decoder, so a WebView2
+  app cannot display an iPhone photo — but the machine underneath usually can,
+  through the Windows Imaging Component. Windows now gets the same
+  platform-codec treatment Apple (ImageIO) and Android (`BitmapFactory`) already
+  had, via a new `CWicShim`: decode-to-RGB that **scales during decode** (so a
+  24-megapixel photo never exists at full size in memory, unlike the
+  resample-after-decode path), PNG/JPEG encode, and a decoder enumeration. Plain
+  Win32/COM headers from the Windows SDK — unlike `CWebView2Shim` it needs no
+  NuGet package, so it builds on any Swift-on-Windows install, and every entry
+  point catches its own exceptions because a C++ exception unwinding across a C
+  ABI into Swift kills the process with no message.
+
+  **What Windows can read is a property of the machine, not the build**, so
+  `capabilities()` enumerates the registered decoders at runtime rather than
+  claiming a list: HEIC needs the HEVC codec extension (the paid/OEM-supplied
+  one) and AVIF needs the AV1 extension. On a machine without them, `heic`
+  simply isn't in `image.info` — which is the honest answer, and why Windows
+  must never advertise the format statically.
+
+  `stb_image` stays on Linux, now the only target with no system codec, and
+  `ImageCodec+Desktop` is narrowed to `os(Linux)` to match. Windows gains a lot
+  more than HEIC from the switch: the test box enumerated **66 decodable
+  extensions** — TIFF, JPEG XL, and camera RAW from most manufacturers — where
+  stb was compiled for PNG and JPEG only.
+
+  **Verified on a real x64 box**, and the claim lands in one measurement: a HEIC
+  reports `naturalWidth: 0` in WebView2, and the 3,444-byte JPEG that
+  `image.transcode` returns renders at 240 (the same image as PNG is 35,794
+  bytes, which is how we know `format` reaches the encoder). The 5 new codec
+  tests live in `SwiftPWAWindowsTestRunner` — swift-testing cannot discover
+  tests on Windows, so that is the only place this path runs at all — and all 17
+  cases pass there.
+
+- **`image.*` — convert an image the webview can't display.** The webview is
+  routinely the least capable image decoder on the device. Measured by driving a
+  real app on each of the four engines this project ships on, **HEIC renders in
+  exactly one of them** — Apple's; WebKitGTK links no HEIF or AVIF decoder at
+  all, and Chromium (WebView2 and Android's `WebView`) has AVIF but not HEIC.
+  Since HEIC is what every photo an iPhone writes to iCloud Drive actually is,
+  an app that accepts photos from a user's filesystem previously had to ship
+  Apple-only or write per-platform native code — the work this framework exists
+  to absorb. Reported by an adopter who had left both formats out of their
+  importers because of it.
+
+  The decoder was already there. `ImageCodec`'s Apple path is ImageIO, which
+  reads HEIC and AVIF today, and its Android path is `BitmapFactory`, which
+  decodes both on a modern device — it was `package`-internal, reachable only by
+  the on-device AI backends. So this exposes what a build already contains
+  rather than adding a codec: opt-in `ImagePlugin(PlatformImageTranscoder())`
+  (add the `SwiftPWAImage` product) serving `image.info` and `image.transcode`.
+
+  **`image.info` is load-bearing, not decoration** — what a build can read is
+  genuinely not uniform, so it is *derived*, never assumed: Apple enumerates
+  ImageIO's real type list (AVIF read arrived in macOS 13 / iOS 16), Android
+  asks the device because `minSdk` can be 28 while HEIF needs 28 and AVIF needs
+  31, and desktop reports the two formats the vendored stb build is actually
+  compiled for (`STBI_ONLY_PNG` + `STBI_ONLY_JPEG` — so Linux and Windows can
+  convert and resize but cannot rescue a HEIC, at either layer). A format this
+  build can't handle throws `E_IMAGE_UNSUPPORTED`, kept distinct from `E_IMAGE`
+  because it is a question `image.info` could have answered first.
+
+  `ImageCodec` gained JPEG output on all three platform codecs to go with it
+  (ImageIO, `Bitmap.compress`, and a new `stbi_write_jpg` shim), since PNG is
+  the wrong output for a photo. Decodes are bounded at 4096px by default:
+  a 24-megapixel photo is ~72 MB of RGB per buffer and on Android that crosses a
+  JNI RPC, which is the same wall `LaMaBackend` hit. `SwiftPWAImageIO` moved out
+  from behind the ONNX gate it used to sit under — it never had an ONNX
+  dependency, and `image.*` must not drag in the AI tier.
+
+  **Verified by driving a scaffolded app on real hardware, not just in tests.**
+  On a Galaxy Z Fold7 the end-to-end claim is demonstrated in one measurement:
+  the HEIC reports `naturalWidth: 0` in Android's `WebView`, and after
+  `image.transcode` the resulting 2,934-byte JPEG renders at 240 — the format
+  the engine refuses, converted by the decoder underneath it, displayed. The
+  same file to PNG is 42,000 bytes, which is how we know `format` genuinely
+  reaches `Bitmap.compress` rather than quietly writing PNG twice. On macOS a
+  real HEIC converts to a 240×240 baseline JPEG on disk (confirmed with `file`)
+  and renders from the page. On Linux the transcoder's suite runs against the
+  real stb build, where the unsupported-source path is meaningful rather than
+  skipped.
+
+  Docs: [`docs/javascript-api.md`](docs/javascript-api.md); proposal
+  [`docs/proposals/image-transcode.md`](docs/proposals/image-transcode.md).
+  Phase 1 of that proposal — Windows via WIC and Linux via libheif/libavif are
+  phases 2 and 3, and both are capability-reported rather than assumed.
+
 ### Fixed
+
+- **The same record now always crosses the bridge as the same bytes.** Two
+  `invoke` calls returning an identical value could serialize its keys in
+  different orders, so `JSON.stringify(a) === JSON.stringify(b)` — the obvious
+  way for a page to ask "did this change?" — never matched. Reported by an
+  adopter whose virtualized gallery reuses a card when its record is unchanged:
+  with the comparison always false, **every card on screen was rebuilt on every
+  re-list**, and a rebuilt card is a new `<img>` that decodes again. On an iPad,
+  re-listing every couple of seconds while covers generated, that read as the
+  whole grid flashing about once a second — a visual symptom whose cause was on
+  the wire.
+
+  The source is `JSONEncoder`, which does not preserve declaration order for
+  synthesized `CodingKeys`: it emits them in hash order, which varies per encode
+  *and* per process. Measured here on one struct: **6 distinct key orders across
+  200 encodes** with a single reused encoder, and a different order again in
+  each of six fresh processes.
+
+  The fix is `.sortedKeys` in `Envelope.encode`, not on the handler's encoder as
+  originally suggested — `Envelope.encode` parses each payload back to
+  `Any` and re-serializes it, so a sort done upstream was **undone** on the way
+  out. Applied at the envelope it is also the one choke point every backend
+  delivers through, so it covers unary replies, stream and session chunks, and
+  `events.*` pushes on all five platforms, nested objects included, in one line.
+  Pre-fix that path emitted **6 distinct frames** for one identical record
+  (the envelope's own keys varied too); it now emits one. Key *sets* still
+  differ when an optional Swift property is `nil`, since `JSONEncoder` omits it
+  rather than sending `null` — that is a real difference, correctly reflected.
+  Cost is a sort per object: on a deliberately large 685 KB reply carrying ~6,000
+  records, frame serialization goes 6.4 ms → 11.3 ms; on ordinary payloads it is
+  noise. The contract is now written down in
+  [`docs/javascript-api.md`](docs/javascript-api.md#record-shape-on-the-wire),
+  since "the same call returns the same object" is what everyone assumes.
+
+  **Verified by driving a scaffolded app on two engines against a control build
+  of the released CLI**, calling one typed command 400 times and comparing what
+  the page received: on `WKWebView` the control produced 3 distinct
+  serializations of an unchanged record (the `JSON.stringify` comparison false),
+  and the fixed build 1, with keys alphabetical; WebKitGTK 6.0 and WebView2
+  likewise each returned a single alphabetical order. A scaffolded app, not an
+  Example, since the Examples carry fallbacks the scaffold never emits.
+
+- **HEIC, HEIF and AVIF are served as themselves, not `application/octet-stream`.**
+  `AssetProvider.mimeType(for:)` had no case for any of the three, so a file the
+  platform decodes perfectly well was announced as an opaque byte stream — the
+  one thing a save path, a download, or any consumer that doesn't sniff has to
+  take at face value. HEIC is not exotic: it is what every photo an iPhone puts
+  in an iCloud Drive folder actually is. The Android file-dialog filter table
+  gained the same three, so a picker filtered on those extensions no longer
+  widens to `*/*`.
+
+  **This is a correctness fix, not a rendering fix, and the reporting adopter's
+  premise for holding the formats out of their importers does not survive
+  measurement.** Driving a scaffolded app serving real HEIC and AVIF files:
+  Apple's WebKit renders both *even under the octet-stream fallback* — `<img>`,
+  a blob URL, and `createImageBitmap` all decoded at full size on macOS and on
+  the iOS Simulator, before this change. It sniffs, so the wrong type cost
+  nothing there. WebKitGTK is the opposite: with the correct type served, both
+  formats fail on GTK4/WebKitGTK 6.0 — `<img>` `naturalWidth: 0`, blob URL
+  broken, `createImageBitmap` `InvalidStateError` — while PNG in the same page
+  renders fine. That is not the fixtures: neither WebKitGTK 6.0 nor 4.1 links
+  libheif or libavif in the builds the distros ship (they carry JPEG XL
+  instead), so those engines have no decoder to reach at any MIME type. On
+  WebView2 and on Android's `WebView`, AVIF renders and HEIC does not (Chromium
+  has no HEIC decoder on either). So across all four engines HEIC renders on
+  exactly one — Apple's, where it already worked before this change — and an app
+  that must show iPhone photos everywhere has to transcode on import. Android
+  *does* honour this table (`image/heic` and `image/avif` served correctly on a
+  Fold7); Windows is the one backend that doesn't, see below.
+
+  Windows also turns out not to consult this table for bundle assets at all:
+  the bundle is served natively by `SetVirtualHostNameToFolderMapping`, so
+  Chromium picks the type from its own extension mapping (measured: `.avif` →
+  `image/avif`, `.heic` → `application/octet-stream`, whatever `AssetProvider`
+  says). The table governs the interception path — `serveDirectory` mounts, the
+  SPA fallback, single-file embedded assets — and every other backend end to
+  end. Both facts recorded in
+  [`docs/swift-api.md`](docs/swift-api.md#serving-extra-directories-content-packs).
+
+  `swift-pwa dev` had its **own second copy** of the MIME table, which had
+  already drifted — it was missing every audio and video type the bundled app
+  serves, so a `<video>` that streams from a built app would not stream under
+  `dev`. It now calls the same `AssetProvider.mimeType(for:)`, deleting the
+  copy rather than adding a third place to fix.
+
+  Queued as a follow-up: [`docs/proposals/image-transcode.md`](docs/proposals/image-transcode.md),
+  an `image.*` plugin that would let an app transcode on import. The decoder is
+  already there on two of the platforms, both now measured: Apple's `ImageCodec`
+  path is ImageIO, which reads HEIC and AVIF today, and Android's is
+  `BitmapFactory`, which decoded both on a Fold7 and round-tripped them to PNG
+  through the `image.decode` / `image.encodePng` RPCs every generated app
+  already carries. So it is mostly a matter of exposing what a build already
+  contains rather than adding a codec.
 
 - **A document's bridge state no longer outlives the document.** Navigating a window — a link, `location.assign`, a router doing a real page load — used to leave every stream, session, and in-flight `invoke` the old document opened still running natively. `BridgeRuntime.stop()` was the only thing that cancelled a window's subscriptions and it ran from `windowWillClose`, so nothing observed a navigation on *any* of the five backends. Reproduced here on a real `WKWebView`: with three documents loaded in turn, one `emit` was delivered **three times** — once per document ever loaded in that window — and both native tasks and `EventBus` sinks accumulated without bound. Reported by an adopter porting a desktop e-reader, who measured the same 1:1 growth.
 

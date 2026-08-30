@@ -213,7 +213,7 @@ then fetches the three ONNX files (default `MobileSAMModelSource.mobileSAM`,
 resumable + checksum-pinned via `ModelDownloader`) into `cacheDirectory` on
 first use. Image decode/resize is per-platform: CoreGraphics/ImageIO on Apple,
 a `vision.preprocessImage` RPC to Kotlin's `BitmapFactory` on Android, and a
-vendored stb_image + pure-Swift bilinear resize on Linux/Windows desktop (no
+vendored stb_image (plus libheif when present) + pure-Swift bilinear resize on Linux, WIC on Windows (no
 CoreGraphics there). Desktop links Microsoft's prebuilt CPU ONNX Runtime,
 staged into the AppImage / next to the `.exe` automatically (Linux needs Swift
 6.1+ to build the segmentation target). `MobileSAMBackend` also implements
@@ -272,6 +272,36 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
 - Range / `206 Partial Content` is honored on all backends, so a large
   `<video>` seeks/streams off disk instead of buffering.
 - The prefix is fully app-chosen (anything but the bundle root `/`).
+- Content types are derived from the file extension and cover the web-facing
+  set — HTML/JS/CSS/JSON/WASM, PNG/JPEG/WebP/GIF/SVG/ICO, HEIC/HEIF/AVIF, the
+  common audio and video containers, and the four web font formats. Anything
+  else is served as `application/octet-stream`.
+- **Whether an image format renders is the engine's decision, not the served
+  type's.** Measured by driving a real app on each engine:
+
+  | | HEIC | AVIF |
+  |---|---|---|
+  | WKWebView (macOS, iOS) | renders | renders |
+  | WebKitGTK 4.1 / 6.0 | never | never |
+  | WebView2 (Chromium) | never | renders |
+  | Android `WebView` (Chromium) | never | renders |
+
+  Apple's WebKit also *sniffs*, so both render there even when the declared type
+  is wrong. WebKitGTK decodes neither at any type: the builds distros ship link
+  no libheif or libavif (they carry JPEG XL instead), so there is no decoder to
+  reach. Chromium has AVIF but no HEIC, on both desktop and Android. A
+  picture-heavy app that must run everywhere should transcode HEIC on import
+  rather than rely on the webview — note that the *platform* underneath usually
+  can decode it even where its webview cannot, which is what
+  [image-transcode.md](proposals/image-transcode.md) proposes exposing.
+
+- **On Windows the bundle's content types come from Chromium, not this table.**
+  The bundle is served natively by `SetVirtualHostNameToFolderMapping`, so
+  WebView2 decides the type from its own extension mapping — measured, `.avif`
+  arrives as `image/avif` and `.heic` as `application/octet-stream` regardless
+  of what `AssetProvider` would have said. The table above governs the
+  interception path — `serveDirectory` mounts, the SPA fallback, and single-file
+  embedded assets — and every other backend end to end.
 
 **Android** builds its asset loader before any Swift runs, so a mount
 that must exist at startup is declared in `pwa.json` instead — the

@@ -134,6 +134,50 @@ struct EnvelopeTests {
         #expect(errBlob?["message"] as? String == "oops")
     }
 
+    /// A record whose `JSONEncoder` output is not order-stable: synthesized
+    /// `CodingKeys` are emitted in hash order, which differs per encode and
+    /// per process. Measured here at 6 distinct orders over 200 encodes.
+    private struct Record: Codable {
+        let id: String
+        let label: String
+        let index: Int
+        let count: Int
+        let path: String
+        let updatedAt: Double
+    }
+
+    @Test("identical payloads encode to identical bytes")
+    func wireIsDeterministic() throws {
+        let record = Record(
+            id: "r-1", label: "first", index: 0,
+            count: 12, path: "/items/1", updatedAt: 1
+        )
+        var frames = Set<Data>()
+        for _ in 0 ..< 200 {
+            let payload = try JSONEncoder().encode(record)
+            try frames.insert(Envelope.encode(.reply(id: 9, ok: payload)))
+        }
+        // Without `.sortedKeys` this is 6: a page comparing two records with
+        // `JSON.stringify(a) === JSON.stringify(b)` never matched.
+        #expect(frames.count == 1)
+    }
+
+    @Test("payload keys are sorted, nested objects too")
+    func wireKeysAreSorted() throws {
+        let payload = Data(#"{"zebra":1,"alpha":{"zulu":2,"bravo":3},"middle":4}"#.utf8)
+        let data = try Envelope.encode(.reply(id: 1, ok: payload))
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""ok":{"alpha":{"bravo":3,"zulu":2},"middle":4,"zebra":1}"#))
+    }
+
+    @Test("event chunks are sorted on the same path")
+    func eventChunksAreSorted() throws {
+        let chunk = Data(#"{"value":42,"key":"scrollOffset"}"#.utf8)
+        let data = try Envelope.encode(.event(id: 2, chunk: chunk))
+        let text = String(decoding: data, as: UTF8.self)
+        #expect(text.contains(#""chunk":{"key":"scrollOffset","value":42}"#))
+    }
+
     @Test("event and end frames encode")
     func encodeEventEnd() throws {
         let chunkData = Data(#"{"x":1}"#.utf8)

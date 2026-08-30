@@ -266,6 +266,16 @@ public final class AssetProvider: @unchecked Sendable {
         case "jpg", "jpeg": "image/jpeg"
         case "webp": "image/webp"
         case "gif": "image/gif"
+        // Every photo an iPhone takes is HEIC, so a served folder of pictures
+        // hits these constantly. Whether they *render* is the engine's call and
+        // not this table's: Apple's WebKit decodes both and sniffs them even
+        // under the octet-stream fallback, while WebKitGTK decodes neither at
+        // any type (those builds link no libheif/libavif). Declaring the real
+        // type is still the honest answer — octet-stream is what a save or
+        // download path, and any consumer that doesn't sniff, has to believe.
+        case "heic": "image/heic"
+        case "heif": "image/heif"
+        case "avif": "image/avif"
         case "ico": "image/x-icon"
         case "wasm": "application/wasm"
         case "woff": "font/woff"

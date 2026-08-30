@@ -3,7 +3,8 @@
 // itself stays private to this target (not under include/), so Swift only ever
 // imports the two-function surface.
 #include "swiftpwa_image.h"
-#include <stdlib.h> // free (for swiftpwa_free_png)
+#include <stdlib.h> // free/realloc (for swiftpwa_free_png)
+#include <string.h> // memcpy (JPEG accumulation buffer)
 
 // Trim stb to the formats the segmentation backend actually receives from web
 // content (PNG/JPEG), and drop the stdio path (we always decode from memory) —
@@ -51,6 +52,51 @@ unsigned char *swiftpwa_encode_png_rgba(const unsigned char *pixels, int width,
                                         int height, int *out_len) {
     // 4 = RGBA, stride = width*4 (tightly packed). stb returns a malloc'd PNG.
     return stbi_write_png_to_mem(pixels, width * 4, width, height, 4, out_len);
+}
+
+// stb's JPEG writer only has a callback form (no *_to_mem), so collect its
+// chunks into one growing allocation. A failed realloc marks the buffer dead
+// (len < 0) and every later chunk is dropped, so the caller sees NULL rather
+// than a truncated image.
+typedef struct {
+    unsigned char *data;
+    int len;
+    int cap;
+} swiftpwa_jpg_buf;
+
+static void swiftpwa_jpg_write(void *context, void *data, int size) {
+    swiftpwa_jpg_buf *buf = (swiftpwa_jpg_buf *)context;
+    if (buf->len < 0 || size <= 0) return;
+    if (buf->len + size > buf->cap) {
+        int cap = buf->cap ? buf->cap : 65536;
+        while (cap < buf->len + size) cap *= 2;
+        unsigned char *grown = (unsigned char *)realloc(buf->data, (size_t)cap);
+        if (!grown) {
+            free(buf->data);
+            buf->data = NULL;
+            buf->cap = 0;
+            buf->len = -1;
+            return;
+        }
+        buf->data = grown;
+        buf->cap = cap;
+    }
+    memcpy(buf->data + buf->len, data, (size_t)size);
+    buf->len += size;
+}
+
+unsigned char *swiftpwa_encode_jpg_rgb(const unsigned char *pixels, int width,
+                                       int height, int quality, int *out_len) {
+    swiftpwa_jpg_buf buf = {NULL, 0, 0};
+    // 3 = RGB components, tightly packed.
+    int ok = stbi_write_jpg_to_func(swiftpwa_jpg_write, &buf, width, height, 3,
+                                    pixels, quality);
+    if (!ok || buf.len <= 0) {
+        free(buf.data);
+        return NULL;
+    }
+    *out_len = buf.len;
+    return buf.data;
 }
 
 void swiftpwa_free_png(unsigned char *data) {

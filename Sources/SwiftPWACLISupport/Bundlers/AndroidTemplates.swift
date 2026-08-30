@@ -1520,7 +1520,8 @@ enum AndroidTemplates {
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
                 "vision.preprocessImage" -> visionPreprocessImage(json, done)
                 "image.decode" -> imageDecode(json, done)
-                "image.encodePng" -> imageEncodePng(json, done)
+                "image.encode" -> imageEncode(json, done)
+                "image.capabilities" -> imageCapabilities(done)
                 "net.downloadFile" -> netDownloadFile(json, done)
                 "net.request" -> netRequest(json, done)
                 "net.ws.open" -> netWebSocketOpen(json, done)
@@ -2633,6 +2634,9 @@ enum AndroidTemplates {
             "jpg", "jpeg" -> "image/jpeg"
             "gif" -> "image/gif"
             "webp" -> "image/webp"
+            "heic" -> "image/heic"
+            "heif" -> "image/heif"
+            "avif" -> "image/avif"
             "svg" -> "image/svg+xml"
             "pdf" -> "application/pdf"
             "txt" -> "text/plain"
@@ -3461,19 +3465,42 @@ enum AndroidTemplates {
             }
         }
 
-        private fun imageEncodePng(json: JSONObject, done: (String?, String?) -> Unit) {
+        // Which image formats BitmapFactory can decode is an API-level fact, and
+        // minSdk here can be as low as 28 — HEIF landed in 28 and AVIF in 31 —
+        // so this is derived at runtime rather than assumed. Reported to JS by
+        // `image.info`, which a page is meant to consult before relying on a
+        // format.
+        private fun imageCapabilities(done: (String?, String?) -> Unit) {
+            val decode = org.json.JSONArray()
+            for (ext in listOf("png", "jpeg", "jpg", "gif", "bmp", "webp")) decode.put(ext)
+            if (android.os.Build.VERSION.SDK_INT >= 28) {
+                decode.put("heic")
+                decode.put("heif")
+            }
+            if (android.os.Build.VERSION.SDK_INT >= 31) decode.put("avif")
+            val encode = org.json.JSONArray()
+            for (ext in listOf("png", "jpeg", "jpg")) encode.put(ext)
+            done(JSONObject().put("decode", decode).put("encode", encode).toString(), null)
+        }
+
+        private fun imageEncode(json: JSONObject, done: (String?, String?) -> Unit) {
             val rgbBase64 = json.optString("rgbBase64", "")
             val w = if (json.has("width")) json.getInt("width") else 0
             val h = if (json.has("height")) json.getInt("height") else 0
+            val format = json.optString("format", "png").lowercase()
+            // Swift sends 0...1; Bitmap.compress wants 1...100.
+            val quality = if (json.has("quality")) {
+                Math.max(1, Math.min(100, Math.round(json.getDouble("quality") * 100).toInt()))
+            } else 85
             if (rgbBase64.isEmpty() || w <= 0 || h <= 0) {
-                done(null, "swift-pwa: image.encodePng: rgbBase64, width, height required")
+                done(null, "swift-pwa: image.encode: rgbBase64, width, height required")
                 return
             }
             backgroundExecutor.execute {
                 try {
                     val rgb = Base64.decode(rgbBase64, Base64.DEFAULT)
                     if (rgb.size != w * h * 3) {
-                        done(null, "swift-pwa: image.encodePng: expected ${w * h * 3} RGB bytes, got ${rgb.size}")
+                        done(null, "swift-pwa: image.encode: expected ${w * h * 3} RGB bytes, got ${rgb.size}")
                         return@execute
                     }
                     val pixels = IntArray(w * h)
@@ -3486,12 +3513,16 @@ enum AndroidTemplates {
                     val bmp = Bitmap.createBitmap(w, h, Bitmap.Config.ARGB_8888)
                     bmp.setPixels(pixels, 0, w, 0, 0, w, h)
                     val baos = java.io.ByteArrayOutputStream()
-                    bmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                    if (format == "jpeg" || format == "jpg") {
+                        bmp.compress(Bitmap.CompressFormat.JPEG, quality, baos)
+                    } else {
+                        bmp.compress(Bitmap.CompressFormat.PNG, 100, baos)
+                    }
                     val result = JSONObject()
                         .put("dataBase64", Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP))
                     done(result.toString(), null)
                 } catch (t: Throwable) {
-                    done(null, "swift-pwa: image.encodePng failed: ${t.javaClass.simpleName}: ${t.message}")
+                    done(null, "swift-pwa: image.encode failed: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
         }

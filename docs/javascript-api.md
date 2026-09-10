@@ -229,6 +229,31 @@ on Windows, the Activity `filesDir` / `cacheDir` on Android. `dataDir` is
 where you extract a downloaded content pack (see `fs.extractZip`); the OS
 may evict `cacheDir` at any time, so only put regenerable artifacts there.
 
+#### `app.lastWindowClosed` — what closing the last window does
+
+```js
+const { value } = await __SWIFT_PWA__.invoke('app.lastWindowClosed');
+// → "reopen" | "keep-running" | "quit"
+
+// Setting replies with the value now in force, so a checkbox round-trips
+// in one call:
+await __SWIFT_PWA__.invoke('app.lastWindowClosed', { value: 'quit' });
+```
+
+**macOS only** in effect — it's the one platform here where an app
+outlives its windows; Linux and Windows exit when the last one closes,
+and the value is stored but ignored there. `reopen` (the default) keeps
+the app running and brings the window back when it's next activated;
+`keep-running` stays windowless; `quit` terminates. See
+[docs/macos-setup.md](macos-setup.md#what-happens-when-the-last-window-closes-macoslast_window_closed).
+
+The change applies to the very next close — nothing is cached at launch —
+so this is the command to put behind a preference checkbox. **Storing the
+user's choice is your app's job**: `pwa.json`'s `macos.last_window_closed`
+sets the launch default, and re-applying a remembered preference over it
+is one `invoke` at startup. The runtime deliberately doesn't persist it,
+so there's never a question of which of the two wins.
+
 #### `app.openFile` — OS "Open With" / launch-with-file
 
 When the OS launches (or foregrounds) your app *with* a document — Finder /

@@ -35,8 +35,28 @@ swift-pwa drive windows                       # window ids, size, position
 
 swift-pwa drive click --selector "#save"      # a real, trusted click
 swift-pwa drive type "hello" --selector "input#q"
+swift-pwa drive type --key a --modifiers command --activate   # ⌘A (see below)
 swift-pwa drive scroll 400                    # positive scrolls down
 ```
+
+`--modifiers` holds keys down for the keystroke (`shift`, `control`,
+`alt`, `command`, comma-separated), so shortcuts are drivable. A name it
+doesn't recognise is a usage error rather than a keystroke quietly sent
+without the modifier.
+
+**Menu shortcuts on macOS need `--activate`.** ⌘C / ⌘V / ⌘A / ⌘Z are
+main-menu key equivalents, and AppKit dispatches a menu item's action
+through `NSApp.keyWindow` — which an app that isn't active does not
+have. So those shortcuts do nothing at all against a backgrounded app,
+and no amount of event synthesis changes that; `--activate` brings the
+app forward for the keystroke. It's per-keystroke and off by default,
+because giving up the screen is the cost the rest of this driver exists
+to avoid. Typing, named keys and page-level shortcuts (anything the page
+handles itself) all work backgrounded and don't need it.
+
+One consequence worth knowing when a run reports nothing happened: a
+**locked screen** has no active app either, so menu shortcuts can't
+dispatch there at all, `--activate` included.
 
 Prefer `--selector` over coordinates: it survives a layout change, and it's
 measured and clicked in one round trip so a mid-flight animation can't leave you

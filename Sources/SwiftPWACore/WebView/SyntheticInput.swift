@@ -205,19 +205,30 @@ public struct KeyInput: Sendable {
     /// character, otherwise insert nothing".
     public var text: String?
     public var modifiers: InputModifiers
+    /// Bring the app forward before delivering the keystroke.
+    ///
+    /// The driver's whole point is that it doesn't need the app frontmost, so
+    /// this is off by default and opt-in per keystroke. It exists for **menu
+    /// key equivalents** on macOS — ⌘C, ⌘V, ⌘A and the rest are dispatched to
+    /// the key window, and an inactive app has none, so those shortcuts do
+    /// nothing at all until the app is active. Everything else (typing, named
+    /// keys, page-level shortcuts) works backgrounded and shouldn't set this.
+    public var activate: Bool
 
     public init(
         phase: Phase,
         key: String,
         code: String? = nil,
         text: String? = nil,
-        modifiers: InputModifiers = []
+        modifiers: InputModifiers = [],
+        activate: Bool = false
     ) {
         self.phase = phase
         self.key = key
         self.code = code
         self.text = text
         self.modifiers = modifiers
+        self.activate = activate
     }
 }
 

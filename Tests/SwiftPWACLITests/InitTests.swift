@@ -235,6 +235,58 @@ struct InitTests {
         #expect(!without.contains("backgroundColor:"))
     }
 
+    @Test("generated App.swift emits lastWindowClosed only when it isn't the default")
+    func appSwiftThreadsLastWindowClosed() {
+        // The default is `.reopen`, so saying so in generated source would be
+        // noise about a behaviour the adopter didn't pick.
+        let omitted = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
+        #expect(!omitted.contains("lastWindowClosed"))
+        let explicitDefault = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X"),
+            macos: Self.macos(lastWindowClosed: "reopen")
+        )
+        #expect(!explicitDefault.contains("lastWindowClosed"))
+
+        for (json, swiftCase) in [("quit", ".quit"), ("keep-running", ".keepRunning")] {
+            let out = Templates.mainSwift(
+                structName: "MyApp", window: .init(title: "X"),
+                macos: Self.macos(lastWindowClosed: json)
+            )
+            #expect(out.contains("ctx.lastWindowClosed = \(swiftCase)"))
+        }
+    }
+
+    /// `MacOSSection`'s memberwise init has no defaults, so spell the
+    /// unrelated fields once here rather than in every case.
+    private static func macos(lastWindowClosed: String?) -> PWAManifest.MacOSSection {
+        .init(
+            bundleIdentifier: nil, category: nil, minimumSystemVersion: nil,
+            copyright: nil, lastWindowClosed: lastWindowClosed, infoPlist: nil
+        )
+    }
+
+    @Test("an unspelled last_window_closed fails the build instead of being ignored")
+    func lastWindowClosedIsValidated() throws {
+        // Silently ignoring it is the bad outcome: the app keeps the default
+        // and the setting looks broken rather than misspelled.
+        var manifest = PWAManifest(
+            id: "com.example.x", name: "X", version: "1.0.0",
+            description: nil, icon: nil,
+            web: .init(directory: "web", entry: "index.html"),
+            window: .init(title: "X"), macos: nil, ios: nil, linux: nil
+        )
+        manifest.macos = Self.macos(lastWindowClosed: "quitt")
+        #expect(throws: (any Error).self) { try Build.validateLastWindowClosed(manifest: manifest) }
+
+        for good in ["reopen", "keep-running", "quit"] {
+            manifest.macos = Self.macos(lastWindowClosed: good)
+            try Build.validateLastWindowClosed(manifest: manifest)
+        }
+        // Absent is fine — the runtime default applies.
+        manifest.macos = Self.macos(lastWindowClosed: nil)
+        try Build.validateLastWindowClosed(manifest: manifest)
+    }
+
     @Test("generated App.swift emits rememberState only when opted in")
     func appSwiftThreadsRememberState() {
         let on = Templates.mainSwift(

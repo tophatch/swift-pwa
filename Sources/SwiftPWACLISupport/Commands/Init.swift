@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import SwiftPWACore
 
 struct Init: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -131,7 +132,8 @@ struct Init: AsyncParsableCommand {
             structName: identifier,
             window: manifest.window,
             entry: manifest.web.entry,
-            spaFallback: manifest.web.spaFallback ?? false
+            spaFallback: manifest.web.spaFallback ?? false,
+            macos: manifest.macos
         ).write(
             to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
             atomically: true,
@@ -386,7 +388,8 @@ enum Templates {
         structName: String,
         window: PWAManifest.WindowSection,
         entry: String = "index.html",
-        spaFallback: Bool = false
+        spaFallback: Bool = false,
+        macos: PWAManifest.MacOSSection? = nil
     ) -> String {
         // Escape the window title for safe embedding in the generated
         // Swift source. `window.title` is whatever the user typed, which
@@ -418,6 +421,25 @@ enum Templates {
         // runtime; a no-op on iOS/Android. `stateKey` distinguishes windows in
         // a multi-window app — the single generated window uses the default.
         let rememberStateArg = (window.rememberState ?? false) ? ",\n                rememberState: true" : ""
+        // What happens when the last window closes (macOS only — see
+        // `LastWindowClosedPolicy`). Emitted only when pwa.json asks for
+        // something other than the default, so the generated file stays quiet
+        // about a behaviour the adopter didn't choose.
+        let lastWindowClosedLine: String = {
+            guard let raw = macos?.lastWindowClosed,
+                  let policy = LastWindowClosedPolicy(rawValue: raw),
+                  policy != .reopen
+            else { return "" }
+            let caseName = switch policy {
+            case .reopen: "reopen"
+            case .keepRunning: "keepRunning"
+            case .quit: "quit"
+            }
+            // Four spaces, not the template's own indentation: an interpolated
+            // string isn't subject to a multiline literal's indent stripping,
+            // so this has to be written at the depth it lands at.
+            return "\n    ctx.lastWindowClosed = .\(caseName)\n"
+        }()
         return """
         // swift-pwa-generated: v\(SwiftPWAVersion.current)
         //
@@ -445,7 +467,7 @@ enum Templates {
         }
 
         @MainActor
-        func configure(_ ctx: any AppContext) throws {
+        func configure(_ ctx: any AppContext) throws {\(lastWindowClosedLine)
             let content: WindowContent
             if let dev = ProcessInfo.processInfo.environment["PWA_DEV_SERVER"],
                let devURL = URL(string: dev) {

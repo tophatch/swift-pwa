@@ -5,6 +5,91 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Text fields on macOS can select-all, copy, paste, cut and undo.** Until
+  now none of them could, in any swift-pwa app: the keystroke arrived and the
+  app beeped. The editing shortcuts on macOS are not a property of a text
+  field — they are main-menu *key equivalents*, dispatched down the responder
+  chain as `selectAll:` / `copy:` / `paste:` / `cut:` / `undo:`, and an
+  equivalent matching no menu item is never dispatched at all. `NSTextView`
+  inside `WKWebView` implements every one of those actions and was sitting
+  there ready to receive them; nothing ever sent them, because
+  `MacAppRuntime.makeMainMenu` built one submenu (About / Hide / Quit) and
+  stopped. The fix that made ⌘Q work went one submenu deep and the rest never
+  followed. Reported by an adopter, whose page had no `keydown` handler, no
+  `preventDefault` and no `user-select` rule anywhere — nothing on the web side
+  was involved.
+
+  So the menu bar now carries **Edit** (Undo / Redo / Cut / Copy / Paste /
+  Paste and Match Style / Delete / Select All) and **Window** (Minimize / Zoom
+  / Close, with `NSApp.windowsMenu` set so AppKit maintains the window list),
+  plus a Services menu. Every editing item has a `nil` target, which is what
+  sends it down the responder chain and lets WebKit enable and disable it
+  against whatever is focused — Paste greys out on a non-editable field with
+  swift-pwa knowing nothing about the page.
+
+  Verified by driving a real app: ⌘A selects, ⌘C and ⌘X reach the **system**
+  pasteboard (checked with `pbpaste`), ⌘V pastes it back, ⌘Z undoes and ⇧⌘Z
+  redoes. A page that handles ⌘A itself still wins — measured against a
+  genuine keystroke, its handler runs and `preventDefault` holds — so an app
+  that already intercepts these keys is unaffected.
+
+- **The app driver could not have caught this, and now can.** `drive type`
+  gained **`--modifiers shift,control,alt,command`**, and two things behind it
+  had to change before a driven ⌘V meant anything. Synthetic input is
+  delivered with `NSWindow.sendEvent`, one level *below* the
+  `NSApplication.sendEvent` step that dispatches menu key equivalents, so a
+  driven shortcut could only ever do nothing however right the menu was; an
+  unhandled injected event is now offered to the main menu at the point it
+  falls off the responder chain (`DriverWindow.noResponder`), which is where a
+  real keystroke would go and keeps the page's first claim on it. And a
+  shift-bearing keystroke carried the *unshifted* character — a real ⇧⌘Z sends
+  "Z", not "z", and AppKit matches key equivalents on that string, so ⇧⌘Z
+  matched no item and looked exactly like a broken Redo when the menu item was
+  correct and the event was wrong.
+
+  Menu shortcuts also need an **active app**: a menu item's action is sent with
+  a `nil` target and AppKit routes those through `NSApp.keyWindow`, which an
+  inactive app doesn't have. `drive type --activate` brings the app forward for
+  the keystroke — opt-in per keystroke, since not needing the screen is the
+  point of this driver. Dispatching down the driven window's own chain to avoid
+  that was tried and rejected: it gets past the routing but still fails
+  WebKit's `validateUserInterfaceItem`, and forcing past *that* would have the
+  driver report an editing capability a real user doesn't have.
+
+### Added
+
+- **`macos.last_window_closed` — what happens when the last window closes.**
+  ⌘W working makes a state reachable that previously wasn't: macOS is the one
+  platform here where an app outlives its windows (Linux and Windows exit), so
+  closing the only window used to leave a running app with a menu bar, no
+  window, and no way back — a Dock click did nothing, because the runtime
+  can't ask an app to build a window again after `configure` has returned.
+
+  The default, `reopen`, is what Finder and Safari do: the app stays running
+  and activating it brings the window back, rebuilt from the `WindowConfig` it
+  was created with (so a remembered size and position come back with it; page
+  state does not — it loads fresh, as a relaunch would). `keep-running` stays
+  windowless on purpose, for an app whose real surface is a status item.
+  `quit` terminates, like a single-window utility and like the other two
+  desktops. Seeds `ctx.lastWindowClosed` in the generated `App.swift` at
+  `swift-pwa init` time, the same way the `window` block does; `swift-pwa
+  build` rejects an unspelled value rather than ignoring it and leaving the
+  setting looking broken.
+
+  **`app.lastWindowClosed`** puts the same choice behind a page's own
+  preference checkbox: called with no argument it reads the current policy,
+  with `{ value }` it sets one, and either way the reply carries what is now
+  in force so a settings UI round-trips in one call. Both sites that consult
+  the policy read it when they need it, so a change applies to the very next
+  close. Where the choice is *stored* stays the app's business — an app
+  already has somewhere it keeps preferences, and a runtime that quietly
+  persisted this one would then owe an answer about which wins at launch, its
+  own file or `pwa.json`'s default.
+
 ## [0.10.3] - 2026-08-30
 
 ### Added

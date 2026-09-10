@@ -260,6 +260,11 @@ struct DriveType: AsyncParsableCommand {
 
         Focus something first (`drive click --selector "input#search"`), or pass --selector here \
         to click it for you. Use `drive type --key Enter` for a named key.
+
+        --modifiers holds keys down for the keystroke, so shortcuts are drivable: \
+        `drive type --key a --modifiers command` is Select All. On macOS these reach the \
+        app's menu bar the way a real keystroke does, which is what makes the editing \
+        shortcuts (⌘A / ⌘C / ⌘V / ⌘X / ⌘Z) testable at all.
         """
     )
 
@@ -269,12 +274,30 @@ struct DriveType: AsyncParsableCommand {
     @Option(name: .long, help: "Press a single named key instead (Enter, Tab, Escape, ArrowDown, …).")
     var key: String?
 
+    @Option(
+        name: .long,
+        help: "Modifiers held for the keystroke, comma-separated: shift, control, alt, command."
+    )
+    var modifiers: String?
+
+    @Flag(
+        name: .long,
+        help: """
+        Bring the app forward for the keystroke. Needed on macOS for menu shortcuts         (⌘C / ⌘V / ⌘A / ⌘Z): they are dispatched to the key window, and an app that         isn't active doesn't have one, so they do nothing without this. Typing and         page-level shortcuts don't need it.
+        """
+    )
+    var activate: Bool = false
+
     @Option(name: .long, help: "Click this element first, so the text goes somewhere.")
     var selector: String?
 
     @OptionGroup var options: DriveOptions
 
     func run() async throws {
+        // Parsed before the app is launched, so a typo'd modifier costs a usage
+        // error rather than a build and a run.
+        let held = try parsedModifiers()
+        let withHeld = held.isEmpty ? "" : " with \(held.joined(separator: "+"))"
         try await DriveSession.run(options) { client in
             if let selector {
                 let point = try client.center(of: selector, window: options.window)
@@ -283,17 +306,17 @@ struct DriveType: AsyncParsableCommand {
                 }
             }
             if let key {
-                try press(client, key: key, text: nil)
-                print("Pressed \(key).")
+                try press(client, key: key, text: nil, modifiers: held)
+                print("Pressed \(key)\(withHeld).")
                 return
             }
             guard let text, !text.isEmpty else {
                 throw ValidationError("Give some text to type, or --key <name>.")
             }
             for character in text {
-                try press(client, key: String(character), text: String(character))
+                try press(client, key: String(character), text: String(character), modifiers: held)
             }
-            print("Typed \(text.count) character\(text.count == 1 ? "" : "s").")
+            print("Typed \(text.count) character\(text.count == 1 ? "" : "s")\(withHeld).")
         }
     }
 
@@ -305,10 +328,35 @@ struct DriveType: AsyncParsableCommand {
         return payload
     }
 
-    private func press(_ client: DriverClient, key: String, text: String?) throws {
+    /// The wire accepts these; `InputModifiers(names:)` ignores anything else so
+    /// a newer client can't break an older app. At the CLI that leniency is the
+    /// wrong trade — a typo'd `--modifiers commnd` would send an unmodified key
+    /// and report success, which is a measurement that lies — so names are
+    /// checked here and a bad one is a usage error.
+    private static let modifierNames: Set<String> = [
+        "shift", "control", "ctrl", "alt", "option", "meta", "command", "cmd"
+    ]
+
+    private func parsedModifiers() throws -> [String] {
+        guard let modifiers else { return [] }
+        let names = modifiers
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+        if let unknown = names.first(where: { !Self.modifierNames.contains($0) }) {
+            throw ValidationError(
+                "Unknown modifier \"\(unknown)\". Use shift, control, alt or command."
+            )
+        }
+        return names
+    }
+
+    private func press(_ client: DriverClient, key: String, text: String?, modifiers: [String]) throws {
         for phase in ["down", "up"] {
             var payload: [String: BridgeJSON] = ["type": .string(phase), "key": .string(key)]
             if let text { payload["text"] = .string(text) }
+            if !modifiers.isEmpty { payload["modifiers"] = .array(modifiers.map { .string($0) }) }
+            if activate { payload["activate"] = .bool(true) }
             if let window = options.window { payload["window"] = .string(window) }
             try client.invoke("input.key", payload)
         }

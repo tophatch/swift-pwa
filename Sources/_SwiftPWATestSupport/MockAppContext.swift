@@ -8,6 +8,10 @@ public final class MockAppContext: AppContext {
     public let assetProvider = AssetProvider()
     public let events = EventBus()
     public let permissions = PermissionPolicy()
+    /// Stored to satisfy ``AppContext``; this backend never reads it.
+    /// macOS is the only platform where an app outlives its windows —
+    /// see ``LastWindowClosedPolicy``.
+    public var lastWindowClosed: LastWindowClosedPolicy = .reopen
     public var windows: [WindowID: any Window] = [:]
     public private(set) var didQuitWith: Int32?
     public private(set) var installedPlugins: [String] = []

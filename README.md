@@ -122,7 +122,8 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
         "bundle_identifier": "com.example.myapp",
         "category": "public.app-category.productivity",
         "minimum_system_version": "15.0",
-        "copyright": "© 2026 Acme Corp."
+        "copyright": "© 2026 Acme Corp.",
+        "last_window_closed": "reopen"
     },
     "ios": {
         "bundle_identifier": "com.example.myapp",
@@ -144,6 +145,8 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 **`window` is build-time metadata, not the runtime config.** The generated `Sources/<name>/App.swift` builds the window from a `WindowConfig` literal, and *that* is what the running app uses. `init` seeds the literal from `pwa.json`'s `window` block, but editing `pwa.json`'s `window.*` afterwards has **no runtime effect** — change the window in `App.swift` (or keep the two in sync by hand). The fields here drive bundle metadata and the initial scaffold only.
 
 **`window.remember_state`** persists the window's size — and, where the platform allows, position — across launches, restoring it next time (on by default for apps scaffolded with `init`). It maps to `WindowConfig.rememberState` in `App.swift`; geometry is saved to a `window-state.json` in the per-app data directory. **Desktop only:** macOS / GTK3 / Windows restore both size and position; GTK4 / Wayland restore size only (the compositor owns placement); iOS / Android windows are full-screen, so it's a no-op. A multi-window app sets a distinct `WindowConfig.stateKey` per window so their frames are tracked separately.
+
+**Optional `macos.last_window_closed`** — what the app does when its last window closes: `reopen` (default — stay running and bring the window back when the app is next activated, the way Finder and Safari do), `keep-running` (stay running with no window, for a menu-bar app) or `quit` (terminate, like a single-window utility, and like Linux and Windows already behave). macOS-only, because it's the only platform here where an app outlives its windows. Like `window`, it seeds the generated `App.swift` (`ctx.lastWindowClosed`) at `init` time. See [docs/macos-setup.md](docs/macos-setup.md#what-happens-when-the-last-window-closes-macoslast_window_closed).
 
 **Optional `build.prebuild`** — a command run from the project root *before* `web/` is staged into the bundle, on every `swift-pwa build` (and so on every cloud release that calls it, no hand-maintained "regenerate before tagging" ritual). Use it for a codegen / asset step that produces part of `web/` — an esbuild / Tailwind pass, a sprite-atlas packer, a generated index. A non-zero exit aborts the build, so a half-generated `web/` never ships. It runs through the platform shell (`/bin/sh -c`, `cmd /c` on Windows); skip it for fast local iteration with `build --skip-prebuild`. If it needs a toolchain (Node, etc.), add a setup step to the generated workflow's jobs.
 

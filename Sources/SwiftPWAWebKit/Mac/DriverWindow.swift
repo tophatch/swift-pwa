@@ -51,13 +51,62 @@
             return injected.contains { $0.timestamp == event.timestamp }
         }
 
+        /// Guards the one re-entrant path: dispatching a key equivalent can end
+        /// in `noResponder` again if nothing implements the action.
+        private nonisolated(unsafe) static var dispatchingKeyEquivalent = false
+
+        /// An injected event that reaches here was declined by the whole
+        /// responder chain, the page included — which is exactly the point at
+        /// which a real keystroke would be offered to the main menu.
+        ///
+        /// The driver injects with `NSWindow.sendEvent`, one level below the
+        /// `NSApplication.sendEvent` step that dispatches menu key equivalents,
+        /// so without this a driven ⌘V could only ever do nothing, whatever the
+        /// Edit menu contains. Doing it here rather than before delivery keeps
+        /// AppKit's real order: measured against a genuine keystroke, a page
+        /// that handles ⌘A and calls `preventDefault` keeps the key, and
+        /// offering the menu first would take it away.
+        ///
+        /// Driver builds only, and that is the whole scope of it: a released
+        /// app's keystrokes arrive through `NSApplication.sendEvent`, which
+        /// consults `mainMenu` itself.
+        ///
+        /// **The app has to be active for this to do anything**, which is the
+        /// one place the driver can't keep its "needn't be frontmost" promise.
+        /// A menu item's action is sent with a `nil` target, and AppKit routes
+        /// those through `NSApp.keyWindow` — an inactive app has none, so
+        /// nothing can receive `paste:` and `performKeyEquivalent` returns
+        /// false. Measured: backgrounded, `active=false key=nil` and ⌘A does
+        /// nothing; activated, the same keystroke selects the field. Not a gap
+        /// worth simulating — dispatching down the driven window's chain by
+        /// hand gets past the routing but still fails WebKit's own
+        /// `validateUserInterfaceItem`, and forcing past *that* would have the
+        /// driver report an editing capability a real user doesn't have.
+        /// `swift-pwa drive type --activate` brings the app forward first.
+        @MainActor
+        private func offerToMainMenu(_ event: NSEvent?) -> Bool {
+            guard !Self.dispatchingKeyEquivalent,
+                  let event, event.type == .keyDown,
+                  event.modifierFlags.contains(.command),
+                  let menu = NSApp.mainMenu
+            else { return false }
+            Self.dispatchingKeyEquivalent = true
+            defer { Self.dispatchingKeyEquivalent = false }
+            return menu.performKeyEquivalent(with: event)
+        }
+
         override func noResponder(for eventSelector: Selector) {
             let event = NSApp.currentEvent
             let suppress = Self.isInjected(event)
+            var handledByMenu = false
+            if suppress, eventSelector == #selector(NSResponder.keyDown(with:)) {
+                handledByMenu = MainActor.assumeIsolated { offerToMainMenu(event) }
+            }
             if ProcessInfo.processInfo.environment["SWIFT_PWA_DRIVER_TRACE"] != nil {
                 FileHandle.standardError.writeQuietly(Data("""
                 swift-pwa driver: noResponder(\(eventSelector)) \
-                ts=\(event?.timestamp.description ?? "nil") suppressed=\(suppress)\n
+                ts=\(event?.timestamp.description ?? "nil") suppressed=\(suppress) \
+                menu=\(handledByMenu)\n
                 """.utf8))
             }
             guard !suppress else { return }

@@ -107,6 +107,14 @@
             if window.firstResponder !== webView {
                 window.makeFirstResponder(webView)
             }
+            // Menu key equivalents need a key window, and only an *active* app
+            // has one — see `DriverWindow.offerToMainMenu`. Opt-in per
+            // keystroke, because taking over the user's screen is the cost the
+            // rest of this file exists to avoid.
+            if key.activate {
+                NSApp.activate(ignoringOtherApps: true)
+                window.makeKeyAndOrderFront(nil)
+            }
             // `characters` decides what the page sees as `event.key`, and an
             // **empty** string is not "no character" — WebKit reads it as a dead
             // key and the page gets `key: "Dead"`. Every named key used to land
@@ -120,7 +128,19 @@
             // for the navigation and function keys one of AppKit's private-use
             // code points (`NSLeftArrowFunctionKey` = U+F702 and friends).
             let named = SyntheticKeyMap.named(key.key) ?? key.code.flatMap(SyntheticKeyMap.named)
-            let characters = key.text ?? named?.characters ?? (key.key.count == 1 ? key.key : "")
+            var characters = key.text ?? named?.characters ?? (key.key.count == 1 ? key.key : "")
+            // Shift is the one modifier that changes the character a key
+            // produces, and `charactersIgnoringModifiers` ignores every
+            // modifier *except* shift — so a real ⇧⌘Z carries "Z", not "z".
+            // AppKit matches menu key equivalents on that string, so sending
+            // the lower-case form means a shift-bearing shortcut matches no
+            // item and does nothing at all: ⇧⌘Z looked like a broken Redo when
+            // the menu item was right and the event was wrong. Only letters are
+            // handled — shifted digits and punctuation are keyboard-layout
+            // dependent, so pass `text` explicitly for those.
+            if key.modifiers.contains(.shift), key.text == nil, named == nil {
+                characters = characters.uppercased()
+            }
             // Real navigation/function-key events carry these flags; WebKit and
             // page code can both read them, so match what a keyboard produces.
             var modifierFlags = Self.flags(key.modifiers)
@@ -187,6 +207,21 @@
         /// key event's fate asynchronously and re-sends the unhandled ones on a
         /// later turn of the main loop, so there is no synchronous window to
         /// bracket. See `DriverWindow`.
+        ///
+        /// A ⌘-bearing key that nothing in the chain handles goes on to the main
+        /// menu, and **only then** — see `DriverWindow.noResponder(for:)`, which
+        /// is where an unhandled injected event surfaces. Editing shortcuts on
+        /// macOS are menu *key equivalents* (⌘V becomes `paste:` down the
+        /// responder chain), and `NSWindow.sendEvent` is below the step that
+        /// dispatches them, so injecting at the window alone can never work them
+        /// however right the menu is.
+        ///
+        /// Offering them to the menu *here* instead would be simpler and wrong:
+        /// measured against a real keystroke, a page that handles ⌘A and calls
+        /// `preventDefault` keeps the key — its handler runs and the field is
+        /// not selected. Menu-first reversed that, silently taking ⌘-keys away
+        /// from the page, which would make the driver disagree with the app it
+        /// is supposed to be measuring.
         @MainActor
         private func send(_ event: NSEvent, to window: NSWindow) {
             #if SWIFT_PWA_DRIVER

@@ -35,6 +35,36 @@ struct AppPluginTests {
         #expect(app.didQuitWith == 3)
     }
 
+    @Test("app.lastWindowClosed reads, sets, and refuses a value that isn't one")
+    func lastWindowClosed() async throws {
+        let app = makeApp()
+
+        // Reading takes no argument and reports the default.
+        let read = await dispatch("app.lastWindowClosed", payload: Data("{}".utf8), on: app)
+        guard case let .ok(data) = read else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(StringResult.self, from: data).value == "reopen")
+
+        // Setting replies with the value now in force, so a settings UI can
+        // round-trip in one call.
+        let set = try await dispatch(
+            "app.lastWindowClosed",
+            payload: JSONEncoder().encode(AppLastWindowClosedArgs(value: "keep-running")),
+            on: app
+        )
+        guard case let .ok(setData) = set else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(StringResult.self, from: setData).value == "keep-running")
+        #expect(app.lastWindowClosed == .keepRunning)
+
+        // A typo must not silently leave the old policy in place looking set.
+        let bad = try await dispatch(
+            "app.lastWindowClosed",
+            payload: JSONEncoder().encode(AppLastWindowClosedArgs(value: "quitt")),
+            on: app
+        )
+        guard case .failure = bad else { Issue.record("expected a failure"); return }
+        #expect(app.lastWindowClosed == .keepRunning)
+    }
+
     @Test("app.name returns a non-empty name")
     func name() async throws {
         let app = makeApp()

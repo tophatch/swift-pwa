@@ -187,6 +187,65 @@ For a richer About panel (formatted text, links), drop your own
 `Resources/Credits.html` or `Credits.rtf` into the `.app` after the
 build — the bundler-generated one is just plain `description` text.
 
+### The menu bar
+
+The runtime installs a standard menu bar — app, **Edit** and **Window**
+submenus — with no code on your part. You mostly won't think about it,
+with one exception worth knowing: **the Edit menu is what makes text
+fields work.**
+
+On macOS the editing shortcuts are not a property of a text field.
+They are main-menu *key equivalents*, dispatched down the responder
+chain as `selectAll:` / `copy:` / `paste:` / `cut:` / `undo:`, and a
+key equivalent matching no menu item is never dispatched at all — it
+falls off the end of the chain and the app beeps. So an app with no
+Edit menu cannot select-all, copy, paste, cut or undo in a text field,
+however ordinary the page's HTML. (Before v0.10.4, none could.)
+
+The items carry a `nil` target, which is what lets WebKit enable and
+disable them against whatever is focused: Paste greys out when the
+focus isn't editable, without swift-pwa knowing anything about your
+page. Adding your own menus is a matter of appending to
+`NSApp.mainMenu` in `configure(_:)`; the runtime sets it before your
+closure runs, so anything you add survives.
+
+### What happens when the last window closes (`macos.last_window_closed`)
+
+macOS is the only platform here where an app outlives its windows: the
+menu bar stays and the process keeps running. Linux and Windows exit
+when the last window closes. Since ⌘W now works, that state is
+reachable, so it's configurable:
+
+```json
+"macos": { "last_window_closed": "reopen" }
+```
+
+| value | behaviour |
+| --- | --- |
+| `reopen` *(default)* | Stay running, and reopen the window when the app is next activated — a Dock click, ⌘Tab, opening it again. What Finder, Safari and Mail do. |
+| `keep-running` | Stay running with no window and don't reopen one. For an app whose real surface is a menu-bar item. |
+| `quit` | Terminate once the last window closes, like a single-window utility — and like Linux and Windows already behave. |
+
+The reopened window is rebuilt from the `WindowConfig` it was created
+with, so it comes back as the app asked for it, including a remembered
+size and position under `remember_state`. Page state is not preserved:
+it loads fresh, exactly as a relaunch would.
+
+Like the `window` block, this seeds the generated `App.swift` at
+`swift-pwa init` time (`ctx.lastWindowClosed`) rather than being read
+at runtime — editing `pwa.json` later means editing the generated
+source too. `swift-pwa build` rejects a value that isn't one of the
+three rather than ignoring it.
+
+Choose `keep-running` only for an app that has a status item or some
+other way back; without one it is the combination that strands a user.
+
+To let a *user* choose — a checkbox in your settings UI — the page can
+read and set the policy at runtime with `app.lastWindowClosed`; it
+applies to the very next close. Storing their choice is your app's job,
+and re-applying it at startup is one `invoke`. See
+[docs/javascript-api.md](javascript-api.md#applastwindowclosed--what-closing-the-last-window-does).
+
 ## 5. Codesigning
 
 For a quick local run you don't need signing — Gatekeeper will warn

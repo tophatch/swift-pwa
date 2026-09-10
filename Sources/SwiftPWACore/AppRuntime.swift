@@ -53,6 +53,16 @@ public protocol AppContext: AnyObject, Sendable {
     /// by every backend at its own permission seam, so one declaration governs
     /// all five. Nothing is permitted until declared; see ``PermissionPolicy``.
     var permissions: PermissionPolicy { get }
+
+    /// What happens when the app's last window closes. **macOS only** — it is
+    /// the one platform here where an app outlives its windows; see
+    /// ``LastWindowClosedPolicy``, which documents why the other backends
+    /// ignore it. Defaults to ``LastWindowClosedPolicy/reopen``.
+    ///
+    /// Seeded from `pwa.json`'s `macos.last_window_closed` at `swift-pwa init`
+    /// time, like the `window` block: the value here is the running app's
+    /// source of truth, and editing `pwa.json` later doesn't change it.
+    var lastWindowClosed: LastWindowClosedPolicy { get set }
 }
 
 public extension AppContext {

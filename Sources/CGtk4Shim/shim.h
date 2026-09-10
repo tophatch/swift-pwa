@@ -520,4 +520,66 @@ static inline int swiftpwa_notify_send(
     return 0;
 }
 
+/// Swift-side undo/redo callback: `redo` is non-zero for Ctrl+Shift+Z.
+typedef void (*swiftpwa_undo_callback)(void *user_data, int redo);
+
+typedef struct {
+    swiftpwa_undo_callback cb;
+    void *user_data;
+} swiftpwa_undo_box;
+
+static void swiftpwa_undo_box_free(gpointer data) {
+    g_free(data);
+}
+
+static gboolean swiftpwa_undo_key_pressed(
+    GtkEventControllerKey *controller,
+    guint keyval,
+    guint keycode,
+    GdkModifierType state,
+    gpointer user_data
+) {
+    (void)controller;
+    (void)keycode;
+    swiftpwa_undo_box *box = (swiftpwa_undo_box *)user_data;
+    if (!box) return FALSE;
+    if (!(state & GDK_CONTROL_MASK)) return FALSE;
+    if (gdk_keyval_to_lower(keyval) != GDK_KEY_z) return FALSE;
+    box->cb(box->user_data, (state & GDK_SHIFT_MASK) ? 1 : 0);
+    return TRUE;
+}
+
+/// Wire Ctrl+Z / Ctrl+Shift+Z on `window` to `cb`, **after** the page has had
+/// its chance.
+///
+/// Deliberately a key controller in the **bubble** phase rather than a
+/// `GtkShortcutController` like the quit / DevTools bindings. Those use
+/// `GTK_SHORTCUT_SCOPE_GLOBAL` precisely so they fire over a focused text
+/// input; undo must not, or a page implementing its own — a drawing or editing
+/// app, the kind most likely to want Ctrl+Z — would never see the key. Bubble
+/// runs after the focused widget (the WebKit view, which asks the page), so
+/// this only fires on a key nothing else claimed. That matches macOS, where
+/// the page keeps a Cmd+Z it calls `preventDefault` on.
+static inline void swiftpwa_window_connect_undo(
+    GtkWindow *window,
+    swiftpwa_undo_callback cb,
+    void *user_data
+) {
+    swiftpwa_undo_box *box = (swiftpwa_undo_box *)g_malloc0(sizeof(swiftpwa_undo_box));
+    box->cb = cb;
+    box->user_data = user_data;
+
+    GtkEventController *ctrl = gtk_event_controller_key_new();
+    gtk_event_controller_set_propagation_phase(ctrl, GTK_PHASE_BUBBLE);
+    g_signal_connect_data(
+        ctrl,
+        "key-pressed",
+        G_CALLBACK(swiftpwa_undo_key_pressed),
+        box,
+        (GClosureNotify)swiftpwa_undo_box_free,
+        (GConnectFlags)0
+    );
+    gtk_widget_add_controller(GTK_WIDGET(window), ctrl);
+}
+
 #endif

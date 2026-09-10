@@ -297,6 +297,21 @@
             )
         }
 
+        /// Hand keyboard focus to the web content. Called from
+        /// `WM_SETFOCUS`.
+        ///
+        /// Activating the host window doesn't focus the page by itself —
+        /// measured: a freshly launched app reports `document.hasFocus() ===
+        /// false` while its window is foreground and the page's own
+        /// `element.focus()` has set `activeElement`, so every keystroke goes
+        /// nowhere until the user clicks inside the window. macOS and both
+        /// GTK backends focus their web view on activation, so this is the
+        /// one platform where "launch the app and start typing" didn't work.
+        func takeFocus() {
+            guard let controller else { return }
+            swiftpwa_w2_controller_move_focus(controller)
+        }
+
         /// Tear down the controller. Called from `Win32Window` on
         /// `WM_DESTROY`; releases COM refs and stops the WebView2
         /// process for this window.

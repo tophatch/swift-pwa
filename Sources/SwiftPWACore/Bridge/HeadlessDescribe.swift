@@ -140,6 +140,8 @@ public final class HeadlessAppContext: AppContext {
     public let assetProvider = AssetProvider()
     public let events = EventBus()
     public let permissions = PermissionPolicy()
+    /// Stored to satisfy ``AppContext``; a catalog dump has no windows.
+    public var lastWindowClosed: LastWindowClosedPolicy = .reopen
     public private(set) var windows: [WindowID: any Window] = [:]
     private var installedPlugins: Set<String> = []
 

@@ -242,6 +242,9 @@
                 }
                 return true
             case WM_SETFOCUS:
+                // Forward focus into the web content, or the window is
+                // focused and the page isn't — see `WebView2Adapter.takeFocus`.
+                (webView as? WebView2Adapter)?.takeFocus()
                 emit(.didFocus)
                 return true
             case WM_CLOSE:

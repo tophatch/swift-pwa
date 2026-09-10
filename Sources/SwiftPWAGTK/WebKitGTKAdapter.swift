@@ -232,6 +232,25 @@
             }
         }
 
+        /// Run WebKit's own undo / redo on the focused editable element.
+        ///
+        /// WebKit's GTK port binds cut / copy / paste / select-all itself but
+        /// leaves these two to the embedder, so without this Ctrl+Z in a text
+        /// field does nothing. Called from the window's key handler, which
+        /// only fires for a key the page didn't claim.
+        func performUndo(redo: Bool) {
+            // Already on the GTK main thread: the only caller is the window's
+            // key handler, which GTK dispatches there. Hopping through
+            // `MainThread.run` would only defer the edit past the keystroke
+            // that asked for it.
+            let webView = UnsafeMutableRawPointer(viewWidget)
+            if redo {
+                swiftpwa_web_view_redo(webView)
+            } else {
+                swiftpwa_web_view_undo(webView)
+            }
+        }
+
         // MARK: - Snapshot
 
         public var supportsSnapshot: Bool {

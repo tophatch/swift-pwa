@@ -15,8 +15,32 @@ public struct Invocation: Sendable, Hashable {
     }
 
     /// Convenience: decode the payload into a typed struct.
+    ///
+    /// **A missing payload decodes as an empty object.** `bridge.js` sends
+    /// `payload: null` for `invoke(cmd)` called with no argument, and a struct
+    /// whose fields are *all optional* still can't decode from `null` — the
+    /// synthesized initializer asks for a keyed container and JSON `null`
+    /// isn't one. So the documented `invoke('app.quit')` failed with a
+    /// decoding error, while `invoke('app.quit', {})` worked, and the only
+    /// commands that escaped it were the ones taking `EmptyArgs` (no
+    /// properties, so nothing ever asks for the container).
+    ///
+    /// Retried rather than substituted up front, so this can only rescue a
+    /// decode that was already failing: a handler that legitimately wants a
+    /// `null` payload still gets it.
     public func decode<T: Decodable>(_ type: T.Type = T.self) throws -> T {
-        try JSONDecoder().decode(type, from: payload)
+        do {
+            return try JSONDecoder().decode(type, from: payload)
+        } catch {
+            guard isNullPayload else { throw error }
+            return try JSONDecoder().decode(type, from: Data("{}".utf8))
+        }
+    }
+
+    /// Whether the payload is the JSON literal `null` (what the JS side sends
+    /// for an argument-less invoke), ignoring surrounding whitespace.
+    private var isNullPayload: Bool {
+        String(decoding: payload, as: UTF8.self).trimmingCharacters(in: .whitespacesAndNewlines) == "null"
     }
 }
 

@@ -18,6 +18,10 @@
         public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
         public let events = EventBus()
         public let permissions = PermissionPolicy()
+        /// Stored to satisfy ``AppContext``; this backend never reads it.
+        /// macOS is the only platform where an app outlives its windows —
+        /// see ``LastWindowClosedPolicy``.
+        public var lastWindowClosed: LastWindowClosedPolicy = .reopen
         public private(set) var windows: [WindowID: any Window] = [:]
         public var pendingExitCode: Int32?
         private var installedPlugins: Set<String> = []

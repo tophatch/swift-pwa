@@ -282,11 +282,23 @@ If you're SSH'd in headlessly:
 ```bash
 # Run inside Xvfb so it doesn't need a real display.
 Xvfb :99 -screen 0 1280x720x24 &
-DISPLAY=:99 swift run --package-path Examples/HelloPWA HelloPWA &
+# GDK_BACKEND=x11 is not optional on GTK4 — see below.
+GDK_BACKEND=x11 DISPLAY=:99 swift run --package-path Examples/HelloPWA HelloPWA &
 sleep 2
 # Take a screenshot to prove it rendered.
 DISPLAY=:99 import -window root /tmp/swift-pwa.png
 ```
+
+**Pin `GDK_BACKEND=x11`, or a GTK4 run can miss your Xvfb entirely.** GTK4
+prefers the Wayland backend, and `wl_display_connect(NULL)` falls back to the
+socket named `wayland-0` when `WAYLAND_DISPLAY` is unset — so on a box with a
+logged-in desktop session, an app launched over SSH with `DISPLAY=:99` opens
+its window on *that* session's compositor and leaves `:99` empty. It fails
+confusingly rather than loudly: the app starts, the driver attaches, `eval`
+works and reports a window with sensible geometry, while `xwininfo -root
+-tree` on `:99` shows zero children and every injected keystroke goes nowhere.
+`xwininfo` is the quick check — a display with no children means the window
+isn't there, not that the app is broken.
 
 ## 6. Build an `.AppImage`
 
@@ -435,6 +447,28 @@ parts stay on the CPU here. See
 for the full matrix. Vendoring the GPU libs yourself uses
 [`Scripts/vendor-onnxruntime-linux-gpu.sh`](../Scripts/vendor-onnxruntime-linux-gpu.sh)
 (then `SWIFT_PWA_ONNXRUNTIME_LINUX_GPU_LIB_DIR=…/Vendor/onnxruntime-desktop-gpu/linux-x86_64`).
+
+## Keyboard shortcuts
+
+| Shortcut               | Action                                                   |
+|------------------------|----------------------------------------------------------|
+| `Ctrl+Q`               | Quit (matches the Windows binding).                       |
+| `Ctrl+Alt+J`           | Open the WebKit inspector.                                |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo in the focused editable element.           |
+
+Cut, copy, paste and select-all need no binding — WebKit's GTK port
+handles those itself. **Undo and redo it leaves to the embedder**, so
+swift-pwa supplies them via
+`webkit_web_view_execute_editing_command`; before v0.10.4 they simply
+did nothing.
+
+The two groups differ in precedence, deliberately. `Ctrl+Q` and
+`Ctrl+Alt+J` are bound ahead of focus (a GTK3 accel group, a
+global-scope `GtkShortcutController` on GTK4), so they fire even while a
+text input has the keyboard. **Undo does not**: it runs only after the
+page has declined the key, so an app that implements its own `Ctrl+Z` —
+a drawing or editing app, the kind most likely to want it — keeps it by
+calling `preventDefault()`. That matches macOS.
 
 ## Known limitations on Linux
 

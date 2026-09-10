@@ -174,6 +174,14 @@
             // accelerator's lifetime.
             let selfPtr = Unmanaged.passUnretained(self).toOpaque()
             swiftpwa_accel_connect_devtools(group, devToolsAcceleratorCallback, selfPtr)
+            // Undo is *not* an accelerator — see the shim: it runs after the
+            // page has declined the key, so an app with its own Ctrl+Z keeps
+            // it. Same lifetime argument as the DevTools pointer above.
+            swiftpwa_window_connect_undo(
+                UnsafeMutableRawPointer(windowPtr).assumingMemoryBound(to: GtkWidget.self),
+                undoKeyCallback,
+                selfPtr
+            )
             // The window now holds the only ref we care about; release
             // the floating one returned by `_new`.
             g_object_unref(UnsafeMutableRawPointer(group))
@@ -347,6 +355,17 @@
             guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
             let window = Unmanaged<GTKWindow>.fromOpaque(opaque).takeUnretainedValue()
             window.webView.openDevTools()
+        }
+    }
+
+    /// Ctrl+Z / Ctrl+Shift+Z, fired only for a key the page didn't claim.
+    let undoKeyCallback: @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void = { userData, redo in
+        guard let userData else { return }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let window = Unmanaged<GTKWindow>.fromOpaque(opaque).takeUnretainedValue()
+            (window.webView as? WebKitGTKAdapter)?.performUndo(redo: redo != 0)
         }
     }
 #endif

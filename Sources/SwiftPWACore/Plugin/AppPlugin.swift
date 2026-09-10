@@ -49,6 +49,32 @@ public struct AppPlugin: Plugin {
         registry.register("app.cacheDir", typed: { (_: EmptyArgs, _) -> StringResult in
             StringResult(value: PlatformDirectories.cacheDirectory(appID: Self.appID()).path)
         })
+
+        // What happens when the last window closes, readable and settable
+        // from the page so an app can put it behind a preference checkbox.
+        // Both sites that consult it read it when they need it, so a change
+        // takes effect on the very next close — nothing is cached at launch.
+        //
+        // Where the choice is *stored* is deliberately the app's business:
+        // an app already has somewhere it keeps preferences, and a runtime
+        // that quietly persisted this one would then have to answer which of
+        // the two wins at launch, its own file or `pwa.json`'s default.
+        registry.register(
+            "app.lastWindowClosed",
+            typed: { (args: AppLastWindowClosedArgs, _) async throws -> StringResult in
+                if let requested = args.value {
+                    guard let policy = LastWindowClosedPolicy(rawValue: requested) else {
+                        let valid = LastWindowClosedPolicy.allCases.map(\.rawValue).joined(separator: ", ")
+                        throw BridgeError(
+                            code: BridgeError.decode,
+                            message: "app.lastWindowClosed: \"\(requested)\" isn't one of: \(valid)"
+                        )
+                    }
+                    await MainThread.run { app.lastWindowClosed = policy }
+                }
+                return await StringResult(value: MainThread.run { app.lastWindowClosed.rawValue })
+            }
+        )
     }
 
     /// The human-facing app name. Prefers the bundle's display name, then
@@ -118,4 +144,12 @@ public struct AppQuitArgs: Sendable, Codable {
     /// Process exit code. Defaults to `0` (clean exit) when omitted.
     public var exitCode: Int32?
     public init(exitCode: Int32? = nil) { self.exitCode = exitCode }
+}
+
+public struct AppLastWindowClosedArgs: Sendable, Codable {
+    /// The policy to set — `reopen`, `keep-running` or `quit`. Omit to read
+    /// the current one; either way the reply carries the value in force
+    /// afterwards, so a settings UI can round-trip in one call.
+    public var value: String?
+    public init(value: String? = nil) { self.value = value }
 }

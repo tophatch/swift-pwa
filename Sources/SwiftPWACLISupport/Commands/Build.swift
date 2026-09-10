@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import SwiftPWACore
 #if os(Windows)
     import WinSDK // _putenv_s (ucrt) — `setenv` is POSIX-only
 #endif
@@ -286,6 +287,7 @@ struct Build: AsyncParsableCommand {
         let prebuildRan = !skipPrebuild
             && (pwa.build?.prebuild?.trimmingCharacters(in: .whitespaces).isEmpty == false)
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
+        try Self.validateLastWindowClosed(manifest: pwa)
         try await Self.validatePermissions(
             manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
         )
@@ -781,6 +783,20 @@ struct Build: AsyncParsableCommand {
     /// precisely where a typo does damage: the manifest entry silently isn't
     /// emitted and the device denies a permission the adopter believes they
     /// declared.
+    /// Reject an unspelled `macos.last_window_closed` before anything is built.
+    /// The cost of letting it through is the worst kind: the key is ignored,
+    /// the app silently keeps the default, and the setting looks broken rather
+    /// than misspelled. Checked on every target, not just macOS, so the typo
+    /// surfaces on whichever platform the adopter happens to build first.
+    static func validateLastWindowClosed(manifest: PWAManifest) throws {
+        guard let raw = manifest.macos?.lastWindowClosed else { return }
+        guard LastWindowClosedPolicy(rawValue: raw) == nil else { return }
+        let valid = LastWindowClosedPolicy.allCases.map(\.rawValue).joined(separator: ", ")
+        throw ValidationError(
+            "pwa.json: macos.last_window_closed is \"\(raw)\", which isn't one of: \(valid)."
+        )
+    }
+
     static func validatePermissions(
         manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String
     ) async throws {

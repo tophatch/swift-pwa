@@ -421,4 +421,63 @@ static inline int swiftpwa_notify_send(
     return 0;
 }
 
+/// Swift-side undo/redo callback: `redo` is non-zero for Ctrl+Shift+Z.
+typedef void (*swiftpwa_undo_callback)(void *user_data, int redo);
+
+typedef struct {
+    swiftpwa_undo_callback cb;
+    void *user_data;
+} swiftpwa_undo_box;
+
+static void swiftpwa_undo_box_free(gpointer data, GClosure *closure) {
+    (void)closure;
+    g_free(data);
+}
+
+static gboolean swiftpwa_undo_key_handler(
+    GtkWidget *widget,
+    GdkEventKey *event,
+    gpointer user_data
+) {
+    (void)widget;
+    swiftpwa_undo_box *box = (swiftpwa_undo_box *)user_data;
+    if (!box || !event) return FALSE;
+    guint mods = event->state & gtk_accelerator_get_default_mod_mask();
+    if (!(mods & GDK_CONTROL_MASK)) return FALSE;
+    guint key = gdk_keyval_to_lower(event->keyval);
+    if (key != GDK_KEY_z) return FALSE;
+    box->cb(box->user_data, (mods & GDK_SHIFT_MASK) ? 1 : 0);
+    return TRUE;
+}
+
+/// Wire Ctrl+Z / Ctrl+Shift+Z on `window` to `cb`, **after** the page has had
+/// its chance.
+///
+/// Deliberately not an accelerator. An accel group is dispatched ahead of
+/// focus-based delivery — that is exactly why Ctrl+Q fires over a focused text
+/// input — so binding undo that way would take Ctrl+Z away from a page that
+/// implements its own, which is a drawing or editing app: precisely the kind
+/// most likely to want it. Connecting `after` the window's default
+/// `key-press-event` handler means this only runs when neither an accelerator
+/// nor the focus widget (the WebKit view, which asks the page) claimed the
+/// key. That matches macOS, where the same measurement shows the page keeps a
+/// Cmd+Z it calls `preventDefault` on.
+static inline void swiftpwa_window_connect_undo(
+    GtkWidget *window,
+    swiftpwa_undo_callback cb,
+    void *user_data
+) {
+    swiftpwa_undo_box *box = (swiftpwa_undo_box *)g_malloc0(sizeof(swiftpwa_undo_box));
+    box->cb = cb;
+    box->user_data = user_data;
+    g_signal_connect_data(
+        window,
+        "key-press-event",
+        G_CALLBACK(swiftpwa_undo_key_handler),
+        box,
+        swiftpwa_undo_box_free,
+        G_CONNECT_AFTER
+    );
+}
+
 #endif

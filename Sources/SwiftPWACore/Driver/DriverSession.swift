@@ -364,7 +364,12 @@
             if case let .string(value)? = payload?["code"] { code = value }
             var text: String?
             if case let .string(value)? = payload?["text"] { text = value }
-            return KeyInput(phase: phase, key: key, code: code, text: text, modifiers: modifiers)
+            var activate = false
+            if case let .bool(value)? = payload?["activate"] { activate = value }
+            return KeyInput(
+                phase: phase, key: key, code: code, text: text,
+                modifiers: modifiers, activate: activate
+            )
         }
 
         private static func decodeWheel(

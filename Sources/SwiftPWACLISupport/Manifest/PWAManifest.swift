@@ -181,6 +181,17 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var category: String? // LSApplicationCategoryType
         public var minimumSystemVersion: String? // e.g. "15.0"
         public var copyright: String? // NSHumanReadableCopyright; shown under the version in the About panel
+        /// What the app does when its last window closes (JSON key
+        /// `last_window_closed`): `reopen` (default), `keep-running` or
+        /// `quit`. Seeds `ctx.lastWindowClosed` in the generated `App.swift`
+        /// at `swift-pwa init` time — like the `window` block, the running
+        /// app's source of truth is the generated Swift, so editing this later
+        /// means updating that too.
+        ///
+        /// macOS-only, because it is the only platform here where an app
+        /// outlives its windows: Linux and Windows exit when the last one
+        /// closes. See `LastWindowClosedPolicy`.
+        public var lastWindowClosed: String?
         /// Arbitrary keys merged verbatim into the generated `Info.plist`,
         /// after swift-pwa's own keys (so they override on collision). The
         /// escape hatch for anything the schema doesn't model — App

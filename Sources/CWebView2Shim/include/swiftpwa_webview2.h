@@ -120,6 +120,15 @@ void swiftpwa_w2_controller_set_visible(swiftpwa_w2_controller *ctrl, int visibl
 void swiftpwa_w2_controller_set_background_color(
     swiftpwa_w2_controller *ctrl, uint8_t a, uint8_t r, uint8_t g, uint8_t b);
 
+// Give the WebView2 keyboard focus.
+//
+// Activating the host window does *not* focus the web content on its own:
+// the page's `document.hasFocus()` stays false and every keystroke goes
+// nowhere until the user clicks inside it. Call this from `WM_SETFOCUS` so
+// a freshly launched or re-activated window can be typed into immediately,
+// the way it already can be on the other platforms.
+void swiftpwa_w2_controller_move_focus(swiftpwa_w2_controller *ctrl);
+
 // Close the controller. Releases the WebView2 process for this window;
 // must be called before the parent HWND is destroyed.
 void swiftpwa_w2_controller_close(swiftpwa_w2_controller *ctrl);

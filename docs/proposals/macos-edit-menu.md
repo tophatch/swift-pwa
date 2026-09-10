@@ -278,6 +278,13 @@ Acceptance, in a focused text field in a real app:
       from editor state it gets back from the web process asynchronously, and
       there is no cheap automated instrument for it (see finding 5).
 
+Only macOS has an automated guard. The Linux and Windows fixes were verified
+by hand on real hardware, and CI compiles them and nothing more — tracked as
+[#164](https://github.com/tophatch/swift-pwa/issues/164), which also records
+the two injection paths that worked (XTEST via ctypes on Linux, `keybd_event`
+on Windows) since `swift-pwa drive` has synthetic input on macOS and GTK3
+only.
+
 A regression guard for the menu's shape lives in `MainMenuTests` — it cannot
 prove a keystroke edits a field, but it catches the failure that produced this
 proposal: the items quietly not being there.

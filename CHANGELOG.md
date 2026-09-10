@@ -37,6 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   genuine keystroke, its handler runs and `preventDefault` holds — so an app
   that already intercepts these keys is unaffected.
 
+  **iPadOS was measured and needs nothing.** It was the platform most likely
+  to share the bug — and doesn't: on an iPad Pro (M5) with a hardware
+  keyboard, ⌘A / ⌘C / ⌘V / ⌘X / ⌘Z all work in a `WKWebView` text field with
+  no menu at all, because UIKit hands the standard edit actions down the
+  responder chain itself. That step is exactly what AppKit lacks, where the
+  same actions exist only as main-menu key equivalents.
+
 - **The app driver could not have caught this, and now can.** `drive type`
   gained **`--modifiers shift,control,alt,command`**, and two things behind it
   had to change before a driven ⌘V meant anything. Synthetic input is

@@ -142,13 +142,30 @@ unspelled value rather than ignoring it.
   default so apps stop shipping broken text fields.
 - **Localization of menu titles.** The existing app menu is English-only; this
   matches it rather than solving a problem the file does not already have.
-- **The other platforms.** GTK and WebView2 handle editing accelerators inside
-  the web view without a menu bar, because neither routes them through one.
-  Still unmeasured, and cheap to check with the probe below.
-- **iOS.** UIKit key commands are a different mechanism entirely
-  (`UIKeyCommand`, `buildMenu(with:)`). A hardware keyboard on iPad has the
-  same class of problem, is the most likely of the four to actually be broken,
-  and is not addressed here.
+- **Linux and Windows.** GTK and WebView2 are expected to handle editing
+  accelerators inside the web view, because neither routes them through a menu
+  bar — and iOS having turned out fine for the analogous reason raises the
+  prior. Still unmeasured; the probe page below runs there unchanged.
+- **iOS — measured, and it needs nothing.** This was expected to be the most
+  likely of the four to share the bug. It doesn't: on an iPad Pro (M5) with a
+  hardware keyboard, ⌘A, ⌘C, ⌘V, ⌘X and ⌘Z all work in a `WKWebView` text
+  field with no menu of any kind. UIKit hands the standard edit actions
+  (`UIResponderStandardEditActions`) down the responder chain on its own,
+  which is exactly the step AppKit *doesn't* have — there the same actions
+  only exist as main-menu key equivalents, which is the whole bug. Nothing to
+  fix, and worth knowing before someone ports `buildMenu(with:)` over here for
+  symmetry.
+
+  Reading a device is manual: the control socket listens on the device's
+  loopback, so `drive` can't reach it. The probe page reports on itself
+  instead — field value, selection, and the keydowns it saw.
+
+  One trap this turned up, for whoever measures the other platforms: the
+  obvious sequence ⌘A → ⌘C → ⌘V → ⌘X → ⌘Z **round-trips to its own starting
+  state**, so "the field looks unchanged and fully selected" is equally
+  consistent with everything working and with only ⌘A working. Run keystrokes
+  that leave *distinct* values — ⌘X should empty the field, then ⌘V should
+  refill it.
 
 ## What measuring changed
 

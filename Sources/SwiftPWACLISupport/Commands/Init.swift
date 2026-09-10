@@ -133,7 +133,8 @@ struct Init: AsyncParsableCommand {
             window: manifest.window,
             entry: manifest.web.entry,
             spaFallback: manifest.web.spaFallback ?? false,
-            macos: manifest.macos
+            macos: manifest.macos,
+            externalUrls: manifest.externalUrls
         ).write(
             to: root.appendingPathComponent("Sources/\(identifier)/App.swift"),
             atomically: true,
@@ -389,7 +390,8 @@ enum Templates {
         window: PWAManifest.WindowSection,
         entry: String = "index.html",
         spaFallback: Bool = false,
-        macos: PWAManifest.MacOSSection? = nil
+        macos: PWAManifest.MacOSSection? = nil,
+        externalUrls: PWAManifest.ExternalURLsSection? = nil
     ) -> String {
         // Escape the window title for safe embedding in the generated
         // Swift source. `window.title` is whatever the user typed, which
@@ -440,6 +442,29 @@ enum Templates {
             // so this has to be written at the depth it lands at.
             return "\n    ctx.lastWindowClosed = .\(caseName)\n"
         }()
+        // Which URLs the app may hand to the OS, and what an off-origin
+        // navigation does (`external_urls` in pwa.json). Same four-space
+        // caveat as above. Emitted only for what the manifest actually asks
+        // for: the defaults — the four web schemes, off-origin navigation to
+        // the system browser — need no code.
+        let externalURLLines: String = {
+            var lines: [String] = []
+            let schemes = (externalUrls?.schemes ?? [])
+                .map { $0.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":/ ")) }
+                .filter { !$0.isEmpty && !ExternalURLPolicy.defaultSchemes.contains($0) }
+            if !schemes.isEmpty {
+                let list = schemes.map { "\"\($0)\"" }.joined(separator: ", ")
+                lines.append("    ctx.externalURLs.declare(schemes: \(list))")
+            }
+            if let raw = externalUrls?.offOriginNavigation,
+               let navigation = OffOriginNavigation(rawValue: raw),
+               navigation != .system
+            {
+                lines.append("    ctx.externalURLs.offOriginNavigation = .inApp")
+            }
+            guard !lines.isEmpty else { return "" }
+            return "\n" + lines.joined(separator: "\n") + "\n"
+        }()
         return """
         // swift-pwa-generated: v\(SwiftPWAVersion.current)
         //
@@ -467,7 +492,7 @@ enum Templates {
         }
 
         @MainActor
-        func configure(_ ctx: any AppContext) throws {\(lastWindowClosedLine)
+        func configure(_ ctx: any AppContext) throws {\(lastWindowClosedLine)\(externalURLLines)
             let content: WindowContent
             if let dev = ProcessInfo.processInfo.environment["PWA_DEV_SERVER"],
                let devURL = URL(string: dev) {

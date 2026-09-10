@@ -9,6 +9,7 @@
         public let assetProvider = AssetProvider()
         public let events = EventBus()
         public let permissions = PermissionPolicy()
+        public let externalURLs = ExternalURLPolicy()
         public private(set) var windows: [WindowID: any Window] = [:]
         public var pendingExitCode: Int32?
         public var lastWindowClosed: LastWindowClosedPolicy = .reopen
@@ -28,7 +29,7 @@
             // do it manually.
             use(WindowPlugin())
             use(PlatformInfoPlugin())
-            use(SystemPlugin())
+            use(SystemPlugin(urlOpener: AppleURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))

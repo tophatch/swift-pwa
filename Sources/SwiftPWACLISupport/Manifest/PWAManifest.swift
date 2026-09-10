@@ -41,6 +41,10 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     /// ``PermissionsSection``; the runtime ceiling is `ctx.permissions`.
     public var permissions: PermissionsSection?
 
+    /// Which URLs may be handed to the OS, and what an off-origin navigation
+    /// does. See ``ExternalURLsSection``; seeds `ctx.externalURLs`.
+    public var externalUrls: ExternalURLsSection?
+
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
     /// `ExecutableNameResolver` (which asks SwiftPM for the real product

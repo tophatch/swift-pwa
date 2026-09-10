@@ -54,6 +54,7 @@
         public let assetProvider = AssetProvider()
         public let events = EventBus()
         public let permissions = PermissionPolicy()
+        public let externalURLs = ExternalURLPolicy()
         /// Stored to satisfy ``AppContext``; this backend never reads it.
         /// macOS is the only platform where an app outlives its windows —
         /// see ``LastWindowClosedPolicy``.
@@ -64,7 +65,7 @@
         public init() {
             use(WindowPlugin())
             use(PlatformInfoPlugin())
-            use(SystemPlugin())
+            use(SystemPlugin(urlOpener: AppleURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))

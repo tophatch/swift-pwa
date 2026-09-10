@@ -63,6 +63,14 @@ public protocol AppContext: AnyObject, Sendable {
     /// time, like the `window` block: the value here is the running app's
     /// source of truth, and editing `pwa.json` later doesn't change it.
     var lastWindowClosed: LastWindowClosedPolicy { get set }
+
+    /// Which URLs may be handed to the operating system, and what an
+    /// off-origin navigation does. Consulted by `system.openURL` and by each
+    /// backend's navigation policy, so one declaration governs both routes out
+    /// of the app; see ``ExternalURLPolicy``.
+    ///
+    /// Seeded from `pwa.json`'s `external_urls` block at `swift-pwa init` time.
+    var externalURLs: ExternalURLPolicy { get }
 }
 
 public extension AppContext {

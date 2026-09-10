@@ -32,6 +32,17 @@ public struct BridgeError: Error, Sendable, Codable, Equatable {
     /// output.
     public static let image = "E_IMAGE"
 
+    /// `system.openURL` couldn't hand the URL to the OS: an unparseable URL,
+    /// a scheme that means something only inside this app (`pwa:`, `file:`,
+    /// `javascript:`), or a platform that declined to open it.
+    public static let url = "E_URL"
+
+    /// The app hasn't declared this URL scheme, so the runtime refused to hand
+    /// it to the OS. Kept distinct from ``url`` because it is the app's own
+    /// build-time omission rather than anything about the URL or the machine —
+    /// the same distinction `permissions` draws between undeclared and denied.
+    public static let urlScheme = "E_URL_SCHEME"
+
     /// This build has no codec for the requested source or output format. Kept
     /// distinct from ``image`` because it answers a question the page could
     /// have asked first via `image.info`, and because it is a property of the

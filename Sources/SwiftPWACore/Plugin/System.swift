@@ -159,19 +159,81 @@ public struct DefaultMemoryProvider: MemoryProvider {
 ///   `DispatchSource.makeMemoryPressureSource`; the Android backend emits it
 ///   from `onTrimMemory`. Linux/Windows have no portable signal and don't emit
 ///   (documented, not synthesized).
+/// Arguments for `system.openURL`.
+public struct SystemOpenURLArgs: Sendable, Codable, Equatable {
+    /// The URL to hand to the OS. Absolute, with a scheme — a relative path
+    /// has no meaning outside the app.
+    public var url: String
+
+    public init(url: String) {
+        self.url = url
+    }
+}
+
+/// Result of `system.openURL`. `opened: false` means the platform found no
+/// handler — a deep link into an app the user hasn't installed — which is
+/// information the page can act on, so it isn't reported as an error.
+public struct SystemOpenURLResult: Sendable, Codable, Equatable {
+    public var opened: Bool
+
+    public init(opened: Bool) {
+        self.opened = opened
+    }
+}
+
 public struct SystemPlugin: Plugin {
     public static let pluginName = "system"
 
     private let memory: any MemoryProvider
+    private let urlOpener: (any URLOpener)?
 
-    public init(_ memory: any MemoryProvider = DefaultMemoryProvider()) {
+    /// `urlOpener` is `nil` on a backend that hasn't implemented one, which
+    /// makes `system.openURL` refuse with `E_UNIMPLEMENTED`. The command is
+    /// registered either way so a page can feature-detect on the error code
+    /// rather than on the platform.
+    public init(
+        _ memory: any MemoryProvider = DefaultMemoryProvider(),
+        urlOpener: (any URLOpener)? = nil
+    ) {
         self.memory = memory
+        self.urlOpener = urlOpener
     }
 
     public func register(into registry: CommandRegistry, app: any AppContext) {
         let memory = memory
         registry.register("system.memory", typed: { (_: EmptyArgs, _) async -> MemorySnapshot in
             await memory.snapshot()
+        })
+
+        let urlOpener = urlOpener
+        let policy = app.externalURLs
+        registry.register("system.openURL", typed: { (args: SystemOpenURLArgs, _) async throws -> SystemOpenURLResult in
+            guard let url = URL(string: args.url), url.scheme != nil else {
+                throw BridgeError(
+                    code: BridgeError.url,
+                    message: "not a URL the system can open: '\(args.url)'"
+                )
+            }
+            switch policy.decide(url) {
+            case .open:
+                break
+            case let .refuse(reason):
+                throw BridgeError(
+                    code: reason == .undeclaredScheme ? BridgeError.urlScheme : BridgeError.url,
+                    message: reason == .undeclaredScheme
+                        ? "this app hasn't declared the '\(url.scheme ?? "")' scheme — add it to "
+                        + "`ctx.externalURLs.declare(schemes:)` and pwa.json's `external_urls.schemes`"
+                        : "'\(url.scheme ?? "")' URLs address this app's own content, not something "
+                        + "the system can open"
+                )
+            }
+            guard let urlOpener else {
+                throw BridgeError(
+                    code: BridgeError.unimplemented,
+                    message: "system.openURL isn't implemented on this platform yet"
+                )
+            }
+            return await SystemOpenURLResult(opened: urlOpener.open(url))
         })
 
         // Emit `system.memoryPressure` on the app-wide event bus where the OS

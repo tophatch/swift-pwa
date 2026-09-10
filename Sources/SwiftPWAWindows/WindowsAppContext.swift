@@ -18,6 +18,7 @@
         public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
         public let events = EventBus()
         public let permissions = PermissionPolicy()
+        public let externalURLs = ExternalURLPolicy()
         /// Stored to satisfy ``AppContext``; this backend never reads it.
         /// macOS is the only platform where an app outlives its windows —
         /// see ``LastWindowClosedPolicy``.

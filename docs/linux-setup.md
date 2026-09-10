@@ -472,6 +472,19 @@ calling `preventDefault()`. That matches macOS.
 
 ## Known limitations on Linux
 
+**A page can't open a URL outside the app, and JavaScript dialogs do nothing.**
+The GTK backend installs no `decide-policy` handler and no `script-dialog` handler on the `WebKitWebView`. The consequence is that a main-frame
+navigation to another site **loads in place and strands the app** — a swift-pwa
+window has no address bar and no back button — and `alert()` / `confirm()` /
+`prompt()` return instantly with nothing on screen, which a page cannot
+feature-detect (`typeof alert` is still `"function"`). `system.openURL` is
+registered here but refuses with `E_UNIMPLEMENTED`. All three landed on macOS
+and iOS in 0.11 behind one shared Core policy (`ctx.externalURLs`), so this
+backend needs the translation rather than the rules; tracked as issues
+[#165](https://github.com/tophatch/swift-pwa/issues/165),
+[#166](https://github.com/tophatch/swift-pwa/issues/166) and
+[#167](https://github.com/tophatch/swift-pwa/issues/167).
+
 **HEIC / AVIF need libheif at runtime, and the webview can't render them at
 all.** WebKitGTK (both 4.1 and 6.0, as distros ship them) links no HEIF or AVIF
 decoder — verified with `ldd`, they carry JPEG XL instead — so an `<img>` for

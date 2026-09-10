@@ -132,6 +132,9 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
     },
     "linux": {
         "desktop_categories": ["Utility"]
+    },
+    "external_urls": {
+        "schemes": ["things"]
     }
 }
 ```
@@ -147,6 +150,17 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 **`window.remember_state`** persists the window's size — and, where the platform allows, position — across launches, restoring it next time (on by default for apps scaffolded with `init`). It maps to `WindowConfig.rememberState` in `App.swift`; geometry is saved to a `window-state.json` in the per-app data directory. **Desktop only:** macOS / GTK3 / Windows restore both size and position; GTK4 / Wayland restore size only (the compositor owns placement); iOS / Android windows are full-screen, so it's a no-op. A multi-window app sets a distinct `WindowConfig.stateKey` per window so their frames are tracked separately.
 
 **Optional `macos.last_window_closed`** — what the app does when its last window closes: `reopen` (default — stay running and bring the window back when the app is next activated, the way Finder and Safari do), `keep-running` (stay running with no window, for a menu-bar app) or `quit` (terminate, like a single-window utility, and like Linux and Windows already behave). macOS-only, because it's the only platform here where an app outlives its windows. Like `window`, it seeds the generated `App.swift` (`ctx.lastWindowClosed`) at `init` time. See [docs/macos-setup.md](docs/macos-setup.md#what-happens-when-the-last-window-closes-macoslast_window_closed).
+
+**Optional `external_urls`** — which URLs the app may hand to the operating system, and what happens when the page tries to leave the app's own origin. `http`, `https`, `mailto` and `tel` are always allowed; anything else has to be named, because opening a URL launches whatever app is registered for it and the page asking isn't always your own code (`bridge.js` runs in subframes, and a link in user-authored content is written by the user). Seeds `ctx.externalURLs` in the generated `App.swift` at `init` time.
+
+```json
+"external_urls": {
+    "schemes": ["things", "obsidian"],
+    "off_origin_navigation": "system"
+}
+```
+
+`off_origin_navigation` defaults to `system`: a main-frame navigation to another site opens in the system browser and the app stays put, because loading it in place strands the app — no address bar, no back button. Set it to `in-app` for an app that deliberately hosts other people's pages and has its own way back. Same-origin navigation, subframes, and `about:` / `blob:` / `data:` URLs are unaffected. See [docs/javascript-api.md](docs/javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
 
 **Optional `build.prebuild`** — a command run from the project root *before* `web/` is staged into the bundle, on every `swift-pwa build` (and so on every cloud release that calls it, no hand-maintained "regenerate before tagging" ritual). Use it for a codegen / asset step that produces part of `web/` — an esbuild / Tailwind pass, a sprite-atlas packer, a generated index. A non-zero exit aborts the build, so a half-generated `web/` never ships. It runs through the platform shell (`/bin/sh -c`, `cmd /c` on Windows); skip it for fast local iteration with `build --skip-prebuild`. If it needs a toolchain (Node, etc.), add a setup step to the generated workflow's jobs.
 
@@ -227,6 +241,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      | Partial⁷                 |
 | `AppPlugin` (`app.quit` …)    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
+| Links out / JS dialogs²⁹      | Yes                     | Yes                          | —²⁹                        | —²⁹                     | —²⁹                      | —²⁹                      |
 | `EventsPlugin` (server push)  | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `DialogPlugin`                | Yes                     | Partial³                     | Yes                        | Yes⁴                    | Yes                      | Partial¹⁰                |
 | `FsPlugin`                    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
@@ -281,6 +296,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 26. Opt-in plugin (`geo.current` / `geo.watch`). Location gets a plugin rather than the web API because **macOS** WKWebView offers an embedder no way to grant `navigator.geolocation` — measured in one process, with location authorized, the plugin returns a fix while the web API still reports a user denial. On Linux it needs a running GeoClue **agent** (a desktop session has one; an SSH session doesn't). Fixes verified on all five platforms.
 27. Opt-in plugin (`ble.scan` / `ble.connect`), central role only. Unlike the rest of the device surface there is **no web fallback**: Web Bluetooth has never shipped in WKWebView, and Android's embedded WebView doesn't expose it either — so this is the difference between the capability existing and not existing, and it's declared under `permissions.device` rather than `permissions.web`. A connection is a duplex bridge session; UUIDs are canonicalized to 128-bit lower-case in both directions, because each platform spells them differently and a page written against one silently matches nothing on the others. Scan + connect + subscribe + write + read verified on all five. See [docs/bluetooth.md](docs/bluetooth.md).
 28. `image.*` decodes with the platform's own codec and re-encodes as PNG/JPEG, for images the webview itself cannot display — **HEIC renders in only one of the four engines** (Apple's), while ImageIO *and* Android's BitmapFactory both decode it. Opt-in (`SwiftPWAImage` + `ImagePlugin(PlatformImageTranscoder())`). Windows goes through **WIC**, and Linux through the vendored stb (PNG/JPEG) plus **libheif**, which is `dlopen`ed rather than linked — so HEIC/AVIF need no `libheif-dev` at build time and no bundled `.so`, and are simply absent on a machine without it. Both were measured on real boxes: WebView2 refuses a HEIC and renders the converted JPEG, and both Linux boxes decode HEIC and AVIF. Because the answer is per-*machine* on those two platforms (Windows needs the HEVC codec extension, libheif needs its codec plugins), `image.info` reports what is actually available — ask rather than assume. See [docs/javascript-api.md](docs/javascript-api.md).
+29. An off-origin main-frame navigation opens in the system browser instead of loading in place (which strands the app — no address bar, no back button); `system.openURL` hands any declared URL to the OS; and `alert()` / `confirm()` / `prompt()` are real native dialogs. One shared Core policy (`ctx.externalURLs`, seeded from `pwa.json`'s `external_urls`) decides which schemes may be handed out, because opening a URL launches whatever app claims it and `bridge.js` runs in subframes too. **macOS and iOS today** — the other four backends install no navigation-policy or JS-dialog handler, so a link out still strands the app there and the three dialogs are silently inert; `system.openURL` answers `E_UNIMPLEMENTED`. Tracked as [#165](https://github.com/tophatch/swift-pwa/issues/165) / [#166](https://github.com/tophatch/swift-pwa/issues/166) / [#167](https://github.com/tophatch/swift-pwa/issues/167).
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 

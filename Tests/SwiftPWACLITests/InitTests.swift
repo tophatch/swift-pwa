@@ -287,6 +287,63 @@ struct InitTests {
         try Build.validateLastWindowClosed(manifest: manifest)
     }
 
+    @Test("generated App.swift seeds external_urls only for what the manifest asks")
+    func appSwiftThreadsExternalURLs() {
+        // The defaults — the four web schemes, off-origin navigation handed to
+        // the system — need no code, so an app that didn't ask gets none.
+        let omitted = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
+        #expect(!omitted.contains("externalURLs"))
+
+        let declared = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X"),
+            externalUrls: .init(schemes: ["things", "OBSIDIAN:", "https"])
+        )
+        // Normalized on the way in, and a scheme that's already free is
+        // dropped rather than restated.
+        #expect(declared.contains(#"ctx.externalURLs.declare(schemes: "things", "obsidian")"#))
+
+        let inApp = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X"),
+            externalUrls: .init(offOriginNavigation: "in-app")
+        )
+        #expect(inApp.contains("ctx.externalURLs.offOriginNavigation = .inApp"))
+        // The default value stays quiet, like lastWindowClosed's.
+        let explicitDefault = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X"),
+            externalUrls: .init(offOriginNavigation: "system")
+        )
+        #expect(!explicitDefault.contains("offOriginNavigation"))
+    }
+
+    @Test("an unspelled external_urls entry fails the build instead of being ignored")
+    func externalURLsAreValidated() throws {
+        var manifest = PWAManifest(
+            id: "com.example.x", name: "X", version: "1.0.0",
+            description: nil, icon: nil,
+            web: .init(directory: "web", entry: "index.html"),
+            window: .init(title: "X"), macos: nil, ios: nil, linux: nil
+        )
+        manifest.externalUrls = .init(offOriginNavigation: "systemm")
+        #expect(throws: (any Error).self) { try Build.validateExternalURLs(manifest: manifest) }
+
+        // The two ways to get a scheme wrong, both silent if allowed through:
+        // a whole URL where a scheme belongs, and one that can't match.
+        for bad in ["https://example.com", "things and stuff", "1password"] {
+            manifest.externalUrls = .init(schemes: [bad])
+            #expect(throws: (any Error).self) {
+                try Build.validateExternalURLs(manifest: manifest)
+            }
+        }
+
+        manifest.externalUrls = .init(
+            schemes: ["things", "obsidian:", "x-callback-url"],
+            offOriginNavigation: "in-app"
+        )
+        try Build.validateExternalURLs(manifest: manifest)
+        manifest.externalUrls = nil
+        try Build.validateExternalURLs(manifest: manifest)
+    }
+
     @Test("generated App.swift emits rememberState only when opted in")
     func appSwiftThreadsRememberState() {
         let on = Templates.mainSwift(

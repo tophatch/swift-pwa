@@ -209,6 +209,43 @@ page. Adding your own menus is a matter of appending to
 `NSApp.mainMenu` in `configure(_:)`; the runtime sets it before your
 closure runs, so anything you add survives.
 
+### Links out of the app, and JavaScript dialogs
+
+The runtime installs a `WKNavigationDelegate` and a `WKUIDelegate` on
+every window, which decide two things a bare `WKWebView` gets wrong for
+an app.
+
+**A main-frame navigation that leaves the app's origin opens in the
+default browser** instead of loading in place. In place is what a
+webview does by default, and it strands the app — an `.app` window has
+no address bar and no back button, so a click on someone's link turns
+your app into a browser with no way home. Same-origin navigation,
+subframes and `about:` / `blob:` / `data:` URLs are untouched; a window
+created on `WindowContent.remote` treats *its own site* as the app.
+`target="_blank"` goes the same way (there is no second window to give
+the page, and `window.open` keeps returning `null`), except
+same-origin, which loads in the current window rather than being
+dropped.
+
+**`alert()`, `confirm()` and `prompt()` are real sheets** — `NSAlert`
+attached to the window that raised them, so one window's `confirm()`
+doesn't block the rest of the app. `confirm()` returns the button and
+`prompt()` the entered text, with Cancel giving `false` / `null`. A
+dialog raised by a cross-origin subframe says which origin raised it.
+
+Which URLs may be handed to the OS is `ctx.externalURLs`, seeded from
+`pwa.json`'s `external_urls` — `http`, `https`, `mailto` and `tel`
+always, anything else declared. `system.openURL` uses the same policy,
+so a page has one answer for both routes out. See
+[docs/javascript-api.md](javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
+
+> **The other direction isn't wired yet.** An app can declare a custom
+> scheme in `macos.info_plist` and open it, but a URL the OS *delivers*
+> to the app doesn't reach the page: `application(_:open:)` forwards
+> only file URLs, onto `app.openFile`. So a deep link into your own app
+> arrives nowhere. Tracked as
+> [#177](https://github.com/tophatch/swift-pwa/issues/177).
+
 ### What happens when the last window closes (`macos.last_window_closed`)
 
 macOS is the only platform here where an app outlives its windows: the

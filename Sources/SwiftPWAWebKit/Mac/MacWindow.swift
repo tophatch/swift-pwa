@@ -98,6 +98,8 @@
             window.delegate = self
             bridge.start()
 
+            // Before `load`, so the first navigation is policed too.
+            adapter.attachWebPolicy(policy: app.externalURLs, opener: AppleURLOpener())
             adapter.load(config.content)
             if config.fullscreen { window.toggleFullScreen(nil) }
             if config.visibleOnLaunch { window.makeKeyAndOrderFront(nil) }

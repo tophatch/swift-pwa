@@ -448,26 +448,29 @@ for the full matrix. Vendoring the GPU libs yourself uses
 [`Scripts/vendor-onnxruntime-linux-gpu.sh`](../Scripts/vendor-onnxruntime-linux-gpu.sh)
 (then `SWIFT_PWA_ONNXRUNTIME_LINUX_GPU_LIB_DIR=…/Vendor/onnxruntime-desktop-gpu/linux-x86_64`).
 
+## Keyboard shortcuts
+
+| Shortcut               | Action                                                   |
+|------------------------|----------------------------------------------------------|
+| `Ctrl+Q`               | Quit (matches the Windows binding).                       |
+| `Ctrl+Alt+J`           | Open the WebKit inspector.                                |
+| `Ctrl+Z` / `Ctrl+Shift+Z` | Undo / redo in the focused editable element.           |
+
+Cut, copy, paste and select-all need no binding — WebKit's GTK port
+handles those itself. **Undo and redo it leaves to the embedder**, so
+swift-pwa supplies them via
+`webkit_web_view_execute_editing_command`; before v0.10.4 they simply
+did nothing.
+
+The two groups differ in precedence, deliberately. `Ctrl+Q` and
+`Ctrl+Alt+J` are bound ahead of focus (a GTK3 accel group, a
+global-scope `GtkShortcutController` on GTK4), so they fire even while a
+text input has the keyboard. **Undo does not**: it runs only after the
+page has declined the key, so an app that implements its own `Ctrl+Z` —
+a drawing or editing app, the kind most likely to want it — keeps it by
+calling `preventDefault()`. That matches macOS.
+
 ## Known limitations on Linux
-
-**Ctrl+Z / Ctrl+Shift+Z do nothing in a text field.** Cut, copy, paste and
-select-all all work — WebKit's GTK port binds those itself — but **undo and
-redo it leaves to the embedder**, and swift-pwa doesn't wire them up yet.
-Measured identically on GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0: typing
-into an `<input>` and pressing Ctrl+Z leaves the text exactly as typed, and
-Ctrl+Shift+Z likewise. This is the same *class* of gap as the macOS Edit menu
-(the shell has to supply what the web view doesn't), scoped to two shortcuts
-rather than all of them.
-
-The fix is `webkit_web_view_execute_editing_command(view, "Undo" / "Redo")`
-behind a key binding, but *which* binding is a real question rather than a
-detail: a `GtkAccelGroup` entry is dispatched ahead of focus-based delivery
-(that is exactly why Ctrl+Q works over a focused text input), so it would take
-Ctrl+Z away from a page that implements its own undo — a drawing or editing
-app, precisely the kind most likely to want it. On macOS the equivalent path
-leaves the page first claim, measured. Making Linux behave the same way needs
-the page's answer first, which WebKitGTK decides asynchronously. Tracked as a
-follow-up rather than bolted on.
 
 **HEIC / AVIF need libheif at runtime, and the webview can't render them at
 all.** WebKitGTK (both 4.1 and 6.0, as distros ship them) links no HEIF or AVIF

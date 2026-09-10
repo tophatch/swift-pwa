@@ -142,23 +142,23 @@ unspelled value rather than ignoring it.
   default so apps stop shipping broken text fields.
 - **Localization of menu titles.** The existing app menu is English-only; this
   matches it rather than solving a problem the file does not already have.
-- **Linux — measured, and mostly fine, with one real gap.** On both backends
-  (GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0), Ctrl+A, Ctrl+X and Ctrl+V
-  work in a text field: WebKit's GTK port binds those itself, no menu bar
-  involved. **Ctrl+Z and Ctrl+Shift+Z do nothing** — WebKit leaves undo and
-  redo to the embedder, and swift-pwa doesn't wire them up. Identical on both,
-  so it is the WebKit port rather than the toolkit.
+- **Linux — measured, and it had a smaller version of the same bug, fixed
+  here.** On both backends (GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0)
+  Ctrl+A, Ctrl+X and Ctrl+V already worked — WebKit's GTK port binds those
+  itself — but Ctrl+Z and Ctrl+Shift+Z did nothing, because WebKit leaves undo
+  and redo to the embedder. Identical on both, so it was the WebKit port
+  rather than the toolkit. Both now call
+  `webkit_web_view_execute_editing_command`.
 
-  The same class of gap as macOS, two shortcuts wide instead of all of them,
-  and deliberately *not* fixed here: the mechanical fix
-  (`webkit_web_view_execute_editing_command`) needs a key binding, and a
-  `GtkAccelGroup` entry is dispatched ahead of focus-based delivery — which is
-  why Ctrl+Q works over a focused input, and why it would take Ctrl+Z away
-  from a page implementing its own undo. macOS leaves the page first claim
-  (measured); matching that on Linux needs the page's answer, which WebKitGTK
-  decides asynchronously. Written up in
-  [`docs/linux-setup.md`](../linux-setup.md#known-limitations-on-linux) as a
-  known limitation and a follow-up.
+  The binding, not the command, was the real question. Ctrl+Q and Ctrl+Alt+J
+  are bound ahead of focus on purpose (a GTK3 accel group; a global-scope
+  `GtkShortcutController` on GTK4) so they fire over a focused input. Undo
+  bound that way would take Ctrl+Z from a page implementing its own — a
+  drawing or editing app, exactly the kind that wants it. So it runs *after*
+  the page declines: `G_CONNECT_AFTER` on the window's `key-press-event`
+  (GTK3), a bubble-phase `GtkEventControllerKey` (GTK4). That is the same
+  order macOS turned out to have, measured.
+
 - **iOS — measured, and it needs nothing.** This was expected to be the most
   likely of the four to share the bug. It doesn't: on an iPad Pro (M5) with a
   hardware keyboard, ⌘A, ⌘C, ⌘V, ⌘X and ⌘Z all work in a `WKWebView` text

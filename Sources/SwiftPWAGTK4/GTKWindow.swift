@@ -115,6 +115,10 @@
             // Lifetime is fine: the controller dies with the window.
             let selfPtr = Unmanaged.passUnretained(self).toOpaque()
             swiftpwa_window_install_devtools_shortcut(windowPtr, devToolsShortcutCallback, selfPtr)
+            // Undo is *not* a global-scope shortcut like those two — see the
+            // shim: it runs in the bubble phase, after the page has declined
+            // the key, so an app with its own Ctrl+Z keeps it.
+            swiftpwa_window_connect_undo(windowPtr, undoKeyCallback, selfPtr)
         }
 
         /// Connect the `default-width` / `default-height` notify signals
@@ -333,6 +337,17 @@
             guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
             let window = Unmanaged<GTKWindow>.fromOpaque(opaque).takeUnretainedValue()
             window.webView.openDevTools()
+        }
+    }
+
+    /// Ctrl+Z / Ctrl+Shift+Z, fired only for a key the page didn't claim.
+    let undoKeyCallback: @convention(c) (UnsafeMutableRawPointer?, Int32) -> Void = { userData, redo in
+        guard let userData else { return }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let window = Unmanaged<GTKWindow>.fromOpaque(opaque).takeUnretainedValue()
+            (window.webView as? WebKitGTKAdapter)?.performUndo(redo: redo != 0)
         }
     }
 #endif

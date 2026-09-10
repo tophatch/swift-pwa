@@ -556,4 +556,26 @@ static inline char *swiftpwa_web_view_uri_copy(gpointer web_view) {
     return uri ? g_strdup(uri) : NULL;
 }
 
+/// Run WebKit's own `Undo` / `Redo` editing command on the focused editable
+/// element, the way an embedder is expected to.
+///
+/// WebKit's GTK port binds cut / copy / paste / select-all itself, but leaves
+/// **undo and redo to the embedder** — so without this, Ctrl+Z in a text field
+/// does nothing at all in any swift-pwa app on Linux. (Measured identically on
+/// WebKitGTK 4.1 and 6.0.) The macOS counterpart is the Edit menu's
+/// `undo:` / `redo:` items.
+static inline void swiftpwa_web_view_undo(gpointer web_view) {
+    if (!web_view) return;
+    webkit_web_view_execute_editing_command(
+        WEBKIT_WEB_VIEW(web_view), WEBKIT_EDITING_COMMAND_UNDO
+    );
+}
+
+static inline void swiftpwa_web_view_redo(gpointer web_view) {
+    if (!web_view) return;
+    webkit_web_view_execute_editing_command(
+        WEBKIT_WEB_VIEW(web_view), WEBKIT_EDITING_COMMAND_REDO
+    );
+}
+
 #endif

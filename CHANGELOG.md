@@ -44,15 +44,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   responder chain itself. That step is exactly what AppKit lacks, where the
   same actions exist only as main-menu key equivalents.
 
-  **Linux was measured too, and has a smaller gap of the same kind.** On both
-  backends Ctrl+A / Ctrl+X / Ctrl+V work — WebKit's GTK port binds those
-  itself — but **Ctrl+Z / Ctrl+Shift+Z do nothing**, because WebKit leaves
-  undo and redo to the embedder. Identical on GTK3 + WebKitGTK 4.1 and GTK4 +
-  WebKitGTK 6.0, so it is the WebKit port rather than the toolkit. Not fixed
-  here: the binding question is real rather than a detail (a `GtkAccelGroup`
-  entry fires ahead of the page, which would take Ctrl+Z from an app
-  implementing its own undo, where macOS leaves the page first claim).
-  Documented under "Known limitations on Linux" as a follow-up.
+  **Linux had a smaller gap of the same kind, now fixed too.** On both
+  backends Ctrl+A / Ctrl+X / Ctrl+V already worked — WebKit's GTK port binds
+  those itself — but **Ctrl+Z / Ctrl+Shift+Z did nothing**, because WebKit
+  leaves undo and redo to the embedder and swift-pwa never wired them up.
+  Identical on GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0, so it was the
+  WebKit port rather than the toolkit. Both now call
+  `webkit_web_view_execute_editing_command`.
+
+  **The binding is the interesting half.** The existing Ctrl+Q and Ctrl+Alt+J
+  bindings are deliberately dispatched ahead of focus — a GTK3 accel group, a
+  global-scope `GtkShortcutController` on GTK4 — so they fire over a focused
+  text input. Undo must *not* work that way: it would take Ctrl+Z from a page
+  implementing its own, which is a drawing or editing app, the kind most
+  likely to want it. So it runs after the page declines instead — a
+  `G_CONNECT_AFTER` handler on the window's `key-press-event` on GTK3, a
+  bubble-phase `GtkEventControllerKey` on GTK4 — which is what macOS does,
+  where the page measurably keeps a ⌘Z it calls `preventDefault` on.
 
 - **The app driver could not have caught this, and now can.** `drive type`
   gained **`--modifiers shift,control,alt,command`**, and two things behind it

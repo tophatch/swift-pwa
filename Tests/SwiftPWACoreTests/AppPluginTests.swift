@@ -35,6 +35,21 @@ struct AppPluginTests {
         #expect(app.didQuitWith == 3)
     }
 
+    /// `bridge.js` sends `payload: null` for `invoke(cmd)` with no argument,
+    /// which is exactly how the JS API documents `app.quit` and how a settings
+    /// UI reads `app.lastWindowClosed`. Every earlier test here passed `{}`,
+    /// so the shape the page actually sends was never covered — and it failed.
+    @Test("a command with all-optional args accepts an absent payload")
+    func nullPayloadDecodesAsEmpty() async {
+        let app = makeApp()
+        let quit = await dispatch("app.quit", payload: Data("null".utf8), on: app)
+        guard case .ok = quit else { Issue.record("expected ok"); return }
+        #expect(app.didQuitWith == 0)
+
+        let read = await dispatch("app.lastWindowClosed", payload: Data("null".utf8), on: app)
+        guard case .ok = read else { Issue.record("expected ok"); return }
+    }
+
     @Test("app.lastWindowClosed reads, sets, and refuses a value that isn't one")
     func lastWindowClosed() async throws {
         let app = makeApp()

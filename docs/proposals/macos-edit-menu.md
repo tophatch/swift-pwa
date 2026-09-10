@@ -152,7 +152,7 @@ unspelled value rather than ignoring it.
 
 ## What measuring changed
 
-Five things, none of which were visible from reading the code.
+Six things, none of which were visible from reading the code.
 
 **1. The driver could not have caught this, and now can.** Synthetic input is
 delivered with `NSWindow.sendEvent`, one level *below* the
@@ -187,7 +187,18 @@ report an editing capability a real user doesn't have. So `drive type
 screen** has no active app either, which is worth knowing before concluding a
 run has found a bug.
 
-**5. Two instruments lied, and a control caught both.** Reading `AXEnabled` on
+**5. `invoke(cmd)` with no argument could not decode.** `bridge.js` sends
+`payload: null`, and a struct whose fields are *all optional* still can't
+decode from `null` — the synthesized initializer asks for a keyed container.
+So reading `app.lastWindowClosed` the natural way failed, and so did the
+documented `invoke('app.quit')`; only commands taking `EmptyArgs` (no
+properties, so nothing asks for the container) escaped. Every existing test
+passed `{}`, which is not what the page sends. Fixed in `Invocation.decode`,
+which retries a failed decode as `{}` when the payload is literally `null` —
+retried rather than substituted, so it can only rescue a decode that was
+already failing.
+
+**6. Two instruments lied, and a control caught both.** Reading `AXEnabled` on
 the menu items reported everything disabled — until the same query against
 **TextEdit**, whose Edit menu unquestionably works, reported exactly the same.
 The AX reading says nothing about menu validation. Separately, a batch of
@@ -215,8 +226,14 @@ Acceptance, in a focused text field in a real app:
 - [x] ⌘Z undoes, ⇧⌘Z redoes
 - [x] A page that handles ⌘A itself still wins — its handler runs and
       `preventDefault` holds, matching a genuine keystroke
-- [ ] ⌘M minimizes, ⌘W closes the window, and reopening from the Dock brings
-      it back — **needs an unlocked screen**; not yet measured
+- [x] ⌘M minimizes (`AXMinimized` false → true)
+- [x] ⌘W closes the window — window count 1 → 0 with the process still alive,
+      which is the dead-end state the reopen policy exists for
+- [x] Reopening (`open` the bundle, as a Dock click does) brings the window
+      back in the **same process**, loaded and working — and under `quit` the
+      app terminates on ⌘W instead
+- [x] `drive type --activate` is what makes any of these drivable: backgrounded
+      without it ⌘A does nothing, with it the field selects
 - [ ] Paste greys out when focus is not in an editable field. An
       *observation*, not a gate: WebKit answers `validateUserInterfaceItem`
       from editor state it gets back from the web process asynchronously, and

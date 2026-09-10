@@ -60,6 +60,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   WebKit's `validateUserInterfaceItem`, and forcing past *that* would have the
   driver report an editing capability a real user doesn't have.
 
+- **`invoke(cmd)` with no argument now decodes.** `bridge.js` sends
+  `payload: null` for an argument-less invoke, and a struct whose fields are
+  all optional cannot decode from `null` — the synthesized initializer asks
+  for a keyed container and JSON `null` isn't one. So the documented
+  `invoke('app.quit')` failed with a decoding error while
+  `invoke('app.quit', {})` worked, and the only commands that escaped were
+  those taking `EmptyArgs`, which has no properties and so never asks. Every
+  test passed `{}`, which is not the shape the page sends. `Invocation.decode`
+  now retries as `{}` when the payload is literally `null` — retried rather
+  than substituted up front, so it can only rescue a decode that was already
+  failing and a handler that wants a `null` payload still gets one.
+
 ### Added
 
 - **`macos.last_window_closed` — what happens when the last window closes.**

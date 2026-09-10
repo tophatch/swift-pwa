@@ -142,10 +142,23 @@ unspelled value rather than ignoring it.
   default so apps stop shipping broken text fields.
 - **Localization of menu titles.** The existing app menu is English-only; this
   matches it rather than solving a problem the file does not already have.
-- **Linux and Windows.** GTK and WebView2 are expected to handle editing
-  accelerators inside the web view, because neither routes them through a menu
-  bar — and iOS having turned out fine for the analogous reason raises the
-  prior. Still unmeasured; the probe page below runs there unchanged.
+- **Linux — measured, and mostly fine, with one real gap.** On both backends
+  (GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0), Ctrl+A, Ctrl+X and Ctrl+V
+  work in a text field: WebKit's GTK port binds those itself, no menu bar
+  involved. **Ctrl+Z and Ctrl+Shift+Z do nothing** — WebKit leaves undo and
+  redo to the embedder, and swift-pwa doesn't wire them up. Identical on both,
+  so it is the WebKit port rather than the toolkit.
+
+  The same class of gap as macOS, two shortcuts wide instead of all of them,
+  and deliberately *not* fixed here: the mechanical fix
+  (`webkit_web_view_execute_editing_command`) needs a key binding, and a
+  `GtkAccelGroup` entry is dispatched ahead of focus-based delivery — which is
+  why Ctrl+Q works over a focused input, and why it would take Ctrl+Z away
+  from a page implementing its own undo. macOS leaves the page first claim
+  (measured); matching that on Linux needs the page's answer, which WebKitGTK
+  decides asynchronously. Written up in
+  [`docs/linux-setup.md`](../linux-setup.md#known-limitations-on-linux) as a
+  known limitation and a follow-up.
 - **iOS — measured, and it needs nothing.** This was expected to be the most
   likely of the four to share the bug. It doesn't: on an iPad Pro (M5) with a
   hardware keyboard, ⌘A, ⌘C, ⌘V, ⌘X and ⌘Z all work in a `WKWebView` text

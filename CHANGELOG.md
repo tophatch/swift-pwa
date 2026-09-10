@@ -44,6 +44,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   responder chain itself. That step is exactly what AppKit lacks, where the
   same actions exist only as main-menu key equivalents.
 
+  **Linux was measured too, and has a smaller gap of the same kind.** On both
+  backends Ctrl+A / Ctrl+X / Ctrl+V work — WebKit's GTK port binds those
+  itself — but **Ctrl+Z / Ctrl+Shift+Z do nothing**, because WebKit leaves
+  undo and redo to the embedder. Identical on GTK3 + WebKitGTK 4.1 and GTK4 +
+  WebKitGTK 6.0, so it is the WebKit port rather than the toolkit. Not fixed
+  here: the binding question is real rather than a detail (a `GtkAccelGroup`
+  entry fires ahead of the page, which would take Ctrl+Z from an app
+  implementing its own undo, where macOS leaves the page first claim).
+  Documented under "Known limitations on Linux" as a follow-up.
+
 - **The app driver could not have caught this, and now can.** `drive type`
   gained **`--modifiers shift,control,alt,command`**, and two things behind it
   had to change before a driven ⌘V meant anything. Synthetic input is

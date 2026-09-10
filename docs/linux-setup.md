@@ -282,11 +282,23 @@ If you're SSH'd in headlessly:
 ```bash
 # Run inside Xvfb so it doesn't need a real display.
 Xvfb :99 -screen 0 1280x720x24 &
-DISPLAY=:99 swift run --package-path Examples/HelloPWA HelloPWA &
+# GDK_BACKEND=x11 is not optional on GTK4 — see below.
+GDK_BACKEND=x11 DISPLAY=:99 swift run --package-path Examples/HelloPWA HelloPWA &
 sleep 2
 # Take a screenshot to prove it rendered.
 DISPLAY=:99 import -window root /tmp/swift-pwa.png
 ```
+
+**Pin `GDK_BACKEND=x11`, or a GTK4 run can miss your Xvfb entirely.** GTK4
+prefers the Wayland backend, and `wl_display_connect(NULL)` falls back to the
+socket named `wayland-0` when `WAYLAND_DISPLAY` is unset — so on a box with a
+logged-in desktop session, an app launched over SSH with `DISPLAY=:99` opens
+its window on *that* session's compositor and leaves `:99` empty. It fails
+confusingly rather than loudly: the app starts, the driver attaches, `eval`
+works and reports a window with sensible geometry, while `xwininfo -root
+-tree` on `:99` shows zero children and every injected keystroke goes nowhere.
+`xwininfo` is the quick check — a display with no children means the window
+isn't there, not that the app is broken.
 
 ## 6. Build an `.AppImage`
 
@@ -437,6 +449,25 @@ for the full matrix. Vendoring the GPU libs yourself uses
 (then `SWIFT_PWA_ONNXRUNTIME_LINUX_GPU_LIB_DIR=…/Vendor/onnxruntime-desktop-gpu/linux-x86_64`).
 
 ## Known limitations on Linux
+
+**Ctrl+Z / Ctrl+Shift+Z do nothing in a text field.** Cut, copy, paste and
+select-all all work — WebKit's GTK port binds those itself — but **undo and
+redo it leaves to the embedder**, and swift-pwa doesn't wire them up yet.
+Measured identically on GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0: typing
+into an `<input>` and pressing Ctrl+Z leaves the text exactly as typed, and
+Ctrl+Shift+Z likewise. This is the same *class* of gap as the macOS Edit menu
+(the shell has to supply what the web view doesn't), scoped to two shortcuts
+rather than all of them.
+
+The fix is `webkit_web_view_execute_editing_command(view, "Undo" / "Redo")`
+behind a key binding, but *which* binding is a real question rather than a
+detail: a `GtkAccelGroup` entry is dispatched ahead of focus-based delivery
+(that is exactly why Ctrl+Q works over a focused text input), so it would take
+Ctrl+Z away from a page that implements its own undo — a drawing or editing
+app, precisely the kind most likely to want it. On macOS the equivalent path
+leaves the page first claim, measured. Making Linux behave the same way needs
+the page's answer first, which WebKitGTK decides asynchronously. Tracked as a
+follow-up rather than bolted on.
 
 **HEIC / AVIF need libheif at runtime, and the webview can't render them at
 all.** WebKitGTK (both 4.1 and 6.0, as distros ship them) links no HEIF or AVIF

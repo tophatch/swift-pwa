@@ -62,6 +62,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bubble-phase `GtkEventControllerKey` on GTK4 — which is what macOS does,
   where the page measurably keeps a ⌘Z it calls `preventDefault` on.
 
+- **Windows: a freshly launched app can be typed into.** The editing
+  shortcuts themselves were already fine there — Ctrl+A / Ctrl+X / Ctrl+V /
+  Ctrl+Z / Ctrl+Shift+Z all work, WebView2 handles them internally — but the
+  window's `WM_SETFOCUS` only emitted `.didFocus` and never called
+  `ICoreWebView2Controller::MoveFocus`, so **the web content never got
+  keyboard focus from activation**. Measured on a fresh launch: the window is
+  foreground, the page's own `element.focus()` has set `activeElement`, and
+  `document.hasFocus()` is still `false` — so nothing you type goes anywhere
+  until you click inside the window. macOS and both GTK backends focus their
+  web view on activation, so Windows was the only platform where "launch the
+  app and start typing" did nothing.
+
 - **The app driver could not have caught this, and now can.** `drive type`
   gained **`--modifiers shift,control,alt,command`**, and two things behind it
   had to change before a driven ⌘V meant anything. Synthetic input is

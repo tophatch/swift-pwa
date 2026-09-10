@@ -142,6 +142,15 @@ unspelled value rather than ignoring it.
   default so apps stop shipping broken text fields.
 - **Localization of menu titles.** The existing app menu is English-only; this
   matches it rather than solving a problem the file does not already have.
+- **Windows — measured. The shortcuts were fine; focus wasn't.** Ctrl+A /
+  Ctrl+X / Ctrl+V / Ctrl+Z / Ctrl+Shift+Z all work in a WebView2 text field
+  with no binding on our part. But `WM_SETFOCUS` never forwarded focus into
+  the web content (`ICoreWebView2Controller::MoveFocus`), so a freshly
+  launched app reported `document.hasFocus() === false` while its window was
+  foreground — you had to click inside before typing did anything. Fixed
+  here; the other three platforms already focused their web view on
+  activation.
+
 - **Linux — measured, and it had a smaller version of the same bug, fixed
   here.** On both backends (GTK3 + WebKitGTK 4.1 and GTK4 + WebKitGTK 6.0)
   Ctrl+A, Ctrl+X and Ctrl+V already worked — WebKit's GTK port binds those

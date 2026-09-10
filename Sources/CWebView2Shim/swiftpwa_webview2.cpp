@@ -310,6 +310,18 @@ extern "C" void swiftpwa_w2_controller_set_bounds(
     }
 }
 
+extern "C" void swiftpwa_w2_controller_move_focus(swiftpwa_w2_controller *ctrl) {
+    if (!ctrl || !ctrl->com) return;
+    // PROGRAMMATIC rather than NEXT/PREVIOUS: this is restoring focus to the
+    // content the window already hosts, not tabbing into it, so it must not
+    // move the page's own focus ring.
+    HRESULT hr = ctrl->com->MoveFocus(COREWEBVIEW2_MOVE_FOCUS_REASON_PROGRAMMATIC);
+    if (FAILED(hr)) {
+        fprintf(stderr, "swift-pwa: MoveFocus failed: 0x%08X\n",
+                static_cast<unsigned int>(hr));
+    }
+}
+
 extern "C" void swiftpwa_w2_controller_set_visible(
     swiftpwa_w2_controller *ctrl, int visible) {
     if (!ctrl || !ctrl->com) return;
@@ -912,6 +924,7 @@ extern "C" void swiftpwa_w2_create_controller(swiftpwa_w2_env *, void *, swiftpw
 extern "C" void swiftpwa_w2_controller_release(swiftpwa_w2_controller *) {}
 extern "C" void swiftpwa_w2_controller_set_bounds(swiftpwa_w2_controller *, int32_t, int32_t, int32_t, int32_t) {}
 extern "C" void swiftpwa_w2_controller_set_visible(swiftpwa_w2_controller *, int) {}
+extern "C" void swiftpwa_w2_controller_move_focus(swiftpwa_w2_controller *) {}
 extern "C" void swiftpwa_w2_controller_set_background_color(
     swiftpwa_w2_controller *, uint8_t, uint8_t, uint8_t, uint8_t) {}
 extern "C" void swiftpwa_w2_controller_close(swiftpwa_w2_controller *) {}

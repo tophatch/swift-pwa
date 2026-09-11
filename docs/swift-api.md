@@ -295,13 +295,13 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   can decode it even where its webview cannot, which is what
   [image-transcode.md](proposals/image-transcode.md) proposes exposing.
 
-- **On Windows the bundle's content types come from Chromium, not this table.**
-  The bundle is served natively by `SetVirtualHostNameToFolderMapping`, so
-  WebView2 decides the type from its own extension mapping — measured, `.avif`
-  arrives as `image/avif` and `.heic` as `application/octet-stream` regardless
-  of what `AssetProvider` would have said. The table above governs the
-  interception path — `serveDirectory` mounts, the SPA fallback, and single-file
-  embedded assets — and every other backend end to end.
+- **This table now governs Windows too.** It used not to: the bundle was served
+  natively by `SetVirtualHostNameToFolderMapping` and WebView2 decided the type
+  from its own extension mapping (measured then — `.avif` arrived as
+  `image/avif`, `.heic` as `application/octet-stream`, regardless of what
+  `AssetProvider` said). Since that mapping also made `serveDirectory` mounts
+  unreachable, Windows serves its whole bundle origin through the router like
+  every other backend, and one table answers for all five.
 
 **Android** builds its asset loader before any Swift runs, so a mount
 that must exist at startup is declared in `pwa.json` instead — the

@@ -181,12 +181,13 @@
                     swiftpwa_w2_view_set_navigation_handler(view, navigationStartingTrampoline, user)
                 }
 
-                // Intercept requests to the bundle origin so directories
-                // added via `ctx.serveDirectory(_:at:)` are served (with
-                // range support) from the shared router. Bundle paths fall
-                // through to the native virtual-host mapping — the handler
-                // only answers requests under a served mount prefix. The
-                // filter is broad (`/*`); per-request triage is cheap.
+                // Serve the whole bundle origin — the bundle itself and every
+                // `ctx.serveDirectory(_:at:)` mount — from the shared router,
+                // range-aware. This is the *only* way requests on that origin
+                // can be seen: `SetVirtualHostNameToFolderMapping` answers
+                // before `WebResourceRequested` is raised, so a host that has a
+                // folder mapping never reaches this handler at all (measured —
+                // see `load(_:)`).
                 let resUser = Unmanaged.passUnretained(self).toOpaque()
                 "https://swift-pwa.local/*".withCString(encodedAs: UTF16.self) { filterW in
                     swiftpwa_w2_view_intercept_resources(view, filterW, resourceRequestedTrampoline, resUser)
@@ -197,42 +198,30 @@
         }
 
         /// Called from `resourceRequestedTrampoline` on the UI thread for
-        /// every request to the bundle origin. Requests that don't fall
-        /// under a `serveDirectory` mount are handed back to WebView2's
-        /// default handling (the bundle's virtual-host mapping); served
-        /// requests are resolved and answered range-aware off disk.
+        /// every request to the bundle origin — the bundle's own files and
+        /// every `serveDirectory` mount alike, since nothing else serves this
+        /// origin. Resolved through the shared router and answered range-aware
+        /// off disk (or out of the exe overlay in a single-file build).
         func _onResourceRequested(uri: String, token: UInt64) {
             guard let view, let url = URL(string: uri) else {
                 if let view { swiftpwa_w2_resource_passthrough(view, token) }
                 return
             }
-            guard assetProvider.isServedPrefix(url) else {
-                // Not a `serveDirectory` mount. In a single-file build, serve
-                // the bundle origin from the exe overlay; otherwise hand back to
-                // the native virtual-host mapping (disk web/).
-                if let embedded = embeddedAssets {
-                    serveEmbedded(url: url, token: token, embedded: embedded, view: view)
-                } else if let fallback = assetProvider.spaFallback(for: url) {
-                    // SPA history routing: a client-side route the native
-                    // virtual-host mapping would 404 → serve the entry document
-                    // off disk so a hard reload / deep-link loads the app.
-                    let path = fallback.fileURL.withUnsafeFileSystemRepresentation { rep -> String in
-                        rep.map { String(cString: $0) } ?? fallback.fileURL.path
-                    }
-                    path.withCString(encodedAs: UTF16.self) { pathW in
-                        fallback.mimeType.withCString { mime in
-                            swiftpwa_w2_resource_respond_file(
-                                view, token, 200, mime, pathW, 0, fallback.fileSize, fallback.fileSize
-                            )
-                        }
-                    }
-                } else {
-                    swiftpwa_w2_resource_passthrough(view, token)
-                }
+            // A `serveDirectory` mount is a real directory on disk in every
+            // build, so it takes precedence over an in-exe overlay: the
+            // overlay only ever carries the bundle, and a single-file app can
+            // still mount a content pack it downloaded.
+            if !assetProvider.isServedPrefix(url), let embedded = embeddedAssets {
+                serveEmbedded(url: url, token: token, embedded: embedded, view: view)
                 return
             }
+            // One lookup covers both roles: the router holds the bundle as its
+            // `/` mount and each served directory under its own prefix, longest
+            // prefix first, and applies the SPA-history fallback for the bundle.
             guard let resolved = assetProvider.resolve(url) else {
-                // Under a served prefix but missing / traversal-blocked → 404.
+                // Nothing on disk under any mount → an honest 404. (Passing the
+                // request back to WebView2 would be a *network* error here,
+                // since nothing else serves this origin.)
                 "text/plain; charset=utf-8".withCString { mime in
                     swiftpwa_w2_resource_respond(view, token, 404, mime, nil, 0)
                 }
@@ -396,33 +385,27 @@
                     }
                     return
                 }
-                // Use the platform's native path representation —
-                // `URL.path` on Windows can return a POSIX-shaped
-                // string with forward slashes, which
-                // `SetVirtualHostNameToFolderMapping` silently
-                // ignores. `withUnsafeFileSystemRepresentation`
-                // gives us the host-native form.
-                let folderPath = directory.withUnsafeFileSystemRepresentation { rep -> String in
-                    rep.map { String(cString: $0) } ?? directory.path
-                }
-                let host = "swift-pwa.local"
-                let urlString = "https://\(host)/\(route)"
-                folderPath.withCString(encodedAs: UTF16.self) { folder in
-                    host.withCString(encodedAs: UTF16.self) { hostW in
-                        swiftpwa_w2_view_map_virtual_host(view, hostW, folder, 2)
-                    }
-                }
+                // The bundle is served from the shared router through resource
+                // interception, exactly like a `serveDirectory` mount and like
+                // the single-file branch above — **not** through
+                // `SetVirtualHostNameToFolderMapping`.
+                //
+                // The mapping is the obvious tool here and we used it until it
+                // was measured: a host that has one answers requests *before*
+                // `WebResourceRequested` is raised, so interception never sees
+                // a single request on the bundle origin. That made every
+                // `serveDirectory` mount unreachable (a fetch failed at the
+                // network layer rather than 404ing) and the SPA-history
+                // fallback dead, while the bundle appeared to work — the
+                // mapping was quietly serving it. One serving path can't be
+                // shadowed by the other, and it's the same path the other four
+                // backends use, so mounts, ranges and SPA routing behave the
+                // same everywhere. See docs/windows-setup.md.
+                assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
+                let urlString = "https://swift-pwa.local/\(route)"
                 urlString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
                 }
-                // Bundle is served natively by the virtual-host mapping
-                // above; the shared router still records the `/` root so
-                // `serveDirectory` mounts (handled via interception below)
-                // can resolve relative file paths consistently — and, when
-                // `spaFallback` is on, so the interception path can serve the
-                // entry document for a client-side route the native mapping
-                // would 404 (see `_onWebResourceRequested`).
-                assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
             case let .remote(url):
                 appOrigin = WebOrigin(url)
                 url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in

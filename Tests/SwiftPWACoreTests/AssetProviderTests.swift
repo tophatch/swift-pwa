@@ -168,6 +168,39 @@ struct AssetProviderTests {
         #expect(resolved?.fileURL.path.hasPrefix(bundle.path) == true)
     }
 
+    /// Windows and Android don't run on `pwa://localhost` — their bundle
+    /// origin is the `https` virtual host — and every other test here uses the
+    /// default shape, so the one both of those backends actually pass through
+    /// had no coverage at all. Found while fixing #159, where a served mount
+    /// was unreachable on Windows.
+    @Test("serves the bundle and a mount on the https virtual-host origin too")
+    func httpsVirtualHostOrigin() throws {
+        let bundle = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let packs = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swift-pwa-packs-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: packs) }
+        try Data("PNGDATA".utf8).write(to: packs.appendingPathComponent("photo.png"))
+
+        let provider = AssetProvider(scheme: "https", host: "swift-pwa.local")
+        provider.setBundleRoot(bundle)
+        provider.mount(packs, at: "/packs")
+
+        // The bundle resolves on this origin, which is what lets a backend
+        // serve it from the router rather than a platform folder mapping.
+        let index = try provider.resolve(#require(URL(string: "https://swift-pwa.local/index.html")))
+        #expect(index?.fileURL.lastPathComponent == "index.html")
+        // …and so does a mount, on the same origin, under its prefix.
+        let photo = try provider.resolve(#require(URL(string: "https://swift-pwa.local/packs/photo.png")))
+        #expect(photo?.mimeType == "image/png")
+        #expect(photo?.fileSize == 7)
+        #expect(try provider.isServedPrefix(#require(URL(string: "https://swift-pwa.local/packs/photo.png"))))
+        #expect(try !provider.isServedPrefix(#require(URL(string: "https://swift-pwa.local/index.html"))))
+        // A different host on the same scheme is not ours.
+        #expect(try provider.resolve(#require(URL(string: "https://example.com/packs/photo.png"))) == nil)
+    }
+
     @Test("isServedPrefix distinguishes served mounts from the bundle")
     func isServedPrefix() throws {
         let bundle = try tempBundle()

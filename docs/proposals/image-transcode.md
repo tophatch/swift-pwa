@@ -184,3 +184,9 @@ worked, and not on the three that need help.
    Content-Type and our table is bypassed (measured). A transcode output written
    to a served directory sidesteps that entirely — but see the unrelated
    `serveDirectory` bug noted during the same session.
+
+   **Resolved (#159):** those two turned out to be the same fact. The folder
+   mapping answers before `WebResourceRequested` is raised, which is exactly
+   why `serveDirectory` was unreachable — so the mapping is gone, Windows
+   serves its whole bundle origin through the router, and the MIME table now
+   applies to bundled files there like everywhere else.

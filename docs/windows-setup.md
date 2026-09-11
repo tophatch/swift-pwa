@@ -616,12 +616,19 @@ A few load-bearing details:
   closure to the dispatcher window; its WndProc unboxes and fires.
 - **`pwa://`-style content uses a virtual host, not a custom scheme.**
   WebView2 enforces same-origin checks on custom schemes that would
-  break ESM imports and `fetch`, so for bundled content we map
-  `https://swift-pwa.local/` to the bundle directory via
-  `SetVirtualHostNameToFolderMapping` and navigate there. The C shim
-  also exposes `WebResourceRequested`-style interception for callers
-  who really want a custom scheme; `WebView2Adapter` doesn't use it
-  but the surface is there.
+  break ESM imports and `fetch`, so bundled content lives on
+  `https://swift-pwa.local/` and the window navigates there.
+- **Everything on that origin is served by `WebResourceRequested`
+  interception — *not* `SetVirtualHostNameToFolderMapping`.** The folder
+  mapping is the obvious tool and we used it until it was measured: a host
+  that has a mapping answers requests **before** `WebResourceRequested` is
+  raised, so an interception handler on that origin never sees a single
+  request. Using both means the mapping silently wins. Since the mapping
+  maps a whole *host* and can't cover a same-origin subpath, that left
+  every `ctx.serveDirectory(_:at:)` mount unreachable (see the entry in
+  §Known limitations). The bundle, served-directory mounts and the
+  SPA-history fallback now all resolve through the same shared router the
+  other four backends use, range-aware.
 - **Notifications go through `Windows.UI.Notifications.ToastNotificationManager`.**
   The C++/WinRT shim (`swiftpwa_toast.cpp`) constructs a
   `ToastGeneric` XML payload and `Show()`s it through a notifier
@@ -722,6 +729,31 @@ handler.
 
 Try it with `start myapp://hello`.
 
+## Verifying that the bundle origin actually serves
+
+CI builds this target but never launches it -- `swift test` can't run on
+Windows and a hosted runner has no interactive session -- so **nothing
+automated ever fetches a URL on the bundle origin**. That is precisely how
+[#159](https://github.com/tophatch/swift-pwa/issues/159) shipped: every
+`ctx.serveDirectory(_:at:)` mount was unreachable for several releases while
+the build stayed green.
+
+`Scripts/verify-windows-serving.ps1` closes that loop on a real box. It
+scaffolds a throwaway app against your checkout, mounts a directory with known
+bytes, and has the page assert the bundle, the mount and a 404 -- reporting by
+**exit code**, because a bundled app is a console-less GUI process with nowhere
+to print and the box may well be locked:
+
+```powershell
+powershell -File Scripts/verify-windows-serving.ps1 -Repo C:\src\swift-pwa -SingleFile
+```
+
+`-SingleFile` adds the embedded-overlay build, where the bundle comes out of the
+exe while mounts still come off disk. Run it after touching `WebView2Adapter`'s
+serving path, `AssetProvider`, or anything about how the bundle origin is
+served. It is checked against the bug it was written for: on the pre-fix code it
+reports `FAIL folder - /packs/photo.png (expected 200)`.
+
 ## Known limitations (Windows-specific)
 
 **HEIC decoding depends on a codec extension the machine may not have.** WebView2
@@ -735,11 +767,14 @@ on a format** — on the test box that list ran to 66 extensions including TIFF,
 JPEG XL and camera RAW, but a bare install can be much shorter. A format that
 isn't there fails with `E_IMAGE_UNSUPPORTED` rather than a broken image.
 
-Note also that this table governs only the interception path (`serveDirectory`
-mounts, the SPA fallback, single-file embedded assets): the **bundle** is served
-natively by `SetVirtualHostNameToFolderMapping`, so Chromium picks its own
-`Content-Type` for those files (measured: `.avif` → `image/avif`, `.heic` →
-`application/octet-stream`).
+This table now governs **every** file on the bundle origin — the bundle itself
+as well as `serveDirectory` mounts, the SPA fallback and single-file embedded
+assets — because all of them are served through the interception path. It used
+to cover only the latter, with the bundle served natively by
+`SetVirtualHostNameToFolderMapping` and Chromium picking its own `Content-Type`
+(measured then: `.avif` → `image/avif`, `.heic` → `application/octet-stream`).
+So a bundled file's type is ours to get right, and it no longer differs from the
+same file served out of a mount.
 
 - **`ble.*` in an MSIX build needs the `bluetooth` device capability**, which
   `swift-pwa build` emits from `permissions.device` in `pwa.json`. A portable
@@ -967,12 +1002,11 @@ natively by `SetVirtualHostNameToFolderMapping`, so Chromium picks its own
   `maxUncompressedBytes` / `maxEntries` guards still apply). The `tar.exe`
   paths aren't exercised by CI (SwiftPM test discovery is broken on
   Windows, so the job builds but doesn't run tests). For **serving**,
-  `SetVirtualHostNameToFolderMapping`
-  maps a whole host, not a subpath, so `ctx.serveDirectory(_:at:)`
-  mounts are served via a `WebResourceRequested` interception filtered
-  to the bundle origin (the bundle itself keeps its native virtual-host
-  mapping; only requests under a served prefix are intercepted), with
-  range support implemented in the C++ shim.
+  the whole bundle origin — bundle and `ctx.serveDirectory(_:at:)` mounts
+  alike — goes through one `WebResourceRequested` interception handler,
+  with range support implemented in the C++ shim. It cannot be shared with
+  `SetVirtualHostNameToFolderMapping`: a mapped host answers before the
+  event is raised, so any mapping makes the handler dead.
 - **On-device llama.cpp on Windows: x64 is GPU (Vulkan), arm64 is CPU.** The
   prebuilt `llama.lib` (see §4) is published for both arches — x64 is the
   **Vulkan** GPU build (NVIDIA/AMD/Intel via the driver ICD; needs the Vulkan

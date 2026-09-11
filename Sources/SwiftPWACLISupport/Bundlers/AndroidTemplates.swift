@@ -675,6 +675,36 @@ enum AndroidTemplates {
             private lateinit var bridge: SwiftPWABridge
             private var isSecondary: Boolean = false
 
+            /// False for the redundant-primary instance that forwards its
+            /// intent and finishes from `onCreate` (see `runtimeOwner`): it
+            /// returns before building a bridge, but Android still runs its
+            /// `onDestroy`, so every lifecycle callback that touches `bridge`
+            /// checks this rather than trusting `lateinit`.
+            private val hasBridge get() = ::bridge.isInitialized
+
+            companion object {
+                /// The Activity that owns this process's one Swift runtime.
+                ///
+                /// Needed because the launcher Activity keeps the default
+                /// `standard` launch mode — `singleTop` or `singleTask` would
+                /// redirect `SwiftPWABridge.spawnWindow`'s secondary Activity
+                /// into the existing instance and break multi-window. The cost
+                /// is that an `ACTION_VIEW` intent routed to an app that is
+                /// *already running* arrives as a brand-new Activity instance
+                /// instead of `onNewIntent`, and that instance would spawn a
+                /// second Swift runtime and steal the single-slot bridge ref
+                /// from the live one. Measured: three warm deep links left
+                /// three MainActivity records stacked in one task, each with
+                /// its own runtime, while the page still looked correct.
+                ///
+                /// So a second *primary* hands its intent to this one and
+                /// finishes. Cleared in `onDestroy` only by the owner, so a
+                /// configuration recreate (whose `onDestroy` runs first) still
+                /// takes over normally.
+                @JvmStatic
+                var runtimeOwner: MainActivity? = null
+            }
+
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
                 // Load the Swift-compiled .so. The base name matches
@@ -683,6 +713,16 @@ enum AndroidTemplates {
                 // on a secondary Activity is harmless — Android's
                 // loader dedupes on the underlying library handle.
                 System.loadLibrary("\(soBaseName)")
+
+                // Before anything with side effects: a redundant primary
+                // forwards and leaves. Creating the WebView or attaching the
+                // bridge first is what would do the damage.
+                val owner = runtimeOwner
+                if (owner != null && intent?.getStringExtra("swift-pwa.config-json") == null) {
+                    owner.handleOpenIntent(intent)
+                    finish()
+                    return
+                }
 
                 val webView = WebView(this)\(backgroundColorLine)
                 setContentView(webView)
@@ -737,6 +777,7 @@ enum AndroidTemplates {
                         finish()
                     }
                 } else {
+                    runtimeOwner = this
                     // Hand control to the Swift runtime on a worker
                     // thread. The runtime blocks until `quit()` is
                     // invoked; running on the UI thread would
@@ -757,12 +798,14 @@ enum AndroidTemplates {
             /// new document or deep link to open.
             override fun onNewIntent(intent: Intent) {
                 super.onNewIntent(intent)
+                if (!hasBridge) return
                 setIntent(intent)
                 handleOpenIntent(intent)
             }
 
             override fun onResume() {
                 super.onResume()
+                if (!hasBridge) return
                 // Re-attach in case a sibling Activity took the
                 // single-slot bridge ref while we were paused. The
                 // C shim's `nativeAttach` is idempotent — atomic
@@ -775,7 +818,8 @@ enum AndroidTemplates {
             }
 
             override fun onDestroy() {
-                bridge.detach()
+                if (runtimeOwner === this) runtimeOwner = null
+                if (hasBridge) bridge.detach()
                 super.onDestroy()
             }
 
@@ -797,7 +841,7 @@ enum AndroidTemplates {
             /// here.)
             ///
             /// Secondary (spawned) windows don't own the runtime, so they skip.
-            private fun handleOpenIntent(intent: Intent?) {
+            internal fun handleOpenIntent(intent: Intent?) {
                 if (intent == null || isSecondary) return
                 val uris = ArrayList<String>()
                 val urls = ArrayList<String>()
@@ -851,7 +895,7 @@ enum AndroidTemplates {
             @Suppress("DEPRECATION")
             override fun onTrimMemory(level: Int) {
                 super.onTrimMemory(level)
-                if (isSecondary) return
+                if (isSecondary || !hasBridge) return
                 val normalized = when (level) {
                     ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
                     ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "critical"

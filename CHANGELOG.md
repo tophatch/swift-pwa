@@ -275,6 +275,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Android, an `ACTION_VIEW` intent routed to an app that was already
+  running stacked a second `MainActivity` — with a second Swift runtime.** Found
+  while verifying the deep-link work, but it applies equally to a warm document
+  open, so it predates it. The launcher Activity keeps the default `standard`
+  launch mode deliberately: `singleTop` or `singleTask` would redirect
+  `spawnWindow`'s secondary Activity into the existing instance and break
+  multi-window. The cost is that a warm `VIEW` intent arrives as a brand-new
+  Activity instead of `onNewIntent`, and that instance ran the whole primary
+  path — spawning another `swiftPwaMain()` thread and taking the single-slot
+  bridge ref off the live one.
+
+  It looked fine, which is why it lasted: measured on a Fold7, three warm deep
+  links left **three `MainActivity` records in one task** (`sz=3`) each with its
+  own runtime, while the page still showed the right URL — because the URL was
+  being read off the newest copy of the app. The back button then walked
+  backwards through stale ones.
+
+  A redundant primary now hands its intent to the live owner and finishes
+  before it builds a WebView or attaches a bridge, keyed on the same
+  `swift-pwa.config-json` extra that already distinguishes a secondary window —
+  so multi-window is untouched (verified: the secondary still opens, `sz=2`,
+  with no extra runtime). After the fix three warm links leave `sz=1` and the
+  runtime-thread count a plain launcher start produces.
+
 - **`biometric.canAuthenticate` reported `available: true` on a Face ID device
   with no `NSFaceIDUsageDescription`**, where the `authenticate` that follows
   can never succeed. `authenticate` already preflighted the key and threw a

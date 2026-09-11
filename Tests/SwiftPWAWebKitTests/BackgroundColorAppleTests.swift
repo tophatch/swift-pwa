@@ -72,21 +72,25 @@
         /// observation, which is only as good as the key being KVO-compliant.
         @Test("an appearance change notifies an effectiveAppearance observer")
         func effectiveAppearanceIsObservable() {
+            // The handler is nonisolated, so the appearance is read inside
+            // `MainActor.assumeIsolated` and the result lands in a box —
+            // exactly what `MacWindow` does for the same reason.
+            final class Names: @unchecked Sendable { var seen: [String] = [] }
+            let names = Names()
             let window = NSWindow(
                 contentRect: NSRect(x: 0, y: 0, width: 10, height: 10),
                 styleMask: [.titled], backing: .buffered, defer: true
             )
             window.appearance = NSAppearance(named: .aqua)
-            var seen: [String] = []
             let observation = window.observe(\.effectiveAppearance) { window, _ in
-                seen.append(window.effectiveAppearance.name.rawValue)
+                MainActor.assumeIsolated { names.seen.append(window.effectiveAppearance.name.rawValue) }
             }
             defer { observation.invalidate() }
 
             window.appearance = NSAppearance(named: .darkAqua)
-            #expect(seen.last == NSAppearance.Name.darkAqua.rawValue)
+            #expect(names.seen.last == NSAppearance.Name.darkAqua.rawValue)
             window.appearance = NSAppearance(named: .aqua)
-            #expect(seen.last == NSAppearance.Name.aqua.rawValue)
+            #expect(names.seen.last == NSAppearance.Name.aqua.rawValue)
         }
 
         @Test("unparseable hex in either half yields no colour at all")

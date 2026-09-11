@@ -71,6 +71,38 @@ struct ExternalURLPolicyTests {
         }
     }
 
+    /// Two backends serve the bundle over **https** (`swift-pwa.local` on
+    /// Windows and Android), where the scheme check above can't tell app
+    /// content from the web. Found on a device: `system.openURL` on the app's
+    /// own page opened Chrome on a URL only the app can answer.
+    @Test("the app's own origin can't be handed to the OS, even over https")
+    func ownOriginIsNeverOpenable() throws {
+        let policy = ExternalURLPolicy()
+        let own = try url("https://swift-pwa.local/index.html")
+        // Before the backend says where it serves from, there is nothing to
+        // recognise — an ordinary https URL is openable.
+        #expect(policy.decide(own) == .open)
+
+        policy.registerAppOrigin(WebOrigin(scheme: "https", host: "swift-pwa.local"))
+        #expect(policy.decide(own) == .refuse(.notOpenable))
+        // A different path on the same origin is equally the app's own.
+        #expect(try policy.decide(url("https://swift-pwa.local/deep/page.html"))
+            == .refuse(.notOpenable))
+        // Everything else still opens.
+        #expect(try policy.decide(url("https://example.com/")) == .open)
+    }
+
+    @Test("registering an origin doesn't stop the app navigating within it")
+    func ownOriginStillNavigable() throws {
+        let policy = ExternalURLPolicy()
+        let origin = WebOrigin(scheme: "https", host: "swift-pwa.local")
+        policy.registerAppOrigin(origin)
+        #expect(try policy.navigationDisposition(
+            for: url("https://swift-pwa.local/next.html"),
+            appOrigin: origin, isMainFrame: true
+        ) == .allowInApp)
+    }
+
     @Test("a string with no scheme isn't openable")
     func schemelessIsRefused() throws {
         #expect(try ExternalURLPolicy().decide(url("/settings")) == .refuse(.notOpenable))

@@ -37,7 +37,13 @@
         // MARK: - PWAWebView
 
         public func load(_ content: WindowContent) {
-            AndroidWebViewAdapter.resolveURL(for: content).withCString { c in
+            let url = AndroidWebViewAdapter.resolveURL(for: content)
+            // Which origin counts as "the app" for the navigation policy. A
+            // `.remote` window is its own origin: an app pointed at a web app
+            // navigates that site freely, and only leaving *it* is leaving
+            // the app.
+            AndroidNavigationPolicy.setAppOrigin(URL(string: url).flatMap(WebOrigin.init))
+            url.withCString { c in
                 swiftpwa_android_load_url(c)
             }
         }

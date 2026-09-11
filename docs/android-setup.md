@@ -998,26 +998,33 @@ launch) — `OnnxRuntimeAndroidArtifact` + `AndroidBundler.stageJniLibs` now
 do this automatically, the same way the Swift runtime stdlib libs are
 staged.
 
+## 7.5 Links out of the app
+
+A main-frame navigation that leaves the app's own origin is handed to the
+system (`Intent.ACTION_VIEW`) instead of loading in place — an app window has
+no address bar and no back button, so in place means the app is gone. Same
+shared policy as every other backend (`ctx.externalURLs`, seeded from
+`pwa.json`'s `external_urls`); `system.openURL` takes the same route out. See
+[the JS API](javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
+
+Android makes this the least fiddly of the five: `shouldOverrideUrlLoading`
+carries **`request.isForMainFrame`**, so a cross-origin `<iframe>` is told
+apart from the app navigating away for free — no heuristics, unlike
+WebKitGTK. Device-verified: an embedded `example.com` iframe still renders
+while a link to the same site opens Chrome and leaves the page where it was.
+
+> **The one synchronous seam in this backend.** `shouldOverrideUrlLoading`
+> must answer *before* the load proceeds, so it calls into Swift through a
+> blocking JNI entry rather than the async RPC everything else here uses. That
+> is only safe because the decision is a lock-guarded pure function in Core —
+> no I/O, no actor hop. Keep it that way.
+
+`alert()`, `confirm()` and `prompt()` need nothing from the runtime: Android's
+WebView shows its own dialog when the `WebChromeClient` doesn't override
+`onJsAlert`. Measured on a device — `alert()` blocks the page and renders
+*"The page at …/ says:"* with an OK button.
+
 ## 8. Known limitations
-
-- **A page can't open a URL outside the app, and an off-origin link strands
-  it.** The generated `MainActivity` sets no `WebViewClient.shouldOverrideUrlLoading`,
-  so a main-frame navigation to another site loads in place — and an app
-  window has no address bar and no back button. `system.openURL` is
-  registered but refuses with `E_UNIMPLEMENTED`. Both landed on macOS, iOS
-  and the three desktop backends behind one shared Core policy
-  (`ctx.externalURLs`), so Android needs the translation and not the rules:
-  `shouldOverrideUrlLoading(view, request)` carries `request.isForMainFrame`,
-  which is exactly the distinction WebKitGTK makes you work for. Tracked as
-  [#166](https://github.com/tophatch/swift-pwa/issues/166) and
-  [#167](https://github.com/tophatch/swift-pwa/issues/167).
-
-  **`alert()` / `confirm()` / `prompt()` are unverified here.** `WebChromeClient`'s
-  default `onJsAlert` returns false, which cancels the dialog rather than
-  showing one, so they are *probably* inert — but that hasn't been measured on
-  a device, and the same assumption turned out to be wrong for WebKitGTK and
-  WebView2, both of which show dialogs of their own
-  ([#165](https://github.com/tophatch/swift-pwa/issues/165)).
 
 - **Camera, microphone and location need a declaration in two places.**
   `permissions.web` in `pwa.json` emits the `uses-permission` entries;

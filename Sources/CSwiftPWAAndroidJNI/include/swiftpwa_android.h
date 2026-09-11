@@ -208,6 +208,34 @@ void swiftpwa_android_post_main(void *box);
 void swiftpwa_android_run_main_box(void *box);
 
 // ---------------------------------------------------------------------
+// Navigation policy.
+// ---------------------------------------------------------------------
+
+// What to do with a navigation the page asked for. Mirrors Core's
+// `NavigationDisposition`, kept as plain ints so Kotlin needn't know Swift
+// types: 0 = load it, 1 = cancel and hand the URL to the system, 2 = cancel.
+#define SWIFTPWA_NAV_ALLOW 0
+#define SWIFTPWA_NAV_OPEN_EXTERNALLY 1
+#define SWIFTPWA_NAV_BLOCK 2
+
+// Set by Swift; called **synchronously** from
+// `WebViewClient.shouldOverrideUrlLoading` on the JVM main thread, which has
+// to answer before the load proceeds. The handler must not block — Core's
+// `ExternalURLPolicy` is a lock-guarded pure decision, which is why this can
+// be synchronous at all.
+typedef int (*swiftpwa_android_navigation_fn)(const char *uri,
+                                              int is_main_frame,
+                                              void *user);
+
+void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn handler,
+                                             void *user);
+
+// Called from JNI. Returns one of the SWIFTPWA_NAV_* values; with no handler
+// installed it answers ALLOW, so an app that never configured a policy keeps
+// the behaviour it had.
+int swiftpwa_android_dispatch_navigation(const char *uri, int is_main_frame);
+
+// ---------------------------------------------------------------------
 // Lifecycle.
 // ---------------------------------------------------------------------
 

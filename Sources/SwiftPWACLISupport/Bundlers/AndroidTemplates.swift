@@ -999,6 +999,24 @@ enum AndroidTemplates {
                         }
                         return response
                     }
+                    // Without this, a main-frame navigation to another site
+                    // loads in place — and an app window has no address bar
+                    // and no back button, so the app is simply gone. The
+                    // decision is Core's (`ctx.externalURLs`), reached through
+                    // a *synchronous* JNI call because this method has to
+                    // answer before the load proceeds.
+                    override fun shouldOverrideUrlLoading(
+                        view: WebView,
+                        request: WebResourceRequest
+                    ): Boolean {
+                        val url = request.url?.toString() ?: return false
+                        return when (nativeDecideNavigation(url, request.isForMainFrame)) {
+                            NAV_OPEN_EXTERNALLY -> { openExternally(url); true }
+                            NAV_BLOCK -> true
+                            else -> false
+                        }
+                    }
+
                     override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                         super.onPageStarted(view, url, favicon)
                         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -1260,6 +1278,42 @@ enum AndroidTemplates {
             external fun nativeHostEvent(json: String)
             @Suppress("unused")
             private external fun nativeQuit(exitCode: Int)
+
+            /// Synchronous by necessity: `shouldOverrideUrlLoading` must
+            /// answer before the load proceeds. Returns one of the NAV_*
+            /// constants below, mirroring Core's `NavigationDisposition`.
+            private external fun nativeDecideNavigation(url: String, isMainFrame: Boolean): Int
+
+            /// Hand a URL to whichever app claims it — the browser for
+            /// http(s), a mail client for mailto, an app's own scheme. Shared
+            /// by the navigation policy above and the `system.openURL`
+            /// bridge command, so both routes out of the app behave alike.
+            ///
+            /// Returns false when nothing on the device handles it, which is
+            /// information the page can act on rather than a failure.
+            fun openExternally(url: String): Boolean {
+                return try {
+                    val intent = Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                    // Required: the Activity context is starting an Activity
+                    // in another task.
+                    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                    activity.startActivity(intent)
+                    true
+                } catch (e: android.content.ActivityNotFoundException) {
+                    false
+                } catch (e: SecurityException) {
+                    // A handler exists but refused the caller — same answer
+                    // as none from the page's point of view.
+                    false
+                }
+            }
+
+            companion object {
+                // Mirrors SWIFTPWA_NAV_* in swiftpwa_android.h.
+                private const val NAV_ALLOW = 0
+                private const val NAV_OPEN_EXTERNALLY = 1
+                private const val NAV_BLOCK = 2
+            }
         }
         """#
     }
@@ -1530,6 +1584,7 @@ enum AndroidTemplates {
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
                 "system.memory" -> systemMemory(done)
+                "system.openURL" -> systemOpenURL(json, done)
                 "ble.availability" -> bleAvailability(done)
                 "ble.scan.start" -> bleScanStart(json, done)
                 "ble.scan.stop" -> bleScanStop(done)
@@ -1552,6 +1607,20 @@ enum AndroidTemplates {
         // the large-heap class (getLargeMemoryClass, in MiB) — a device-tier
         // proxy, since a WebView canvas app's real pressure is usually native/
         // GPU memory, not the Java heap. `lowMemory` is the OS's own flag.
+        // Hands a URL to the OS through the bridge's shared helper, so the
+        // `system.openURL` command and the navigation policy take the same
+        // route out. `opened: false` means nothing on the device claims the
+        // scheme — an answer for the page, not an error.
+        private fun systemOpenURL(json: JSONObject, done: (String?, String?) -> Unit) {
+            val url = json.optString("url")
+            if (url.isEmpty()) { done(null, "swift-pwa: system.openURL: url required"); return }
+            // startActivity wants the main thread.
+            activity.runOnUiThread {
+                val opened = bridge.openExternally(url)
+                done(JSONObject().put("opened", opened).toString(), null)
+            }
+        }
+
         private fun systemMemory(done: (String?, String?) -> Unit) {
             val am = activity.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
             val info = ActivityManager.MemoryInfo()

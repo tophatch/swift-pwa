@@ -105,6 +105,11 @@
             // must find someone listening.
             AndroidWebPermissions.install(policy: context.permissions)
 
+            // Same reasoning: the WebView can be asked to navigate before
+            // `configure` returns, and an unanswered navigation takes the
+            // default — which is to load it in place and strand the app.
+            AndroidNavigationPolicy.install(policy: context.externalURLs)
+
             // Host events: Kotlin-side asynchronous pushes that don't
             // fit the JS bridge envelope or the RPC request/response
             // shape — `BroadcastReceiver` payloads, lifecycle hooks,

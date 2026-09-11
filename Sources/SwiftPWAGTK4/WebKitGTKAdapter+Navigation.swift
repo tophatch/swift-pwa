@@ -41,7 +41,9 @@
     final class NavigationBox: @unchecked Sendable {
         private let policy: ExternalURLPolicy
         private let opener: any URLOpener
-        var appOrigin: WebOrigin?
+        var appOrigin: WebOrigin? {
+            didSet { policy.registerAppOrigin(appOrigin) }
+        }
 
         init(policy: ExternalURLPolicy, opener: any URLOpener) {
             self.policy = policy

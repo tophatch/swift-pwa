@@ -369,7 +369,7 @@ something else. Two things *are* errors:
 | Code | Meaning |
 |---|---|
 | `E_URL_SCHEME` | The app hasn't declared this scheme — see below. |
-| `E_URL` | Not a URL the system can open: unparseable, or a `pwa:` / `file:` / `javascript:` URL, which address this app's own content rather than something the desktop can launch. |
+| `E_URL` | Not a URL the system can open: unparseable, a `pwa:` / `file:` / `javascript:` URL, or **a URL on the app's own origin** — including the `https://swift-pwa.local` the Windows and Android backends serve the bundle from. Handing those to the OS opens a browser on a page only the app can answer. |
 
 **Declaring schemes.** `http`, `https`, `mailto` and `tel` work out of the box.
 Anything else — an app's own deep-link scheme, a conferencing handler — has to
@@ -386,9 +386,7 @@ and a link in user-authored content is written by the user):
 scheme that can't be one. A refusal logs a diagnostic naming the fix, because
 all the page sees is an error code.
 
-> **Platform coverage.** macOS, iOS, both GTK backends and Windows. Android
-> registers the command and refuses it with `E_UNIMPLEMENTED`, so you can
-> feature-detect on the code rather than on the platform.
+> **Platform coverage.** All five.
 
 #### Leaving the app: off-origin links
 
@@ -404,9 +402,7 @@ subframes, and `about:` / `blob:` / `data:` URLs, which can't reach another site
 A window opened on `WindowContent.remote` counts *its own site* as the app, so a
 wrapper around a web app can navigate that site freely.
 
-Handled on macOS, iOS, both GTK backends and Windows; **Android still loads it
-in place** ([#166](https://github.com/tophatch/swift-pwa/issues/166)). One
-platform difference worth knowing: on Linux, WebKitGTK's navigation decision
+Handled on all five platforms. One platform difference worth knowing: on Linux, WebKitGTK's navigation decision
 carries no frame information, so a link clicked **inside a cross-origin
 iframe** is handed to the browser there while the other backends leave it to
 the embed. See [Linux setup](linux-setup.md#links-out-of-the-app) for why, and
@@ -430,12 +426,11 @@ names the origin that raised it.
 > Before 0.11 `WKWebView` showed nothing for any of the three — it is the only
 > engine here with no built-in JavaScript panel, so a page's `alert()` returned
 > in 0 ms with nothing on screen and no way to detect it. The other engines
-> ship their own: measured, **WebKitGTK 4.1 / 6.0 and WebView2 all block the
-> page on `alert()`**, so they were never broken and get the engine's dialog
-> rather than a swift-pwa one. Android is unverified and probably inert
-> ([#165](https://github.com/tophatch/swift-pwa/issues/165)). If you want one
-> dialog everywhere, draw your own — the better answer for an app with its own
-> design language anyway.
+> ship their own: measured, **WebKitGTK 4.1 / 6.0, WebView2 and Android's
+> WebView all block the page on `alert()`**, so they were never broken and get
+> the engine's dialog rather than a swift-pwa one. If you want one dialog
+> everywhere, draw your own — the better answer for an app with its own design
+> language anyway.
 
 ### `clipboard.*`
 

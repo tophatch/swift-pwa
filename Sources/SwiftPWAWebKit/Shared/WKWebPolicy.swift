@@ -29,8 +29,12 @@
         private let opener: any URLOpener
 
         /// The origin this window's own content lives on, set from
-        /// ``WKWebViewAdapter/load(_:)``.
-        var appOrigin: WebOrigin?
+        /// ``WKWebViewAdapter/load(_:)``. Registering it with the policy is
+        /// what stops `system.openURL` handing the app's own pages to the
+        /// browser.
+        var appOrigin: WebOrigin? {
+            didSet { policy.registerAppOrigin(appOrigin) }
+        }
 
         init(policy: ExternalURLPolicy, opener: any URLOpener) {
             self.policy = policy

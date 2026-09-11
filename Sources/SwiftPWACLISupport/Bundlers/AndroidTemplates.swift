@@ -1509,7 +1509,7 @@ enum AndroidTemplates {
                 "dialog.openDirectory" -> dialogOpenDirectory(done)
                 "dialog.takePersistableUri" -> dialogTakePersistableUri(json, done)
                 "dialog.checkPersistedUri" -> dialogCheckPersistedUri(json, done)
-                "biometric.canAuthenticate" -> biometricCanAuthenticate(done)
+                "biometric.canAuthenticate" -> biometricCanAuthenticate(json, done)
                 "biometric.authenticate" -> biometricAuthenticate(json, done)
                 "updater.installApk" -> updaterInstallApk(json, done)
                 "fs.readContentUri" -> fsReadContentUri(json, done)
@@ -2763,16 +2763,36 @@ enum AndroidTemplates {
         // Biometric
         // -----------------------------------------------------------
 
-        private fun biometricCanAuthenticate(done: (String?, String?) -> Unit) {
-            val mgr = BiometricManager.from(activity)
-            val authenticators = BiometricManager.Authenticators.BIOMETRIC_STRONG or
+        // BIOMETRIC_STRONG (0x000F) is a subset of BIOMETRIC_WEAK
+        // (0x00FF), so "strong or weak" is just WEAK — and WEAK
+        // combined with DEVICE_CREDENTIAL is the one device-credential
+        // combination androidx supports on every API level we target
+        // (STRONG or DEVICE_CREDENTIAL throws at PromptInfo.build() on
+        // API 28-29, and DEVICE_CREDENTIAL alone throws below 30).
+        private fun biometricAuthenticators(allowDeviceCredential: Boolean): Int {
+            val biometrics = BiometricManager.Authenticators.BIOMETRIC_STRONG or
                 BiometricManager.Authenticators.BIOMETRIC_WEAK
-            val result = mgr.canAuthenticate(authenticators)
+            return if (allowDeviceCredential) {
+                biometrics or BiometricManager.Authenticators.DEVICE_CREDENTIAL
+            } else {
+                biometrics
+            }
+        }
+
+        private fun biometricCanAuthenticate(json: JSONObject, done: (String?, String?) -> Unit) {
+            val allowDeviceCredential = json.optBoolean("allowDeviceCredential", false)
+            val mgr = BiometricManager.from(activity)
+            val result = mgr.canAuthenticate(biometricAuthenticators(allowDeviceCredential))
             val (available, reason) = when (result) {
                 BiometricManager.BIOMETRIC_SUCCESS -> true to null
                 BiometricManager.BIOMETRIC_ERROR_NO_HARDWARE -> false to "no biometric hardware"
                 BiometricManager.BIOMETRIC_ERROR_HW_UNAVAILABLE -> false to "biometric hardware unavailable"
-                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED -> false to "no biometrics enrolled"
+                BiometricManager.BIOMETRIC_ERROR_NONE_ENROLLED ->
+                    false to if (allowDeviceCredential) {
+                        "no biometrics enrolled and no device lock set"
+                    } else {
+                        "no biometrics enrolled"
+                    }
                 BiometricManager.BIOMETRIC_ERROR_SECURITY_UPDATE_REQUIRED ->
                     false to "biometric security update required"
                 else -> false to "biometrics not available (code $result)"
@@ -2790,6 +2810,7 @@ enum AndroidTemplates {
 
         private fun biometricAuthenticate(json: JSONObject, done: (String?, String?) -> Unit) {
             val reason = json.optString("reason", "Authenticate")
+            val allowDeviceCredential = json.optBoolean("allowDeviceCredential", false)
             val executor = ContextCompat.getMainExecutor(activity)
             var resolved = false
             val resolve = { authenticated: Boolean, error: String? ->
@@ -2818,16 +2839,17 @@ enum AndroidTemplates {
                 }
             }
             val prompt = BiometricPrompt(appActivity, executor, callback)
-            val info = BiometricPrompt.PromptInfo.Builder()
+            val builder = BiometricPrompt.PromptInfo.Builder()
                 .setTitle("Authenticate")
                 .setSubtitle(reason)
-                .setAllowedAuthenticators(
-                    BiometricManager.Authenticators.BIOMETRIC_STRONG or
-                        BiometricManager.Authenticators.BIOMETRIC_WEAK
-                )
-                .setNegativeButtonText(activity.getString(android.R.string.cancel))
-                .build()
-            prompt.authenticate(info)
+                .setAllowedAuthenticators(biometricAuthenticators(allowDeviceCredential))
+            // A negative button and a device-credential fallback are
+            // mutually exclusive — the system draws "Use PIN" in that
+            // slot, and setting both makes PromptInfo.build() throw.
+            if (!allowDeviceCredential) {
+                builder.setNegativeButtonText(activity.getString(android.R.string.cancel))
+            }
+            prompt.authenticate(builder.build())
         }
 
         // -----------------------------------------------------------

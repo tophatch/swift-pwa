@@ -7,7 +7,7 @@ import SwiftPWACore
 @MainActor
 public final class MockBiometricAuth: BiometricAuth {
     public enum Action: Sendable, Equatable {
-        case canAuthenticate
+        case canAuthenticate(BiometricAvailabilityArgs)
         case authenticate(BiometricAuthArgs)
     }
 
@@ -18,8 +18,8 @@ public final class MockBiometricAuth: BiometricAuth {
 
     public init() {}
 
-    public func canAuthenticate() async throws -> BiometricAvailability {
-        actions.append(.canAuthenticate)
+    public func canAuthenticate(_ args: BiometricAvailabilityArgs) async throws -> BiometricAvailability {
+        actions.append(.canAuthenticate(args))
         return nextAvailability
     }
 

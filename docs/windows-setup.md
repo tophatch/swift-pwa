@@ -813,6 +813,12 @@ natively by `SetVirtualHostNameToFolderMapping`, so Chromium picks its own
 - **`updater.windows.install_mode` field is reserved.** The
   `pwa.json` `updater.windows.install_mode` (`passive` / `silent`) is
   not consumed yet — `Add-AppxPackage` runs in its default mode.
+- **`allowDeviceCredential` changes nothing on Windows.**
+  `UserConsentVerifier` always offers the PIN alongside the
+  biometric, and a user with no Windows Hello credential has no PIN
+  either — so the biometrics-only and either-one answers are the
+  same answer. The flag is accepted and ignored, which is what lets
+  a page that sets it behave identically here and on Apple/Android.
 - **`BiometricAuthPlugin` works on both packaged and unpackaged
   builds, via the `IUserConsentVerifierInterop` desktop-app
   variant.** The static

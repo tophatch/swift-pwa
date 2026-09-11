@@ -718,6 +718,31 @@ User cancellation reports `authenticated: false` with `error:
 System-level errors (no sensor, lockout, policy disabled) propagate as
 `BridgeError`. Linux is a stub that always reports `available: false`.
 
+**Accepting the device passcode as well.** `allowDeviceCredential:
+true` on either command widens the policy to the account password /
+device passcode / PIN / pattern. Pass it to *both* — the availability
+answer is policy-specific, so asking the narrower question and then
+running the wider one means hiding a feature that would have worked:
+
+```js
+const opts = { allowDeviceCredential: true };
+const status = await __SWIFT_PWA__.invoke('biometric.canAuthenticate', opts);
+await __SWIFT_PWA__.invoke('biometric.authenticate', { reason: 'Unlock', ...opts });
+```
+
+Use it for anything a user can get *locked out of*. Biometrics-only is
+the right default for a re-confirmation ("authorize this payment"),
+but a lock the app puts on the user's own content becomes unopenable
+on a Mac whose Touch ID enrolment was removed, or a phone whose face
+no longer matches. Per platform: Apple swaps `LAPolicy`, Android adds
+`DEVICE_CREDENTIAL` to the allowed authenticators (and the prompt's
+Cancel button becomes "Use PIN"), Windows already offers the PIN
+either way, and Linux stays unavailable.
+
+Note that with the wider policy `kind` can be `none` while `available`
+is `true` — there's no sensor, but there is a passcode. Branch on
+`available`, never on `kind`.
+
 ### `updater.*`
 
 ```js

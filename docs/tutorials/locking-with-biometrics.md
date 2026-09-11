@@ -16,7 +16,7 @@ In `configure` (`Sources/MyApp/App.swift`) — no `#if os()` needed, each platfo
 ctx.use(BiometricAuthPlugin(SystemBiometricAuth()))
 ```
 
-> **iOS Face ID gotcha:** Apple refuses to show a Face ID prompt unless your app declares `NSFaceIDUsageDescription`. Add it via the `ios.info_plist` passthrough in `pwa.json` (Touch ID doesn't need it, but adding it is harmless):
+> **iOS Face ID gotcha:** Apple refuses to show a Face ID prompt unless your app declares `NSFaceIDUsageDescription` — it terminates the app rather than raising a catchable error. `canAuthenticate` reports `available: false` and `authenticate` throws, both naming the fix, so the omission shows up the first time you switch the feature on rather than on a user's phone. Add it via the `ios.info_plist` passthrough in `pwa.json` (Touch ID doesn't need it, but adding it is harmless):
 > ```json
 > "ios": { "info_plist": { "NSFaceIDUsageDescription": "Unlock your vault with Face ID." } }
 > ```
@@ -77,6 +77,24 @@ const label = {
 ```
 
 > **Android caveat:** Android reports `kind: 'unknown'` even when biometrics work, because it doesn't distinguish fingerprint/face/iris. **Gate your UI on `available`, never on `kind`** — only use `kind` to pick nicer wording on Apple/Windows.
+
+### Letting the device passcode in
+
+If the biometric check is the only way into something the user owns, they can be locked out of their own data: a Touch ID enrolment gets removed, a face stops matching, a sensor fails. Pass `allowDeviceCredential: true` to **both** commands and the platform accepts the account password / device passcode / PIN / pattern as well:
+
+```js
+const opts = { allowDeviceCredential: true };
+const status = await __SWIFT_PWA__.invoke('biometric.canAuthenticate', opts);
+const { authenticated } = await __SWIFT_PWA__.invoke(
+  'biometric.authenticate', { reason: 'Unlock your journal', ...opts }
+);
+```
+
+Both, because the availability answer is policy-specific — ask the biometrics-only question on a Mac with no Touch ID and you'll hide a feature the passcode would have served. With the wider policy `kind` can be `'none'` while `available` is `true`.
+
+This is what Notes, Files and Photos do. Keep the default (biometrics only) for a *re-confirmation* — authorizing a payment, revealing one field — where a passcode the device just accepted at the lock screen isn't the proof you want.
+
+> **Per platform:** Apple evaluates `.deviceOwnerAuthentication` instead of `.deviceOwnerAuthenticationWithBiometrics`; Android adds `DEVICE_CREDENTIAL` to the allowed authenticators, which replaces the prompt's Cancel button with "Use PIN"; Windows Hello already offers the PIN either way, so the flag changes nothing there; Linux remains unavailable.
 
 And because Linux has no biometrics (and a user may have none enrolled anywhere), **always provide a non-biometric way in** (password, passcode). Feature-detect the plugin itself if you want to hide the option entirely where it wasn't wired:
 

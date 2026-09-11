@@ -17,14 +17,22 @@
     public final class SystemBiometricAuth: BiometricAuth, @unchecked Sendable {
         public init() {}
 
-        public func canAuthenticate() async throws -> BiometricAvailability {
+        public func canAuthenticate(_ args: BiometricAvailabilityArgs) async throws -> BiometricAvailability {
             let context = LAContext()
             var error: NSError?
             let ok = context.canEvaluatePolicy(
-                .deviceOwnerAuthenticationWithBiometrics,
+                BiometricPolicy.laPolicy(allowDeviceCredential: args.allowDeviceCredential),
                 error: &error
             )
             let kind = mapBiometryType(context.biometryType)
+            // A Face ID device with no usage description can never
+            // complete `authenticate` — it throws before it prompts,
+            // because evaluating would abort the app. The advisory
+            // answer has to say so, or an app doing the documented
+            // thing offers a lock that cannot be opened.
+            if let reason = faceIDUsageDescriptionProblem(kind: kind) {
+                return BiometricAvailability(available: false, kind: kind, reason: reason)
+            }
             if ok {
                 return BiometricAvailability(available: true, kind: kind)
             }
@@ -40,29 +48,16 @@
 
         public func authenticate(_ args: BiometricAuthArgs) async throws -> BiometricAuthResult {
             let context = LAContext()
-            #if os(iOS)
-                // iOS **terminates the app** if `evaluatePolicy` triggers Face ID
-                // without an `NSFaceIDUsageDescription` string in Info.plist — a
-                // hard OS requirement, raised as an uncatchable exception (so the
-                // caller's try/catch can't save it). Preflight it and return a
-                // clean, actionable error instead of crashing. `biometryType` is
-                // only populated after a policy evaluation, so probe first.
-                var probeError: NSError?
-                _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &probeError)
-                if context.biometryType == .faceID,
-                   Bundle.main.object(forInfoDictionaryKey: "NSFaceIDUsageDescription") == nil
-                {
-                    throw BridgeError(
-                        code: BridgeError.handler,
-                        message: "Face ID needs an NSFaceIDUsageDescription string in Info.plist — "
-                            + "add it via pwa.json's `ios.info_plist` (see docs/ios-setup.md). "
-                            + "Without it iOS aborts the app when Face ID is invoked."
-                    )
-                }
-            #endif
+            // `biometryType` is only populated after a policy
+            // evaluation, so probe before reading it.
+            var probeError: NSError?
+            _ = context.canEvaluatePolicy(.deviceOwnerAuthenticationWithBiometrics, error: &probeError)
+            if let reason = faceIDUsageDescriptionProblem(kind: mapBiometryType(context.biometryType)) {
+                throw BridgeError(code: BridgeError.handler, message: reason)
+            }
             do {
                 let success = try await context.evaluatePolicy(
-                    .deviceOwnerAuthenticationWithBiometrics,
+                    BiometricPolicy.laPolicy(allowDeviceCredential: args.allowDeviceCredential),
                     localizedReason: args.reason
                 )
                 return BiometricAuthResult(authenticated: success)
@@ -91,6 +86,17 @@
             }
         }
 
+        private func faceIDUsageDescriptionProblem(kind: BiometricKind) -> String? {
+            #if os(iOS)
+                BiometricPolicy.faceIDUsageDescriptionProblem(
+                    kind: kind,
+                    usageDescription: Bundle.main.object(forInfoDictionaryKey: "NSFaceIDUsageDescription")
+                )
+            #else
+                nil
+            #endif
+        }
+
         private func mapBiometryType(_ type: LABiometryType) -> BiometricKind {
             switch type {
             case .none: .none
@@ -99,6 +105,42 @@
             case .opticID: .opticID
             @unknown default: .unknown
             }
+        }
+    }
+
+    /// The two policy decisions, pulled out of `SystemBiometricAuth`
+    /// so they can be asserted without a real `LAContext` — neither a
+    /// Face ID sensor nor a missing `Info.plist` key can be staged in
+    /// a test process.
+    package enum BiometricPolicy {
+        package static func laPolicy(allowDeviceCredential: Bool) -> LAPolicy {
+            allowDeviceCredential ? .deviceOwnerAuthentication : .deviceOwnerAuthenticationWithBiometrics
+        }
+
+        /// iOS **terminates the app** if `evaluatePolicy` triggers Face
+        /// ID without an `NSFaceIDUsageDescription` string in
+        /// Info.plist — a hard OS requirement, raised as an uncatchable
+        /// exception (so the caller's try/catch can't save it). Both
+        /// entry points check for it: `authenticate` throws this
+        /// instead of crashing, and `canAuthenticate` reports it as
+        /// unavailable so the feature is never offered.
+        ///
+        /// It applies with `allowDeviceCredential` too: Face ID is
+        /// attempted first, so the passcode fallback is never reached.
+        package static func faceIDUsageDescriptionProblem(
+            kind: BiometricKind,
+            usageDescription: Any?
+        ) -> String? {
+            guard kind == .faceID else { return nil }
+            if let text = usageDescription as? String, !text.isEmpty {
+                return nil
+            }
+            if usageDescription != nil, !(usageDescription is String) {
+                return nil
+            }
+            return "Face ID needs an NSFaceIDUsageDescription string in Info.plist — "
+                + "add it via pwa.json's `ios.info_plist` (see docs/ios-setup.md). "
+                + "Without it iOS aborts the app when Face ID is invoked."
         }
     }
 #endif

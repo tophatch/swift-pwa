@@ -26,7 +26,12 @@
     public final class SystemBiometricAuth: BiometricAuth, @unchecked Sendable {
         public init() {}
 
-        public func canAuthenticate() async throws -> BiometricAvailability {
+        /// `allowDeviceCredential` changes nothing here:
+        /// `UserConsentVerifier` always offers the PIN as part of
+        /// Windows Hello, and a user with no Hello credential has no
+        /// PIN either — so the biometrics-only and either-one answers
+        /// are the same answer.
+        public func canAuthenticate(_: BiometricAvailabilityArgs) async throws -> BiometricAvailability {
             let raw = await withCheckedContinuation { (cont: CheckedContinuation<
                 swiftpwa_biometric_availability,
                 Never

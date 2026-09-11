@@ -68,6 +68,34 @@ struct BiometricAuthPluginTests {
         #expect(out.error == "cancelled")
     }
 
+    @Test("biometric.canAuthenticate defaults to the biometrics-only policy")
+    func availabilityDefaultsToBiometricsOnly() async {
+        let (app, auth) = makeApp()
+        _ = await dispatch(app, "biometric.canAuthenticate", "null")
+        #expect(auth.actions == [.canAuthenticate(.init(allowDeviceCredential: false))])
+    }
+
+    @Test("biometric.canAuthenticate forwards allowDeviceCredential")
+    func availabilityWithDeviceCredential() async {
+        let (app, auth) = makeApp()
+        _ = await dispatch(app, "biometric.canAuthenticate", #"{"allowDeviceCredential":true}"#)
+        #expect(auth.actions == [.canAuthenticate(.init(allowDeviceCredential: true))])
+    }
+
+    @Test("biometric.authenticate forwards allowDeviceCredential")
+    func authenticateWithDeviceCredential() async {
+        let (app, auth) = makeApp()
+        let payload = #"{"reason":"unlock","allowDeviceCredential":true}"#
+        _ = await dispatch(app, "biometric.authenticate", payload)
+        #expect(auth.actions == [.authenticate(.init(reason: "unlock", allowDeviceCredential: true))])
+    }
+
+    @Test("a page written before the flag existed still decodes")
+    func authenticateArgsBackCompat() throws {
+        let args = try JSONDecoder().decode(BiometricAuthArgs.self, from: Data(#"{"reason":"x"}"#.utf8))
+        #expect(args.allowDeviceCredential == false)
+    }
+
     @Test("BiometricKind round-trips through JSON")
     func kindCodable() throws {
         let snap = BiometricAvailability(available: true, kind: .windowsHello)

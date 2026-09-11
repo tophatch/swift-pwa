@@ -124,6 +124,55 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   backends need the translation into their own callback and not the reasoning,
   and it is unit-tested without a webview.
 
+- **`allowDeviceCredential` on both `biometric.*` commands.** A biometric lock
+  the app puts on the user's own content could become **un-openable**:
+  `SystemBiometricAuth` evaluated `.deviceOwnerAuthenticationWithBiometrics`,
+  which is biometrics or nothing, so a Mac that had Touch ID when the lock was
+  set and has since had the enrolment removed has no way back in.
+  `canAuthenticate` reported the situation honestly, which let an app refuse to
+  *offer* a lock but not open one already there. The flag widens the policy to
+  the account password / device passcode / PIN / pattern — what Notes, Files
+  and Photos all use for exactly this — and defaults to `false`, so nothing
+  changes for existing callers.
+
+  It is on `canAuthenticate` **as well**, because the advisory answer has to be
+  policy-specific: asking the biometrics-only question and then running the
+  wider one is how an app ends up hiding a feature that would have worked. Per
+  backend: Apple swaps `LAPolicy`; Android requests
+  `BIOMETRIC_WEAK | DEVICE_CREDENTIAL` (the one combination androidx supports
+  at every API level this targets — `BIOMETRIC_STRONG | DEVICE_CREDENTIAL`
+  throws at `PromptInfo.build()` on API 28–29, and `BIOMETRIC_STRONG` is a
+  subset of `BIOMETRIC_WEAK` so nothing is lost) and drops the negative button,
+  which the system replaces with "Use PIN"; Windows' `UserConsentVerifier`
+  already offers the PIN either way, so the flag is accepted and ignored there;
+  Linux stays unavailable. Reported by an adopter shipping a lock on user
+  content ([#168]).
+
+[#168]: https://github.com/tophatch/swift-pwa/issues/168
+
+- **`Scripts/android-cdp-eval.py`** — on-device verification in one command
+  instead of four copy-pasted ones. `swift-pwa drive` can't reach an Android
+  app (the driver socket is on the device's loopback), so verification goes
+  through the WebView's own CDP endpoint, and
+  [docs/android-on-device-testing.md](docs/android-on-device-testing.md) had
+  been telling people to save a helper into `/tmp` and `pip install
+  websockets` — a documented manual procedure, which is the smell that
+  something should be a script. This one finds the process, forwards its
+  abstract socket (bound to the PID, so it is re-established every run),
+  discovers the page target and evaluates, several expressions in order
+  against one connection. Stdlib only, WebSocket framing included: a test
+  tool shouldn't add a `pip` dependency to the machine running it.
+
+  Two traps it now documents, both of which produced confidently wrong
+  readings while verifying the change above: **each `swift-pwa drive eval`
+  launches a fresh app instance** and tears it down, so a "still pending"
+  promise read by a *second* call is a new process rather than an unfinished
+  await; and **a native prompt is never screenshottable** — Android blanks
+  `screencap` over `BiometricPrompt` and macOS's `screencapture` misses the
+  Touch ID sheet, so a blank frame says nothing about whether the prompt
+  appeared. `adb shell uiautomator dump` reads it, which is how the negative
+  button was confirmed to say "Use PIN".
+
 ### Changed
 
 - **`AppContext` gains `externalURLs`** (an `ExternalURLPolicy`, the way
@@ -139,6 +188,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#167]: https://github.com/tophatch/swift-pwa/issues/167
 
 ### Fixed
+
+- **`biometric.canAuthenticate` reported `available: true` on a Face ID device
+  with no `NSFaceIDUsageDescription`**, where the `authenticate` that follows
+  can never succeed. `authenticate` already preflighted the key and threw a
+  clear error rather than letting iOS raise the uncatchable exception that
+  terminates the app; `canAuthenticate` didn't, so an app doing the
+  **documented** thing — check availability, offer the feature only when
+  available — offered a biometric lock on a device where the unlock could
+  never work, and the error then arrived when someone was trying to get back
+  in. It only reproduces on a real device, which is where the reporting
+  adopter found it. Both entry points now run the same check, and it is a
+  pure function (`BiometricPolicy.faceIDUsageDescriptionProblem`) so it is
+  assertable without a bundle that has or lacks the key ([#169]).
+
+[#169]: https://github.com/tophatch/swift-pwa/issues/169
 
 - **Text fields on macOS can select-all, copy, paste, cut and undo.** Until
   now none of them could, in any swift-pwa app: the keystroke arrived and the

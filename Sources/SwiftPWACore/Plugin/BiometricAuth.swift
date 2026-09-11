@@ -23,11 +23,16 @@ import Foundation
 /// identity and won't show its UI from a portable EXE — see the
 /// notes in [docs/windows-setup.md](docs/windows-setup.md).
 public protocol BiometricAuth: AnyObject, Sendable {
-    /// Inspect the current host. The result is *advisory*: callers
-    /// should still handle `authenticate` returning `authenticated:
-    /// false` (the user may have disabled biometrics between this
-    /// call and the prompt).
-    func canAuthenticate() async throws -> BiometricAvailability
+    /// Inspect the current host for the policy `args` describes. The
+    /// result is *advisory*: callers should still handle
+    /// `authenticate` returning `authenticated: false` (the user may
+    /// have disabled biometrics between this call and the prompt).
+    ///
+    /// The answer has to be policy-specific: a Mac with no Touch ID
+    /// is unavailable for biometrics and available for the account
+    /// password, and an app willing to accept either shouldn't hide
+    /// the feature because it asked the narrower question.
+    func canAuthenticate(_ args: BiometricAvailabilityArgs) async throws -> BiometricAvailability
 
     /// Show the platform's biometric prompt with `reason` as the
     /// localized explanation. Returns whether the user proved
@@ -36,6 +41,13 @@ public protocol BiometricAuth: AnyObject, Sendable {
     /// system errors (no sensor available, device locked out) come
     /// back as `BridgeError(code: .handler)`.
     func authenticate(_ args: BiometricAuthArgs) async throws -> BiometricAuthResult
+}
+
+public extension BiometricAuth {
+    /// Biometrics-only availability — `canAuthenticate(.init())`.
+    func canAuthenticate() async throws -> BiometricAvailability {
+        try await canAuthenticate(BiometricAvailabilityArgs())
+    }
 }
 
 // MARK: - DTOs
@@ -63,12 +75,55 @@ public struct BiometricAvailability: Sendable, Codable, Equatable {
     }
 }
 
+public struct BiometricAvailabilityArgs: Sendable, Codable, Equatable {
+    /// Ask whether the *device credential* (account password, device
+    /// passcode, PIN, pattern) counts as well as biometrics — the
+    /// same policy `BiometricAuthArgs.allowDeviceCredential` runs.
+    public var allowDeviceCredential: Bool
+
+    public init(allowDeviceCredential: Bool = false) {
+        self.allowDeviceCredential = allowDeviceCredential
+    }
+
+    /// Hand-written so `biometric.canAuthenticate()` with no payload
+    /// keeps working: a synthesized `init(from:)` requires every key.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        allowDeviceCredential = try container.decodeIfPresent(Bool.self, forKey: .allowDeviceCredential) ?? false
+    }
+}
+
 public struct BiometricAuthArgs: Sendable, Codable, Equatable {
     /// Localized explanation shown next to the system prompt
     /// ("Authenticate to unlock the journal"). Apple requires this;
     /// Windows and the mock both accept and ignore it.
     public var reason: String
-    public init(reason: String) { self.reason = reason }
+
+    /// Accept the account password / device passcode when biometrics
+    /// are unavailable or fail, so a lock the app set can still be
+    /// opened on a machine whose sensor is gone. Defaults to `false`,
+    /// which is biometrics or nothing.
+    ///
+    /// Apple swaps `LAPolicy` (`.deviceOwnerAuthentication` rather
+    /// than `.deviceOwnerAuthenticationWithBiometrics`); Android adds
+    /// `DEVICE_CREDENTIAL` to the allowed authenticators. Windows'
+    /// `UserConsentVerifier` always offers the PIN, so the flag is
+    /// already its behaviour and changes nothing there; Linux has no
+    /// biometric primitive either way.
+    public var allowDeviceCredential: Bool
+
+    public init(reason: String, allowDeviceCredential: Bool = false) {
+        self.reason = reason
+        self.allowDeviceCredential = allowDeviceCredential
+    }
+
+    /// Hand-written so a page sending `{ reason }` — every caller
+    /// written before this flag existed — still decodes.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        reason = try container.decode(String.self, forKey: .reason)
+        allowDeviceCredential = try container.decodeIfPresent(Bool.self, forKey: .allowDeviceCredential) ?? false
+    }
 }
 
 public struct BiometricAuthResult: Sendable, Codable, Equatable {

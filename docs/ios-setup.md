@@ -170,6 +170,17 @@ installed portal profile; if none matches it says so and you fall back to the
 explicit flags. Find your Team ID with `security find-identity -v -p codesigning`
 (the `(……)` suffix) or in the Apple Developer portal.
 
+**The target device is part of the match.** A development profile lists the
+devices it was minted for, and the OS refuses it on any other — `0xe8008012`,
+*"This provisioning profile cannot be installed on this device"*, at the very
+last step of an install, which reads like a signing problem when the profile is
+in fact correct and current. So when the build knows which device it's for
+(`swift-pwa deploy --target ios`, or `build` with `--device` /
+`--allow-provisioning-registration`), a profile whose `ProvisionedDevices`
+doesn't list it is treated exactly like no profile at all: it's named in the
+output and the build falls through to minting one that does. A plain `build`
+with no device in view filters nothing.
+
 #### Free personal teams
 
 A **free personal team** has no portal profile to find. Add
@@ -203,6 +214,10 @@ Two Apple constraints on **free** teams (not swift-pwa limits) worth knowing:
   free profile at once. A fourth install fails with `ApplicationVerificationFailed`
   / "reached the maximum number of installed apps using a free developer profile"
   — delete a free-provisioned app from the device and retry.
+- **A profile is minted per device.** Deploying the same app to a second test
+  device needs a second profile; the first one can't cover it. swift-pwa mints
+  it for you (see the device-matching note above) rather than embedding the
+  first and failing at install time.
 
 > **Note on the signing identity.** A free team's "Apple Development" certificate
 > often shows a *different* 10-char id in its name than the team id you pass —

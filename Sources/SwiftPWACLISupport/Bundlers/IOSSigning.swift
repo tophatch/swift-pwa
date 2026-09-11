@@ -23,6 +23,22 @@ enum IOSSigning {
         var identity: String?
         var profile: URL?
         var entitlements: URL?
+        /// Profiles that match the app id, team and expiry but don't list the
+        /// target device, so they can't be installed on it. Populated only
+        /// when a device UDID was supplied; the caller reports them, because
+        /// the platform's own failure (`0xe8008012`) can't say which profile
+        /// or which device it means.
+        var profilesExcludedByDevice: [URL] = []
+    }
+
+    /// The outcome of choosing among installed profiles: the one to embed,
+    /// plus the ones rejected *only* because they don't cover the target
+    /// device. The two travel together because a caller that finds no profile
+    /// needs to know whether that means "none installed" or "none for this
+    /// device" — those want different advice.
+    struct ProfileChoice: Equatable {
+        var profile: URL?
+        var excludedByDevice: [URL] = []
     }
 
     // MARK: - Pure logic (unit-tested)
@@ -77,23 +93,60 @@ enum IOSSigning {
         return false
     }
 
+    /// The devices a profile authorizes, or `nil` when it lists none — a
+    /// distribution profile isn't device-restricted, so "no list" means "any
+    /// device", not "no device".
+    static func provisionedDevices(from plist: [String: Any]) -> Set<String>? {
+        guard let devices = plist["ProvisionedDevices"] as? [String] else { return nil }
+        return Set(devices.map { $0.uppercased() })
+    }
+
+    /// Whether a profile can be installed on `deviceUDID`. A development
+    /// profile lists the devices it was minted for and the OS refuses it on
+    /// any other (`0xe8008012`), which is why this has to be checked *before*
+    /// a profile is embedded rather than discovered at install time.
+    static func profileCovers(deviceUDID: String, plist: [String: Any]) -> Bool {
+        guard let devices = provisionedDevices(from: plist) else { return true }
+        return devices.contains(deviceUDID.uppercased())
+    }
+
+    /// Whether `value` has the shape of a device UDID rather than a device
+    /// name. `--device` takes either, and an unlisted value is passed through
+    /// verbatim as the udid, so anything keyed on it has to check first — a
+    /// name compared against `ProvisionedDevices` would reject every profile.
+    /// Both live shapes: 40 hex digits (pre-A12) and `<8 hex>-<16 hex>`.
+    static func isDeviceUDID(_ value: String) -> Bool {
+        if value.count == 40, value.allSatisfy(\.isHexDigit) { return true }
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
+        return parts.count == 2 && parts[0].count == 8 && parts[1].count == 16
+            && parts.allSatisfy { $0.allSatisfy(\.isHexDigit) }
+    }
+
     /// Best matching profile among candidates: an exact (non-wildcard) app-id
-    /// match wins over a wildcard, then the latest expiration date.
+    /// match wins over a wildcard, then the latest expiration date. When
+    /// `deviceUDID` is known, a profile that doesn't list it is not a
+    /// candidate at all — it is current, correctly signed, and still
+    /// uninstallable — and is reported separately so the caller can say so.
     static func bestProfile(
-        bundleID: String, team: String,
+        bundleID: String, team: String, deviceUDID: String? = nil,
         candidates: [(url: URL, plist: [String: Any])], now: Date
-    ) -> URL? {
+    ) -> ProfileChoice {
         let matches = candidates.filter { profileMatches(bundleID: bundleID, team: team, plist: $0.plist, now: now) }
+        let excluded = deviceUDID.map { udid in
+            matches.filter { !profileCovers(deviceUDID: udid, plist: $0.plist) }.map(\.url)
+        } ?? []
+        let usable = matches.filter { !excluded.contains($0.url) }
         func isExact(_ plist: [String: Any]) -> Bool {
             appIDPattern(team: team, plist: plist) == bundleID
         }
         func expiry(_ plist: [String: Any]) -> Date {
             (plist["ExpirationDate"] as? Date) ?? .distantPast
         }
-        return matches.sorted { a, b in
+        let best = usable.sorted { a, b in
             if isExact(a.plist) != isExact(b.plist) { return isExact(a.plist) }
             return expiry(a.plist) > expiry(b.plist)
         }.first?.url
+        return ProfileChoice(profile: best, excludedByDevice: excluded)
     }
 
     /// The `Entitlements` dict embedded in a profile plist.
@@ -162,7 +215,13 @@ enum IOSSigning {
     /// read the keychain identities and decode installed profiles, runs the
     /// pure matchers, and writes the chosen profile's entitlements to
     /// `scratch`. Best-effort: any field that can't be resolved stays `nil`.
-    static func resolve(team: String, bundleID: String, scratch: URL, now: Date = Date()) async -> Resolved {
+    ///
+    /// Pass `deviceUDID` when the build is aimed at a known device: a profile
+    /// that doesn't list it is treated exactly like no profile at all, so the
+    /// caller falls through to minting one that does.
+    static func resolve(
+        team: String, bundleID: String, scratch: URL, deviceUDID: String? = nil, now: Date = Date()
+    ) async -> Resolved {
         var resolved = Resolved()
 
         var parsedIdentities: [(hash: String, name: String)] = []
@@ -189,7 +248,11 @@ enum IOSSigning {
             }
         }
 
-        if let best = bestProfile(bundleID: bundleID, team: team, candidates: candidates, now: now) {
+        let choice = bestProfile(
+            bundleID: bundleID, team: team, deviceUDID: deviceUDID, candidates: candidates, now: now
+        )
+        resolved.profilesExcludedByDevice = choice.excludedByDevice
+        if let best = choice.profile {
             resolved.profile = best
             let bestPlist = candidates.first(where: { $0.url == best })?.plist
             if let plist = bestPlist, let ent = entitlements(from: plist) {

@@ -312,6 +312,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#171]: https://github.com/tophatch/swift-pwa/issues/171
 
+- **`--team` embedded an installed provisioning profile without checking the
+  target device was in it.** `deploy --target ios --device <name> --team <id>`
+  found a profile for the app id, reported it as the answer, and the install
+  then failed at its very last step with `0xe8008012` / *"This provisioning
+  profile cannot be installed on this device"* — which reads as a mis-signed
+  app. It isn't: the profile is correct, current and correctly signed, it just
+  lists the *other* device. A free personal team mints a profile per device, so
+  a second test device hits this the first time it is used ([#172]).
+
+  `IOSSigning.bestProfile` filtered candidates on bundle id, team and expiry and
+  never read `ProvisionedDevices`. It does now, when the build knows which
+  device it is for — `deploy` always passes the resolved device through, and
+  `build` takes `--device` (or resolves one for
+  `--allow-provisioning-registration`). A profile that doesn't list it is
+  treated exactly like no profile at all, so the existing mint path takes over
+  and produces one that covers the device; nothing is lost, because the
+  non-matching profile could not have been installed anyway. With no device in
+  view a plain `build` filters nothing and behaves as before.
+
+  The skipped profiles are named in the output, since the platform's own error
+  has no way to say *which* profile or *which* device it means. Two guards the
+  device list needs: a profile that lists **no** devices is a distribution
+  profile and isn't device-restricted, so "no list" means *any* device rather
+  than none; and `--device` accepts a device *name*, passing an unlisted value
+  through verbatim as the udid, so the filter runs only against something
+  shaped like a real UDID — comparing a name would have rejected every profile.
+
+[#172]: https://github.com/tophatch/swift-pwa/issues/172
+
 - **On Windows, a `ctx.serveDirectory(_:at:)` mount was unreachable: every
   fetch under it failed at the network layer.** An app that mounted a directory
   at `/packs` and fetched `/packs/photo.png` got a `TypeError` for *every* file

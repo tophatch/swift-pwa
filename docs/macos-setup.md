@@ -239,12 +239,17 @@ always, anything else declared. `system.openURL` uses the same policy,
 so a page has one answer for both routes out. See
 [docs/javascript-api.md](javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
 
-> **The other direction isn't wired yet.** An app can declare a custom
-> scheme in `macos.info_plist` and open it, but a URL the OS *delivers*
-> to the app doesn't reach the page: `application(_:open:)` forwards
-> only file URLs, onto `app.openFile`. So a deep link into your own app
-> arrives nowhere. Tracked as
-> [#177](https://github.com/tophatch/swift-pwa/issues/177).
+The other direction is `url_schemes` in `pwa.json`, which generates the
+`CFBundleURLTypes` registration and delivers an arriving URL to the page
+on the `app.openURL` channel — retained, so a link that *launched* the
+app isn't lost before the page subscribes. See
+[docs/tutorials/receiving-deep-links.md](tutorials/receiving-deep-links.md).
+
+> LaunchServices caches a bundle's registration. A freshly built `.app`
+> that has never been opened from its final location may not be the
+> registered handler yet; `open`ing the app once (or
+> `lsregister -f build/macos/MyApp.app`) is what makes the OS route the
+> scheme to it.
 
 ### What happens when the last window closes (`macos.last_window_closed`)
 

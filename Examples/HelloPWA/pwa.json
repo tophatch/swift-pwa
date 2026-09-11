@@ -3,6 +3,14 @@
   "name": "HelloPWA",
   "version": "0.1.0",
   "description": "A swift-pwa demo app — a thin Swift wrapper around a WKWebView that shows the JS↔Swift bridge round-tripping invoke and subscribe calls.",
+  "url_schemes": [
+    "hellopwa"
+  ],
+  "external_urls": {
+    "schemes": [
+      "hellopwa"
+    ]
+  },
   "web": {
     "directory": "Sources/HelloPWA/web",
     "entry": "index.html"

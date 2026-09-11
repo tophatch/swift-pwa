@@ -213,25 +213,41 @@ struct AppImageBundler {
         try Data(bytes).write(to: url)
     }
 
-    /// Render the `.desktop` entry. When `linux.document_types` declares MIME
-    /// types, add a `MimeType=` list (so the desktop environment associates the
-    /// app with them) and a `%F` field code on `Exec=` (so opened file paths are
-    /// passed as arguments — the runtime forwards them to `app.openFile`).
-    /// Without doc types the output is unchanged (bare `Exec=`, no `MimeType=`).
+    /// Render the `.desktop` entry. Two declarations reach it, both through the
+    /// `MimeType=` list — which is how freedesktop expresses *either* kind of
+    /// association:
+    ///
+    /// - `linux.document_types` → the MIME types themselves, plus a `%F` field
+    ///   code on `Exec=` so opened file paths arrive as arguments (the runtime
+    ///   forwards them to `app.openFile`).
+    /// - `url_schemes` → one `x-scheme-handler/<scheme>` pseudo-MIME per
+    ///   scheme, which is how a desktop environment records a URL handler, plus
+    ///   `%U` so the URL arrives as an argument (→ `app.openURL`).
+    ///
+    /// **`%U` supersedes `%F` when both are declared**, because a field code is
+    /// singular and `%U` is the more general one: it accepts URLs *and* local
+    /// paths. The catch is that with `%U` the desktop hands local files over as
+    /// `file:///…` URIs rather than bare paths, which is why
+    /// ``OpenFile/launchFilePaths(_:)`` accepts a `file:` URL as a path.
+    ///
+    /// With neither declared the output is unchanged (bare `Exec=`, no
+    /// `MimeType=`).
     static func desktopEntry(manifest: PWAManifest, exeName: String) -> String {
-        let mimeTypes = (manifest.linux?.documentTypes ?? [])
+        let docMimeTypes = (manifest.linux?.documentTypes ?? [])
             .flatMap(\.mimeTypes)
             .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
-        // `%F` = a list of local file paths (freedesktop Exec field code). Only
-        // added when the app declares openable types, so a launcher-only app's
-        // Exec line stays bare.
-        let exec = mimeTypes.isEmpty ? exeName : "\(exeName) %F"
+        let schemeMimeTypes = URLSchemeSupport.declared(manifest).map { "x-scheme-handler/\($0)" }
+        let mimeTypes = docMimeTypes + schemeMimeTypes
+        // freedesktop Exec field codes: `%F` a list of local paths, `%U` a list
+        // of URLs. Only added when the app declares something openable, so a
+        // launcher-only app's Exec line stays bare.
+        let fieldCode = schemeMimeTypes.isEmpty ? (docMimeTypes.isEmpty ? "" : " %F") : " %U"
         var lines = [
             "[Desktop Entry]",
             "Type=Application",
             "Name=\(manifest.name)",
-            "Exec=\(exec)",
+            "Exec=\(exeName)\(fieldCode)",
             "Icon=\(exeName)",
             "Categories=\(manifest.linux?.desktopCategories?.joined(separator: ";") ?? "Utility");",
             "Comment=\(manifest.description ?? manifest.name)",

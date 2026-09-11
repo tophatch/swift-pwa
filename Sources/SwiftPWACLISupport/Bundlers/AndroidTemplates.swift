@@ -229,6 +229,7 @@ enum AndroidTemplates {
         hasIcon: Bool,
         customTheme: Bool = false,
         documentTypes: [PWAManifest.AndroidSection.DocumentType] = [],
+        urlSchemes: [String] = [],
         networkConfigStaged: Bool = false,
         webPermissions: [String] = [],
         minSdk: Int = 28
@@ -336,7 +337,7 @@ enum AndroidTemplates {
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN"/>
                         <category android:name="android.intent.category.LAUNCHER"/>
-                    </intent-filter>\(documentTypeFilters(documentTypes))
+                    </intent-filter>\(documentTypeFilters(documentTypes))\(urlSchemeFilter(urlSchemes))
                 </activity>
             </application>
 
@@ -441,6 +442,32 @@ enum AndroidTemplates {
             AndroidUsesPermission(name: "android.permission.ACCESS_FINE_LOCATION", maxSdkVersion: 30)
         ]
         return permissions
+    }
+
+    /// The `<intent-filter>` that makes the activity the handler for the app's
+    /// declared `url_schemes`, so a `myapp://…` link routes here and
+    /// `MainActivity` can push it to `app.openURL`. One filter listing every
+    /// scheme as its own `<data>` spec. Returns `""` when none are declared, so
+    /// the manifest is byte-for-byte unchanged for apps that don't opt in.
+    ///
+    /// `BROWSABLE` alongside `DEFAULT` is the point of the whole thing: without
+    /// it the filter matches an intent another app builds by hand but *not* a
+    /// link tapped in a browser, a mail client, or a chat app — which is where
+    /// deep links actually come from. The failure is silent (the link just
+    /// doesn't open the app), so it's the one attribute to keep.
+    private static func urlSchemeFilter(_ schemes: [String]) -> String {
+        guard !schemes.isEmpty else { return "" }
+        let dataLines = schemes
+            .map { "\n                        <data android:scheme=\"\(xmlEscape($0))\"/>" }
+            .joined()
+        return """
+
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW"/>
+                        <category android:name="android.intent.category.DEFAULT"/>
+                        <category android:name="android.intent.category.BROWSABLE"/>\(dataLines)
+                    </intent-filter>
+        """
     }
 
     private static func documentTypeFilters(_ documentTypes: [PWAManifest.AndroidSection.DocumentType]) -> String {
@@ -717,21 +744,21 @@ enum AndroidTemplates {
                     thread(name = "swift-pwa-runtime", isDaemon = false) {
                         swiftPwaMain()
                     }
-                    // A file this app was opened *with* ("Open with" / share)
-                    // rides in on the launch intent. Forward it now; the Swift
-                    // side buffers the push until its handler is installed on
-                    // the runtime thread above, so a cold-launch file isn't
-                    // lost to the race.
-                    handleOpenFileIntent(intent)
+                    // A file or deep link this app was opened *with* ("Open
+                    // with" / share / a `myapp://` link) rides in on the launch
+                    // intent. Forward it now; the Swift side buffers the push
+                    // until its handler is installed on the runtime thread
+                    // above, so a cold-launch open isn't lost to the race.
+                    handleOpenIntent(intent)
                 }
             }
 
             /// Warm launch: the app is already running and the OS routes it a
-            /// new document to open.
+            /// new document or deep link to open.
             override fun onNewIntent(intent: Intent) {
                 super.onNewIntent(intent)
                 setIntent(intent)
-                handleOpenFileIntent(intent)
+                handleOpenIntent(intent)
             }
 
             override fun onResume() {
@@ -752,30 +779,51 @@ enum AndroidTemplates {
                 super.onDestroy()
             }
 
-            /// Forward a document the OS opened the app with — `ACTION_VIEW`
-            /// ("Open with") or `ACTION_SEND` / `ACTION_SEND_MULTIPLE` (share
-            /// sheet) — to the Swift runtime on the `app.openFile` host-event
-            /// channel, which re-emits it to JS (`on('app.openFile', …)`). The
-            /// `content://` URIs carry a temporary read grant tied to this
-            /// Activity, so the web app reads them via `fs.readBinary`.
+            /// Forward what the OS opened the app with to the Swift runtime,
+            /// on one of two host-event channels depending on what it is.
+            ///
+            /// A **document** — `ACTION_VIEW` on a `content://` / `file://`
+            /// URI ("Open with"), or `ACTION_SEND` / `ACTION_SEND_MULTIPLE`
+            /// (share sheet) — goes to `app.openFile`, which JS receives as
+            /// `on('app.openFile', …)`. Those URIs carry a temporary read
+            /// grant tied to this Activity, so the web app reads them via
+            /// `fs.readBinary`.
+            ///
+            /// A **deep link** — `ACTION_VIEW` on any other scheme, i.e. one
+            /// of the app's declared `url_schemes` — goes to `app.openURL`
+            /// instead. The channels are separate because the payloads mean
+            /// different things: a URI to read versus a URL to route. (A
+            /// share-sheet stream is always a document, so SEND never routes
+            /// here.)
+            ///
             /// Secondary (spawned) windows don't own the runtime, so they skip.
-            private fun handleOpenFileIntent(intent: Intent?) {
+            private fun handleOpenIntent(intent: Intent?) {
                 if (intent == null || isSecondary) return
                 val uris = ArrayList<String>()
+                val urls = ArrayList<String>()
                 when (intent.action) {
-                    Intent.ACTION_VIEW -> intent.data?.let { uris.add(it.toString()) }
+                    Intent.ACTION_VIEW -> intent.data?.let {
+                        val scheme = it.scheme?.lowercase()
+                        if (scheme == "content" || scheme == "file") uris.add(it.toString())
+                        else urls.add(it.toString())
+                    }
                     Intent.ACTION_SEND -> streamExtra(intent)?.let { uris.add(it.toString()) }
                     Intent.ACTION_SEND_MULTIPLE ->
                         streamExtras(intent)?.forEach { uris.add(it.toString()) }
                 }
-                if (uris.isEmpty()) return
-                val payload = JSONObject()
-                    .put("channel", "app.openFile")
-                    .put("paths", JSONArray(uris))
+                if (uris.isNotEmpty()) {
+                    push(JSONObject().put("channel", "app.openFile").put("paths", JSONArray(uris)))
+                }
+                if (urls.isNotEmpty()) {
+                    push(JSONObject().put("channel", "app.openURL").put("urls", JSONArray(urls)))
+                }
+            }
+
+            private fun push(payload: JSONObject) {
                 try {
                     bridge.nativeHostEvent(payload.toString())
                 } catch (t: Throwable) {
-                    android.util.Log.e("swift-pwa", "failed to push app.openFile: ${t.message}")
+                    android.util.Log.e("swift-pwa", "failed to push host event: ${t.message}")
                 }
             }
 

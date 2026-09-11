@@ -29,6 +29,7 @@ enum InfoPlistGenerator {
             plist["CFBundleIconFile"] = "AppIcon.icns"
         }
         applyUsageDescriptions(manifest, into: &plist)
+        applyURLSchemes(manifest, into: &plist)
         merge(manifest.macos?.infoPlist, into: &plist)
         return plist
     }
@@ -81,8 +82,34 @@ enum InfoPlistGenerator {
             plist["UILaunchScreen"] = [String: Any]()
         }
         applyUsageDescriptions(manifest, into: &plist)
+        applyURLSchemes(manifest, into: &plist)
         merge(manifest.ios?.infoPlist, into: &plist)
         return plist
+    }
+
+    /// `CFBundleURLTypes` for each declared `url_schemes` entry — the
+    /// registration that makes Launch Services route `myapp://…` to this app,
+    /// so `application(_:open:)` / `scene(_:openURLContexts:)` fire and the URL
+    /// reaches JS on `app.openURL`.
+    ///
+    /// One entry holding every scheme, rather than one per scheme: the grouping
+    /// only names the URL *type* for the user, and these are all the same type
+    /// — this app's own links. Emitted before the `info_plist` passthrough so
+    /// an app with an elaborate registration (per-scheme names, a different
+    /// role) can still write `CFBundleURLTypes` by hand and win.
+    ///
+    /// > `CFBundleTypeRole` is `Viewer`, not `Editor`: an app receiving a deep
+    /// > link displays what it points at; it doesn't own the URL's storage.
+    private static func applyURLSchemes(_ manifest: PWAManifest, into plist: inout InfoPlist) {
+        let schemes = URLSchemeSupport.declared(manifest)
+        guard !schemes.isEmpty else { return }
+        plist["CFBundleURLTypes"] = [
+            [
+                "CFBundleURLName": manifest.id,
+                "CFBundleTypeRole": "Viewer",
+                "CFBundleURLSchemes": schemes
+            ]
+        ]
     }
 
     /// The `NS…UsageDescription` string Apple requires for each declared

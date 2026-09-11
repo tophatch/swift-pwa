@@ -46,15 +46,20 @@
             emitOpen(URLContexts)
         }
 
-        /// Forward the file URLs in `contexts` to JS over the ``OpenFile``
-        /// channel, activating (and retaining) the sandbox grant for each.
+        /// Forward the URLs in `contexts` to JS: file URLs over ``OpenFile``
+        /// (activating and retaining the sandbox grant for each), everything
+        /// else — a deep link in a scheme the app registered in
+        /// `CFBundleURLTypes` — over ``OpenURL``. Two channels, because a path
+        /// to read and a URL to route are different payloads.
         private func emitOpen(_ contexts: Set<UIOpenURLContext>) {
-            let fileURLs = contexts.map(\.url).filter(\.isFileURL)
-            guard !fileURLs.isEmpty else { return }
+            let urls = contexts.map(\.url)
+            let fileURLs = urls.filter(\.isFileURL)
             for url in fileURLs where url.startAccessingSecurityScopedResource() {
                 scopedURLs.append(url)
             }
-            OpenFile.emit(fileURLs.map(\.path), on: IOSAppRuntime.shared.context.events)
+            let events = IOSAppRuntime.shared.context.events
+            OpenFile.emit(fileURLs.map(\.path), on: events)
+            OpenURL.emit(urls.filter { !$0.isFileURL }.map(\.absoluteString), on: events)
         }
 
         private func attachNextPendingWindow(to windowScene: UIWindowScene) {

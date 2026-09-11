@@ -277,15 +277,20 @@
             }
         }
 
+        /// Launch Services routes both kinds of open through here: a document
+        /// the app is associated with, and a URL in a scheme it registered in
+        /// `CFBundleURLTypes`. They go to different channels because they mean
+        /// different things — a path to read versus a URL to route — so this
+        /// splits rather than filters.
         func application(_: NSApplication, open urls: [URL]) {
             let fileURLs = urls.filter(\.isFileURL)
-            guard !fileURLs.isEmpty else { return }
             // Activate the sandbox grant where present (no-op / false for a
             // non-sandboxed app, where the path is readable anyway).
             for url in fileURLs where url.startAccessingSecurityScopedResource() {
                 scopedURLs.append(url)
             }
             OpenFile.emit(fileURLs.map(\.path), on: events)
+            OpenURL.emit(urls.filter { !$0.isFileURL }.map(\.absoluteString), on: events)
         }
     }
 #endif

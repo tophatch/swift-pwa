@@ -375,6 +375,30 @@ a URL it can't load to the system — while the same click did nothing at
 all on macOS, and an `http` link loaded in place and stranded the app on
 both. Both routes now go through the same declaration.
 
+## Deep links into the app (`url_schemes`)
+
+The inbound direction. Declaring the top-level `url_schemes` key generates
+`CFBundleURLTypes` in the `Info.plist`, and a URL the OS routes to the app —
+via `scene(_:openURLContexts:)` warm, or the
+`connectionOptions.urlContexts` drain at cold launch — reaches the page on the
+`app.openURL` channel. See
+[docs/tutorials/receiving-deep-links.md](tutorials/receiving-deep-links.md).
+
+```json
+"url_schemes": ["myapp"]
+```
+
+Two iOS-specific things to expect:
+
+- **iOS asks the user first, once.** A link arriving from an unverified source
+  (`xcrun simctl openurl`, another app) raises an **"Open in *MyApp*?"**
+  confirmation before the app launches. That's the OS, not the runtime; it is
+  remembered after the first approval, and it does not appear when the app
+  opens its *own* scheme via `system.openURL`.
+- **A file URL still goes to `app.openFile`.** The scene delegate splits the
+  arriving contexts by kind rather than filtering, so a document keeps its
+  security-scoped grant and a deep link gets its own channel.
+
 ## Known limitations on iOS
 
 - **The app driver is simulator-only, and can't synthesize input.**

@@ -9,6 +9,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`app.openURL` — a deep link the OS routes to the app reaches the page.**
+  The outbound half shipped first, which left the capability half-built: an app
+  could *send* a `myapp://…` link but had nowhere to *receive* one. A URL the OS
+  delivered reached `NSApplicationDelegate.application(_:open:)` and was then
+  dropped by `urls.filter(\.isFileURL)` — right for `app.openFile`, which is
+  about documents, but a custom-scheme URL has no path to put on that channel
+  and had no channel of its own. Measured before the fix: `system.openURL` on a
+  registered scheme reported `{ opened: true }` (the OS accepted and routed it)
+  while the page's `app.openFile` handler never fired. Never worked, not a
+  regression ([#177]).
+
+  An arriving URL is now emitted on its own `app.openURL` event channel,
+  **retained** the way `app.openFile` is — a link far more often *launches* the
+  app than reaches a running one, so the event fires before any listener exists
+  and has to replay on subscribe. The payload is `{ url, urls }`: one OS event
+  can carry several links, and retention keeps only a channel's latest value, so
+  emitting them one apiece would have shown a late subscriber only the last.
+  `url` is the first, which is the case a router actually has.
+
+  A separate channel from `app.openFile` on purpose — a path to read and a URL
+  to route are different payloads, and an app that handles documents shouldn't
+  start receiving deep links it never declared. A `file:` URL counts as a
+  document and keeps going to `app.openFile`, including its macOS
+  security-scoped grant.
+
+- **`url_schemes` — one declaration, five platform artifacts.** The receiving
+  end needs the OS to know the app handles the scheme, and that registration
+  lives in a different file on every platform. Unlike `document_types` there is
+  one top-level list, because a URL scheme is the same string everywhere where a
+  file type is a MIME type on Linux/Android and an extension on Windows.
+  `swift-pwa build` generates Apple `CFBundleURLTypes`, an Android
+  `ACTION_VIEW` intent-filter with `DEFAULT` + **`BROWSABLE`** (without which a
+  link tapped in a browser or mail client silently doesn't match — the only
+  place deep links come from), a `.desktop` `x-scheme-handler/…` MIME entry with
+  the `%U` field code, and an MSIX `windows.protocol` extension — or, for the
+  portable Windows exe, a `register-url-schemes.cmd` the user runs once, next to
+  the existing file-type pair rather than folded into it.
+
+  **Deliberately a separate list from `external_urls.schemes`**: that one is
+  what the app may *open*. Handling a scheme and being allowed to launch one are
+  different permissions and most apps want only one of them, so neither implies
+  the other. A system-owned scheme (`https`, `mailto`, `file`, `pwa`, …) is
+  refused at build time with the reason — claiming `https` would put the app in
+  the browser chooser, and making `https://` links open an app is universal-link
+  / App-Link verification, which needs a signed file served from the domain and
+  isn't something a build tool can generate.
+
+  One knock-on worth knowing on Linux: `%U` supersedes `%F` when an app declares
+  both a scheme and document types, because a field code is singular and `%U` is
+  the general one. The desktop then hands *local files* over as `file:///…`
+  URIs, so the launch-argument scan accepts a `file:` URL as a path.
+
 - **`system.openURL` — a page can open a URL outside the app.** There was no
   way to do it at all, and all three of the routes a web developer reaches for
   failed differently: an `<a href="https://…">` **loaded in place and stranded
@@ -106,6 +158,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#166]: https://github.com/tophatch/swift-pwa/issues/166
 [#167]: https://github.com/tophatch/swift-pwa/issues/167
+[#177]: https://github.com/tophatch/swift-pwa/issues/177
 
 - **`external_urls` in `pwa.json`, and `ctx.externalURLs` at runtime.** Opening
   a URL launches whatever app is registered for its scheme, and the page asking

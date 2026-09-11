@@ -48,6 +48,10 @@
             // (retained) so the WebView receives it once it subscribes to
             // `app.openFile`, matching the macOS/iOS Launch Services path.
             OpenFile.emit(OpenFile.launchFilePaths(), on: context.events)
+            // A deep link arrives the same way, via the `x-scheme-handler/…`
+            // association and `Exec=… %U` — a separate channel, since a URL to
+            // route isn't a document to read.
+            OpenURL.emit(OpenURL.launchURLs(), on: context.events)
             // Opt-in dev/test control socket. After `configure` so the app's
             // first window already exists when a driver connects; a no-op
             // unless SWIFT_PWA_DRIVE names a port (and absent entirely from

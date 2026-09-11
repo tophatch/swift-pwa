@@ -8,13 +8,6 @@
 // rather than assumed: with it set, WebKitGTK reports
 // `prefers-color-scheme: dark` to the page on both 4.1 (GTK3) and 6.0 (GTK4).
 // So this test drives the same property a desktop's settings daemon would.
-//
-// The windows are deliberately **not** closed (#187). `initGTKForTesting` never
-// enters `gtk_main`, so `MainThread.run` falls back to its libdispatch hook
-// and the deferred `load` runs at an arbitrary later moment — after a
-// `close()` that would already have destroyed the `WebKitWebView`. That is a
-// property of the test environment, not of the backend, and it takes down any
-// GTK GUI test that closes a window (`GTKFullscreenStateTests` included).
 #if os(Linux)
     import Foundation
     import SwiftPWACore
@@ -57,39 +50,49 @@
 
         @Test("a pair paints the half the desktop currently asks for")
         func resolvesAtCreation() throws {
-            initGTKForTesting()
-            setPrefersDark(false)
-            #expect(try bytes(makeWindow(pair)) == (0xFF, 0x44, 0x00))
-            setPrefersDark(true)
-            #expect(try bytes(makeWindow(pair)) == (0x00, 0x44, 0xFF))
-            setPrefersDark(false)
+            try withGTKMainThreadForTesting {
+                setPrefersDark(false)
+                let light = try makeWindow(pair)
+                defer { light.close() }
+                #expect(bytes(light) == (0xFF, 0x44, 0x00))
+
+                setPrefersDark(true)
+                let dark = try makeWindow(pair)
+                defer { dark.close() }
+                #expect(bytes(dark) == (0x00, 0x44, 0xFF))
+                setPrefersDark(false)
+            }
         }
 
         @Test("a pair repaints when the desktop switches under a running window")
         func followsALiveChange() throws {
-            initGTKForTesting()
-            setPrefersDark(false)
-            let win = try makeWindow(pair)
-            #expect(bytes(win) == (0xFF, 0x44, 0x00))
+            try withGTKMainThreadForTesting {
+                setPrefersDark(false)
+                let win = try makeWindow(pair)
+                defer { win.close() }
+                #expect(bytes(win) == (0xFF, 0x44, 0x00))
 
-            // What a settings daemon does; the `notify::` handler installed by
-            // `GTKAppearance` is what has to notice.
-            setPrefersDark(true)
-            #expect(bytes(win) == (0x00, 0x44, 0xFF))
+                // What a settings daemon does; the `notify::` handler installed
+                // by `GTKAppearance` is what has to notice.
+                setPrefersDark(true)
+                #expect(bytes(win) == (0x00, 0x44, 0xFF))
 
-            setPrefersDark(false)
-            #expect(bytes(win) == (0xFF, 0x44, 0x00))
+                setPrefersDark(false)
+                #expect(bytes(win) == (0xFF, 0x44, 0x00))
+            }
         }
 
         @Test("one colour stays put across an appearance switch")
         func singleColourIsUnaffected() throws {
-            initGTKForTesting()
-            setPrefersDark(false)
-            let win = try makeWindow("#123456")
-            #expect(bytes(win) == (0x12, 0x34, 0x56))
-            setPrefersDark(true)
-            #expect(bytes(win) == (0x12, 0x34, 0x56))
-            setPrefersDark(false)
+            try withGTKMainThreadForTesting {
+                setPrefersDark(false)
+                let win = try makeWindow("#123456")
+                defer { win.close() }
+                #expect(bytes(win) == (0x12, 0x34, 0x56))
+                setPrefersDark(true)
+                #expect(bytes(win) == (0x12, 0x34, 0x56))
+                setPrefersDark(false)
+            }
         }
     }
 #endif

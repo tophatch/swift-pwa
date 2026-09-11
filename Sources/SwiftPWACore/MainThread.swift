@@ -29,6 +29,17 @@ public enum MainThread {
         _hook = hook
     }
 
+    /// Put the built-in dispatcher back.
+    ///
+    /// The hook is process-global and a platform one only delivers while that
+    /// platform's loop is being pumped, so a test that installs one has to
+    /// restore this before it returns — otherwise every later `MainThread.run`
+    /// in the same process waits forever on a loop nobody is running.
+    public static func resetHook() {
+        lock.lock(); defer { lock.unlock() }
+        _hook = nil
+    }
+
     private static func currentHook() -> Dispatcher {
         lock.lock(); defer { lock.unlock() }
         return _hook ?? defaultHook

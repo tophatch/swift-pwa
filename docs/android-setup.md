@@ -457,6 +457,37 @@ read grant scoped to the launching activity, so no extra permission step is
 needed. Both cold launch (the file starts the app) and warm delivery (the app
 is already running) are handled; device-verified on a Galaxy Tab S10+.
 
+### Deep links (`url_schemes`)
+
+Declare the URL schemes your app handles and a `myapp://…` link — tapped in a
+browser, a mail client, a chat app, or fired from `adb` — opens your app, with
+the URL delivered on the `app.openURL` event channel (see
+[javascript-api.md](javascript-api.md#appopenurl--inbound-deep-links)). The key
+is **top level**, not under `android`, because a URL scheme is the same string
+on every platform:
+
+```json
+"url_schemes": ["myapp"]
+```
+
+Each scheme becomes a `<data android:scheme="…"/>` spec on one generated
+`ACTION_VIEW` intent-filter carrying both `DEFAULT` and **`BROWSABLE`**
+categories. `BROWSABLE` is the load-bearing one: without it the filter matches
+an intent another app builds by hand but *not* a link tapped in a browser or a
+mail client — which is where deep links actually come from — and the failure is
+silent (the link just doesn't open the app).
+
+`MainActivity` routes the arriving intent by the URI's scheme: `content:` and
+`file:` are documents and go to `app.openFile`, anything else is a deep link
+and goes to `app.openURL`. A share-sheet stream is always a document, so
+`ACTION_SEND` never routes to the URL channel.
+
+Try it with:
+
+```bash
+adb shell am start -a android.intent.action.VIEW -d "myapp://hello"
+```
+
 ### Cleartext HTTP to LAN endpoints (`android.network.cleartext_domains`)
 
 Android blocks plain-`http://` (cleartext) traffic by default

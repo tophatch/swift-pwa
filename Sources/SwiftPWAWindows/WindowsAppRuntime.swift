@@ -101,6 +101,11 @@
             // the WebView receives it once it subscribes to `app.openFile`,
             // matching the macOS/iOS Launch Services path.
             OpenFile.emit(OpenFile.launchFilePaths(), on: context.events)
+            // A deep link arrives the same way: the scheme's registered
+            // `shell\open\command` launches the app with the URL as its
+            // argument. Separate channel, since a URL to route isn't a
+            // document to read.
+            OpenURL.emit(OpenURL.launchURLs(), on: context.events)
 
             // Opt-in dev/test control socket. After `configure` so the app's
             // first window already exists when a driver connects; a no-op

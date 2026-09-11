@@ -689,6 +689,39 @@ shows its own script dialogs unless an app turns them off
 (`AreDefaultScriptDialogsEnabled`), and swift-pwa doesn't. Measured on an x64
 box — `alert()` blocks the page until it is dismissed.
 
+## Deep links into the app (`url_schemes`)
+
+The other direction: declare the schemes your app handles with the top-level
+`url_schemes` key and a `myapp://…` link routes to the app, arriving on the
+`app.openURL` JS channel (see
+[the JS API](javascript-api.md#appopenurl--inbound-deep-links)).
+
+```json
+"url_schemes": ["myapp"]
+```
+
+Windows delivers the URL as the process's **command-line argument**, the same
+convention a file association uses, and the runtime forwards it. How the
+registration gets written depends on the package format:
+
+- **MSIX** (`--package-format msix`): a `windows.protocol` extension
+  (`<uap:Protocol Name="myapp"/>`) in the generated `AppxManifest.xml`. The OS
+  registers it when the package installs.
+- **Portable `.exe`**: there is no installer, so the bundler writes
+  `register-url-schemes.cmd` and `unregister-url-schemes.cmd` next to the exe.
+  Run the first once — it writes per-user (`HKCU\Software\Classes`) entries
+  pointing at the exe *at its current location*, so move the folder and you
+  re-run it. This is the same opt-in shape as `register-file-types.cmd`, kept
+  as a separate pair of files because handling a file type and handling a URL
+  scheme are separate decisions.
+
+A protocol class differs from a file class in one detail worth knowing if you
+write the registry by hand: the key *is* the scheme, and it carries an **empty
+`URL Protocol` value** whose mere presence is what marks the class as a URL
+handler.
+
+Try it with `start myapp://hello`.
+
 ## Known limitations (Windows-specific)
 
 **HEIC decoding depends on a codec extension the machine may not have.** WebView2

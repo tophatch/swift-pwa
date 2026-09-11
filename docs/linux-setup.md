@@ -504,6 +504,38 @@ WebKitGTK ships its own script dialogs (measured on 4.1 and 6.0), unlike
 `WKWebView`, which has none and needed the Apple backend to grow a
 `WKUIDelegate`.
 
+### Deep links into the app (`url_schemes`)
+
+The other direction: declare the schemes your app handles with the top-level
+`url_schemes` key and a `myapp://…` link routes to the app, arriving on the
+`app.openURL` JS channel (see
+[the JS API](javascript-api.md#appopenurl--inbound-deep-links)).
+
+```json
+"url_schemes": ["myapp"]
+```
+
+freedesktop expresses a URL handler as a **pseudo-MIME type**, so each scheme
+becomes a `MimeType=x-scheme-handler/myapp;` entry in the generated `.desktop`
+file, and `Exec=` gains the `%U` field code so the desktop passes the URL as an
+argument.
+
+**`%U` replaces `%F` when both a scheme and `linux.document_types` are
+declared.** A field code is singular and `%U` is the general one — it accepts
+URLs *and* local paths, where `%F` would drop every deep link. The consequence
+worth knowing: with `%U` the desktop hands local files over as `file:///…`
+URIs rather than bare paths, so the runtime's launch-argument scan accepts a
+`file:` URL as a path (percent-decoded) and still routes it to `app.openFile`.
+
+Installing the `.desktop` entry is what registers the handler; a built
+`.AppImage` on its own isn't registered with anything. Either install it
+normally or point the association by hand:
+
+```bash
+xdg-mime default myapp.desktop x-scheme-handler/myapp
+xdg-open "myapp://hello"
+```
+
 ## Known limitations on Linux
 
 **HEIC / AVIF need libheif at runtime, and the webview can't render them at

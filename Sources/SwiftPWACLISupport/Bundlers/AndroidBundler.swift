@@ -171,6 +171,7 @@ struct AndroidBundler {
         try AndroidTemplates.androidManifestXml(
             packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil,
             documentTypes: manifest.android?.documentTypes ?? [],
+            urlSchemes: URLSchemeSupport.declared(manifest),
             networkConfigStaged: networkSecurityConfig != nil,
             webPermissions: manifest.permissions?.allDeclarations?.names ?? [],
             minSdk: minSdk

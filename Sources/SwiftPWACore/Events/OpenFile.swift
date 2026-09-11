@@ -38,14 +38,23 @@ public enum OpenFile {
     }
 
     /// File paths among the process launch arguments — the desktop "open
-    /// with" / file-association convention on Linux (`.desktop` `%F`) and
-    /// Windows. Drops `argv[0]` and keeps only arguments that name a file that
-    /// exists on disk, so flags (`--foo`) and non-file arguments are ignored.
-    /// (macOS/iOS don't use argv for this — Launch Services delivers an Apple
-    /// event / scene URL context instead.)
+    /// with" / file-association convention on Linux (`.desktop` `%F` / `%U`)
+    /// and Windows. Drops `argv[0]` and keeps only arguments that name a file
+    /// that exists on disk, so flags (`--foo`) and non-file arguments are
+    /// ignored. (macOS/iOS don't use argv for this — Launch Services delivers
+    /// an Apple event / scene URL context instead.)
+    ///
+    /// A `file:` URL counts as a path: an app that also declares a URL scheme
+    /// gets `Exec=… %U` rather than `%F`, and the desktop then hands local
+    /// files over as `file:///…` URIs instead of bare paths. Percent-decoding
+    /// is `URL`'s, so a name with a space survives the round trip.
     public static func launchFilePaths(_ arguments: [String] = CommandLine.arguments) -> [String] {
-        arguments.dropFirst().filter { arg in
-            !arg.hasPrefix("-") && FileManager.default.fileExists(atPath: arg)
+        arguments.dropFirst().compactMap { arg -> String? in
+            guard !arg.hasPrefix("-") else { return nil }
+            if FileManager.default.fileExists(atPath: arg) { return arg }
+            guard let url = URL(string: arg), url.isFileURL else { return nil }
+            let path = url.path
+            return FileManager.default.fileExists(atPath: path) ? path : nil
         }
     }
 }

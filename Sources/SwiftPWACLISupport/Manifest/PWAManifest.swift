@@ -45,6 +45,27 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     /// does. See ``ExternalURLsSection``; seeds `ctx.externalURLs`.
     public var externalUrls: ExternalURLsSection?
 
+    /// URL schemes this app *handles* — the deep links the OS should route to
+    /// it (JSON key `url_schemes`). The inbound counterpart to
+    /// `external_urls.schemes`, which is what the app may *open*; the two are
+    /// separate lists because handling `myapp://` and being allowed to launch
+    /// someone else's `things://` are different permissions, and an app
+    /// usually wants only one of them.
+    ///
+    /// ```json
+    /// "url_schemes": ["myapp", "myapp-beta"]
+    /// ```
+    ///
+    /// Unlike `document_types`, one list serves every platform: a URL scheme
+    /// is the same string everywhere, where a file type is a MIME type on
+    /// Linux/Android and an extension on Windows. Each declared scheme reaches
+    /// the platform artifact — Apple `CFBundleURLTypes`, an Android
+    /// `ACTION_VIEW` intent-filter, a `.desktop` `x-scheme-handler/…` MIME
+    /// entry plus `Exec=… %U`, and an MSIX `windows.protocol` extension or the
+    /// portable build's `register-url-schemes.cmd`. An arriving URL reaches JS
+    /// on the `app.openURL` event channel.
+    public var urlSchemes: [String]?
+
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
     /// `ExecutableNameResolver` (which asks SwiftPM for the real product

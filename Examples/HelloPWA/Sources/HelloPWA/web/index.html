@@ -610,6 +610,20 @@
                     <button id="sess-close" disabled>Close</button>
                 </div>
             </section>
+
+            <section class="section">
+                <h2>Deep links</h2>
+                <p>Both directions of one scheme. <code>system.openURL</code>
+                hands <code>hellopwa://</code> to the OS, which routes it back
+                to this app, and it arrives on the <code>app.openURL</code>
+                channel — declared once as <code>url_schemes</code> in
+                <code>pwa.json</code>. Try it from outside too:
+                <code>open hellopwa://greet?from=terminal</code>.</p>
+                <div class="sess-count" id="deep-last">No link received yet.</div>
+                <div class="actions">
+                    <button id="deep-roundtrip" data-requires="system.openURL">Open my own link</button>
+                </div>
+            </section>
     </div>
 
     <nav class="pager" aria-label="Choose a demo card"></nav>
@@ -1546,6 +1560,25 @@
                 trayEvt(JSON.stringify(event));
             }
         });
+
+        // Deep links, both directions. The subscribe happens at page setup
+        // rather than behind a button because `app.openURL` is emitted
+        // *retained*: a link that launched the app fired long before this
+        // script ran, and the retained value replays to whoever subscribes
+        // first. Deferring it behind a click would lose exactly the case the
+        // channel exists for.
+        (() => {
+            const out = document.getElementById("deep-last");
+            __SWIFT_PWA__.on("app.openURL", ({ url, urls }) => {
+                out.textContent = url + (urls.length > 1 ? `  (+${urls.length - 1} more)` : "");
+                log("app.openURL  " + JSON.stringify(urls));
+            });
+            document.getElementById("deep-roundtrip").onclick = async () => {
+                const url = "hellopwa://greet?from=the-app&at=" + Date.now();
+                const res = await __SWIFT_PWA__.invoke("system.openURL", { url });
+                log("system.openURL  " + JSON.stringify(res) + "  → " + url);
+            };
+        })();
 
         // Render shortcuts using the platform's accelerator key. Mac uses
         // ⌘ + the letter; everywhere else (Linux, future Windows) it's

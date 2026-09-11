@@ -171,6 +171,13 @@ func configure(_ ctx: any AppContext) throws {
     // See the "Device & location" card in web/index.html.
     ctx.permissions.declare(.camera, .microphone, .geolocation, .bluetooth)
     ctx.use(GeoPlugin(SystemGeolocation()))
+
+    // The "Deep links" card opens this app's *own* scheme, which needs
+    // declaring like any other: `url_schemes` in pwa.json registers the app as
+    // the handler (inbound, `app.openURL`), and this is the outbound half that
+    // lets `system.openURL` hand it to the OS. Two lists on purpose — handling
+    // a scheme and being allowed to launch one are different permissions.
+    ctx.externalURLs.declare(schemes: "hellopwa")
     // `ble.*` — the one capability here that no webview exposes at all, so
     // there's nothing to fall back to. See the "Bluetooth" card.
     ctx.use(BLEPlugin(SystemBluetooth()))

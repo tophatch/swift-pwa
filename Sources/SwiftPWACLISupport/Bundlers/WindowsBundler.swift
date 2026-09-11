@@ -178,6 +178,7 @@ struct WindowsBundler {
                 // ai.local_onnx_runtime is on.
                 try await stageOnnxRuntimeDLLIfNeeded(nextTo: outputDir)
                 try writeFileAssociationScripts(into: outputDir, exeName: exeName)
+                try writeURLSchemeScripts(into: outputDir, exeName: exeName)
                 print("swift-pwa: single-file build — web/ embedded into \(exeName)")
                 return singleExe
             }
@@ -216,6 +217,7 @@ struct WindowsBundler {
                 // MSIX declares file associations in its manifest; the portable
                 // folder has no installer, so it ships opt-in registration scripts.
                 try writeFileAssociationScripts(into: bundleDir, exeName: exeName)
+                try writeURLSchemeScripts(into: bundleDir, exeName: exeName)
                 return bundleDir
             case .msix:
                 return try await buildMSIX(stagingDir: bundleDir)
@@ -241,6 +243,26 @@ struct WindowsBundler {
         try scripts.unregister.joined(separator: "\r\n")
             .write(to: dir.appendingPathComponent("unregister-file-types.cmd"), atomically: true, encoding: .utf8)
         print("swift-pwa: wrote register-file-types.cmd (\(scripts.register.count) lines) for file associations")
+    }
+
+    /// Emit `register-url-schemes.cmd` / `unregister-url-schemes.cmd` into
+    /// `dir` when `url_schemes` declares any — the deep-link counterpart to
+    /// ``writeFileAssociationScripts(into:exeName:)``, and a separate pair of
+    /// files because they are a separate decision: an app can want one kind of
+    /// association and not the other, and a user who runs only one script
+    /// should get only what they asked for. No-op when nothing is declared.
+    func writeURLSchemeScripts(into dir: URL, exeName: String) throws {
+        guard let scripts = URLSchemeSupport.registrationScripts(
+            schemes: manifest.urlSchemes ?? [],
+            exeName: exeName,
+            appName: manifest.name
+        ) else { return }
+        // Batch files want CRLF line endings.
+        try scripts.register.joined(separator: "\r\n")
+            .write(to: dir.appendingPathComponent("register-url-schemes.cmd"), atomically: true, encoding: .utf8)
+        try scripts.unregister.joined(separator: "\r\n")
+            .write(to: dir.appendingPathComponent("unregister-url-schemes.cmd"), atomically: true, encoding: .utf8)
+        print("swift-pwa: wrote register-url-schemes.cmd (\(scripts.register.count) lines) for URL schemes")
     }
 
     /// Append the project's `web/` directory to the exe as an

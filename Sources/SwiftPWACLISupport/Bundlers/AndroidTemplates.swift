@@ -229,6 +229,7 @@ enum AndroidTemplates {
         hasIcon: Bool,
         customTheme: Bool = false,
         documentTypes: [PWAManifest.AndroidSection.DocumentType] = [],
+        urlSchemes: [String] = [],
         networkConfigStaged: Bool = false,
         webPermissions: [String] = [],
         minSdk: Int = 28
@@ -336,7 +337,7 @@ enum AndroidTemplates {
                     <intent-filter>
                         <action android:name="android.intent.action.MAIN"/>
                         <category android:name="android.intent.category.LAUNCHER"/>
-                    </intent-filter>\(documentTypeFilters(documentTypes))
+                    </intent-filter>\(documentTypeFilters(documentTypes))\(urlSchemeFilter(urlSchemes))
                 </activity>
             </application>
 
@@ -441,6 +442,32 @@ enum AndroidTemplates {
             AndroidUsesPermission(name: "android.permission.ACCESS_FINE_LOCATION", maxSdkVersion: 30)
         ]
         return permissions
+    }
+
+    /// The `<intent-filter>` that makes the activity the handler for the app's
+    /// declared `url_schemes`, so a `myapp://…` link routes here and
+    /// `MainActivity` can push it to `app.openURL`. One filter listing every
+    /// scheme as its own `<data>` spec. Returns `""` when none are declared, so
+    /// the manifest is byte-for-byte unchanged for apps that don't opt in.
+    ///
+    /// `BROWSABLE` alongside `DEFAULT` is the point of the whole thing: without
+    /// it the filter matches an intent another app builds by hand but *not* a
+    /// link tapped in a browser, a mail client, or a chat app — which is where
+    /// deep links actually come from. The failure is silent (the link just
+    /// doesn't open the app), so it's the one attribute to keep.
+    private static func urlSchemeFilter(_ schemes: [String]) -> String {
+        guard !schemes.isEmpty else { return "" }
+        let dataLines = schemes
+            .map { "\n                        <data android:scheme=\"\(xmlEscape($0))\"/>" }
+            .joined()
+        return """
+
+                    <intent-filter>
+                        <action android:name="android.intent.action.VIEW"/>
+                        <category android:name="android.intent.category.DEFAULT"/>
+                        <category android:name="android.intent.category.BROWSABLE"/>\(dataLines)
+                    </intent-filter>
+        """
     }
 
     private static func documentTypeFilters(_ documentTypes: [PWAManifest.AndroidSection.DocumentType]) -> String {
@@ -648,6 +675,36 @@ enum AndroidTemplates {
             private lateinit var bridge: SwiftPWABridge
             private var isSecondary: Boolean = false
 
+            /// False for the redundant-primary instance that forwards its
+            /// intent and finishes from `onCreate` (see `runtimeOwner`): it
+            /// returns before building a bridge, but Android still runs its
+            /// `onDestroy`, so every lifecycle callback that touches `bridge`
+            /// checks this rather than trusting `lateinit`.
+            private val hasBridge get() = ::bridge.isInitialized
+
+            companion object {
+                /// The Activity that owns this process's one Swift runtime.
+                ///
+                /// Needed because the launcher Activity keeps the default
+                /// `standard` launch mode — `singleTop` or `singleTask` would
+                /// redirect `SwiftPWABridge.spawnWindow`'s secondary Activity
+                /// into the existing instance and break multi-window. The cost
+                /// is that an `ACTION_VIEW` intent routed to an app that is
+                /// *already running* arrives as a brand-new Activity instance
+                /// instead of `onNewIntent`, and that instance would spawn a
+                /// second Swift runtime and steal the single-slot bridge ref
+                /// from the live one. Measured: three warm deep links left
+                /// three MainActivity records stacked in one task, each with
+                /// its own runtime, while the page still looked correct.
+                ///
+                /// So a second *primary* hands its intent to this one and
+                /// finishes. Cleared in `onDestroy` only by the owner, so a
+                /// configuration recreate (whose `onDestroy` runs first) still
+                /// takes over normally.
+                @JvmStatic
+                var runtimeOwner: MainActivity? = null
+            }
+
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
                 // Load the Swift-compiled .so. The base name matches
@@ -656,6 +713,16 @@ enum AndroidTemplates {
                 // on a secondary Activity is harmless — Android's
                 // loader dedupes on the underlying library handle.
                 System.loadLibrary("\(soBaseName)")
+
+                // Before anything with side effects: a redundant primary
+                // forwards and leaves. Creating the WebView or attaching the
+                // bridge first is what would do the damage.
+                val owner = runtimeOwner
+                if (owner != null && intent?.getStringExtra("swift-pwa.config-json") == null) {
+                    owner.handleOpenIntent(intent)
+                    finish()
+                    return
+                }
 
                 val webView = WebView(this)\(backgroundColorLine)
                 setContentView(webView)
@@ -710,6 +777,7 @@ enum AndroidTemplates {
                         finish()
                     }
                 } else {
+                    runtimeOwner = this
                     // Hand control to the Swift runtime on a worker
                     // thread. The runtime blocks until `quit()` is
                     // invoked; running on the UI thread would
@@ -717,25 +785,27 @@ enum AndroidTemplates {
                     thread(name = "swift-pwa-runtime", isDaemon = false) {
                         swiftPwaMain()
                     }
-                    // A file this app was opened *with* ("Open with" / share)
-                    // rides in on the launch intent. Forward it now; the Swift
-                    // side buffers the push until its handler is installed on
-                    // the runtime thread above, so a cold-launch file isn't
-                    // lost to the race.
-                    handleOpenFileIntent(intent)
+                    // A file or deep link this app was opened *with* ("Open
+                    // with" / share / a `myapp://` link) rides in on the launch
+                    // intent. Forward it now; the Swift side buffers the push
+                    // until its handler is installed on the runtime thread
+                    // above, so a cold-launch open isn't lost to the race.
+                    handleOpenIntent(intent)
                 }
             }
 
             /// Warm launch: the app is already running and the OS routes it a
-            /// new document to open.
+            /// new document or deep link to open.
             override fun onNewIntent(intent: Intent) {
                 super.onNewIntent(intent)
+                if (!hasBridge) return
                 setIntent(intent)
-                handleOpenFileIntent(intent)
+                handleOpenIntent(intent)
             }
 
             override fun onResume() {
                 super.onResume()
+                if (!hasBridge) return
                 // Re-attach in case a sibling Activity took the
                 // single-slot bridge ref while we were paused. The
                 // C shim's `nativeAttach` is idempotent — atomic
@@ -748,34 +818,56 @@ enum AndroidTemplates {
             }
 
             override fun onDestroy() {
-                bridge.detach()
+                if (runtimeOwner === this) runtimeOwner = null
+                if (hasBridge) bridge.detach()
                 super.onDestroy()
             }
 
-            /// Forward a document the OS opened the app with — `ACTION_VIEW`
-            /// ("Open with") or `ACTION_SEND` / `ACTION_SEND_MULTIPLE` (share
-            /// sheet) — to the Swift runtime on the `app.openFile` host-event
-            /// channel, which re-emits it to JS (`on('app.openFile', …)`). The
-            /// `content://` URIs carry a temporary read grant tied to this
-            /// Activity, so the web app reads them via `fs.readBinary`.
+            /// Forward what the OS opened the app with to the Swift runtime,
+            /// on one of two host-event channels depending on what it is.
+            ///
+            /// A **document** — `ACTION_VIEW` on a `content://` / `file://`
+            /// URI ("Open with"), or `ACTION_SEND` / `ACTION_SEND_MULTIPLE`
+            /// (share sheet) — goes to `app.openFile`, which JS receives as
+            /// `on('app.openFile', …)`. Those URIs carry a temporary read
+            /// grant tied to this Activity, so the web app reads them via
+            /// `fs.readBinary`.
+            ///
+            /// A **deep link** — `ACTION_VIEW` on any other scheme, i.e. one
+            /// of the app's declared `url_schemes` — goes to `app.openURL`
+            /// instead. The channels are separate because the payloads mean
+            /// different things: a URI to read versus a URL to route. (A
+            /// share-sheet stream is always a document, so SEND never routes
+            /// here.)
+            ///
             /// Secondary (spawned) windows don't own the runtime, so they skip.
-            private fun handleOpenFileIntent(intent: Intent?) {
+            internal fun handleOpenIntent(intent: Intent?) {
                 if (intent == null || isSecondary) return
                 val uris = ArrayList<String>()
+                val urls = ArrayList<String>()
                 when (intent.action) {
-                    Intent.ACTION_VIEW -> intent.data?.let { uris.add(it.toString()) }
+                    Intent.ACTION_VIEW -> intent.data?.let {
+                        val scheme = it.scheme?.lowercase()
+                        if (scheme == "content" || scheme == "file") uris.add(it.toString())
+                        else urls.add(it.toString())
+                    }
                     Intent.ACTION_SEND -> streamExtra(intent)?.let { uris.add(it.toString()) }
                     Intent.ACTION_SEND_MULTIPLE ->
                         streamExtras(intent)?.forEach { uris.add(it.toString()) }
                 }
-                if (uris.isEmpty()) return
-                val payload = JSONObject()
-                    .put("channel", "app.openFile")
-                    .put("paths", JSONArray(uris))
+                if (uris.isNotEmpty()) {
+                    push(JSONObject().put("channel", "app.openFile").put("paths", JSONArray(uris)))
+                }
+                if (urls.isNotEmpty()) {
+                    push(JSONObject().put("channel", "app.openURL").put("urls", JSONArray(urls)))
+                }
+            }
+
+            private fun push(payload: JSONObject) {
                 try {
                     bridge.nativeHostEvent(payload.toString())
                 } catch (t: Throwable) {
-                    android.util.Log.e("swift-pwa", "failed to push app.openFile: ${t.message}")
+                    android.util.Log.e("swift-pwa", "failed to push host event: ${t.message}")
                 }
             }
 
@@ -803,7 +895,7 @@ enum AndroidTemplates {
             @Suppress("DEPRECATION")
             override fun onTrimMemory(level: Int) {
                 super.onTrimMemory(level)
-                if (isSecondary) return
+                if (isSecondary || !hasBridge) return
                 val normalized = when (level) {
                     ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL,
                     ComponentCallbacks2.TRIM_MEMORY_COMPLETE -> "critical"

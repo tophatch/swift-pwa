@@ -91,6 +91,16 @@
                 OpenFile.emit(payload.paths, on: context.events)
             }
 
+            // The same intent path carries deep links: an `ACTION_VIEW` whose
+            // data is a declared custom scheme rather than a `content://`
+            // document. `MainActivity` routes those to this channel instead,
+            // and the cold-launch buffering argument above applies identically.
+            AndroidHostEventRouter.subscribe(channel: OpenURL.channel) { data in
+                struct Payload: Decodable { let urls: [String] }
+                guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
+                OpenURL.emit(payload.urls, on: context.events)
+            }
+
             // Core's diagnostics default to stderr, which Android discards.
             // Installed first so nothing emitted during setup is lost.
             RuntimeDiagnostics.installSink { message in

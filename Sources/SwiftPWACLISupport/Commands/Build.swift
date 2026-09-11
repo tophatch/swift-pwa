@@ -818,18 +818,48 @@ struct Build: AsyncParsableCommand {
             )
         }
         for scheme in manifest.externalUrls?.schemes ?? [] {
-            let bare = scheme.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":/ "))
-            let isValid = !bare.isEmpty
-                && bare.first!.isLetter
-                && bare.allSatisfy { $0.isLetter || $0.isNumber || "+-.".contains($0) }
-            guard isValid else {
+            guard URLSchemeSupport.isValid(URLSchemeSupport.normalize(scheme)) else {
                 throw ValidationError(
                     "pwa.json: external_urls.schemes contains \"\(scheme)\", which isn't a URL "
                         + "scheme. Name the scheme alone — \"things\", not \"things://open\"."
                 )
             }
         }
+        // The inbound list gets the same grammar check, and one more: a scheme
+        // the app *handles* reaches a platform artifact, so a typo here is a
+        // deep link that never arrives rather than a key that does nothing.
+        for scheme in manifest.urlSchemes ?? [] {
+            let bare = URLSchemeSupport.normalize(scheme)
+            guard URLSchemeSupport.isValid(bare) else {
+                throw ValidationError(
+                    "pwa.json: url_schemes contains \"\(scheme)\", which isn't a URL scheme. "
+                        + "Name the scheme alone — \"myapp\", not \"myapp://open\"."
+                )
+            }
+            // Claiming `https` would put this app in the system's browser
+            // chooser; claiming `file` or `mailto` shadows a handler the user
+            // already has. None of that is what an app declaring a deep link
+            // means, and all of it is hard to notice after the fact.
+            guard !Self.reservedURLSchemes.contains(bare) else {
+                let suggestion = manifest.id.split(separator: ".").last.map(String.init) ?? "myapp"
+                throw ValidationError(
+                    "pwa.json: url_schemes contains \"\(bare)\", which the system owns. "
+                        + "A deep-link scheme has to be the app's own — \"\(suggestion)\", say. "
+                        + "(Handling https:// links is app-link / universal-link verification, "
+                        + "a different mechanism this doesn't cover.)"
+                )
+            }
+        }
     }
+
+    /// Schemes `url_schemes` refuses: the ones the platform or the user's other
+    /// apps own. `pwa` is this runtime's own bundle origin on the Apple and GTK
+    /// backends, and the `https://swift-pwa.local` the other two serve from is
+    /// covered by `https` being here.
+    static let reservedURLSchemes: Set<String> = [
+        "http", "https", "file", "mailto", "tel", "sms", "ftp", "data",
+        "javascript", "about", "blob", "ws", "wss", "pwa"
+    ]
 
     static func validatePermissions(
         manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String

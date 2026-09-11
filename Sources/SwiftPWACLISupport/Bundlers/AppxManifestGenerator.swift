@@ -99,7 +99,10 @@ enum AppxManifestGenerator {
         // `windows.fileTypeAssociation` extension per declared group, so the OS
         // associates the app with those extensions on install. Empty when none
         // are declared, keeping the manifest byte-for-byte as before.
-        let fileTypeExtensions = fileTypeAssociationsXML(manifest.windows?.documentTypes ?? [])
+        let fileTypeExtensions = extensionsXML(
+            docTypes: manifest.windows?.documentTypes ?? [],
+            urlSchemes: URLSchemeSupport.declared(manifest)
+        )
 
         return """
         <?xml version="1.0" encoding="utf-8"?>
@@ -151,11 +154,43 @@ enum AppxManifestGenerator {
         """
     }
 
-    /// Render the `<Extensions>` block of `windows.fileTypeAssociation`
-    /// entries, or "" when none are declared. One `<uap:FileTypeAssociation>`
-    /// per document-type group; its `Name` (the association identifier) must be
-    /// lowercase and `[a-z0-9.-_]`, so it's sanitized / auto-numbered.
-    static func fileTypeAssociationsXML(_ docTypes: [PWAManifest.ExtensionDocumentType]) -> String {
+    /// The one `<Extensions>` block, holding whatever the app declared:
+    /// `windows.fileTypeAssociation` entries from `windows.document_types` and
+    /// `windows.protocol` entries from `url_schemes`. Returns "" when neither
+    /// is declared — an empty `<Extensions/>` is invalid against the schema,
+    /// and there can only be one, which is why the two generators join here
+    /// rather than each emitting their own wrapper.
+    ///
+    /// A registered protocol is what makes the OS launch this app for
+    /// `myapp://…`; the URL arrives as the process's command-line argument,
+    /// which the runtime forwards to `app.openURL`.
+    static func extensionsXML(
+        docTypes: [PWAManifest.ExtensionDocumentType],
+        urlSchemes: [String]
+    ) -> String {
+        let blocks = fileTypeAssociationBlocks(docTypes) + protocolBlocks(urlSchemes)
+        guard !blocks.isEmpty else { return "" }
+        return "\n          <Extensions>\n\(blocks.joined(separator: "\n"))\n          </Extensions>"
+    }
+
+    /// One `<uap:Protocol>` per declared scheme. `Name` is the scheme itself
+    /// (lowercase, no colon) — `URLSchemeSupport` has already canonicalized it.
+    private static func protocolBlocks(_ schemes: [String]) -> [String] {
+        schemes.map { scheme in
+            """
+                  <uap:Extension Category="windows.protocol">
+                    <uap:Protocol Name="\(xmlEscape(scheme))" />
+                  </uap:Extension>
+            """
+        }
+    }
+
+    /// One `<uap:FileTypeAssociation>` per document-type group; its `Name` (the
+    /// association identifier) must be lowercase and `[a-z0-9.-_]`, so it's
+    /// sanitized / auto-numbered.
+    private static func fileTypeAssociationBlocks(
+        _ docTypes: [PWAManifest.ExtensionDocumentType]
+    ) -> [String] {
         // Normalize + drop entries with no usable extension.
         let groups: [(name: String, exts: [String])] = docTypes.enumerated().compactMap { index, dt in
             let exts = FileAssociationSupport.normalizedExtensions(dt.extensions)
@@ -163,9 +198,7 @@ enum AppxManifestGenerator {
             let name = FileAssociationSupport.associationName(dt.name, fallbackIndex: index)
             return (name, exts)
         }
-        guard !groups.isEmpty else { return "" }
-
-        let associations = groups.map { group in
+        return groups.map { group in
             let fileTypes = group.exts
                 .map { "              <uap:FileType>\($0)</uap:FileType>" }
                 .joined(separator: "\n")
@@ -178,9 +211,7 @@ enum AppxManifestGenerator {
                     </uap:FileTypeAssociation>
                   </uap:Extension>
             """
-        }.joined(separator: "\n")
-
-        return "\n          <Extensions>\n\(associations)\n          </Extensions>"
+        }
     }
 
     private static func xmlEscape(_ s: String) -> String {

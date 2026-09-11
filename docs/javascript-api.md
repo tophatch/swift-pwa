@@ -301,6 +301,60 @@ which generates the intent-filters). On Android `paths` are `content://` URIs �
 read them with `fs.readBinary` the same way; the URI's read grant is held for
 the launching activity's lifetime.
 
+#### `app.openURL` — inbound deep links
+
+The other direction of [`system.openURL`](#systemopenurl--hand-a-url-to-the-operating-system):
+when the OS routes a URL in one of *your* schemes to your app — a `myapp://…`
+link clicked in Mail, `open myapp://x`, an Android notification — it arrives as
+a **server-push event** on the `app.openURL` channel:
+
+```js
+__SWIFT_PWA__.on('app.openURL', ({ url }) => router.go(url));
+```
+
+Key points:
+
+- **Cold-start safe**, the same way `app.openFile` is: the link usually *launches*
+  the app, so the event fires long before your listener exists. It's emitted
+  **retained** and replays on subscribe. Subscribe at startup, not behind a
+  click — deferring it loses exactly the case the channel exists for.
+- **Payload** is `{ url: string, urls: string[] }`. One OS event can carry
+  several URLs (`open myapp://a myapp://b`), so `urls` is the full list and
+  `url` is the first — destructure `{ url }` for the ordinary single-link case.
+  They're batched into one event rather than emitted one apiece because
+  retention keeps only a channel's *latest* value, and a late subscriber would
+  otherwise see only the last link.
+- **A separate channel from `app.openFile`**, deliberately: a path to read and a
+  URL to route are different payloads, and an app that handles documents
+  shouldn't start receiving deep links it never declared. A `file://` URL counts
+  as a document and goes to `app.openFile`.
+
+**Declare the schemes you handle** with the top-level `url_schemes` key — the
+event only fires for a URL the OS actually routes to you:
+
+```json
+"url_schemes": ["myapp"]
+```
+
+One list covers all five platforms (a scheme is the same string everywhere,
+unlike a file type), and `swift-pwa build` turns it into the registration each
+one needs: Apple `CFBundleURLTypes`, an Android `ACTION_VIEW` +
+`BROWSABLE` intent-filter, a `.desktop` `x-scheme-handler/…` entry with
+`Exec=… %U`, and an MSIX `windows.protocol` extension — or, for the portable
+Windows exe, a `register-url-schemes.cmd` the user runs once.
+
+> **`url_schemes` and `external_urls.schemes` are different lists.** This one is
+> what your app *handles*; that one is what it may *open*. An app that opens its
+> own deep links (a notification that re-enters the app, say) needs the scheme in
+> both — declaring it as handled does not grant permission to launch it, because
+> most apps want only one of the two.
+
+A system-owned scheme (`https`, `mailto`, `file`, …) is refused at build time:
+handling `https://` links is app-link / universal-link verification, a different
+mechanism with its own server-side proof, which this doesn't cover.
+
+Walkthrough: [docs/tutorials/receiving-deep-links.md](tutorials/receiving-deep-links.md).
+
 ### `system.*`
 
 Device / OS facts that aren't application identity (`app.*`) or window state

@@ -18,6 +18,10 @@
         private weak var app: MacAppContext?
 
         private var continuations: [UUID: AsyncStream<WindowEvent>.Continuation] = [:]
+        /// Kept alive only for a light/dark background pair: a `CGColor` is a
+        /// snapshot of one appearance, so the webview layer's fill is the one
+        /// place AppKit can't re-resolve for us.
+        private var appearanceObservation: NSKeyValueObservation?
 
         public init(config: WindowConfig, app: MacAppContext) throws {
             // Configure WKWebView with pwa:// scheme handler if we'll
@@ -75,13 +79,15 @@
             window.contentView = adapter.webView
 
             // Native background before first paint: avoids the white flash
-            // and colours the overscroll / rubber-band area.
-            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
-                let color = NSColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+            // and colours the overscroll / rubber-band area. A light/dark pair
+            // becomes a dynamic NSColor so AppKit re-resolves it when the
+            // system appearance changes.
+            let backgroundColor = config.backgroundColor?.nsColor()
+            if let color = backgroundColor {
                 window.backgroundColor = color
                 adapter.webView.underPageBackgroundColor = color
                 adapter.webView.wantsLayer = true
-                adapter.webView.layer?.backgroundColor = color.cgColor
+                Self.applyLayerBackground(color, to: adapter.webView, in: window)
             }
 
             nsWindow = window
@@ -96,6 +102,14 @@
 
             super.init()
             window.delegate = self
+            if let color = backgroundColor, config.backgroundColor?.isPair == true {
+                appearanceObservation = window.observe(\.effectiveAppearance) { [weak adapter] window, _ in
+                    MainActor.assumeIsolated {
+                        guard let webView = adapter?.webView else { return }
+                        MacWindow.applyLayerBackground(color, to: webView, in: window)
+                    }
+                }
+            }
             bridge.start()
 
             // Before `load`, so the first navigation is policed too.
@@ -103,6 +117,16 @@
             adapter.load(config.content)
             if config.fullscreen { window.toggleFullScreen(nil) }
             if config.visibleOnLaunch { window.makeKeyAndOrderFront(nil) }
+        }
+
+        /// Resolve `color` against the window's current appearance and paint
+        /// the webview's backing layer with it. `NSView.layer` takes a
+        /// `CGColor`, which carries no appearance of its own, so the value has
+        /// to be resolved while that appearance is the drawing one.
+        static func applyLayerBackground(_ color: NSColor, to view: NSView, in window: NSWindow) {
+            window.effectiveAppearance.performAsCurrentDrawingAppearance {
+                view.layer?.backgroundColor = color.cgColor
+            }
         }
 
         // MARK: - Window

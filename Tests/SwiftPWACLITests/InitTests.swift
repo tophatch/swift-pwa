@@ -220,16 +220,15 @@ struct InitTests {
             structName: "MyApp", window: .init(title: "X", backgroundColor: .single("#F4F7F5"))
         )
         #expect(withColor.contains("backgroundColor: \"#F4F7F5\""))
-        // A light/dark pair resolves to its dark value for the single-colour
-        // runtime WindowConfig (a dark pre-paint flash beats a blinding one).
+        // A light/dark pair travels to the runtime as a pair — every backend
+        // resolves it against the live system appearance.
         let pair = Templates.mainSwift(
             structName: "MyApp", window: .init(
                 title: "X",
                 backgroundColor: .dayNight(light: "#F4F4F2", dark: "#0C0D0E")
             )
         )
-        #expect(pair.contains("backgroundColor: \"#0C0D0E\""))
-        #expect(!pair.contains("#F4F4F2"))
+        #expect(pair.contains("backgroundColor: .dayNight(light: \"#F4F4F2\", dark: \"#0C0D0E\")"))
         // Omitted when nil, so WindowConfig keeps the platform default.
         let without = Templates.mainSwift(structName: "MyApp", window: .init(title: "X"))
         #expect(!without.contains("backgroundColor:"))

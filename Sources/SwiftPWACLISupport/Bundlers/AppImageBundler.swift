@@ -68,7 +68,7 @@ struct AppImageBundler {
         // and hang on its retry/prompt path.
         let iconDst = appDir.appendingPathComponent("\(exeName).png")
         let iconOutcome: IconOutcome
-        if let icon = manifest.icon {
+        if let icon = manifest.icon(for: .linux) {
             let src = projectRoot.appendingPathComponent(icon)
             let isPNG = src.pathExtension.lowercased() == "png"
             let exists = FileManager.default.fileExists(atPath: src.path)

@@ -41,8 +41,11 @@
 
             // Native background before first paint: kills the white/black
             // flash and colours the scroll overscroll (rubber-band) area.
-            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
-                let color = UIColor(red: rgb.red, green: rgb.green, blue: rgb.blue, alpha: 1)
+            // A light/dark pair becomes a dynamic UIColor, so UIKit re-resolves
+            // it when the system appearance changes under a running app —
+            // otherwise a dark-themed app bounces paper white on every
+            // overscroll.
+            if let color = config.backgroundColor?.uiColor() {
                 adapter.webView.isOpaque = false
                 adapter.webView.backgroundColor = color
                 adapter.webView.scrollView.backgroundColor = color

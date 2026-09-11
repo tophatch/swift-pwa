@@ -52,12 +52,17 @@ public struct WindowConfig: Sendable {
     public var fullscreen: Bool
     public var visibleOnLaunch: Bool
     public var content: WindowContent
-    /// Native surface background colour (hex, e.g. `"#F4F7F5"`), applied
-    /// before the page's first paint so there's no white/black flash and
-    /// the scroll overscroll area matches. `nil` keeps the platform default
-    /// (opaque white). A single solid colour can only approximate a
-    /// gradient page background — close, but not pixel-exact.
-    public var backgroundColor: String?
+    /// Native surface background colour, applied before the page's first
+    /// paint so there's no white/black flash and the scroll overscroll area
+    /// matches. `nil` keeps the platform default (opaque white). A single
+    /// solid colour can only approximate a gradient page background — close,
+    /// but not pixel-exact.
+    ///
+    /// Either one colour (`"#F4F7F5"` — a string literal still works) or a
+    /// light/dark pair (`.dayNight(light:dark:)`), which every backend
+    /// resolves against the live system appearance and re-resolves when it
+    /// changes.
+    public var backgroundColor: WindowBackgroundColor?
     /// Persist this window's size — and, where the platform exposes it,
     /// position — across launches, restoring it the next time a window with
     /// the same ``stateKey`` is created. Off by default so an app opts in
@@ -86,7 +91,7 @@ public struct WindowConfig: Sendable {
         fullscreen: Bool = false,
         visibleOnLaunch: Bool = true,
         content: WindowContent,
-        backgroundColor: String? = nil,
+        backgroundColor: WindowBackgroundColor? = nil,
         rememberState: Bool = false,
         stateKey: String = "main"
     ) {

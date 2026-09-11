@@ -270,7 +270,7 @@ struct IPABundler {
     /// Skips quietly (no icon, not a failed build) if the icon is missing /
     /// not a PNG / `actool` errors.
     private func compileAppIcon(into app: URL) async -> (keys: [String: Any], outcome: IconOutcome) {
-        guard let iconPath = manifest.icon else { return ([:], .noneSet) }
+        guard let iconPath = manifest.icon(for: .ios) else { return ([:], .noneSet) }
         let iconURL = projectRoot.appendingPathComponent(iconPath)
         let fm = FileManager.default
         guard fm.fileExists(atPath: iconURL.path) else {
@@ -290,6 +290,14 @@ struct IPABundler {
             try Self.appIconContentsJSON.write(
                 to: iconset.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8
             )
+            // The launch storyboard's background rides in the same catalog:
+            // actool writes one `Assets.car` per `--compile`, so a second run
+            // would replace this one. See `compileLaunchScreen`.
+            if let colorset = Self.launchBackgroundColorSetJSON(manifest.window.backgroundColor) {
+                let dir = assets.appendingPathComponent("\(Self.launchBackgroundName).colorset")
+                try fm.createDirectory(at: dir, withIntermediateDirectories: true)
+                try colorset.write(to: dir.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8)
+            }
             let partial = tmp.appendingPathComponent("icon-info.plist")
             let platform = simulator ? "iphonesimulator" : "iphoneos"
             try await Shell.run("/usr/bin/env", [
@@ -324,6 +332,39 @@ struct IPABundler {
     }
     """
 
+    /// Asset name for the launch screen's background colour set. Only
+    /// written (and only referenced) for a light/dark pair.
+    static let launchBackgroundName = "LaunchBackground"
+
+    /// Asset-catalog colour set with a light and a dark variant, or `nil`
+    /// when the manifest carries no pair and the storyboard can hold the
+    /// colour inline.
+    static func launchBackgroundColorSetJSON(_ background: PWAManifest.BackgroundColor?) -> String? {
+        guard let background, background.isPair,
+              let light = RGBColor(hex: background.light),
+              let dark = RGBColor(hex: background.dark)
+        else { return nil }
+        func components(_ rgb: RGBColor) -> String {
+            let b = rgb.bytes
+            return """
+            { "color-space" : "srgb", "components" : { "red" : "0x\(hex(b.r))", \
+            "green" : "0x\(hex(b.g))", "blue" : "0x\(hex(b.b))", "alpha" : "1.000" } }
+            """
+        }
+        func hex(_ value: UInt8) -> String { String(format: "%02X", value) }
+        return """
+        {
+          "colors" : [
+            { "idiom" : "universal", "color" : \(components(light)) },
+            { "idiom" : "universal", \
+        "appearances" : [ { "appearance" : "luminosity", "value" : "dark" } ], \
+        "color" : \(components(dark)) }
+          ],
+          "info" : { "author" : "xcode", "version" : 1 }
+        }
+        """
+    }
+
     /// Best-effort: build a launch storyboard from `manifest.icon` if it's a
     /// PNG. Drops `LaunchIcon.png` into the bundle root so the storyboard's
     /// `image="LaunchIcon"` reference resolves via `UIImage(named:)` without
@@ -331,7 +372,7 @@ struct IPABundler {
     /// write into `UILaunchStoryboardName`, or `nil` to fall back to the
     /// system-default launch screen.
     private func compileLaunchScreen(into app: URL) async -> String? {
-        guard let iconPath = manifest.icon else { return nil }
+        guard let iconPath = manifest.icon(for: .ios) else { return nil }
         let iconURL = projectRoot.appendingPathComponent(iconPath)
         let fm = FileManager.default
         guard fm.fileExists(atPath: iconURL.path),
@@ -348,11 +389,7 @@ struct IPABundler {
             defer { try? fm.removeItem(at: tmp) }
 
             let sbInput = tmp.appendingPathComponent("LaunchScreen.storyboard")
-            // A launch screen is a single static image — iOS can't swap it by
-            // appearance — so resolve a light/dark pair to its dark value (a
-            // dark flash beats a blinding light one at night).
-            let background = manifest.window.backgroundColor.map(\.dark).flatMap(RGBColor.init(hex:))
-            try Self.launchStoryboardXML(background: background)
+            try Self.launchStoryboardXML(background: manifest.window.backgroundColor)
                 .write(to: sbInput, atomically: true, encoding: .utf8)
             let sbOutput = app.appendingPathComponent("LaunchScreen.storyboardc")
 
@@ -374,10 +411,23 @@ struct IPABundler {
     /// `window.background_color` is set). Matching the launch background to
     /// the app background makes the splash→app transition seamless. The
     /// format is the standard IB launch-screen XML.
-    private static func launchStoryboardXML(background: RGBColor?) -> String {
-        let r = background?.red ?? 0.0
-        let g = background?.green ?? 0.0
-        let b = background?.blue ?? 0.0
+    static func launchStoryboardXML(background: PWAManifest.BackgroundColor?) -> String {
+        let inline = background.map(\.dark).flatMap(RGBColor.init(hex:))
+        let r = inline?.red ?? 0.0
+        let g = inline?.green ?? 0.0
+        let b = inline?.blue ?? 0.0
+        // A launch screen *can* follow the appearance, contrary to the usual
+        // "it's a static image": UIKit resolves a named colour out of the
+        // bundle's compiled asset catalog against the launch trait collection.
+        // So a light/dark pair is referenced by name (the colour set is
+        // written in `compileAppIcon`) and one colour stays inline, which
+        // needs no catalog at all.
+        let backgroundElement = background?.isPair == true
+            ? "<color key=\"backgroundColor\" name=\"\(launchBackgroundName)\"/>"
+            : """
+            <color key="backgroundColor" red="\(r)" green="\(g)" blue="\(b)" alpha="1" \
+            colorSpace="custom" customColorSpace="sRGB"/>
+            """
         return """
         <?xml version="1.0" encoding="UTF-8" standalone="no"?>
         <document type="com.apple.InterfaceBuilder3.CocoaTouch.Storyboard.XIB" version="3.0" \
@@ -401,8 +451,7 @@ struct IPABundler {
         translatesAutoresizingMaskIntoConstraints="NO" id="ICON1"/>
                                 </subviews>
                                 <viewLayoutGuide key="safeArea" id="SA1"/>
-                                <color key="backgroundColor" red="\(r)" green="\(g)" blue="\(b)" alpha="1" \
-        colorSpace="custom" customColorSpace="sRGB"/>
+                                \(backgroundElement)
                                 <constraints>
                                     <constraint firstItem="ICON1" firstAttribute="centerX" \
         secondItem="V1" secondAttribute="centerX" id="cx"/>

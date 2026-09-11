@@ -408,15 +408,24 @@ enum Templates {
         let width = String(format: "%g", window.width)
         let height = String(format: "%g", window.height)
         let name = structName
+        /// A hex colour as a Swift string literal, escaped for the generated
+        /// source.
+        func swiftLiteral(_ hex: String) -> String {
+            let escaped = hex.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
+            return "\"\(escaped)\""
+        }
         // Optional native background colour. Emitted only when set, so the
-        // generated WindowConfig keeps `nil` (platform default) otherwise.
-        // The runtime `WindowConfig` takes one colour and isn't system-theme-
-        // aware, so a light/dark pair resolves to its dark value (a dark
-        // pre-paint flash is preferable to a blinding light one at night;
-        // Android's build-time DayNight theme handles per-mode colours).
-        let backgroundColorArg: String = window.backgroundColor.map(\.dark).map {
-            let escaped = $0.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
-            return ",\n                backgroundColor: \"\(escaped)\""
+        // generated WindowConfig keeps `nil` (platform default) otherwise. A
+        // light/dark pair is carried through as a pair — every backend
+        // resolves it against the live system appearance.
+        let backgroundColorArg: String = window.backgroundColor.map { background in
+            let value = switch background {
+            case let .single(hex):
+                swiftLiteral(hex)
+            case let .dayNight(light, dark):
+                ".dayNight(light: \(swiftLiteral(light)), dark: \(swiftLiteral(dark)))"
+            }
+            return ",\n                backgroundColor: \(value)"
         } ?? ""
         // Persist window size/position across launches when pwa.json opts in
         // (the `init` scaffold sets `remember_state: true`). Desktop-only at

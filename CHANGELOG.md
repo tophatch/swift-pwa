@@ -293,6 +293,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#180]: https://github.com/tophatch/swift-pwa/issues/180
 
+- **A CI-only flake: `DevServerTests` bound a port it had probed as free,
+  which anything could take in between.** The test discovered a free port by
+  binding `port: 0`, recorded the number the OS handed out, **stopped that
+  server**, then bound the same number again to prove a fixed port yields a
+  stable origin — a window no test can win, because the port it just released
+  goes straight back into the range the kernel hands out to any outbound
+  connection, and the rest of the suite runs concurrently. `SO_REUSEADDR`
+  doesn't help: another socket genuinely owns the port, it isn't ours in
+  `TIME_WAIT`.
+
+  Fixed by removing the window rather than narrowing it — the test now binds a
+  port it *chooses*, so the attempt is its own probe and there is nothing to
+  re-acquire. The number is drawn from below the ephemeral range, which is
+  what makes this airtight rather than merely unlikely: measured on macOS,
+  4,000 `bind(0)` calls returned nothing below 49152 (`net.inet.ip.portrange.first`,
+  and the flake landed on 49189), so a chosen port in the 20000s cannot be
+  handed to a competing connection at all. Only the *choice* retries, bounded,
+  and if every attempt is occupied the last error surfaces — a broken bind
+  can't be retried into a pass. The assertion also got stronger: the port is
+  now the test's own number for `DevServer` to honour, not one the OS had just
+  supplied ([#161]).
+
+  The race was real but rare, which matches having been seen once: a released
+  port does come back from `bind(0)` — measured, port 51433 reappeared after
+  16,356 tries, about the 16,384-port range size — so the odds were roughly
+  one in a range-size per competing bind inside a microsecond window.
+
+[#161]: https://github.com/tophatch/swift-pwa/issues/161
+
 - **On Android, an `ACTION_VIEW` intent routed to an app that was already
   running stacked a second `MainActivity` — with a second Swift runtime.** Found
   while verifying the deep-link work, but it applies equally to a warm document

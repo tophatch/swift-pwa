@@ -20,21 +20,44 @@
             return dir
         }
 
+        /// Start a server on a port this test *chooses*, and retry the choice —
+        /// never an assertion — if something already holds it.
+        ///
+        /// The number comes from below the ephemeral range (macOS hands out
+        /// 49152+, `net.inet.ip.portrange.first`) so the kernel will not assign
+        /// it to an outbound connection made by the rest of the suite, which
+        /// runs concurrently. Randomized per attempt so a lingering server from
+        /// an earlier run doesn't wedge every attempt on one number.
+        private func startOnAChosenPort(web: URL) throws -> (server: DevServer, url: URL, port: UInt16) {
+            var lastError: (any Error)?
+            for _ in 0 ..< 20 {
+                let port = UInt16.random(in: 20000 ... 29999)
+                let server = DevServer(root: web, entry: "index.html", port: port)
+                do {
+                    let url = try server.start()
+                    return (server, url, port)
+                } catch {
+                    // Occupied by something outside this process; try another.
+                    lastError = error
+                }
+            }
+            throw lastError ?? DevServerError.socket("no free port found in 20 attempts")
+        }
+
         @Test("a fixed port gives a stable origin; reusing a live port throws")
         func fixedPortStableOrigin() throws {
             let web = try tmpWeb()
             defer { try? FileManager.default.removeItem(at: web) }
 
-            // Start on an OS-assigned port to discover a currently-free one…
-            let probe = DevServer(root: web, entry: "index.html", port: 0)
-            let probeURL = try probe.start()
-            let port = UInt16(probeURL.port ?? 0)
-            #expect(port != 0)
-            probe.stop()
-
-            // …then bind that exact port: the origin is now stable/predictable.
-            let server = DevServer(root: web, entry: "index.html", port: port)
-            let url = try server.start()
+            // This used to bind port 0 to discover a free port, stop that
+            // server and re-bind the same number — a race no test can win,
+            // because the port it just released is in the range the OS hands
+            // out to any outbound connection, and it lost on CI (#161).
+            // Binding a chosen port directly removes the window rather than
+            // narrowing it: the attempt *is* the probe. It also makes the
+            // assertion stronger — the port is now the test's number to honour
+            // rather than one the OS just supplied.
+            let (server, url, port) = try startOnAChosenPort(web: web)
             defer { server.stop() }
             #expect(url.absoluteString == "http://127.0.0.1:\(port)")
 

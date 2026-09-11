@@ -458,6 +458,10 @@
                 + <code>biometric.authenticate</code>. Touch ID / Face ID /
                 Optic ID on Apple, Windows Hello on Windows, stub on
                 Linux (no clean cross-distro primitive).</p>
+                <label class="switch">
+                    <input type="checkbox" id="bio-device-credential">
+                    <span>Accept the device passcode too</span>
+                </label>
                 <div class="actions">
                     <button id="bio-status" data-requires="biometric.canAuthenticate">Check status</button>
                     <button id="bio-auth" data-requires="biometric.authenticate">Authenticate</button>
@@ -738,6 +742,13 @@
         const evt = (m) => append("log", "window · " + m);
         const trayEvt = (m) => append("log", "tray · " + m);
         const clearLog = () => { document.getElementById("log").textContent = ""; };
+
+        // Both biometric commands take the same policy flag: asking
+        // the biometrics-only availability question and then running
+        // the wider one would hide the feature on a machine where only
+        // the passcode is usable.
+        const bioAllowsDeviceCredential = () =>
+            document.getElementById("bio-device-credential").checked;
 
         // Bridge actions, named so shortcuts can re-use them.
         const actions = {
@@ -1118,17 +1129,20 @@
                 }
             },
             bioStatus: async () => {
-                const r = await __SWIFT_PWA__.invoke("biometric.canAuthenticate");
+                const allowDeviceCredential = bioAllowsDeviceCredential();
+                const r = await __SWIFT_PWA__.invoke("biometric.canAuthenticate", { allowDeviceCredential });
+                const policy = allowDeviceCredential ? "biometrics or passcode" : "biometrics only";
                 if (r.available) {
-                    log("biometric → available (" + r.kind + ")");
+                    log("biometric [" + policy + "] → available (" + r.kind + ")");
                 } else {
-                    log("biometric → unavailable: " + (r.reason || "unknown") + " (" + r.kind + ")");
+                    log("biometric [" + policy + "] → unavailable: " + (r.reason || "unknown") + " (" + r.kind + ")");
                 }
             },
             bioAuth: async () => {
                 try {
                     const r = await __SWIFT_PWA__.invoke("biometric.authenticate", {
                         reason: "Authenticate to verify the swift-pwa demo flow.",
+                        allowDeviceCredential: bioAllowsDeviceCredential(),
                     });
                     if (r.authenticated) {
                         log("biometric → authenticated");

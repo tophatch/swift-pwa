@@ -28,10 +28,8 @@
     public final class SystemBiometricAuth: BiometricAuth, @unchecked Sendable {
         public init() {}
 
-        public func canAuthenticate() async throws -> BiometricAvailability {
-            try await AndroidRPC.call(
-                "biometric.canAuthenticate", EmptyArgs()
-            )
+        public func canAuthenticate(_ args: BiometricAvailabilityArgs) async throws -> BiometricAvailability {
+            try await AndroidRPC.call("biometric.canAuthenticate", args)
         }
 
         public func authenticate(_ args: BiometricAuthArgs) async throws -> BiometricAuthResult {

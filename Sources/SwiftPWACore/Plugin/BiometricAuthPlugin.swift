@@ -24,8 +24,8 @@ public struct BiometricAuthPlugin: Plugin {
 
         registry.register(
             "biometric.canAuthenticate",
-            typed: { (_: EmptyArgs, _) async throws -> BiometricAvailability in
-                try await auth.canAuthenticate()
+            typed: { (args: BiometricAvailabilityArgs, _) async throws -> BiometricAvailability in
+                try await auth.canAuthenticate(args)
             }
         )
 

@@ -19,7 +19,7 @@
     public final class SystemBiometricAuth: BiometricAuth, @unchecked Sendable {
         public init() {}
 
-        public func canAuthenticate() async throws -> BiometricAvailability {
+        public func canAuthenticate(_: BiometricAvailabilityArgs) async throws -> BiometricAvailability {
             BiometricAvailability(
                 available: false,
                 kind: .none,

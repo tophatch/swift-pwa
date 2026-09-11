@@ -628,6 +628,9 @@ remain:
   false` with the same string in the `error` field rather than
   throwing — apps can fall back to a passphrase flow and treat
   the `available` flag as the universal cue.
+  `allowDeviceCredential: true` doesn't change this: there is no
+  system "prove the user is here" prompt on Linux to fall back to
+  either.
 - **GTK4 dialogs require GTK 4.10+.** `DialogPlugin` on the GTK4
   backend is wired through `GtkAlertDialog` (message + confirm) and
   `GtkFileDialog` (open / save / directory), both added in GTK 4.10.

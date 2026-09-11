@@ -17,8 +17,7 @@ and you can drive `__SWIFT_PWA__.invoke(...)` from a host shell.
 ## 1. Prerequisites
 
 The host needs the same toolchain as a regular Android build (see
-[android-setup.md](android-setup.md) §1) plus `adb` and a
-`websockets`-capable Python:
+[android-setup.md](android-setup.md) §1), plus `adb` and Python 3:
 
 ```bash
 brew install swiftly openjdk@17 python3
@@ -29,7 +28,6 @@ unzip /tmp/ndk.zip -d ~/
 
 # adb ships with Android Studio's platform-tools; standalone via sdkmanager
 ls ~/Library/Android/sdk/platform-tools/adb
-pip3 install websockets
 ```
 
 The device needs USB debugging enabled:
@@ -88,54 +86,51 @@ launch failure — common ones are documented in
 ## 3. Hooking up Chrome DevTools Protocol
 
 The WebView's CDP endpoint lives on a per-process abstract socket
-named `webview_devtools_remote_<pid>`. Forward it to localhost:
+named `webview_devtools_remote_<pid>`. `Scripts/android-cdp-eval.py`
+does the whole dance — find the process, forward the socket, discover
+the page target, evaluate — so a verification run is one command:
 
 ```bash
-PID=$(adb shell pidof com.swiftpwa.hello)
-adb forward tcp:9222 localabstract:webview_devtools_remote_$PID
+Scripts/android-cdp-eval.py com.swiftpwa.hello '1 + 1'      # → 2
+Scripts/android-cdp-eval.py com.swiftpwa.hello \
+  "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('__platform.info')))()"
 ```
 
-> **The PID changes every launch.** Re-run the `adb forward` line
-> after each `am force-stop` + `am start`. There's no "follow the
-> app" mode — abstract sockets are bound to the process at
-> creation, and a new launch creates a new socket.
+Several expressions run in order against one connection, which is what
+you want when a command's effect is only visible to the next call.
+`-s <serial>` picks a device, `--timeout 0` waits forever. Stdlib only,
+WebSocket framing included — nothing to `pip install`.
 
-The page's WebSocket URL comes out of the `/json` endpoint:
+> **The PID changes every launch**, so the script re-establishes the
+> forward every run rather than assuming one. Abstract sockets are
+> bound to the process at creation; there is no "follow the app" mode.
 
-```bash
-curl -s http://localhost:9222/json | python3 -c \
-  "import json,sys; print([p['webSocketDebuggerUrl'] for p in json.load(sys.stdin) if p.get('type')=='page'][0])"
-# → ws://localhost:9222/devtools/page/<id>
-```
+> **Each `swift-pwa drive eval` launches a fresh app instance** and
+> tears it down, so state set by one call is gone by the next. CDP
+> here does *not* work that way — it attaches to the running app — but
+> the distinction matters when comparing the two: a "still pending"
+> read from a second `drive eval` is a *new process*, not an
+> unfinished promise.
 
-A short Python helper opens the WebSocket, sends a single
-`Runtime.evaluate`, and prints the result. Save as
-`/tmp/cdp_eval.py`:
+A timeout is itself a measurement: **no reply to `Runtime.evaluate`
+means a modal dialog is holding the JS thread**, which is how you
+prove a native prompt (a JS `alert()`, a biometric sheet) actually
+blocks the page. Read the dialog's own text with
+`adb shell uiautomator dump` + `adb pull` — the view hierarchy names
+every button, and it works when `adb exec-out screencap` doesn't.
 
-```python
-import json, sys
-from websockets.sync.client import connect
-
-ws_url, expr = sys.argv[1], sys.argv[2]
-with connect(ws_url) as ws:
-    ws.send(json.dumps({
-        "id": 1,
-        "method": "Runtime.evaluate",
-        "params": {"expression": expr, "awaitPromise": True, "returnByValue": True}
-    }))
-    r = json.loads(ws.recv()).get("result", {}).get("result", {})
-    print(json.dumps(r.get("value", r)))
-```
-
-Usage:
-
-```bash
-WS=$(curl -s http://localhost:9222/json | python3 -c \
-  "import json,sys; print([p['webSocketDebuggerUrl'] for p in json.load(sys.stdin) if p.get('type')=='page'][0])")
-python3 /tmp/cdp_eval.py "$WS" "1 + 2"   # → 3
-```
+> **Don't reach for a screenshot to read a native prompt** — see §6
+> for why a biometric sheet comes back black, and on a multi-display
+> device `adb exec-out screencap -p` prepends a warning to
+> the PNG bytes, so the file isn't even a PNG.
 
 ## 4. Round-tripping each plugin
+
+The examples below use `PKG` for the app's package id:
+
+```bash
+PKG=com.swiftpwa.hello
+```
 
 `__platform.info` lists every command the runtime registered —
 this is the first call to make. If a plugin doesn't show up here,
@@ -143,7 +138,7 @@ the JS-side `__SWIFT_PWA__.invoke('<command>', ...)` will reject
 with "command not registered" rather than reach Swift.
 
 ```bash
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('__platform.info', {})))()"
 # → "{\"os\":\"android\",\"tempDir\":\"...\",\"commands\":[\"biometric.authenticate\",\"biometric.canAuthenticate\",\"clipboard.clear\",\"clipboard.readText\",\"clipboard.writeText\",\"dialog.confirm\",\"dialog.message\",...]}"
 ```
@@ -154,24 +149,24 @@ These resolve immediately — no native UI to drive:
 
 ```bash
 # Clipboard write/read round-trip
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('clipboard.writeText', {text: 'hello'})))()"
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('clipboard.readText', {})))()"
 # → "{\"text\":\"hello\"}"
 
 # Biometric availability
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('biometric.canAuthenticate', {})))()"
 # → "{\"available\":true,\"kind\":\"unknown\"}"
 
 # Notification authorization (API 33+ shows a system prompt the first time)
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('notifications.requestAuthorization', {})))()"
 # → "{\"granted\":true}"
 
 # Send a notification (visible in the system shade)
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('notifications.send', {title: 'swift-pwa', body: 'hi', sound: false})))()"
 # → "{\"id\":\"95937348\"}"
 ```
@@ -185,14 +180,14 @@ slot back:
 
 ```bash
 # 1. Fire — promise sits pending, the result will land in window._dlg
-python3 /tmp/cdp_eval.py "$WS" \
+Scripts/android-cdp-eval.py "$PKG" \
   "(()=>{__SWIFT_PWA__.invoke('dialog.confirm', {message: 'Tap YES', okLabel: 'Yes', cancelLabel: 'No'}).then(r=>window._dlg=JSON.stringify(r)); return 'pending';})()"
 
 # 2. Drive the native UI (see §5)
 adb shell input tap 1838 826   # YES button on a 2800x1752 landscape
 
 # 3. Read the resolved result
-python3 /tmp/cdp_eval.py "$WS" "window._dlg || 'still pending'"
+Scripts/android-cdp-eval.py "$PKG" "window._dlg || 'still pending'"
 # → "{\"ok\":true}"
 ```
 
@@ -260,11 +255,13 @@ adb shell cmd clipboard get-primary
 These are the failure modes that cost real time. Most are flagged
 by clear log lines once you know what to look for.
 
-- **`adb forward` socket name uses the PID.** Re-run the forward
-  after every `am force-stop` + `am start`. A pre-existing forward
-  to a dead PID returns connection-refused on the next `curl
-  http://localhost:9222/json` — looks like the device went away
-  but actually you're forwarding to a stale socket.
+- **`adb forward` socket name uses the PID.** A pre-existing forward
+  to a dead PID returns connection-refused on the next
+  `curl http://localhost:9222/json` — looks like the device went
+  away when actually you're forwarding to a stale socket. This is
+  why `Scripts/android-cdp-eval.py` re-establishes the forward on
+  every run rather than assuming one; if you wire up CDP by hand,
+  re-run it after every `am force-stop` + `am start`.
 
 - **`KEYCODE_BACK` exits the app** if no modal is open. The first
   time I sent BACK to dismiss what I thought was a stuck dialog,
@@ -274,8 +271,13 @@ by clear log lines once you know what to look for.
   PID changed.
 
 - **Biometric prompt blanks `screencap`.** Android's secure-overlay
-  protection blocks screenshots over `BiometricPrompt`. The black
-  screen is the *right* behaviour, not a bug. Verify the round-trip
+  protection blocks screenshots over `BiometricPrompt` — macOS does
+  the same to `screencapture` over a Touch ID sheet, so this is not
+  Android being awkward. The black screen is the *right* behaviour,
+  not a bug. **`adb shell uiautomator dump` still reads it**, which
+  is how you check what the prompt actually offers: with
+  `allowDeviceCredential: true` the negative button reads "Use PIN"
+  where it otherwise reads "Cancel". Verify the round-trip
   by reading the JS-side promise resolution instead of looking at
   the pixels.
 

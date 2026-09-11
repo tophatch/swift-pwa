@@ -321,7 +321,42 @@ struct Build: AsyncParsableCommand {
             // signing entirely.
             if let team, !simulator {
                 let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
-                let resolved = await IOSSigning.resolve(team: team, bundleID: bundleID, scratch: outputDir)
+                // Which device this build is for, when we can tell. A profile
+                // that doesn't list the target device can't be installed on it
+                // however current and correctly signed it is — the OS refuses
+                // with 0xe8008012, which reads as a signing problem — so the
+                // target has to be known *before* a profile is chosen, not
+                // just before one is minted. Best-effort: with no device
+                // connected (a plain `build`) this stays nil and the choice is
+                // unfiltered, exactly as before.
+                var targetDevice: IOSDeviceResolver.Device?
+                if device != nil || allowProvisioningRegistration {
+                    targetDevice = try? await IOSDeviceResolver.resolve(explicit: device)
+                }
+                // An unlisted --device is passed through verbatim, so it may be
+                // a name rather than a UDID; only a real UDID can be matched
+                // against a profile's device list.
+                let targetUDID = targetDevice.map(\.udid).flatMap { IOSSigning.isDeviceUDID($0) ? $0 : nil }
+                let resolved = await IOSSigning.resolve(
+                    team: team, bundleID: bundleID, scratch: outputDir, deviceUDID: targetUDID
+                )
+                let excluded = resolved.profilesExcludedByDevice
+                // Only when we were the one choosing: an explicitly-passed
+                // --provisioning-profile is the user's call, and what the rest
+                // of the folder holds is then beside the point.
+                if !excluded.isEmpty, profileURL == nil, let targetDevice {
+                    let names = excluded.map(\.lastPathComponent).joined(separator: ", ")
+                    let noun = excluded.count == 1 ? "profile" : "profiles"
+                    // An unlisted --device has no name of its own, so don't
+                    // print the udid twice.
+                    let label = targetDevice.name == targetDevice.udid
+                        ? targetDevice.udid
+                        : "\(targetDevice.name) (\(targetDevice.udid))"
+                    print("""
+                    swift-pwa: skipping \(excluded.count) installed \(noun) for \(bundleID) that \(label) \
+                    is not registered in — the OS refuses such a profile at install time (0xe8008012): \(names).
+                    """)
+                }
                 if signIdentity == nil, let id = resolved.identity {
                     signIdentity = id
                     print("swift-pwa: --team \(team) → signing identity \"\(id)\"")
@@ -339,8 +374,15 @@ struct Build: AsyncParsableCommand {
                 // against the target device (registering it). See
                 // PersonalTeamProfileMinter / docs/ios-setup.md.
                 if profileURL == nil, allowProvisioningRegistration {
-                    let target = try await IOSDeviceResolver.resolve(explicit: device)
-                    print("swift-pwa: --team \(team) found no installed profile — minting one on \(target.name).")
+                    let target: IOSDeviceResolver.Device = if let targetDevice {
+                        targetDevice
+                    } else {
+                        try await IOSDeviceResolver.resolve(explicit: device)
+                    }
+                    let why = excluded.isEmpty
+                        ? "found no installed profile"
+                        : "found no installed profile covering this device"
+                    print("swift-pwa: --team \(team) \(why) — minting one on \(target.name).")
                     let minted = try await PersonalTeamProfileMinter.mint(
                         bundleID: bundleID, team: team, deviceUDID: target.udid, scratch: outputDir
                     )
@@ -356,12 +398,23 @@ struct Build: AsyncParsableCommand {
                     }
                 }
                 if signIdentity == nil || profileURL == nil {
-                    let hint = profileURL == nil && !allowProvisioningRegistration
-                        ? " (for a free personal team, add --allow-provisioning-registration to mint one)"
-                        : ""
+                    // Both can go missing at once, and for a free team they
+                    // usually do: the identity is read off the chosen profile,
+                    // so no profile means no identity either.
+                    let missing = [
+                        signIdentity == nil ? "a signing identity" : nil,
+                        profileURL == nil ? "a provisioning profile" : nil
+                    ].compactMap(\.self).joined(separator: " or ")
+                    let hint = if profileURL == nil, !excluded.isEmpty {
+                        " (every installed profile for \(bundleID) is for another device — add "
+                            + "--allow-provisioning-registration to mint one for this one)"
+                    } else if profileURL == nil, !allowProvisioningRegistration {
+                        " (for a free personal team, add --allow-provisioning-registration to mint one)"
+                    } else {
+                        ""
+                    }
                     print("""
-                    swift-pwa: --team \(team) couldn't resolve \
-                    \(signIdentity == nil ? "a signing identity" : "a provisioning profile")\(hint) — \
+                    swift-pwa: --team \(team) couldn't resolve \(missing)\(hint) — \
                     pass it explicitly, or create one once in Xcode (see docs/ios-setup.md).
                     """)
                 }

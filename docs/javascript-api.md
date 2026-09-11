@@ -881,7 +881,9 @@ const score = await __SWIFT_PWA__.invoke('ai.generateJSON', {
 });
 // Audio out (when info.audioGeneration) — TTS.
 const { audio } = await __SWIFT_PWA__.invoke('ai.generateAudio', { prompt: 'kiitos' });
-// streaming variant: subscribe('ai.generateAudioStream', …) for play-as-it-arrives
+// streaming variant: subscribe('ai.generateAudioStream', …) — handle both `chunk`
+// and `done`: a backend that can't synthesize incrementally (every shipped one
+// today) emits a single `done` with the finished audio.
 
 // Per-request voice cloning (when info.voiceCloning) — clone from a reference
 // clip + its transcript. The reference rides on the request, so it can change

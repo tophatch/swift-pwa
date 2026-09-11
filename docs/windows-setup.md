@@ -832,7 +832,8 @@ same file served out of a mount.
   low/high object rather than the graded warning/critical bands the event
   models, so it isn't wired yet — size memory-scaled caches from a
   `system.memory` read and treat the event as best-effort.
-- **The portable `.exe` embeds a multi-size icon.** `pwa.json`'s `icon`
+- **The portable `.exe` embeds a multi-size icon.** `pwa.json`'s icon
+  (`windows.icon` when set, else the top-level `icon`)
   is injected into the portable `.exe` as an `RT_GROUP_ICON` / `RT_ICON`
   resource via the Win32 `UpdateResource` API (the same post-link resource
   editing the bundler does for the Common Controls manifest, so no extra

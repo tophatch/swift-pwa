@@ -40,8 +40,9 @@
         }
         private let environment: OpaquePointer
         private let parent: HWND
-        /// Applied once the controller is ready (RGBColor is Sendable).
-        private let backgroundColor: RGBColor?
+        /// Applied once the controller is ready, and again whenever the
+        /// system theme changes (the type is `Sendable`).
+        private let backgroundColor: WindowBackgroundColor?
 
         // Mutable pointer fields are `nonisolated(unsafe)` because
         // they're read from `MainThread.run` closures (which Swift
@@ -100,7 +101,7 @@
             environment: OpaquePointer,
             parent: HWND,
             content _: WindowContent,
-            backgroundColor: RGBColor? = nil,
+            backgroundColor: WindowBackgroundColor? = nil,
             sharedProvider: AssetProvider,
             permissions: PermissionPolicy? = nil,
             externalURLs: ExternalURLPolicy? = nil
@@ -124,6 +125,18 @@
                 controllerReadyTrampoline,
                 user
             )
+        }
+
+        /// Paint the controller's surface with the half of the configured
+        /// background Windows currently asks for. Called once the controller
+        /// exists, and again on every `WM_SETTINGCHANGE/ImmersiveColorSet`, so
+        /// a light/dark pair follows a theme switch made while the app runs.
+        func applyBackgroundForCurrentAppearance() {
+            guard let controller,
+                  let rgb = backgroundColor?.rgb(dark: WindowsAppearance.prefersDark)
+            else { return }
+            let c = rgb.bytes
+            swiftpwa_w2_controller_set_background_color(controller, 255, c.r, c.g, c.b)
         }
 
         /// Drive the local message pump until the WebView2 controller
@@ -157,10 +170,7 @@
 
             // Native background before first paint (no white flash). ARGB,
             // fully opaque. No-op on runtimes without ICoreWebView2Controller2.
-            if let bg = backgroundColor {
-                let c = bg.bytes
-                swiftpwa_w2_controller_set_background_color(ctrl, 255, c.r, c.g, c.b)
-            }
+            applyBackgroundForCurrentAppearance()
 
             // Inject bridge.js at document-start. WebView2's API for
             // this is "AddScriptToExecuteOnDocumentCreated" — fires

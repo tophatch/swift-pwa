@@ -541,7 +541,7 @@ struct WindowsBundler {
     /// icon and never fails the build, matching every other bundler's icon
     /// step. See `WindowsIcon` for the resource-injection mechanics.
     private func embedPortableIcon(at exe: URL) async -> IconOutcome {
-        guard let icon = manifest.icon else { return .noneSet }
+        guard let icon = manifest.icon(for: .windows) else { return .noneSet }
         let src = projectRoot.appendingPathComponent(icon)
         guard src.pathExtension.lowercased() == "png" else {
             return .notPNG(source: icon, placeholder: false)
@@ -637,7 +637,7 @@ struct WindowsBundler {
         // placeholder PNG so makeappx doesn't reject the manifest.
         let logoPath = stagingDir.appendingPathComponent("Square150x150Logo.png")
         let iconOutcome: IconOutcome
-        if let icon = manifest.icon {
+        if let icon = manifest.icon(for: .windows) {
             let src = projectRoot.appendingPathComponent(icon)
             let isPNG = src.pathExtension.lowercased() == "png"
             if isPNG, FileManager.default.fileExists(atPath: src.path) {

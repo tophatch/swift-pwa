@@ -100,10 +100,25 @@ The bundler:
    system version, `LSApplicationCategoryType`, `NSHumanReadableCopyright`),
    then merges any `macos.info_plist` passthrough on top (see below).
 4. Copies the `web/` directory into `Contents/Resources/web`.
-5. If `pwa.json.icon` points at a PNG, converts it to `AppIcon.icns`
+5. If `pwa.json`'s icon points at a PNG, converts it to `AppIcon.icns`
    via `sips` + `iconutil`. The build prints a one-line icon summary —
    `swift-pwa: app icon ← icon.png (7 sizes)` on success, or the reason
    it fell back (no icon set / not a PNG / file missing / tool absent).
+
+   **macOS needs the mask drawn into the art.** Nothing here composites:
+   `sips`/`iconutil` take the PNG as it is, so the rounded-square shape
+   has to be in the image, with transparent padding around it to the
+   1024×1024 canvas. iOS is the opposite — `actool` applies Apple's own
+   superellipse, so it wants full bleed, and macOS art handed to iOS
+   ends up with its squircle nested inside Apple's and the padding
+   reading as a dark border. Set **`macos.icon`** (and `ios.icon`) to
+   give each the artwork it wants; either falls back to the top-level
+   `icon` when unset.
+
+   ```json
+   "icon": "icon-ios.png",
+   "macos": { "icon": "icon-macos.png" }
+   ```
 6. If `pwa.json.description` is set, writes a `Credits.html` so the
    description shows up as the body of the standard About panel.
 

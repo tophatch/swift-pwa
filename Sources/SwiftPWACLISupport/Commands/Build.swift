@@ -5,14 +5,14 @@ import SwiftPWACore
     import WinSDK // _putenv_s (ucrt) — `setenv` is POSIX-only
 #endif
 
-enum BuildTarget: String, ExpressibleByArgument, CaseIterable {
+public enum BuildTarget: String, ExpressibleByArgument, CaseIterable {
     case macos, ios, linux, windows, android
 
     /// The desktop target that matches the machine running the CLI, used
     /// as the default when `--target` is omitted. Only the three desktop
     /// hosts qualify — iOS / Android are cross-builds with no "this is my
     /// host" meaning, so they're always explicit.
-    static var host: BuildTarget {
+    public static var host: BuildTarget {
         #if os(macOS)
             .macos
         #elseif os(Linux)

@@ -321,7 +321,7 @@ struct AndroidBundler {
     /// `android:icon` attribute). Best-effort: a missing or non-PNG icon
     /// just yields the platform-default launcher icon, same as before.
     private func stageLauncherIcon(into main: URL) throws -> IconOutcome {
-        guard let icon = manifest.icon else { return .noneSet }
+        guard let icon = manifest.icon(for: .android) else { return .noneSet }
         let src = projectRoot.appendingPathComponent(icon)
         guard src.pathExtension.lowercased() == "png" else {
             return .notPNG(source: icon, placeholder: false)

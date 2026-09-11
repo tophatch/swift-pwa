@@ -147,10 +147,13 @@ build/
 The `swift_pwa` namespace is reserved — don't put your own assets in
 it; the bundler manages it.
 
-When `pwa.json`'s `icon` is a PNG, the bundler copies it to
+When `pwa.json`'s icon (`android.icon` when set, else the top-level
+`icon`) is a PNG, the bundler copies it to
 `res/mipmap/ic_launcher.png` and wires `android:icon="@mipmap/ic_launcher"`
 into the manifest; aapt/Gradle scale it per density at build time (a
-single source PNG is enough). Without an icon, the platform default
+single source PNG is enough); adaptive-icon artwork — a separate
+foreground and background layer — isn't modelled, so the launcher icon is
+one flattened image. Without an icon, the platform default
 launcher icon is used. The build prints a one-line icon summary either
 way (`swift-pwa: app icon ← icon.png`, or the fallback reason — no icon
 set / not a PNG / file missing).
@@ -411,12 +414,15 @@ On Android it drives three things, generated only when the field is set
   branches on the active night mode (`UI_MODE_NIGHT_MASK`) so a dark-mode
   user gets the dark pre-paint colour, not a light flash.
 
-The other backends (macOS / iOS / Linux / Windows) aren't system-theme-
-aware at runtime yet, so they paint a **single** launch colour; given a
-pair they use its **dark** value (a dark pre-paint flash is preferable to
-blinding a dark-mode user with the light colour). Device-verified on a
-Galaxy Tab S10+: `prefers-color-scheme` reports `dark` in night mode and
-`light` otherwise, tracking the system toggle.
+The other backends resolve the same pair at runtime rather than at build
+time, each against its platform's appearance signal — `UIColor` /
+`NSColor` dynamic providers on Apple,
+`GtkSettings:gtk-application-prefer-dark-theme` on Linux,
+`AppsUseLightTheme` on Windows — and re-resolve it
+when the user switches themes under a running app. See
+[README.md](../README.md#configuring-pwajson). Device-verified on a Galaxy
+Tab S10+: `prefers-color-scheme` reports `dark` in night mode and `light`
+otherwise, tracking the system toggle.
 
 ### `window.remember_state`
 

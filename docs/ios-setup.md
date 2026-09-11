@@ -477,19 +477,35 @@ Two iOS-specific things to expect:
   (`URLResourceKey.ubiquitousItemDownloadingStatusKey`) and pulling them
   down (`FileManager.startDownloadingUbiquitousItem`) is plain Foundation
   on a URL — no runtime involvement, and no swift-pwa command wraps it.
-- **`pwa.json.icon` drives both the home-screen App Icon and the
-  launch screen.** From the single 1024×1024 PNG the bundler compiles
-  a real `AppIcon` via `actool` (a single "universal" asset — Xcode
-  generates the full size set — and the resulting `CFBundleIcons*` keys
-  are merged into `Info.plist`), and also generates a minimal
-  `LaunchScreen.storyboard` with the icon centered on a black background
-  (compiled via `ibtool`). App-icon generation is best-effort: if the
+- **The icon drives both the home-screen App Icon and the launch
+  screen**, from `ios.icon` when set and the top-level `icon`
+  otherwise. **iOS wants full bleed**: `actool` is handed the PNG
+  uncropped and iOS applies its own superellipse mask, so art already
+  masked for macOS arrives with a squircle nested inside Apple's and the
+  transparent padding rendering as a dark border. That is what
+  `ios.icon` / `macos.icon` exist for — see
+  [docs/macos-setup.md](macos-setup.md).
+
+  From that single 1024×1024 PNG the bundler compiles a real `AppIcon`
+  via `actool` (one "universal" asset — Xcode generates the full size
+  set — with the resulting `CFBundleIcons*` keys merged into
+  `Info.plist`), and also generates a minimal `LaunchScreen.storyboard`
+  with the icon centered on the `window.background_color` (black when
+  none is set), compiled via `ibtool`. A light/dark **pair** is written
+  into the same asset catalog as a colour set and referenced from the
+  storyboard by name, so the launch screen follows the system appearance
+  too: a launch screen is static art, but a *named* colour inside it is
+  resolved against the launch trait collection. (Same catalog on
+  purpose — `actool` writes one `Assets.car` per `--compile`, so a
+  second run would replace the first.)
+
+  App-icon generation is best-effort: if the
   icon is missing / not a PNG, or `actool` can't run, the build falls
   back to the system default rather than failing — the build prints a
   one-line icon summary either way (`swift-pwa: app icon ← icon.png`, or
   the fallback reason). Alternate-icon support
   and dark/tinted icon variants are still queued. To customize the
-  launch screen beyond "icon on black", drop your own compiled
+  launch screen beyond "icon on the background colour", drop your own compiled
   `LaunchScreen.storyboardc` into `<App>.app/` after the build for now.
 
 ## Reporting issues

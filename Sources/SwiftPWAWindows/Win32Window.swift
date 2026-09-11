@@ -130,7 +130,7 @@
                 environment: environment,
                 parent: hwnd,
                 content: config.content,
-                backgroundColor: config.backgroundColor.flatMap(RGBColor.init(hex:)),
+                backgroundColor: config.backgroundColor,
                 sharedProvider: app.assetProvider,
                 permissions: app.permissions,
                 externalURLs: app.externalURLs
@@ -242,6 +242,14 @@
                     )
                 }
                 return true
+            case WM_SETTINGCHANGE:
+                // The user switched between light and dark while the app was
+                // running. Windows broadcasts this for many settings, so the
+                // payload string is what identifies a theme change.
+                if WindowsAppearance.isColorSchemeChange(lParam: lParam) {
+                    adapter.applyBackgroundForCurrentAppearance()
+                }
+                return false
             case WM_SETFOCUS:
                 // Forward focus into the web content, or the window is
                 // focused and the page isn't — see `WebView2Adapter.takeFocus`.

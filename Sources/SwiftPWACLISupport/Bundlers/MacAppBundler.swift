@@ -141,7 +141,7 @@ struct MacAppBundler {
     /// tool or file leaves the app with the system default rather than
     /// failing the build.
     private func bundleIcon(into resourcesDir: URL) async -> IconOutcome {
-        guard let icon = manifest.icon else { return .noneSet }
+        guard let icon = manifest.icon(for: .macos) else { return .noneSet }
         let iconURL = projectRoot.appendingPathComponent(icon)
         guard FileManager.default.fileExists(atPath: iconURL.path) else {
             return .notFound(source: icon, placeholder: false)

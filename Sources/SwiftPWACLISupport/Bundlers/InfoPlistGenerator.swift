@@ -25,7 +25,7 @@ enum InfoPlistGenerator {
         }
         plist["NSHighResolutionCapable"] = true
         plist["NSPrincipalClass"] = "NSApplication"
-        if manifest.icon != nil {
+        if manifest.icon(for: .macos) != nil {
             plist["CFBundleIconFile"] = "AppIcon.icns"
         }
         applyUsageDescriptions(manifest, into: &plist)

@@ -25,11 +25,18 @@
 
         /// The owned `GtkWidget*` (concretely a `GtkWindow`).
         private let widget: UnsafeMutablePointer<GtkWidget>
-        private let adapter: WebKitGTKAdapter
+        /// Internal rather than private so sibling backend code — and the
+        /// GUI-gated tests — can reach the webview surface directly.
+        let adapter: WebKitGTKAdapter
         private let bridge: BridgeRuntime
         private weak var app: GTKAppContext?
         private var titleStorage: String
         private var continuations: [UUID: AsyncStream<WindowEvent>.Continuation] = [:]
+
+        /// Kept so the surface can be repainted when the desktop switches
+        /// between light and dark. `nil` when the app configured no
+        /// background colour.
+        private let background: WindowBackgroundColor?
 
         /// Last size seen via the `default-width` / `default-height`
         /// notify signals. We only emit `.didResize` when the value
@@ -89,10 +96,11 @@
             // exactly one child slot.
             gtk_window_set_child(windowPtr, adapter.viewWidget)
 
-            // Native background before first paint (no white flash).
-            if let hex = config.backgroundColor, let rgb = RGBColor(hex: hex) {
-                adapter.setBackgroundColor(rgb)
-            }
+            // Native background before first paint (no white flash). A
+            // light/dark pair is resolved against GTK's current preference
+            // here and again whenever it changes, below.
+            background = config.backgroundColor
+            if let background { Self.applyBackground(background, to: adapter) }
 
             self.app = app
 
@@ -109,6 +117,10 @@
             fullscreenOn = config.fullscreen
             if config.visibleOnLaunch { gtk_widget_set_visible(win, gboolean(1)) }
 
+            // Only a pair can change with the desktop's appearance; one
+            // colour never needs repainting.
+            if background?.isPair == true { GTKAppearance.observe(self) }
+
             lastSize = config.size
             connectSizeNotify()
             connectCloseRequest()
@@ -122,6 +134,21 @@
             // shim: it runs in the bubble phase, after the page has declined
             // the key, so an app with its own Ctrl+Z keeps it.
             swiftpwa_window_connect_undo(windowPtr, undoKeyCallback, selfPtr)
+        }
+
+        /// Paint the webview's surface with the half of `background` the
+        /// desktop currently asks for. Static so it can run from `init`
+        /// before every stored property exists.
+        private static func applyBackground(_ background: WindowBackgroundColor, to adapter: WebKitGTKAdapter) {
+            guard let rgb = background.rgb(dark: GTKAppearance.prefersDark) else { return }
+            adapter.setBackgroundColor(rgb)
+        }
+
+        /// Called by ``GTKAppearance`` when the desktop switches between
+        /// light and dark.
+        func applyBackgroundForCurrentAppearance() {
+            guard let background else { return }
+            Self.applyBackground(background, to: adapter)
         }
 
         /// Connect the `default-width` / `default-height` notify signals
@@ -198,6 +225,7 @@
         }
 
         private func cleanupAfterClose() {
+            GTKAppearance.stopObserving(self)
             for c in continuations.values { c.finish() }
             continuations.removeAll()
             bridge.stop()

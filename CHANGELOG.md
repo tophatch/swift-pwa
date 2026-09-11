@@ -159,6 +159,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#166]: https://github.com/tophatch/swift-pwa/issues/166
 [#167]: https://github.com/tophatch/swift-pwa/issues/167
 [#177]: https://github.com/tophatch/swift-pwa/issues/177
+[#173]: https://github.com/tophatch/swift-pwa/issues/173
+[#174]: https://github.com/tophatch/swift-pwa/issues/174
 
 - **`external_urls` in `pwa.json`, and `ctx.externalURLs` at runtime.** Opening
   a URL launches whatever app is registered for its scheme, and the page asking
@@ -274,6 +276,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached for `pwa://` there, which isn't that backend's origin at all.
 
 ### Fixed
+
+- **`window.background_color` carries a light/dark pair all the way to the
+  pixels.** The manifest has decoded a `{ light, dark }` pair since v0.7.8, but
+  only Android used both halves; the runtime `WindowConfig` took one `String?`,
+  so every other backend resolved a pair to its **dark** value and painted that
+  forever. That was a defensible call for a *launch* colour — a dark flash beats
+  blinding a dark-mode user — and wrong for what the colour actually is on iOS,
+  where it paints the scroll view's rubber-band area and is therefore on screen
+  during **every overscroll**: a dark-themed app flashed paper white on each
+  bounce, and a light-themed app in light mode got the dark half all day
+  ([#174]).
+
+  `WindowConfig.backgroundColor` is now a `WindowBackgroundColor` — `.single`
+  or `.dayNight(light:dark:)`, `ExpressibleByStringLiteral` so the existing
+  spelling still compiles — and every backend resolves it against the **live**
+  system appearance, re-resolving when the user switches theme under a running
+  app. Apple hands the pair to the platform (`UIColor(dynamicProvider:)` /
+  `NSColor(name:dynamicProvider:)`) rather than tracking it; the one thing AppKit
+  can't re-resolve for us is the webview layer's `CGColor`, which carries no
+  appearance, so that is repainted from an `effectiveAppearance` observation.
+  Linux follows `GtkSettings:gtk-application-prefer-dark-theme` and Windows the
+  `AppsUseLightTheme` theme setting, with a `WM_SETTINGCHANGE/ImmersiveColorSet`
+  repaint.
+
+  **Why those two signals and not the portal or `GTK_THEME`:** measured, both
+  ways. WebKitGTK derives the page's own `prefers-color-scheme` from exactly
+  that GTK property — verified on WebKitGTK 4.1 *and* 6.0 — so the native
+  surface and the web content can't disagree, which is the entire point of a
+  pair. `GTK_THEME=Adwaita:dark`, the obvious thing to reach for, turned out
+  **not** to set it (it applies at the style-context level), so it is not a
+  usable signal. On Windows, `AppsUseLightTheme` is what Chromium reads, for the
+  same coherence reason — `SystemUsesLightTheme`, which the tray already uses
+  for its own art, is a separate setting.
+
+  Found while verifying: a closed GTK window kept being repainted, because the
+  Swift object can outlive its `WebKitWebView` and a weak reference doesn't say
+  so — a GTK `CRITICAL`, not a silent no-op. Observers are dropped in the
+  window's one teardown path.
+
+  The **iOS launch screen** follows too, which the previous note had written off
+  as impossible ("a launch screen is a single static image"). It isn't: UIKit
+  resolves a *named* colour from the compiled asset catalog against the launch
+  trait collection, so a pair is emitted as a colour set — into the app icon's
+  catalog, because `actool` writes one `Assets.car` per `--compile`.
+
+- **`macos.icon` / `ios.icon` / `linux.icon` / `windows.icon` /
+  `android.icon` — one project, per-platform artwork.** `pwa.json` had a single
+  `icon` and no override, but the two Apple platforms want **opposite** source
+  images: macOS composites nothing (`sips`/`iconutil` take the PNG as-is, so the
+  rounded-square mask has to be drawn in, with transparent padding around it)
+  while iOS applies its own superellipse to a full-bleed image. Give iOS the
+  macOS art and its squircle sits nested inside Apple's with the padding reading
+  as a dark border — which an adopter shipped, visibly, to the home screen
+  ([#173]).
+
+  Each platform section now takes its own `icon`, falling back to the top-level
+  one. The manifest key rather than a `--build --icon` flag because it is
+  declarative, lives in the repo, and matches how every other per-platform
+  difference is spelled (`macos.info_plist`, `android.document_types`). The
+  workaround it replaces is the argument for doing it properly: the reporting
+  adopter's install script **rewrote `pwa.json` for the length of the build and
+  restored it from a trap on exit**, which also forced the script to avoid
+  `exec`. Android takes the key for consistency, but adaptive-icon artwork (a
+  separate foreground and background layer) is still not modelled — that is a
+  design question, not plumbing.
 
 - **Three `SwiftPWAQwenTTS` adoption papercuts, all documentation.** Reported by
   an adopter wiring up read-aloud, in descending order of what each cost them

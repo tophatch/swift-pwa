@@ -66,6 +66,28 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     /// on the `app.openURL` event channel.
     public var urlSchemes: [String]?
 
+    /// The icon source for one build target: that platform's own `icon`
+    /// when it sets one, otherwise the top-level ``icon``.
+    ///
+    /// A per-target override exists because the two Apple platforms want
+    /// **opposite artwork** from the same project. macOS composites nothing —
+    /// `sips`/`iconutil` take the PNG as it is — so the rounded-square mask
+    /// has to be drawn into the image, with transparent padding around it.
+    /// iOS applies its own superellipse to whatever `actool` is handed, so it
+    /// wants full bleed. Give iOS the macOS art and its mask lands inside
+    /// Apple's, with the padding rendering as a dark border on the home
+    /// screen. One key can't be right for both.
+    public func icon(for target: BuildTarget) -> String? {
+        let platform = switch target {
+        case .macos: macos?.icon
+        case .ios: ios?.icon
+        case .linux: linux?.icon
+        case .windows: windows?.icon
+        case .android: android?.icon
+        }
+        return platform ?? icon
+    }
+
     /// Last-resort fallback for the executable name: `executableName`
     /// when set, otherwise `name`. The bundlers prefer
     /// `ExecutableNameResolver` (which asks SwiftPM for the real product
@@ -203,6 +225,10 @@ public struct PWAManifest: Codable, Sendable, Equatable {
 
     public struct MacOSSection: Codable, Sendable, Equatable {
         public var bundleIdentifier: String? // defaults to top-level `id`
+        /// Icon source for this target, overriding the top-level ``icon``.
+        /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
+        /// sometimes unavoidable.
+        public var icon: String?
         public var category: String? // LSApplicationCategoryType
         public var minimumSystemVersion: String? // e.g. "15.0"
         public var copyright: String? // NSHumanReadableCopyright; shown under the version in the About panel
@@ -235,6 +261,10 @@ public struct PWAManifest: Codable, Sendable, Equatable {
 
     public struct IOSSection: Codable, Sendable, Equatable {
         public var bundleIdentifier: String?
+        /// Icon source for this target, overriding the top-level ``icon``.
+        /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
+        /// sometimes unavoidable.
+        public var icon: String?
         public var minimumSystemVersion: String? // e.g. "18.0"
         /// `UIDeviceFamily` — which device idioms the app supports
         /// (`1` = iPhone, `2` = iPad). Defaults to `[1, 2]` (universal): a
@@ -456,6 +486,10 @@ public struct PWAManifest: Codable, Sendable, Equatable {
 
     public struct LinuxSection: Codable, Sendable, Equatable {
         public var desktopCategories: [String]? // e.g. ["Utility"]
+        /// Icon source for this target, overriding the top-level ``icon``.
+        /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
+        /// sometimes unavoidable.
+        public var icon: String?
         public var executableName: String? // defaults to top-level `id` last component
         /// File types this app opens, declared in the generated `.desktop`
         /// entry so the desktop environment associates the app with them
@@ -498,8 +532,13 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "windows": { "document_types": [{ "extensions": [".foo", ".bar"], "name": "MyApp Document" }] }
         /// ```
         public var documentTypes: [ExtensionDocumentType]?
-        public init(documentTypes: [ExtensionDocumentType]? = nil) {
+        /// Icon source for this target, overriding the top-level ``icon``.
+        /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
+        /// sometimes unavoidable.
+        public var icon: String?
+        public init(documentTypes: [ExtensionDocumentType]? = nil, icon: String? = nil) {
             self.documentTypes = documentTypes
+            self.icon = icon
         }
     }
 
@@ -545,6 +584,11 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// package id (contains a dot); otherwise to
         /// `dev.swiftpwa.<id>`.
         public var packageId: String?
+        /// Icon source for the Android build, overriding the top-level
+        /// ``icon``. A plain override: adaptive-icon artwork (a separate
+        /// foreground and background layer) isn't modelled — the launcher
+        /// icon stays one flattened image.
+        public var icon: String?
         /// Minimum SDK the generated Gradle scaffold accepts, *and*
         /// the API level the cross-compile triple is built against.
         /// Defaults to 28 (Android 9) — the floor of the Swift

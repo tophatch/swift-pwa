@@ -634,7 +634,8 @@ remain:
   `system.memoryPressure` event never fires here (it does on
   iOS/macOS/Android). Size memory-scaled caches from a `system.memory` read
   rather than relying on the push event, and treat the event as best-effort.
-- **AppImage builds need a real PNG icon.** If `pwa.json.icon` is
+- **AppImage builds need a real PNG icon.** The source is `linux.icon`
+  when set and the top-level `icon` otherwise. If it is
   absent or non-PNG, the bundler embeds a transparent placeholder
   so `linuxdeploy` doesn't hang on its prompt path. The build prints a
   one-line icon summary (`swift-pwa: app icon ← icon.png`, or the

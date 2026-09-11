@@ -108,6 +108,15 @@
             swiftpwa_webkit_set_background_color(webView, rgb.red, rgb.green, rgb.blue, 1.0)
         }
 
+        /// Read the surface colour back. The appearance-driven repaint is
+        /// otherwise invisible from Swift, so this is what lets the GUI-gated
+        /// test assert that a light/dark pair actually followed the desktop.
+        func backgroundColor() -> RGBColor {
+            var rgba = GdkRGBA()
+            webkit_web_view_get_background_color(webView, &rgba)
+            return RGBColor(red: Double(rgba.red), green: Double(rgba.green), blue: Double(rgba.blue))
+        }
+
         private func connectMessageHandler(ucm: OpaquePointer) {
             let box = Unmanaged.passRetained(MessageBox(self)).toOpaque()
             "script-message-received".withCString { name in

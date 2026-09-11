@@ -34,6 +34,7 @@ swift-pwa drive shot out.png                  # PNG of the webview contents
 swift-pwa drive windows                       # window ids, size, position
 
 swift-pwa drive click --selector "#save"      # a real, trusted click
+swift-pwa drive drag --from 20,20 --to 300,200  # press, move, release
 swift-pwa drive type "hello" --selector "input#q"
 swift-pwa drive type --key a --modifiers command --activate   # ⌘A (see below)
 swift-pwa drive scroll 400                    # positive scrolls down
@@ -217,6 +218,56 @@ best-effort `setPosition`.
 > TCP, which crosses the session boundary fine — so the CLI can keep running in
 > the SSH shell. A local RDP or console session needs none of this.
 
+### Dragging
+
+```bash
+swift-pwa drive drag --from 20,20 --to 200,20 --to 200,200 --duration 400
+swift-pwa drive drag --from-selector "#handle" --to-selector "#dropzone"
+swift-pwa drive drag --from 0.2,0.8 --to 0.8,0.2 --fraction --modifiers shift
+```
+
+**The moves in between are the point.** A press and a release at two
+coordinates drives no momentum, no inertia, no rubber-banding and nothing else
+that reads velocity — which is most of what a drag gesture is for. So `drag`
+interpolates a path and paces it over `--duration` (milliseconds) in real
+elapsed time, and `--to` repeats so a multi-segment gesture is one command.
+Steps are spread by *distance* rather than one share per segment, so an
+L-shaped drag doesn't crawl along its short leg and jump along its long one.
+
+Pacing is to a deadline, not a sleep between sends: every move is a synchronous
+round trip to the app, so a fixed sleep per move overshoots — measured at
+roughly 2x on a local macOS app. Where the round trips can't keep up with a
+short `--duration` the verb says so rather than reporting the time it was asked
+for; lower `--steps` for a genuinely quicker gesture.
+
+> **A page may see fewer `pointermove` events than were sent.** Engines coalesce
+> moves, and that is correct behaviour — `getCoalescedEvents()` exists for it.
+> Assert on what the gesture *did* (the element moved, the velocity was
+> non-zero), not on a move count.
+
+### Checking the keyboard and editing paths
+
+[`Scripts/verify-driven-input.sh`](../Scripts/verify-driven-input.sh) drives a
+real app through the behaviours that only a driven run can check: select-all /
+cut / type / paste, type → undo → redo, a page that claims the undo key with
+`preventDefault` keeping it, typing into a freshly focused field, and a
+multi-segment drag. It reports what the backend in front of it can do and
+**skips** — never silently passes — the checks it can't run.
+
+Two things it is deliberately written around, both of which otherwise produce a
+green run that proves nothing:
+
+- The obvious editing sequence (⌘A → ⌘C → ⌘V → ⌘X → ⌘Z) **round-trips to its
+  own starting state**, which is equally consistent with everything working and
+  with only select-all working. Every step in the script leaves a *distinct*
+  value.
+- **A quiet environment is not a passing test.** A locked macOS screen has no
+  key window and an SSH shell has no interactive desktop; in both, every
+  shortcut fails exactly as a broken fix would. So the script leads with a
+  control keystroke that must land, and on macOS adds a second control for
+  whether the app can become active at all — menu key equivalents need a key
+  window, plain typing doesn't, so one control can't cover both.
+
 ### Synthetic input
 
 `input.pointer` / `input.key` / `input.wheel` deliver events into the app's
@@ -252,22 +303,50 @@ that nothing handles still beeps.
 > The cost is that debug and release differ in that one behaviour. If you're
 > testing click-through by hand, test a release build.
 
-| Backend | pointer / key / wheel | pointer types | pressure | tilt |
-| --- | --- | --- | --- | --- |
-| **macOS** | Yes | `mouse` | — | — |
-| **Linux GTK3** | Yes | `mouse` | — | — |
-| **Windows / GTK4 / iOS** | — | — | — | — |
+| Backend | pointer / key / wheel | delivery | pointer types | pressure | tilt |
+| --- | --- | --- | --- | --- | --- |
+| **macOS** | Yes | `appQueue` | `mouse` | — | — |
+| **Linux GTK3** | Yes | `appQueue` | `mouse` | — | — |
+| **Windows** | Yes | `appQueue` | `mouse` | — | — |
+| **Linux GTK4** | Yes | `displayServer` | `mouse` | — | — |
+| **iOS** | — | — | — | — | — |
 
-GTK3 pushes events through `gtk_main_do_event`, GTK's own dispatch entry point,
-so they work **under Xvfb** — on a display server with no input device at all,
-which is what makes them usable in CI.
+**`delivery` is the column to read before writing a harness.** The two values
+are not degrees of the same thing:
 
-**Windows and GTK4 can't do this, and not for want of trying.** WebView2's
-`SendPointerInput` lives on `ICoreWebView2CompositionController` while swift-pwa
-creates a *windowed* controller; GTK4 removed public event synthesis entirely
-(`GdkEvent` is opaque, `gtk_main_do_event` is gone). On those backends,
-dispatch DOM events through `eval` — untrusted, but enough for a large share of
-UI assertions.
+- **`appQueue`** is everything described above — the event goes into the app's
+  own queue, the OS input layer is never touched, the real cursor doesn't move,
+  and the window needn't be focused. macOS builds the `NSEvent` and hands it to
+  its own `NSWindow`. GTK3 pushes through `gtk_main_do_event`, GTK's own
+  dispatch entry point, so it works **under Xvfb** — on a display server with no
+  input device at all, which is what makes it usable in CI. Windows goes through
+  the DevTools protocol (`Input.dispatchKeyEvent` / `dispatchMouseEvent` via
+  `CallDevToolsProtocolMethod`), injecting at the browser level, which is the
+  same mechanism Puppeteer and Playwright drive Chromium with — WebView2's own
+  `SendPointerInput` needs a composition controller swift-pwa doesn't create.
+
+- **`displayServer`** is GTK4, and it is a weaker guarantee. GTK4 removed event
+  synthesis outright — `GdkEvent` is opaque with no public constructors,
+  `gtk_main_do_event` is gone, and `gdk_display_put_event` survives with nothing
+  to hand it — so the only route left is XTEST, the X server's test extension.
+  Events enter at the *server*, which means **the window must hold input focus**,
+  the real pointer really moves, and only X11 and XWayland clients can be
+  reached: a native Wayland session reports no input support at all. Under Xvfb
+  none of that costs anything, which is the case it exists for. libXtst is
+  `dlopen`ed, so a box without it reports no input rather than failing to build.
+
+On iOS, dispatch DOM events through `eval` instead — untrusted, but enough for
+a large share of UI assertions.
+
+**The clipboard is the one thing Windows can't drive.** A driven `Ctrl+X` or
+`Ctrl+C` there runs the *edit* — the field empties — but nothing reaches the
+system clipboard, so a following `Ctrl+V` has nothing to restore. Measured: the
+field goes empty and `Get-Clipboard` is still empty. It is a property of how the
+events arrive rather than a bug in the app: Chromium runs clipboard commands in
+the browser process off a native key event, while the DevTools protocol
+dispatches into the renderer. A real user's `Ctrl+C` works normally. To move
+text in a driven run, use the page's own clipboard API or set the value through
+`eval`.
 
 **A request a backend can't honour is refused, not downgraded.** Ask macOS for
 a `pen` pointer and you get `E_DRIVER_UNSUPPORTED`, because AppKit exposes no

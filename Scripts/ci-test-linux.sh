@@ -34,17 +34,32 @@
 #   * a `"symbol":"fail"` event                      -> FAIL (report, no retry).
 #   * `runEnded`                                     -> PASS (clean flush).
 #   * process alive + event file quiescent + tests
-#     ran + no failures                              -> PASS (parked at the
+#     ran + no failures + no test still in flight    -> PASS (parked at the
 #                                                      post-run exit-hang).
 #   * process exited with neither runEnded nor a
 #     failure (a swift-corelibs crash-at-exit, the
 #     other face of the same race)                   -> RETRY; a deterministic
 #                                                      crash recrashes and fails.
 #
-# Caveat (documented in issue #39 / docs/linux-setup.md): a hypothetical test
-# that hangs *mid-run* with no output would be indistinguishable from the
-# post-run park and reported as passed. The suite has no such test (all are
-# fast and event-dense); a real failing assertion or crash is still caught.
+# Telling the post-run park from a test that is merely slow (issue #190): the
+# event stream carries `testStarted` / `testEnded` per `testID`, so "a test is
+# still in flight" is directly observable rather than inferred from file growth.
+#   * Nothing in flight -> a short quiet window (STABLE_POLLS) is enough; every
+#     test that started has reported, so the process can only be parked.
+#   * Something in flight -> wait INFLIGHT_POLLS instead, far longer than any
+#     test in the suite takes. A live test emits its `testEnded` inside that
+#     window; a lost block-buffered tail never will.
+# The long window is needed because both look the same in the file: swift-testing
+# block-buffers, so the park can also *end* with tests that ran but never got
+# flushed. Passing on the long window is therefore still a judgement call, and
+# it says so on stderr, naming the tests that never reported.
+#
+# This replaced an 8-second quiescence check that read any quiet gap as the park.
+# The GUI-gated GTK suites broke its assumption that every test is "fast and
+# event-dense": they pump a GMainContext for seconds at a time emitting nothing,
+# so a real mid-run gap looked exactly like the park. Measured on the GTK3 box
+# against a suite with a genuine failure, the old rule reported "no failures"
+# on 1 run in 5.
 #
 # Requires the bundle to be built first (CI's "Build test targets" step runs
 # `swift build --build-tests`).
@@ -60,6 +75,12 @@ set -uo pipefail
 ATTEMPTS="${CI_TEST_ATTEMPTS:-4}"
 HARD_TIMEOUT="${CI_TEST_TIMEOUT:-300}"       # ceiling per attempt (rarely hit)
 STABLE_POLLS="${CI_TEST_STABLE_POLLS:-16}"   # 16 * 0.5s = 8s quiescent => parked
+# Only consulted when a test started and never reported. 120 * 0.5s = 60s, which
+# has to clear the slowest single test in the suite by a wide margin — the
+# GUI-gated ones pump for seconds in silence, and GTKNavigationPolicyTests takes
+# ~18s on its own. Raise it, don't lower it: too short reads a slow test as a
+# finished run, which is the bug this exists to stop.
+INFLIGHT_POLLS="${CI_TEST_INFLIGHT_POLLS:-120}"
 
 BUNDLE=$(find .build -maxdepth 4 -name '*PackageTests.xctest' -type f 2>/dev/null | head -1)
 if [ -z "${BUNDLE:-}" ]; then
@@ -78,7 +99,20 @@ ev=$(mktemp)
 log=$(mktemp)
 trap 'rm -f "$ev" "$log"' EXIT
 
-VERDICT=""   # set by run_once: pass | fail | crash
+VERDICT=""     # set by run_once: pass | fail | crash
+STRANDED=""    # testIDs that started and never reported, when we pass anyway
+
+# Tests that emitted `testStarted` and never the matching `testEnded`.
+#
+# One event per line, each carrying its own `testID`, so set subtraction over
+# the two kinds is the whole job. Suites emit the pair too and are included
+# deliberately: a suite is in flight exactly while one of its tests is.
+in_flight() {
+    comm -23 \
+        <(grep '"kind":"testStarted"' "$ev" 2>/dev/null | grep -o '"testID":"[^"]*"' | sort -u) \
+        <(grep '"kind":"testEnded"' "$ev" 2>/dev/null | grep -o '"testID":"[^"]*"' | sort -u) \
+        | sed 's/"testID":"//; s/"$//'
+}
 
 run_once() {
     VERDICT=""
@@ -102,7 +136,18 @@ run_once() {
         sz=$(wc -c <"$ev" 2>/dev/null || echo 0)
         if [ "$sz" = "$last" ] && [ "$sz" -gt 0 ]; then stable=$((stable+1)); else stable=0; last=$sz; fi
         if [ "$stable" -ge "$STABLE_POLLS" ] && grep -q '"kind":"testEnded"' "$ev" 2>/dev/null; then
-            VERDICT=pass; break   # parked at the post-run exit-hang, no failures
+            # A quiet file is not a finished run while a test is still in
+            # flight: the GUI suites go silent for seconds mid-test. Give those
+            # the long window — a live test reports inside it, a tail lost to
+            # block buffering never does.
+            stranded=$(in_flight)
+            if [ -z "$stranded" ]; then
+                VERDICT=pass; break   # parked at the post-run exit-hang, no failures
+            fi
+            if [ "$stable" -ge "$INFLIGHT_POLLS" ]; then
+                STRANDED="$stranded"
+                VERDICT=pass; break
+            fi
         fi
         sleep 0.5
     done
@@ -118,6 +163,14 @@ for attempt in $(seq 1 "$ATTEMPTS"); do
     echo "::endgroup::"
     case "$VERDICT" in
         pass)
+            if [ -n "$STRANDED" ]; then
+                # Passing, but say what we couldn't account for. These are
+                # usually a block-buffered tail the exit-hang ate; a test that
+                # genuinely wedged mid-run would look the same, and that is the
+                # one case this verdict can still get wrong (issue #190).
+                echo "::warning::passed on quiescence with $(printf '%s\n' "$STRANDED" | grep -c .) test(s) that started and never reported:"
+                printf '%s\n' "$STRANDED" | sed 's/^/  - /'
+            fi
             echo "swift-testing run completed with no failures (attempt ${attempt})."
             exit 0
             ;;

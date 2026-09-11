@@ -104,7 +104,9 @@ final class MCPServer {
             // Blocking read: this process exists only to serve one client, and
             // the host signals shutdown by closing our stdin.
             let chunk = FileHandle.standardInput.availableData
-            if chunk.isEmpty { break } // EOF — the host disconnected
+            if chunk.isEmpty {
+                break
+            } // EOF — the host disconnected
             pending.append(chunk)
 
             while let newline = pending.firstIndex(of: UInt8(ascii: "\n")) {
@@ -154,7 +156,9 @@ final class MCPServer {
         case "tools/call":
             return await callTool(id: id, params: request["params"])
         default:
-            if isNotification { return nil } // notifications/initialized, cancelled, …
+            if isNotification {
+                return nil
+            } // notifications/initialized, cancelled, …
             return Self.error(id: id, code: -32601, message: "unknown method '\(method)'")
         }
     }
@@ -249,7 +253,9 @@ final class MCPServer {
     /// lowering happens here rather than in the runtime, so fixing a mapping
     /// bug is a CLI update instead of an app rebuild.
     private func loadAgentTools() async throws -> [AgentMCPTool] {
-        if let agentTools { return agentTools }
+        if let agentTools {
+            return agentTools
+        }
         let client = try await connectedClient()
         let result = try client.invoke("describe")
         guard case let .array(entries)? = result["tools"] else {
@@ -326,7 +332,9 @@ final class MCPServer {
     /// starting a second copy would be both surprising and useless (its agent
     /// surface would be off).
     private func connectedClient() async throws -> DriverClient {
-        if let client { return client }
+        if let client {
+            return client
+        }
         let client: DriverClient
         if let port = options.attach {
             guard let token = options.token else {
@@ -398,7 +406,9 @@ struct AgentMCPTool: Equatable {
             "description": .string(description),
             "inputSchema": inputSchema
         ]
-        if let annotations { fields["annotations"] = annotations }
+        if let annotations {
+            fields["annotations"] = annotations
+        }
         return .object(fields)
     }
 }
@@ -424,7 +434,7 @@ struct MCPTool {
 
 enum MCPTools {
     static let all: [MCPTool] = [
-        screenshot, eval, click, typeText, pressKey, scroll, windows, capabilities
+        screenshot, eval, click, drag, typeText, pressKey, scroll, windows, capabilities
     ]
 
     // MARK: Observing
@@ -446,7 +456,9 @@ enum MCPTools {
         ]),
         run: { client, arguments, options in
             var payload: [String: BridgeJSON] = [:]
-            if let window = options.window { payload["window"] = .string(window) }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             let result = try client.invoke("screenshot", payload)
             guard let base64 = result["pngBase64"]?.stringValue,
                   var png = Data(base64Encoded: base64)
@@ -481,7 +493,9 @@ enum MCPTools {
                 throw DriveError.remote(code: "E_ARGS", message: "app_eval needs `js`")
             }
             var payload: [String: BridgeJSON] = ["js": .string(js)]
-            if let window = options.window { payload["window"] = .string(window) }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             return try [text(client.invoke("eval", payload).prettyPrinted)]
         }
     )
@@ -526,16 +540,110 @@ enum MCPTools {
         run: { client, arguments, options in
             let point = try resolvePoint(client, arguments, options)
             var count = 1.0
-            if case let .number(value)? = arguments["clickCount"] { count = max(1, value) }
+            if case let .number(value)? = arguments["clickCount"] {
+                count = max(1, value)
+            }
             for phase in ["down", "up"] {
                 var payload: [String: BridgeJSON] = [
                     "type": .string(phase), "x": .number(point.x), "y": .number(point.y),
                     "clickCount": .number(count)
                 ]
-                if let window = options.window { payload["window"] = .string(window) }
+                if let window = options.window {
+                    payload["window"] = .string(window)
+                }
                 try client.invoke("input.pointer", payload)
             }
             return [text("Clicked at \(Int(point.x)), \(Int(point.y)).")]
+        }
+    )
+
+    static let drag = MCPTool(
+        name: "app_drag",
+        title: "Drag in the page",
+        description: """
+        Press, move along a path, and release. The moves in between are the point: a press and a \
+        release at two points doesn't drive momentum, inertia or anything else reading velocity, \
+        which is most of what a drag is for. Give `to` as a list of points for a multi-segment \
+        gesture. Endpoints can be selectors instead of coordinates, which survive a layout change.
+        """,
+        inputSchema: object(properties: [
+            "fromSelector": schema("string", "Start at this element's centre."),
+            "fromX": schema("number", "Window-local CSS pixels, if you aren't using a selector."),
+            "fromY": schema("number", "Window-local CSS pixels."),
+            "toSelector": schema("string", "End at this element's centre."),
+            "to": schema("array", "Points to drag through, each {x, y} in window-local CSS pixels."),
+            "durationMs": schema("number", "How long the gesture takes. Default 250.")
+        ]),
+        run: { client, arguments, options in
+            var path: [DragPoint] = []
+            if let selector = arguments["fromSelector"]?.stringValue {
+                let centre = try client.center(of: selector, window: options.window)
+                path.append(DragPoint(argument: "\(centre.x),\(centre.y)")!)
+            } else if case let .number(x)? = arguments["fromX"], case let .number(y)? = arguments["fromY"] {
+                path.append(DragPoint(argument: "\(x),\(y)")!)
+            } else {
+                throw DriveError.remote(
+                    code: "E_ARGS",
+                    message: "app_drag needs a start: `fromSelector`, or `fromX` and `fromY`"
+                )
+            }
+            if let selector = arguments["toSelector"]?.stringValue {
+                let centre = try client.center(of: selector, window: options.window)
+                path.append(DragPoint(argument: "\(centre.x),\(centre.y)")!)
+            } else if case let .array(points)? = arguments["to"] {
+                for point in points {
+                    guard case let .number(x)? = point["x"], case let .number(y)? = point["y"] else {
+                        throw DriveError.remote(code: "E_ARGS", message: "each `to` entry needs numeric x and y")
+                    }
+                    path.append(DragPoint(argument: "\(x),\(y)")!)
+                }
+            }
+            guard path.count > 1 else {
+                throw DriveError.remote(
+                    code: "E_ARGS",
+                    message: "app_drag needs somewhere to drag to: `toSelector` or a non-empty `to`"
+                )
+            }
+
+            var duration = 250.0
+            if case let .number(value)? = arguments["durationMs"] {
+                duration = max(0, value)
+            }
+            let plan = DriveDrag.interpolate(path, steps: DriveDrag.defaultSteps(forMilliseconds: duration))
+            let interval = plan.count > 1 ? duration / 1000 / Double(plan.count - 1) : 0
+
+            func pointer(_ phase: String, _ point: DragPoint, holding: Bool) throws {
+                var payload: [String: BridgeJSON] = [
+                    "type": .string(phase), "x": .number(point.x), "y": .number(point.y)
+                ]
+                // Marks the move as a drag rather than a hover — without it the
+                // platforms deliver a different event, or none at all.
+                if holding {
+                    payload["buttons"] = .array([.string("left")])
+                }
+                if let window = options.window {
+                    payload["window"] = .string(window)
+                }
+                try client.invoke("input.pointer", payload)
+            }
+
+            try pointer("move", path[0], holding: false)
+            try pointer("down", path[0], holding: false)
+            // Paced to a deadline: every move is a synchronous round trip, so
+            // sleeping between them overshoots and the page reads a slower
+            // gesture than the one that was asked for.
+            let start = Date()
+            for (index, point) in plan.dropFirst().enumerated() {
+                let wait = start.addingTimeInterval(Double(index + 1) * interval).timeIntervalSinceNow
+                if wait > 0 {
+                    Thread.sleep(forTimeInterval: wait)
+                }
+                try pointer("move", point, holding: true)
+            }
+            try pointer("up", plan[plan.count - 1], holding: true)
+
+            let route = path.map { "\(Int($0.x)),\(Int($0.y))" }.joined(separator: " → ")
+            return [text("Dragged \(route) in \(plan.count - 1) moves.")]
         }
     )
 
@@ -563,7 +671,9 @@ enum MCPTools {
                     var payload: [String: BridgeJSON] = [
                         "type": .string(phase), "x": .number(point.x), "y": .number(point.y)
                     ]
-                    if let window = options.window { payload["window"] = .string(window) }
+                    if let window = options.window {
+                        payload["window"] = .string(window)
+                    }
                     try client.invoke("input.pointer", payload)
                 }
             }
@@ -611,7 +721,9 @@ enum MCPTools {
                 throw DriveError.remote(code: "E_ARGS", message: "app_scroll needs a numeric `amount`")
             }
             var dx = 0.0
-            if case let .number(value)? = arguments["dx"] { dx = value }
+            if case let .number(value)? = arguments["dx"] {
+                dx = value
+            }
             let point: (x: Double, y: Double)
             if arguments["selector"]?.stringValue != nil {
                 point = try resolvePoint(client, arguments, options)
@@ -623,7 +735,9 @@ enum MCPTools {
                 "x": .number(point.x), "y": .number(point.y),
                 "deltaX": .number(dx), "deltaY": .number(amount)
             ]
-            if let window = options.window { payload["window"] = .string(window) }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             try client.invoke("input.wheel", payload)
             return [text("Scrolled \(Int(amount)) px vertically.")]
         }
@@ -636,8 +750,12 @@ enum MCPTools {
     ) throws {
         for phase in ["down", "up"] {
             var payload: [String: BridgeJSON] = ["type": .string(phase), "key": .string(key)]
-            if let text { payload["text"] = .string(text) }
-            if let window = options.window { payload["window"] = .string(window) }
+            if let text {
+                payload["text"] = .string(text)
+            }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             try client.invoke("input.key", payload)
         }
     }
@@ -673,7 +791,9 @@ enum MCPTools {
             "type": .string("object"),
             "properties": .object(properties)
         ]
-        if !required.isEmpty { schema["required"] = .array(required.map { .string($0) }) }
+        if !required.isEmpty {
+            schema["required"] = .array(required.map { .string($0) })
+        }
         return .object(schema)
     }
 }

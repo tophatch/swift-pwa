@@ -34,7 +34,11 @@
 #     --remote-dir <d>  remote checkout path. Default: ~/swift-pwa
 #     --filter <f>      pass --filter to `swift test`. swift-testing matches the
 #                       *type* name (GTKFullscreenStateTests), not the @Suite
-#                       display name.
+#                       display name. Defaults to SwiftPWAGTKTests — the backend
+#                       this box exists to verify. Without that default the
+#                       obvious invocation ran 952 Core+CLI tests with zero GTK
+#                       suites among them and printed a green verdict (#190);
+#                       hosted CI already covers those two targets.
 #     --with-vendor     also sync Vendor/ (~1 GB of Apple/Android/desktop ONNX
 #                       and llama artifacts). Excluded by default: the Linux box
 #                       resolves its own, and syncing them dominates the transfer.
@@ -185,7 +189,7 @@ ssh "$HOST" "$REMOTE_ENV $XML_ENV cd ~/$REMOTE_DIR && $SWIFT build $BUILD_ARGS \
 # The `WEBKIT_IS_WEB_VIEW ... load_uri` CRITICAL lines they produce are harmless
 # headless noise, not failures.
 WEBKIT_ENV='export WEBKIT_DISABLE_COMPOSITING_MODE=1 WEBKIT_DISABLE_DMABUF_RENDERER=1 WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS=1;'
-echo "→ testing on $HOST under Xvfb"
+echo "→ testing on $HOST under Xvfb (--filter ${FILTER:-SwiftPWAGTKTests})"
 # Delegate to ci-test-linux.sh rather than `swift test`. On Linux the test
 # process intermittently crashes *at exit*, after every test has run, and that
 # truncates swift-testing's block-buffered output — so `swift test` reports a
@@ -198,8 +202,9 @@ echo "→ testing on $HOST under Xvfb"
 #
 # A suite name can contain spaces, so the filter has to survive a second round
 # of word-splitting on the remote shell — quote it there, not just here.
-REMOTE_FILTER=""
-if [[ -n "$FILTER" ]]; then
-    REMOTE_FILTER="$(printf '%q' "$FILTER")"
-fi
+# No --filter means the GTK suites, not everything: see the --filter note above.
+# Narrow is also what the verdict logic handles best — a broad run's tail is the
+# part most likely to be lost to the exit-hang.
+EFFECTIVE_FILTER="${FILTER:-SwiftPWAGTKTests}"
+REMOTE_FILTER="$(printf '%q' "$EFFECTIVE_FILTER")"
 ssh "$HOST" "$REMOTE_ENV $WEBKIT_ENV $XML_ENV export SWIFT_PWA_LINUX_GUI=1; cd ~/$REMOTE_DIR && xvfb-run -a bash Scripts/ci-test-linux.sh $REMOTE_FILTER"

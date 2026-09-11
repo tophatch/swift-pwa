@@ -552,6 +552,21 @@ list and a conversion fails with `E_IMAGE_UNSUPPORTED` rather than producing a
 broken image. The vendored stb decoder behind `image.*` covers PNG and JPEG
 only, so libheif is the whole story for these two formats here.
 
+- **The app driver's synthetic input on GTK4 needs X11 and the focused
+  window.** GTK4 removed event synthesis outright — `GdkEvent` is opaque with no
+  public constructors and `gtk_main_do_event` is gone — so unlike GTK3, which
+  pushes events straight into GTK's own dispatch, the GTK4 backend drives input
+  through **XTEST**, the X server's test extension. Events enter at the server,
+  which means the target window must hold input focus, the real pointer really
+  moves, and only X11 and XWayland clients can be reached: on a native Wayland
+  session `drive info` reports no input support at all rather than pretending.
+  Under Xvfb — no input device, nothing competing for focus — none of that
+  costs anything, which is the case it exists for. `libXtst.so.6` is `dlopen`ed,
+  so a box without it reports no input rather than failing to build. The
+  capability report distinguishes the two paths as `input.delivery`:
+  `displayServer` on GTK4, `appQueue` on GTK3. See
+  [app-driver.md](app-driver.md#synthetic-input).
+
 - **`ble.connect` to a dual-mode peripheral fails.** A Mac, a phone, anything
   that also speaks classic Bluetooth advertises over LE from the same address
   its classic radio uses, so BlueZ keeps a single device object carrying both

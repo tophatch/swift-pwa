@@ -140,7 +140,12 @@
                 "wheel": .bool(input.wheel),
                 "pointerTypes": .array(input.pointerTypes.map { .string($0.rawValue) }),
                 "pressure": .bool(input.pressure),
-                "tilt": .bool(input.tilt)
+                "tilt": .bool(input.tilt),
+                // How these events arrive, not just whether they can. A
+                // `displayServer` backend needs the window focused and moves
+                // the real pointer; a harness that assumes otherwise writes a
+                // test that passes only on the machine it was written on.
+                "delivery": .string(input.delivery.rawValue)
             ])
         }
 
@@ -312,7 +317,22 @@
                 button = parsed
             }
             var clickCount = 1
-            if case let .number(count)? = payload?["clickCount"] { clickCount = max(1, Int(count)) }
+            if case let .number(count)? = payload?["clickCount"] {
+                clickCount = max(1, Int(count))
+            }
+
+            // Which buttons are held *during* the event, as the DOM's
+            // `buttons`. Only a `move` needs it, and only to say it's a drag
+            // rather than a hover — but an unknown name is still a bad request
+            // rather than a silently-dropped one, because a typo here turns a
+            // drag test into a hover test that passes.
+            var buttons: Set<PointerButton> = []
+            for name in payload?["buttons"]?.stringArray ?? [] {
+                guard let parsed = PointerButton(rawValue: name) else {
+                    throw DriverError.badRequest("unknown button '\(name)' in `buttons`")
+                }
+                buttons.insert(parsed)
+            }
 
             var pressure: Double?
             if case let .number(value)? = payload?["pressure"] {
@@ -326,8 +346,12 @@
             }
             var tiltX: Double?
             var tiltY: Double?
-            if case let .number(value)? = payload?["tiltX"] { tiltX = value }
-            if case let .number(value)? = payload?["tiltY"] { tiltY = value }
+            if case let .number(value)? = payload?["tiltX"] {
+                tiltX = value
+            }
+            if case let .number(value)? = payload?["tiltY"] {
+                tiltY = value
+            }
             if tiltX != nil || tiltY != nil {
                 guard capabilities.tilt else {
                     throw DriverError.unsupported("this backend can't carry stylus tilt")
@@ -339,7 +363,8 @@
 
             return PointerInput(
                 phase: phase, x: x, y: y,
-                pointerType: pointerType, button: button, clickCount: clickCount,
+                pointerType: pointerType, button: button, buttons: buttons,
+                clickCount: clickCount,
                 pressure: pressure, tiltX: tiltX, tiltY: tiltY, modifiers: modifiers
             )
         }
@@ -361,11 +386,17 @@
                 throw DriverError.badRequest("input.key needs a `key` (a DOM key value like 'a' or 'Enter')")
             }
             var code: String?
-            if case let .string(value)? = payload?["code"] { code = value }
+            if case let .string(value)? = payload?["code"] {
+                code = value
+            }
             var text: String?
-            if case let .string(value)? = payload?["text"] { text = value }
+            if case let .string(value)? = payload?["text"] {
+                text = value
+            }
             var activate = false
-            if case let .bool(value)? = payload?["activate"] { activate = value }
+            if case let .bool(value)? = payload?["activate"] {
+                activate = value
+            }
             return KeyInput(
                 phase: phase, key: key, code: code, text: text,
                 modifiers: modifiers, activate: activate
@@ -385,8 +416,12 @@
             }
             var deltaX = 0.0
             var deltaY = 0.0
-            if case let .number(value)? = payload?["deltaX"] { deltaX = value }
-            if case let .number(value)? = payload?["deltaY"] { deltaY = value }
+            if case let .number(value)? = payload?["deltaX"] {
+                deltaX = value
+            }
+            if case let .number(value)? = payload?["deltaY"] {
+                deltaY = value
+            }
             return WheelInput(x: x, y: y, deltaX: deltaX, deltaY: deltaY, modifiers: modifiers)
         }
 
@@ -437,7 +472,9 @@
         private static func encode(_ response: DriverResponse) -> Data {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.sortedKeys]
-            if let data = try? encoder.encode(response) { return data }
+            if let data = try? encoder.encode(response) {
+                return data
+            }
             // Encoding our own response type can only fail on a non-finite
             // Double reaching us from a window's geometry. Say so on the wire
             // rather than dropping the frame and hanging the client.

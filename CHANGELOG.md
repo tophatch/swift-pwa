@@ -275,6 +275,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Windows, a `ctx.serveDirectory(_:at:)` mount was unreachable: every
+  fetch under it failed at the network layer.** An app that mounted a directory
+  at `/packs` and fetched `/packs/photo.png` got a `TypeError` for *every* file
+  on Windows while the identical app worked on macOS. A plain PNG failing
+  alongside the exotic formats was the tell -- this was never a content-type
+  problem, and a `TypeError` rather than a resolved 404 means the request never
+  reached a handler at all ([#159]).
+
+  The cause is a WebView2 precedence rule that isn't obvious from either API's
+  documentation: **`SetVirtualHostNameToFolderMapping` answers requests to its
+  host before `WebResourceRequested` is raised.** The bundle origin had a folder
+  mapping, so the interception handler that serves mounts was never called --
+  not for a mount, not for anything. Measured directly: with the mapping
+  installed, a trace in the handler logged nothing across a full page load;
+  with the same binary skipping the mapping, the first request appeared
+  immediately. The code comment claiming bundle paths "fall through to the
+  native virtual-host mapping" had the precedence exactly backwards, and since
+  a mapping covers a whole *host* and cannot be scoped to a subpath, there was
+  no arrangement in which both worked.
+
+  So Windows no longer uses the folder mapping. The bundle, served-directory
+  mounts and the SPA-history fallback all resolve through the same shared
+  `AssetProvider` the other four backends use, range-aware, through the
+  interception path that single-file builds have always used. One serving path
+  can't be shadowed by the other. Three things improve as a side effect: a
+  missing file under a mount is now an honest **404** instead of a network
+  error; the **SPA-history fallback works on Windows at all** (it was dead for
+  the same reason -- `/settings` now serves the entry document); and a bundled
+  file's `Content-Type` comes from our own table rather than Chromium's
+  guess, so `.heic` no longer arrives as `application/octet-stream` there.
+
+  A `serveDirectory` mount is checked *before* the in-exe overlay, so a
+  single-file app can still mount a content pack it downloaded -- that was the
+  one Windows case which already worked, precisely because a single-file build
+  installs no mapping.
+
+  Verified on an x64 Windows box across all three build shapes -- `swift build`,
+  a portable folder bundle, and `--single-file` -- for the bundle, a mount
+  (binary and text), a byte range (`206 bytes 0-15/68`), a missing file, an
+  encoded path-traversal attempt, and SPA routes.
+
+  **Why this lasted:** the Windows half of content packs was landed
+  "compile-only here, CI-verified". CI builds the Windows target but never
+  launches it, so no test has ever fetched a URL on the bundle origin. New
+  `Scripts/verify-windows-serving.ps1` does exactly that on a real box, and is
+  checked against this bug -- it reports `FAIL` on the pre-fix code.
+
+[#159]: https://github.com/tophatch/swift-pwa/issues/159
+
+
 - **A CI-only flake: three `ComfyUIWorkflowProviderTests` tests failed together
   on the macOS runner against a 500 ms test-harness deadline.** The suite drives
   a fake ComfyUI in the same process, and the deadline is a test constant no

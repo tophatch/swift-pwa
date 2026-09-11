@@ -159,11 +159,12 @@ public final class AssetProvider: @unchecked Sendable {
 
     /// Whether `url` falls under a mount added via ``mount(_:at:)`` (a
     /// served pack), as opposed to the bundle `/` root or no mount at all.
+    /// Scheme/host must still match.
     ///
-    /// The Windows backend uses this to decide, per `WebResourceRequested`,
-    /// whether to answer the request itself (true → resolve + range-serve the
-    /// served directory) or let the native `SetVirtualHostNameToFolderMapping`
-    /// serve the bundle (false). Scheme/host must still match.
+    /// Used to tell a mount apart from the bundle where the two are served
+    /// from different places: in a single-file Windows build the bundle lives
+    /// in an exe overlay while a mount is still a real directory on disk, so
+    /// the mount has to win. ``resolve(_:)`` alone answers both otherwise.
     public func isServedPrefix(_ url: URL) -> Bool {
         guard url.scheme?.lowercased() == scheme else { return false }
         guard let urlHost = url.host?.lowercased(), urlHost == host else { return false }
@@ -185,11 +186,17 @@ public final class AssetProvider: @unchecked Sendable {
     /// nil for a real file (so the caller keeps serving those its own way) and
     /// for a missing asset with an extension (an honest 404).
     ///
-    /// The counterpart to the fallback baked into ``resolve(_:)``, for backends
-    /// whose bundle is served **natively** (Windows' `SetVirtualHostNameTo`
-    /// `FolderMapping`) rather than through `resolve` — they consult this in
-    /// their resource-interception path to answer a route the native mapping
-    /// would 404. Only applies to the bundle `/` mount.
+    /// The counterpart to the fallback baked into ``resolve(_:)``, for a
+    /// backend whose bundle is served **natively** by the platform rather than
+    /// through `resolve` — it can consult this to answer a client-side route
+    /// the native serving would 404. Only applies to the bundle `/` mount.
+    ///
+    /// No in-tree backend needs it today: Windows was the only one serving its
+    /// bundle natively, and it stopped (a `SetVirtualHostNameToFolderMapping`
+    /// host answers before `WebResourceRequested` is raised, which made served
+    /// mounts unreachable — see `WebView2Adapter.load(_:)`). Kept because it is
+    /// public API and the question it answers is a real one for any such
+    /// backend; `resolve(_:)` covers the fallback for everyone else.
     public func spaFallback(for url: URL) -> Resolved? {
         guard url.scheme?.lowercased() == scheme else { return nil }
         guard let urlHost = url.host?.lowercased(), urlHost == host else { return nil }

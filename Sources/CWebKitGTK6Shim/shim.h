@@ -401,4 +401,105 @@ static inline void swiftpwa_web_view_redo(gpointer web_view) {
     );
 }
 
+/// The URI a navigation decision is about, or NULL if this decision isn't a
+/// navigation (a *response* decision — display vs download — which the policy
+/// leaves to WebKit). Freshly allocated; the caller must `g_free` it.
+///
+/// Both navigation decision types carry a `WebKitNavigationAction`:
+/// `NAVIGATION_ACTION` is an ordinary load, `NEW_WINDOW_ACTION` a
+/// `target="_blank"` / `window.open`.
+static inline char *swiftpwa_policy_decision_uri_copy(
+    gpointer decision, unsigned int decision_type
+) {
+    if (!decision) return NULL;
+    if (decision_type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION
+        && decision_type != WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
+        return NULL;
+    }
+    WebKitNavigationPolicyDecision *nav = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+    WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(nav);
+    if (!action) return NULL;
+    WebKitURIRequest *request = webkit_navigation_action_get_request(action);
+    const char *uri = request ? webkit_uri_request_get_uri(request) : NULL;
+    return uri ? g_strdup(uri) : NULL;
+}
+
+/// The *target* frame name of a navigation, or NULL when it has none.
+/// Freshly allocated; the caller must `g_free` it.
+static inline char *swiftpwa_policy_decision_frame_name_copy(
+    gpointer decision, unsigned int decision_type
+) {
+    if (!decision) return NULL;
+    if (decision_type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION
+        && decision_type != WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
+        return NULL;
+    }
+    WebKitNavigationPolicyDecision *nav = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+    WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(nav);
+    if (!action) return NULL;
+    const char *name = webkit_navigation_action_get_frame_name(action);
+    return name ? g_strdup(name) : NULL;
+}
+
+/// The `WebKitNavigationType` behind a navigation decision, or -1 if this
+/// isn't one. 0 = link clicked, 1 = form submitted, 2 = back/forward,
+/// 3 = reload, 4 = form resubmitted, 5 = other.
+static inline int swiftpwa_policy_decision_navigation_type(
+    gpointer decision, unsigned int decision_type
+) {
+    if (!decision) return -1;
+    if (decision_type != WEBKIT_POLICY_DECISION_TYPE_NAVIGATION_ACTION
+        && decision_type != WEBKIT_POLICY_DECISION_TYPE_NEW_WINDOW_ACTION) {
+        return -1;
+    }
+    WebKitNavigationPolicyDecision *nav = WEBKIT_NAVIGATION_POLICY_DECISION(decision);
+    WebKitNavigationAction *action = webkit_navigation_policy_decision_get_navigation_action(nav);
+    if (!action) return -1;
+    return (int)webkit_navigation_action_get_navigation_type(action);
+}
+
+/// The URI of a *response* decision — the point at which WebKit has the
+/// headers and is deciding whether to display. Freshly allocated; `g_free` it.
+static inline char *swiftpwa_response_decision_uri_copy(gpointer decision) {
+    if (!decision) return NULL;
+    WebKitResponsePolicyDecision *response = WEBKIT_RESPONSE_POLICY_DECISION(decision);
+    WebKitURIRequest *request = webkit_response_policy_decision_get_request(response);
+    const char *uri = request ? webkit_uri_request_get_uri(request) : NULL;
+    return uri ? g_strdup(uri) : NULL;
+}
+
+/// Whether a response decision is the **main frame's main resource** — the
+/// one question the navigation decision can't answer. Subframe loads are
+/// false, which is how an embedded iframe is told apart from the app
+/// navigating away from itself.
+static inline int swiftpwa_response_decision_is_main_frame(gpointer decision) {
+    if (!decision) return 0;
+    return webkit_response_policy_decision_is_main_frame_main_resource(
+        WEBKIT_RESPONSE_POLICY_DECISION(decision)
+    ) ? 1 : 0;
+}
+
+/// Let the navigation proceed.
+static inline void swiftpwa_policy_decision_use(gpointer decision) {
+    if (decision) webkit_policy_decision_use(WEBKIT_POLICY_DECISION(decision));
+}
+
+/// Cancel it. The page stays where it is — which is the point: an off-origin
+/// load in the main frame strands the app, since a swift-pwa window has no
+/// address bar and no back button.
+static inline void swiftpwa_policy_decision_ignore(gpointer decision) {
+    if (decision) webkit_policy_decision_ignore(WEBKIT_POLICY_DECISION(decision));
+}
+
+/// Hand a URI to the desktop — the browser for http(s), whichever app claims a
+/// custom scheme. gio rather than `gtk_show_uri*`, which is spelled differently
+/// in GTK3 and GTK4 and needs a window; this needs neither.
+static inline int swiftpwa_open_uri_external(const char *uri) {
+    if (!uri) return 0;
+    GError *error = NULL;
+    gboolean ok = g_app_info_launch_default_for_uri(uri, NULL, &error);
+    if (error) g_error_free(error);
+    return ok ? 1 : 0;
+}
+
 #endif

@@ -22,6 +22,20 @@
         fileprivate var policyForPermissionRequests: PermissionPolicy? {
             permissionPolicy
         }
+
+        /// Which URLs may leave the app, consulted from WebView2's
+        /// `NavigationStarting` / `NewWindowRequested`. Optional for the same
+        /// reason `permissionPolicy` is: an embedder building an adapter
+        /// directly keeps WebView2's own behaviour.
+        private nonisolated(unsafe) var externalURLs: ExternalURLPolicy?
+        /// The origin this window's own content lives on — set as content
+        /// loads, because a `.remote` window's site *is* the app.
+        private nonisolated(unsafe) var appOrigin: WebOrigin?
+
+        /// Read by the C trampoline, which can't reach private state.
+        fileprivate var navigationInputs: (ExternalURLPolicy, WebOrigin?)? {
+            externalURLs.map { ($0, appOrigin) }
+        }
         private let environment: OpaquePointer
         private let parent: HWND
         /// Applied once the controller is ready (RGBColor is Sendable).
@@ -86,9 +100,11 @@
             content _: WindowContent,
             backgroundColor: RGBColor? = nil,
             sharedProvider: AssetProvider,
-            permissions: PermissionPolicy? = nil
+            permissions: PermissionPolicy? = nil,
+            externalURLs: ExternalURLPolicy? = nil
         ) throws {
             permissionPolicy = permissions
+            self.externalURLs = externalURLs
             self.environment = environment
             self.parent = parent
             self.backgroundColor = backgroundColor
@@ -155,6 +171,12 @@
                 swiftpwa_w2_view_set_web_message_handler(view, messageReceivedTrampoline, user)
                 if permissionPolicy != nil {
                     swiftpwa_w2_view_set_permission_handler(view, permissionRequestedTrampoline, user)
+                }
+                if externalURLs != nil {
+                    // Before the first navigate below: the initial load is a
+                    // navigation too, and an off-origin one would otherwise
+                    // load in place and strand the app.
+                    swiftpwa_w2_view_set_navigation_handler(view, navigationStartingTrampoline, user)
                 }
 
                 // Intercept requests to the bundle origin so directories
@@ -345,6 +367,10 @@
             guard let view else { return }
             switch content {
             case let .bundled(directory, entry, spaFallback):
+                // The bundle origin is the virtual host below; a `.remote`
+                // window is its own origin, so only *leaving that* counts as
+                // leaving the app.
+                appOrigin = WebOrigin(scheme: "https", host: "swift-pwa.local")
                 // Record the SPA-fallback policy for the interception path
                 // (both the embedded and disk branches consult it below).
                 spaFallbackEnabled = spaFallback
@@ -396,6 +422,7 @@
                 // would 404 (see `_onWebResourceRequested`).
                 assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
             case let .remote(url):
+                appOrigin = WebOrigin(url)
                 url.absoluteString.withCString(encodedAs: UTF16.self) { urlW in
                     swiftpwa_w2_view_navigate(view, urlW)
                 }
@@ -621,6 +648,41 @@
         }
         guard let wanted else { return 1 }
         return policy.decide(all: wanted, origin: origin) == .allow ? 1 : 0
+    }
+
+    /// `@convention(c)` callback from `swiftpwa_w2_view_set_navigation_handler`.
+    /// Returns 1 to let WebView2 load it, 0 to cancel. Only *top-level*
+    /// navigations arrive here — WebView2 raises subframe ones on
+    /// `FrameNavigationStarting`, which the shim leaves alone so an embedded
+    /// iframe keeps working.
+    let navigationStartingTrampoline: @convention(c) (
+        UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?
+    ) -> Int32 = { uriPtr, isNewWindow, userData in
+        guard let uriPtr, let userData else { return 1 }
+        let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
+        guard let (policy, appOrigin) = adapter.navigationInputs else { return 1 }
+        guard let url = URL(string: String(cString: uriPtr)) else { return 1 }
+
+        switch policy.navigationDisposition(for: url, appOrigin: appOrigin, isMainFrame: true) {
+        case .allowInApp:
+            // A new-window request has already been marked handled by the
+            // shim, so there is nothing to allow — the page gets no window,
+            // which is what it got before this existed.
+            return isNewWindow == 0 ? 1 : 0
+        case .openExternally:
+            let absolute = url.absoluteString
+            absolute.withCString { _ = swiftpwa_w2_open_external($0) }
+            return 0
+        case let .block(reason):
+            if reason == .notOpenable {
+                RuntimeDiagnostics.emit(
+                    "swift-pwa: blocked a navigation to '\(url.absoluteString)' — it can't be "
+                        + "loaded here and the system can't open it, so allowing it would leave "
+                        + "the window with no way back."
+                )
+            }
+            return 0
+        }
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_set_web_message_handler`.

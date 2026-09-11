@@ -470,20 +470,41 @@ page has declined the key, so an app that implements its own `Ctrl+Z` —
 a drawing or editing app, the kind most likely to want it — keeps it by
 calling `preventDefault()`. That matches macOS.
 
-## Known limitations on Linux
+### Links out of the app
 
-**A page can't open a URL outside the app, and JavaScript dialogs do nothing.**
-The GTK backend installs no `decide-policy` handler and no `script-dialog` handler on the `WebKitWebView`. The consequence is that a main-frame
-navigation to another site **loads in place and strands the app** — a swift-pwa
-window has no address bar and no back button — and `alert()` / `confirm()` /
-`prompt()` return instantly with nothing on screen, which a page cannot
-feature-detect (`typeof alert` is still `"function"`). `system.openURL` is
-registered here but refuses with `E_UNIMPLEMENTED`. All three landed on macOS
-and iOS in 0.11 behind one shared Core policy (`ctx.externalURLs`), so this
-backend needs the translation rather than the rules; tracked as issues
-[#165](https://github.com/tophatch/swift-pwa/issues/165),
-[#166](https://github.com/tophatch/swift-pwa/issues/166) and
-[#167](https://github.com/tophatch/swift-pwa/issues/167).
+A main-frame navigation that leaves the app's own origin is handed to the
+desktop (`g_app_info_launch_default_for_uri`) instead of loading in place,
+which is what strands an app that has no address bar and no back button. Same
+rule as every other backend — `ctx.externalURLs`, seeded from `pwa.json`'s
+`external_urls`; see [the JS API](javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
+
+**Two mechanisms here, for a reason worth knowing.** WebKitGTK's
+`decide-policy` gives a navigation decision **no frame information** —
+measured: a cross-origin `<iframe>`'s own load is indistinguishable from the
+main frame navigating away, and `webkit_navigation_action_get_frame_name()` is
+NULL for both. Acting on every navigation decision would therefore hand every
+embedded map or video to the browser, which is worse than the bug being fixed.
+So:
+
+- **Navigation decisions** are acted on only for a *user-initiated*
+  navigation — a link click or a form submission — plus `window.open`. No
+  request is made for those.
+- **Response decisions** carry `is_main_frame_main_resource`, which is exact,
+  and catch the rest: a programmatic `location.href = …` to another site. The
+  request has been sent by the time it is cancelled; the page stays where it
+  was.
+
+The practical edge: a link clicked **inside** a cross-origin iframe is treated
+as user-initiated and opens in the browser. For embedded third-party content
+that is usually what a user wants, and it is the price of embeds working at
+all.
+
+`alert()`, `confirm()` and `prompt()` need nothing from the runtime here —
+WebKitGTK ships its own script dialogs (measured on 4.1 and 6.0), unlike
+`WKWebView`, which has none and needed the Apple backend to grow a
+`WKUIDelegate`.
+
+## Known limitations on Linux
 
 **HEIC / AVIF need libheif at runtime, and the webview can't render them at
 all.** WebKitGTK (both 4.1 and 6.0, as distros ship them) links no HEIF or AVIF

@@ -23,6 +23,10 @@
         private var continuation: AsyncStream<InboundFrame>.Continuation?
         private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }
         private var assetProvider: AssetProvider?
+        /// Opaque pointer to the retained `NavigationBox`, so `load` can tell
+        /// it which origin this window's content lives on. Owned by the
+        /// signal's `GClosureNotify`, not by this property.
+        var navigationBox: UnsafeMutableRawPointer?
 
         private var webView: UnsafeMutablePointer<WebKitWebView> {
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
@@ -140,20 +144,34 @@
             // on the GTK main thread. Pass the widget pointer through
             // a `UInt` so strict concurrency lets us cross actors.
             let raw = UInt(bitPattern: viewWidget)
+            // The navigation box is passed as a plain integer rather than by
+            // capturing `self`: Swift 6.2 rejects sending `self` into
+            // `MainThread.run` here (6.3 allows it), and the box is owned by
+            // the signal connection anyway.
+            let navBox = navigationBox.map { UInt(bitPattern: $0) } ?? 0
             Task {
                 await MainThread.run {
                     guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
                     let webView = UnsafeMutableRawPointer(view)
                         .assumingMemoryBound(to: WebKitWebView.self)
+                    // Recorded on the GTK main thread, where the navigation
+                    // policy reads it — the signal fires there too.
+                    var origin: WebOrigin?
                     switch content {
                     case let .bundled(_, entry, _):
                         // `SWIFT_PWA_INITIAL_ROUTE` can send the first window
                         // somewhere other than the entry; the entry itself stays
                         // the SPA-fallback document.
                         let url = "pwa://localhost/\(InitialRoute.take(declared: entry))"
+                        origin = URL(string: url).flatMap(WebOrigin.init)
                         url.withCString { webkit_web_view_load_uri(webView, $0) }
                     case let .remote(url):
+                        origin = WebOrigin(url)
                         url.absoluteString.withCString { webkit_web_view_load_uri(webView, $0) }
+                    }
+                    if navBox != 0, let boxPointer = UnsafeMutableRawPointer(bitPattern: navBox) {
+                        Unmanaged<NavigationBox>.fromOpaque(boxPointer)
+                            .takeUnretainedValue().appOrigin = origin
                     }
                 }
             }

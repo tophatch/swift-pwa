@@ -66,6 +66,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the compiler; the shipped code uses the async spellings and that test pins
   every selector.
 
+- **The same policy on Linux and Windows** — GTK3, GTK4 and WebView2 now hand
+  an off-origin main-frame navigation to the desktop instead of loading it in
+  place, and `system.openURL` works there (`g_app_info_launch_default_for_uri`,
+  `ShellExecuteW`). The rule itself is unchanged: each backend translates
+  `ExternalURLPolicy.navigationDisposition` into its own callback. Android is
+  the remaining gap ([#166], [#167]).
+
+  **The dialogs needed no work on either**, which is the opposite of what this
+  was scoped as. The claim that all four non-Apple backends were inert came
+  from grepping for handlers we don't install; measured, `alert()` **blocks the
+  page** on WebKitGTK 4.1, WebKitGTK 6.0 and WebView2, because all three ship
+  their own script dialogs when the embedder installs none. `WKWebView` is the
+  outlier with no built-in panel at all — which is why the Apple gap existed
+  and why nobody noticed it elsewhere. Android is still unmeasured ([#165]).
+
+  **Linux needs two mechanisms where Windows needs one**, and the reason is
+  worth recording: WebKitGTK's `decide-policy` carries **no frame
+  information** — measured, a cross-origin `<iframe>`'s own load is
+  indistinguishable from the main frame navigating away, with
+  `webkit_navigation_action_get_frame_name()` NULL for both. Acting on every
+  navigation decision would hand every embedded map or video to the browser,
+  which is worse than the bug being fixed. So the GTK backend acts on
+  *user-initiated* navigation decisions (link click, form submit, plus
+  `window.open`) and catches the rest — a programmatic `location.href = …` —
+  at the **response** decision, which does carry
+  `is_main_frame_main_resource`. The cost is one request made before the
+  cancel; the alternative is not catching it. WebView2 needs none of this:
+  `NavigationStarting` is top-level by contract, with subframes on a separate
+  event.
+
+  Verified on real boxes rather than in CI, which builds these backends but
+  never runs them: on both GTK boxes a new `SWIFT_PWA_LINUX_GUI`-gated test
+  asserts that two cross-origin iframes still load, a link click and a JS
+  redirect both leave the page where it was with the URL handed to the opener,
+  and same-origin navigation still works. On an x64 Windows box the same
+  behaviours were driven by hand, with Edge confirmed launching in the
+  interactive session at each handoff.
+
+[#166]: https://github.com/tophatch/swift-pwa/issues/166
+[#167]: https://github.com/tophatch/swift-pwa/issues/167
+
 - **`external_urls` in `pwa.json`, and `ctx.externalURLs` at runtime.** Opening
   a URL launches whatever app is registered for its scheme, and the page asking
   isn't always the app's own code — `bridge.js` is injected into subframes, so

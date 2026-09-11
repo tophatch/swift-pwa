@@ -81,6 +81,9 @@
             // runs, and an unanswered request takes WebKit's silent-refuse
             // default.
             adapter.connectPermissionHandler(policy: app.permissions)
+            // Likewise before `load`: the first navigation is a navigation
+            // too, and an off-origin one would otherwise load in place.
+            adapter.connectNavigationPolicy(policy: app.externalURLs, opener: GTKURLOpener())
 
             // Place the WebKit view inside the window. GTK4 windows have
             // exactly one child slot.

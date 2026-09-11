@@ -386,10 +386,9 @@ and a link in user-authored content is written by the user):
 scheme that can't be one. A refusal logs a diagnostic naming the fix, because
 all the page sees is an error code.
 
-> **Platform coverage.** macOS and iOS today. The other three backends register
-> the command and refuse it with `E_UNIMPLEMENTED`, so you can feature-detect on
-> the code rather than on the platform; GTK, WebView2 and Android openers are
-> tracked as follow-ups.
+> **Platform coverage.** macOS, iOS, both GTK backends and Windows. Android
+> registers the command and refuses it with `E_UNIMPLEMENTED`, so you can
+> feature-detect on the code rather than on the platform.
 
 #### Leaving the app: off-origin links
 
@@ -404,6 +403,14 @@ Unaffected: same-origin navigation (including a router doing a real page load),
 subframes, and `about:` / `blob:` / `data:` URLs, which can't reach another site.
 A window opened on `WindowContent.remote` counts *its own site* as the app, so a
 wrapper around a web app can navigate that site freely.
+
+Handled on macOS, iOS, both GTK backends and Windows; **Android still loads it
+in place** ([#166](https://github.com/tophatch/swift-pwa/issues/166)). One
+platform difference worth knowing: on Linux, WebKitGTK's navigation decision
+carries no frame information, so a link clicked **inside a cross-origin
+iframe** is handed to the browser there while the other backends leave it to
+the embed. See [Linux setup](linux-setup.md#links-out-of-the-app) for why, and
+what it buys.
 
 To turn it off — for an app that deliberately hosts other people's pages and has
 its own way back:
@@ -420,11 +427,15 @@ attached to the window that raised them rather than app-modal, so one window's
 `confirm()` doesn't block another's. A dialog raised by a cross-origin subframe
 names the origin that raised it.
 
-> Before 0.11 no backend installed a `WKUIDelegate` (or its equivalent), so all
-> three returned instantly with nothing on screen and no way for a page to
-> detect it. **On Linux, Windows and Android they are still unimplemented** —
-> if you need a dialog on every platform, draw your own, which is the better
-> answer for an app with its own design language anyway.
+> Before 0.11 `WKWebView` showed nothing for any of the three — it is the only
+> engine here with no built-in JavaScript panel, so a page's `alert()` returned
+> in 0 ms with nothing on screen and no way to detect it. The other engines
+> ship their own: measured, **WebKitGTK 4.1 / 6.0 and WebView2 all block the
+> page on `alert()`**, so they were never broken and get the engine's dialog
+> rather than a swift-pwa one. Android is unverified and probably inert
+> ([#165](https://github.com/tophatch/swift-pwa/issues/165)). If you want one
+> dialog everywhere, draw your own — the better answer for an app with its own
+> design language anyway.
 
 ### `clipboard.*`
 

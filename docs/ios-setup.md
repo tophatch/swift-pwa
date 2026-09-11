@@ -351,6 +351,30 @@ over HTTPS. The `.ipa` itself can be HTTP-redirected from the plist's
 `software-package` URL but the plist URL given to `itms-services://`
 must be HTTPS — iOS rejects http manifests outright.
 
+## Links out of the app, and JavaScript dialogs
+
+Same behaviour as macOS, through the same shared policy — see
+[docs/macos-setup.md](macos-setup.md#links-out-of-the-app-and-javascript-dialogs)
+for the reasoning and [docs/javascript-api.md](javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system)
+for the API. Two iOS specifics:
+
+- **The panels are `UIAlertController`s**, presented from the nearest
+  view controller up the webview's responder chain rather than the
+  window's root — so an app that hosts the webview inside its own
+  controller hierarchy still gets a dialog while something else is
+  modal.
+- **`canOpenURL` is deliberately not consulted.** It requires every
+  scheme to be listed in `LSApplicationQueriesSchemes` and returns
+  `false` for anything absent, so preflighting with it would turn a
+  declared scheme into a silent refusal. `UIApplication.open` needs no
+  such declaration, and its own answer is what `system.openURL` reports
+  as `opened`.
+
+Before this, a non-`http` scheme happened to work on iOS — WebKit hands
+a URL it can't load to the system — while the same click did nothing at
+all on macOS, and an `http` link loaded in place and stranded the app on
+both. Both routes now go through the same declaration.
+
 ## Known limitations on iOS
 
 - **The app driver is simulator-only, and can't synthesize input.**

@@ -26,6 +26,10 @@
         /// `AsyncStream<InboundFrame>` is `Sendable`, so a plain
         /// `nonisolated let` suffices — no `(unsafe)`.
         private nonisolated let stream: AsyncStream<InboundFrame>
+        /// Retained here because `WKWebView` holds its delegates weakly, and
+        /// installed by the window rather than at init so the adapter stays
+        /// constructible without an `AppContext` (the driver builds one).
+        private nonisolated(unsafe) var webPolicy: WKWebPolicy?
 
         public init(configuration: WKWebViewConfiguration? = nil) throws {
             var captured: AsyncStream<InboundFrame>.Continuation?
@@ -82,6 +86,21 @@
             assetProvider = provider
         }
 
+        /// Install the navigation policy and the JavaScript panels — see
+        /// ``WKWebPolicy``. Called by each window right after it builds the
+        /// adapter, and *before* `load`, so the first navigation is policed
+        /// too.
+        ///
+        /// Without this an off-origin link loads in place and strands the app,
+        /// and `alert()` / `confirm()` / `prompt()` do nothing at all.
+        @MainActor
+        public func attachWebPolicy(policy: ExternalURLPolicy, opener: any URLOpener) {
+            let delegate = WKWebPolicy(policy: policy, opener: opener)
+            webPolicy = delegate
+            webView.navigationDelegate = delegate
+            webView.uiDelegate = delegate
+        }
+
         // MARK: - PWAWebView
 
         // Marked `nonisolated` because the protocol requirements are
@@ -104,8 +123,13 @@
                         ))
                         return
                     }
+                    webPolicy?.appOrigin = WebOrigin(url)
                     webView.load(URLRequest(url: url))
                 case let .remote(url):
+                    // A `.remote` window is its own origin: an app pointed at
+                    // a web app navigates around that site freely, and only
+                    // leaving *it* counts as leaving the app.
+                    webPolicy?.appOrigin = WebOrigin(url)
                     webView.load(URLRequest(url: url))
                 }
             }

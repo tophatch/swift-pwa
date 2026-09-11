@@ -288,6 +288,7 @@ struct Build: AsyncParsableCommand {
             && (pwa.build?.prebuild?.trimmingCharacters(in: .whitespaces).isEmpty == false)
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
         try Self.validateLastWindowClosed(manifest: pwa)
+        try Self.validateExternalURLs(manifest: pwa)
         try await Self.validatePermissions(
             manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
         )
@@ -795,6 +796,39 @@ struct Build: AsyncParsableCommand {
         throw ValidationError(
             "pwa.json: macos.last_window_closed is \"\(raw)\", which isn't one of: \(valid)."
         )
+    }
+
+    /// Reject an unspelled `external_urls.off_origin_navigation`, and a
+    /// scheme that can't be one, before anything is built — same reasoning as
+    /// ``validateLastWindowClosed``: a key the generator silently ignores
+    /// looks like a broken feature rather than a typo.
+    ///
+    /// A scheme is checked against RFC 3986's grammar (letter, then letters /
+    /// digits / `+` `-` `.`) because the two ways to get it wrong both end in
+    /// silence: `"https://example.com"` in the list declares nothing useful,
+    /// and a scheme with a stray space never matches a URL.
+    static func validateExternalURLs(manifest: PWAManifest) throws {
+        if let raw = manifest.externalUrls?.offOriginNavigation,
+           OffOriginNavigation(rawValue: raw) == nil
+        {
+            let valid = OffOriginNavigation.allCases.map(\.rawValue).joined(separator: ", ")
+            throw ValidationError(
+                "pwa.json: external_urls.off_origin_navigation is \"\(raw)\", "
+                    + "which isn't one of: \(valid)."
+            )
+        }
+        for scheme in manifest.externalUrls?.schemes ?? [] {
+            let bare = scheme.lowercased().trimmingCharacters(in: CharacterSet(charactersIn: ":/ "))
+            let isValid = !bare.isEmpty
+                && bare.first!.isLetter
+                && bare.allSatisfy { $0.isLetter || $0.isNumber || "+-.".contains($0) }
+            guard isValid else {
+                throw ValidationError(
+                    "pwa.json: external_urls.schemes contains \"\(scheme)\", which isn't a URL "
+                        + "scheme. Name the scheme alone — \"things\", not \"things://open\"."
+                )
+            }
+        }
     }
 
     static func validatePermissions(

@@ -350,6 +350,82 @@ signal, so the event never fires there** — treat it as best-effort and always
 also size caches from `system.memory` so you degrade gracefully where there's no
 pressure feed.
 
+#### `system.openURL` — hand a URL to the operating system
+
+Opens a URL **outside** the app: the default browser for `https`, the mail
+client for `mailto`, whichever app registered a custom scheme.
+
+```js
+const { opened } = await __SWIFT_PWA__.invoke('system.openURL', {
+    url: 'https://example.com/docs',
+});
+if (!opened) showFallback();   // nothing on this machine handles it
+```
+
+`opened: false` is an answer, not a failure — a deep link into an app the user
+may not have installed comes back `false` rather than throwing, so you can offer
+something else. Two things *are* errors:
+
+| Code | Meaning |
+|---|---|
+| `E_URL_SCHEME` | The app hasn't declared this scheme — see below. |
+| `E_URL` | Not a URL the system can open: unparseable, or a `pwa:` / `file:` / `javascript:` URL, which address this app's own content rather than something the desktop can launch. |
+
+**Declaring schemes.** `http`, `https`, `mailto` and `tel` work out of the box.
+Anything else — an app's own deep-link scheme, a conferencing handler — has to
+be declared, because opening a URL launches whatever is registered for it and
+the page asking isn't always your own code (`bridge.js` runs in subframes too,
+and a link in user-authored content is written by the user):
+
+```json
+"external_urls": { "schemes": ["things", "obsidian"] }
+```
+
+`swift-pwa init` seeds that into `ctx.externalURLs.declare(schemes:)` in
+`App.swift`, which is what the running app reads; `swift-pwa build` rejects a
+scheme that can't be one. A refusal logs a diagnostic naming the fix, because
+all the page sees is an error code.
+
+> **Platform coverage.** macOS and iOS today. The other three backends register
+> the command and refuse it with `E_UNIMPLEMENTED`, so you can feature-detect on
+> the code rather than on the platform; GTK, WebView2 and Android openers are
+> tracked as follow-ups.
+
+#### Leaving the app: off-origin links
+
+A main-frame navigation that leaves the app's own origin — a link to a website,
+`location.assign` to one, a `target="_blank"` — is **handed to the system
+browser**, and the app stays where it was. Loading it in place is what a webview
+does by default, and it strands the app: there is no address bar and no back
+button, so the window becomes a browser showing someone else's site with no way
+home.
+
+Unaffected: same-origin navigation (including a router doing a real page load),
+subframes, and `about:` / `blob:` / `data:` URLs, which can't reach another site.
+A window opened on `WindowContent.remote` counts *its own site* as the app, so a
+wrapper around a web app can navigate that site freely.
+
+To turn it off — for an app that deliberately hosts other people's pages and has
+its own way back:
+
+```json
+"external_urls": { "off_origin_navigation": "in-app" }
+```
+
+#### `alert()`, `confirm()` and `prompt()`
+
+These work on macOS and iOS: a sheet on macOS, a modal alert on iOS, with
+`confirm()` returning the button and `prompt()` the entered text. They are
+attached to the window that raised them rather than app-modal, so one window's
+`confirm()` doesn't block another's. A dialog raised by a cross-origin subframe
+names the origin that raised it.
+
+> Before 0.11 no backend installed a `WKUIDelegate` (or its equivalent), so all
+> three returned instantly with nothing on screen and no way for a page to
+> detect it. **On Linux, Windows and Android they are still unimplemented** —
+> if you need a dialog on every platform, draw your own, which is the better
+> answer for an app with its own design language anyway.
+
 ### `clipboard.*`
 
 ```js

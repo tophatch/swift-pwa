@@ -7,6 +7,96 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`system.openURL` — a page can open a URL outside the app.** There was no
+  way to do it at all, and all three of the routes a web developer reaches for
+  failed differently: an `<a href="https://…">` **loaded in place and stranded
+  the app** (measured — the window has no address bar and no back button, and
+  `drive eval` then reports `E_EVAL_LOST: the page navigated`), `window.open`
+  returned `null`, and a scheme WebKit can't load was handed to the system on
+  **iOS only**, doing nothing at all on macOS. So deep links worked on a phone
+  by accident of what WebKit refuses, and web links worked nowhere. Reported by
+  an adopter whose workaround was to render links with no `href` and **copy an
+  `http` URL to the clipboard**, because opening it would have destroyed the
+  app.
+
+  The command returns `{ opened }` rather than throwing when nothing handles
+  the URL — a deep link into an app the user may not have installed is a
+  question the page can act on, not a failure — and refuses with `E_URL` for a
+  URL the system can't be asked to open (`pwa:`, `file:`, `javascript:`,
+  unparseable). `NSWorkspace` on macOS, `UIApplication` on iOS; the other three
+  backends register the command and answer `E_UNIMPLEMENTED`, so a page
+  feature-detects on the code rather than on the platform ([#167]).
+
+- **Off-origin navigation goes to the system browser instead of stranding the
+  app** — the other half of the same problem, and the one an app can't work
+  around, because any link in content it didn't write is a trapdoor. A
+  main-frame navigation that leaves the window's own origin is cancelled and
+  handed to the OS. Subframes, same-origin navigation (including a router
+  doing a real page load) and `about:` / `blob:` / `data:` URLs are untouched,
+  and a window created on `WindowContent.remote` counts **its own site** as the
+  app, so a wrapper around a web app still navigates that site freely. Opt out
+  with `"external_urls": { "off_origin_navigation": "in-app" }` ([#166]).
+
+- **`alert()`, `confirm()` and `prompt()` work on macOS and iOS.** No backend
+  set a `uiDelegate`, and `WKWebView` serves a JavaScript panel *only* through
+  `WKUIDelegate` — so all three were dropped: measured at **0 ms** with nothing
+  on screen. The absence wasn't the problem, the silence was: nothing threw,
+  nothing warned, and a page can't feature-detect it (`typeof alert` is
+  `"function"` and the call returns normally). The adopter who reported it had
+  sixteen error paths reported that way and could read none of them; the one
+  that cost real time was a failed biometric unlock on an iPad, which looked
+  exactly like a tap that had missed. Now an `NSAlert` sheet / `UIAlertController`
+  attached to the window that raised it — not app-modal, so one window's
+  `confirm()` doesn't block another's — with the button and the entered text
+  returned properly. A dialog raised by a **cross-origin subframe** names the
+  origin that raised it, because `bridge.js` and the page's scripts run in
+  subframes too and an iframe's `confirm()` otherwise reads as the app's own.
+  Still unimplemented on Linux, Windows and Android, documented in each
+  platform's "Known limitations" ([#165]).
+
+  Getting this wrong is invisible, which is worth recording: `WKUIDelegate` and
+  `WKNavigationDelegate` are almost entirely **optional Objective-C methods
+  matched by selector**, and WebKit's headers mark these `WK_SWIFT_UI_ACTOR` /
+  `WK_SWIFT_ASYNC`. A completion-handler signature whose closure isn't typed
+  `@MainActor` compiles, conforms, and is **never called** — indistinguishable
+  from having no delegate at all. The first draft here had exactly that, in four
+  of five methods, and it was a `responds(to:)` test that caught it rather than
+  the compiler; the shipped code uses the async spellings and that test pins
+  every selector.
+
+- **`external_urls` in `pwa.json`, and `ctx.externalURLs` at runtime.** Opening
+  a URL launches whatever app is registered for its scheme, and the page asking
+  isn't always the app's own code — `bridge.js` is injected into subframes, so
+  a third-party `<iframe>` can invoke commands, and a link in user-authored
+  content is written by the user. So the gate has the shape `permissions` has:
+  `http`, `https`, `mailto` and `tel` need no declaration (a link in a page
+  means a document or a contact), and everything else — `things:`,
+  `obsidian:`, a conferencing handler — is declared, with a refusal that logs a
+  diagnostic naming the exact fix. `swift-pwa build` rejects a scheme that
+  can't be one (`"https://example.com"` in the list declares nothing useful)
+  and an unspelled `off_origin_navigation`, before anything is built.
+
+  The rule itself lives in Core — `ExternalURLPolicy.navigationDisposition(for:appOrigin:isMainFrame:)`
+  answers `allowInApp` / `openExternally` / `block` — so the four remaining
+  backends need the translation into their own callback and not the reasoning,
+  and it is unit-tested without a webview.
+
+### Changed
+
+- **`AppContext` gains `externalURLs`** (an `ExternalURLPolicy`, the way
+  `permissions` is a `PermissionPolicy`). Additive for anyone using the
+  built-in backends, but a **source break for an out-of-tree `AppContext`
+  conformance** — add `public let externalURLs = ExternalURLPolicy()`. All
+  in-tree conformances and the test mock are updated. `SystemPlugin` also takes
+  an optional `urlOpener:`, defaulted, so existing `SystemPlugin(…)` calls are
+  unchanged.
+
+[#165]: https://github.com/tophatch/swift-pwa/issues/165
+[#166]: https://github.com/tophatch/swift-pwa/issues/166
+[#167]: https://github.com/tophatch/swift-pwa/issues/167
+
 ### Fixed
 
 - **Text fields on macOS can select-all, copy, paste, cut and undo.** Until

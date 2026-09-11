@@ -58,6 +58,8 @@
                 app: app
             )
             bridge.start()
+            // Before `load`, so the first navigation is policed too.
+            adapter.attachWebPolicy(policy: app.externalURLs, opener: AppleURLOpener())
             adapter.load(config.content)
         }
 

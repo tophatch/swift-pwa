@@ -1000,6 +1000,19 @@ staged.
 
 ## 8. Known limitations
 
+- **A page can't open a URL outside the app, and JavaScript dialogs do nothing.**
+  The generated `MainActivity` overrides neither `WebViewClient.shouldOverrideUrlLoading` nor `WebChromeClient.onJsAlert` / `onJsConfirm` / `onJsPrompt`. The consequence is that a main-frame
+  navigation to another site **loads in place and strands the app** — a swift-pwa
+  window has no address bar and no back button — and `alert()` / `confirm()` /
+  `prompt()` return instantly with nothing on screen, which a page cannot
+  feature-detect (`typeof alert` is still `"function"`). `system.openURL` is
+  registered here but refuses with `E_UNIMPLEMENTED`. All three landed on macOS
+  and iOS in 0.11 behind one shared Core policy (`ctx.externalURLs`), so this
+  backend needs the translation rather than the rules; tracked as issues
+  [#165](https://github.com/tophatch/swift-pwa/issues/165),
+  [#166](https://github.com/tophatch/swift-pwa/issues/166) and
+  [#167](https://github.com/tophatch/swift-pwa/issues/167).
+
 - **Camera, microphone and location need a declaration in two places.**
   `permissions.web` in `pwa.json` emits the `uses-permission` entries;
   `ctx.permissions.declare(…)` is the runtime ceiling. `swift-pwa build`

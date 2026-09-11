@@ -48,6 +48,10 @@
 
         public func quit(exitCode: Int32) {
             pendingExitCode = exitCode
+            // There is no loop to quit when a GUI-gated test closes a window:
+            // `initGTKForTesting` initializes GTK without entering `gtk_main`,
+            // and quitting anyway is a GTK CRITICAL rather than a no-op.
+            guard gtk_main_level() > 0 else { return }
             gtk_main_quit()
         }
 

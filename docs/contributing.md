@@ -24,6 +24,18 @@ swiftformat .                                  # apply it
   Linux; a full `SwiftPWAGTK` build needs `libgtk-3-dev` + `libwebkit2gtk-4.1-dev`
   (see [linux-setup.md](linux-setup.md)). GTK integration tests are opt-in:
   `SWIFT_PWA_LINUX_GUI=1 swift test`.
+- **A GTK GUI test that closes a window wraps its body in
+  `withGTKMainThreadForTesting { … }`.** `initGTKForTesting` never enters
+  `gtk_main`, so without it `MainThread.run` falls back to libdispatch and the
+  adapter's deferred WebKit calls fire on a worker thread at an arbitrary later
+  moment. The wrapper installs the real `g_idle_add` dispatch hook for the
+  duration — deferred work then queues into the GMainContext and runs when the
+  test calls `pumpMainContextForTesting(seconds:)` — and restores the default
+  on the way out. The restore is not optional: `MainThread`'s hook is
+  process-global and a GTK hook only delivers while something pumps, so one
+  left installed hangs every later test that awaits `MainThread.run`. Keep the
+  body synchronous for the same reason (it is non-`async` so you can't suspend
+  by accident).
 - **swiftformat is enforced by CI.** 4-space indent, 120 columns, `--self remove`.
   Run it before you push.
 - **Tests use [swift-testing](https://github.com/apple/swift-testing)** (`@Test`,

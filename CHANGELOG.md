@@ -161,6 +161,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#177]: https://github.com/tophatch/swift-pwa/issues/177
 [#173]: https://github.com/tophatch/swift-pwa/issues/173
 [#174]: https://github.com/tophatch/swift-pwa/issues/174
+[#187]: https://github.com/tophatch/swift-pwa/issues/187
 
 - **`external_urls` in `pwa.json`, and `ctx.externalURLs` at runtime.** Opening
   a URL launches whatever app is registered for its scheme, and the page asking
@@ -276,6 +277,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached for `pwa://` there, which isn't that backend's origin at all.
 
 ### Fixed
+
+- **A GTK window can be closed while the webview still has work queued, without
+  taking the process with it.** `WebKitGTKAdapter` defers every WebKit call onto
+  the GTK main thread through `MainThread.run`, and the widget pointer travels
+  through those closures as a `UInt` — so a pointer to a destroyed view is
+  indistinguishable from a live one, and the existing `guard let view = …
+  (bitPattern:)` never failed. Closing a window destroyed the `WebKitWebView`
+  and freed the heap-boxed `NavigationBox`; a `load` that had not run yet then
+  called `webkit_web_view_load_uri` on dead memory and wrote the resolved origin
+  into the freed box. The visible form was a `WEBKIT_IS_WEB_VIEW` assertion
+  followed by a crash in `swift_release`, which this repo had recorded as
+  headless noise ([#187]).
+
+  The adapter now carries a lock-guarded liveness token that every deferred
+  closure captures and checks, and the window invalidates it before the destroy
+  on both close paths (`close()` and the WM's `delete-event`). Late work is a
+  no-op; `evaluateJavaScript` and `captureSnapshot` still answer their callers
+  rather than stranding them. This was reported against the test environment,
+  where `initGTKForTesting` never enters `gtk_main` so the closures land on a
+  libdispatch worker — but the same ordering is reachable in a shipping app
+  whose window closes between a `load` being scheduled and the main loop getting
+  to it, so the fix is in the backend rather than the harness.
+
+  The harness half is that GUI-gated tests could not exercise teardown at all:
+  `GTKFullscreenStateTests` crashed on `main` on both boxes and both backends,
+  and `GTKAppearanceBackgroundTests` worked around it by leaking its windows.
+  `withGTKMainThreadForTesting` now gives a test production ordering — the
+  `g_idle_add` dispatch hook installed for the duration and the default restored
+  after, since the hook is process-global and only delivers while something
+  pumps the loop, so one left installed hangs every later test that awaits
+  `MainThread.run`. `MainThread.resetHook()` is the new API that makes that
+  restore possible.
 
 - **`window.background_color` carries a light/dark pair all the way to the
   pixels.** The manifest has decoded a `{ light, dark }` pair since v0.7.8, but

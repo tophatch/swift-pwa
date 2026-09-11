@@ -34,6 +34,9 @@
         /// it which origin this window's content lives on. Owned by the
         /// signal's `GClosureNotify`, not by this property.
         var navigationBox: UnsafeMutableRawPointer?
+        /// Guards work deferred onto the GTK main thread against the widget
+        /// being destroyed first. See ``ViewLifetime``.
+        let lifetime = ViewLifetime()
 
         private var webView: UnsafeMutablePointer<WebKitWebView> {
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
@@ -158,9 +161,11 @@
             // `MainThread.run` here (6.3 allows it), and the box is owned by
             // the signal connection anyway.
             let navBox = navigationBox.map { UInt(bitPattern: $0) } ?? 0
+            let viewLifetime = lifetime
             Task {
                 await MainThread.run {
-                    guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
+                    guard viewLifetime.isAlive,
+                          let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
                     let webView = UnsafeMutableRawPointer(view)
                         .assumingMemoryBound(to: WebKitWebView.self)
                     // Recorded on the GTK main thread, where the navigation
@@ -194,6 +199,7 @@
             // main thread; the GAsyncReadyCallback fires there too, so
             // the continuation resume happens on the main thread.
             let viewRaw = UInt(bitPattern: viewWidget)
+            let viewLifetime = lifetime
             return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in
                 let boxRaw = UInt(bitPattern: Unmanaged.passRetained(
@@ -205,7 +211,9 @@
                         guard let boxPtr = UnsafeMutableRawPointer(bitPattern: boxRaw) else {
                             return
                         }
-                        guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: viewRaw) else {
+                        guard viewLifetime.isAlive,
+                              let view = UnsafeMutablePointer<GtkWidget>(bitPattern: viewRaw)
+                        else {
                             Unmanaged<EvalBox>.fromOpaque(boxPtr).takeRetainedValue()
                                 .continuation.resume(returning: nil)
                             return
@@ -242,9 +250,11 @@
             // 6.0 umbrella header pulled in by `CWebKitGTK6Shim`.
             // Calls must run on the GTK main thread.
             let raw = UInt(bitPattern: viewWidget)
+            let viewLifetime = lifetime
             Task {
                 await MainThread.run {
-                    guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
+                    guard viewLifetime.isAlive,
+                          let view = UnsafeMutablePointer<GtkWidget>(bitPattern: raw) else { return }
                     let webView = UnsafeMutableRawPointer(view)
                         .assumingMemoryBound(to: WebKitWebView.self)
                     if let inspector = webkit_web_view_get_inspector(webView) {
@@ -290,6 +300,7 @@
             let path = NSTemporaryDirectory()
                 .appending("/swift-pwa-snapshot-\(UUID().uuidString).png")
             let viewRaw = UInt(bitPattern: viewWidget)
+            let viewLifetime = lifetime
 
             try await withCheckedThrowingContinuation { (cont: CheckedContinuation<Void, any Error>) in
                 let boxRaw = UInt(bitPattern: Unmanaged.passRetained(
@@ -299,7 +310,9 @@
                 Task {
                     await MainThread.run {
                         guard let boxPtr = UnsafeMutableRawPointer(bitPattern: boxRaw) else { return }
-                        guard let view = UnsafeMutablePointer<GtkWidget>(bitPattern: viewRaw) else {
+                        guard viewLifetime.isAlive,
+                              let view = UnsafeMutablePointer<GtkWidget>(bitPattern: viewRaw)
+                        else {
                             Unmanaged<SnapshotBox>.fromOpaque(boxPtr).takeRetainedValue()
                                 .continuation.resume(throwing: BridgeError(
                                     code: BridgeError.handler,
@@ -340,6 +353,40 @@
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")
                 #endif
+            }
+        }
+
+        /// Called by the owning window just before it destroys the widget, so
+        /// anything still queued for the GTK main thread becomes a no-op
+        /// instead of a call into freed memory.
+        func invalidate() {
+            lifetime.invalidate()
+        }
+
+        /// Liveness flag shared with every piece of work the adapter defers onto
+        /// the GTK main thread.
+        ///
+        /// The web view is a widget owned by the window that created it, so
+        /// closing the window finalizes it while `MainThread.run` closures may
+        /// still be queued. The widget pointer is laundered through a `UInt`, and
+        /// a freed pointer is not nil, so nothing downstream can tell — the
+        /// closure calls WebKit on dead memory and corrupts the heap. Closures
+        /// capture this box (they cannot capture the adapter itself under Swift
+        /// 6.2's sending rules) and check it before touching the view.
+        final class ViewLifetime: @unchecked Sendable {
+            private let lock = NSLock()
+            private var alive = true
+
+            var isAlive: Bool {
+                lock.lock()
+                defer { lock.unlock() }
+                return alive
+            }
+
+            func invalidate() {
+                lock.lock()
+                defer { lock.unlock() }
+                alive = false
             }
         }
 

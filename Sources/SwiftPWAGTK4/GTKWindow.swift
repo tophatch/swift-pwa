@@ -225,6 +225,9 @@
         }
 
         private func cleanupAfterClose() {
+            // Idempotent, and the only invalidation on the WM-close path —
+            // `handleDeleteEvent` runs while GTK is still about to destroy.
+            adapter.invalidate()
             GTKAppearance.stopObserving(self)
             for c in continuations.values { c.finish() }
             continuations.removeAll()
@@ -292,6 +295,10 @@
 
         public func close() {
             emit(.willClose)
+            // Before the widget goes: anything the adapter still has queued for
+            // the GTK main thread has to learn the view is gone, or it runs
+            // against freed memory (#187).
+            adapter.invalidate()
             gtk_window_destroy(window)
             emit(.didClose)
             cleanupAfterClose()

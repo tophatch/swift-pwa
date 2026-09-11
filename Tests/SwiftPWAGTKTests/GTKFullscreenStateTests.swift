@@ -30,24 +30,26 @@
 
         @Test("isFullscreen() mirrors setFullscreen()")
         func tracksProgrammaticToggle() throws {
-            initGTKForTesting()
-            let win = try GTKWindow(config: makeConfig(fullscreen: false), app: .shared)
-            defer { win.close() }
+            try withGTKMainThreadForTesting {
+                let win = try GTKWindow(config: makeConfig(fullscreen: false), app: .shared)
+                defer { win.close() }
 
-            #expect(win.isFullscreen() == false)
-            win.setFullscreen(true)
-            #expect(win.isFullscreen() == true)
-            win.setFullscreen(false)
-            #expect(win.isFullscreen() == false)
+                #expect(win.isFullscreen() == false)
+                win.setFullscreen(true)
+                #expect(win.isFullscreen() == true)
+                win.setFullscreen(false)
+                #expect(win.isFullscreen() == false)
+            }
         }
 
         @Test("a window created fullscreen reports true immediately")
         func honorsConfigFullscreen() throws {
-            initGTKForTesting()
-            let win = try GTKWindow(config: makeConfig(fullscreen: true), app: .shared)
-            defer { win.close() }
+            try withGTKMainThreadForTesting {
+                let win = try GTKWindow(config: makeConfig(fullscreen: true), app: .shared)
+                defer { win.close() }
 
-            #expect(win.isFullscreen() == true)
+                #expect(win.isFullscreen() == true)
+            }
         }
     }
 #endif

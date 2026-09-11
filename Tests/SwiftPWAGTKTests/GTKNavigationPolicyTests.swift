@@ -45,6 +45,7 @@
             defer {
                 fixture.window.close()
                 for server in fixture.servers { server.terminate() }
+                MainThread.resetHook()
             }
             let win = fixture.window
             let other = "http://127.0.0.1:\(fixture.otherPort)"
@@ -120,12 +121,11 @@
             RecordedOpens.reset()
             initGTKForTesting()
             // `MainThread.run`'s default hook posts to libdispatch's main
-            // queue, which nothing drains in a test — so without this every
-            // `evaluateJavaScript` times out, control included.
-            MainThread.setHook { body in
-                let box = Unmanaged.passRetained(GTKMainThreadJob(body)).toOpaque()
-                g_idle_add(gtkMainThreadTrampoline, box)
-            }
+            // queue, which nothing drains in a test — so without the GTK hook
+            // every `evaluateJavaScript` below times out, control included.
+            // Each test restores the default when it tears the fixture down;
+            // the hook is process-global and only delivers while we pump.
+            installMainThreadHook()
             let window = try GTKWindow(
                 config: WindowConfig(
                     title: "nav-policy",

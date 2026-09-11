@@ -58,25 +58,61 @@
             gtk_main()
             exit(context.pendingExitCode ?? 0)
         }
+    }
 
-        /// Route `MainThread.run` through `g_idle_add`, which schedules
-        /// a callback to fire on the GTK main thread the next time the
-        /// event loop is idle.
-        private func installMainThreadHook() {
-            MainThread.setHook { body in
-                let box = Unmanaged.passRetained(GTKMainThreadJob(body)).toOpaque()
-                g_idle_add(gtkMainThreadTrampoline, box)
-            }
+    /// Route `MainThread.run` through `g_idle_add`, which schedules a callback
+    /// to fire on the GTK main thread the next time the event loop is idle.
+    ///
+    /// File-scope rather than a method on the runtime so a GUI-gated test can
+    /// install the same hook: without it `MainThread.run` falls back to
+    /// libdispatch and deferred WebKit calls land on a worker thread at an
+    /// arbitrary later moment, after the window that owns the view may already
+    /// be gone (#187). See ``withGTKMainThreadForTesting(_:)``.
+    func installMainThreadHook() {
+        MainThread.setHook { body in
+            let box = Unmanaged.passRetained(GTKMainThreadJob(body)).toOpaque()
+            g_idle_add(gtkMainThreadTrampoline, box)
         }
     }
 
     /// Test-only: initialize GTK without entering `gtk_main()`, so
     /// `SWIFT_PWA_LINUX_GUI`-gated integration tests can construct a
     /// `GTKWindow`. `gtk_init` is safe to call more than once.
+    ///
+    /// Deliberately does **not** install the `g_idle_add` dispatch hook: the
+    /// hook only delivers while something pumps the loop, and `MainThread.run`
+    /// is global, so leaving one installed would hang every later test that
+    /// awaits it (`WindowPluginTests`, `AppPluginTests`). A test that needs
+    /// production ordering calls ``installMainThreadHook()`` itself and
+    /// restores the default with `MainThread.resetHook()` when it is done.
     @MainActor
     func initGTKForTesting() {
         var argc: Int32 = 0
         gtk_init(&argc, nil)
+    }
+
+    /// Test-only: run `body` with GTK initialized and the production
+    /// `g_idle_add` dispatch hook in place, restoring the default hook on the
+    /// way out.
+    ///
+    /// A GUI test that lets a window go through teardown wants production
+    /// ordering — deferred work queued into the GMainContext, run on the GTK
+    /// main thread when the test pumps — rather than the default hook's
+    /// libdispatch worker firing at an arbitrary later moment. The restore is
+    /// the point of the wrapper: `MainThread`'s hook is process-global, and a
+    /// GTK hook left installed hangs every later test that awaits
+    /// `MainThread.run` without pumping.
+    ///
+    /// Take care that `body` does not suspend: the hook is global, so a test
+    /// that yields the main actor between installing and restoring it would
+    /// leave the hook in place for whatever runs next. The closure is
+    /// deliberately non-`async` so that cannot happen by accident.
+    @MainActor
+    func withGTKMainThreadForTesting<T>(_ body: () throws -> T) rethrows -> T {
+        initGTKForTesting()
+        installMainThreadHook()
+        defer { MainThread.resetHook() }
+        return try body()
     }
 
     /// Test-only: pump the global-default `GMainContext` for roughly

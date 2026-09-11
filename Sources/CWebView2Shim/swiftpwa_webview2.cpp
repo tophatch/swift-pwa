@@ -35,6 +35,7 @@
 #include <windows.h>
 #include <objbase.h>
 #include <shlwapi.h> // SHCreateStreamOnFileEx (range-serving files)
+#include <shellapi.h> // ShellExecuteW (handing a URL to the desktop)
 #include <wrl.h>
 #include <wil/com.h>
 #include <WebView2.h>
@@ -127,6 +128,10 @@ struct ViewExtension {
     swiftpwa_w2_permission_cb permission_cb = nullptr;
     void *permission_user = nullptr;
     bool permission_subscribed = false;
+
+    swiftpwa_w2_navigation_cb navigation_cb = nullptr;
+    void *navigation_user = nullptr;
+    bool navigation_subscribed = false;
 };
 
 // We keep the per-view extension as a side-table keyed by the
@@ -527,6 +532,88 @@ extern "C" void swiftpwa_w2_view_set_web_message_handler(
         view->owner->web_message_token = token;
         view->owner->web_message_subscribed = true;
     }
+}
+
+extern "C" void swiftpwa_w2_view_set_navigation_handler(
+    swiftpwa_w2_view *view,
+    swiftpwa_w2_navigation_cb cb,
+    void *user
+) {
+    if (!view || !view->raw) return;
+    {
+        ViewExtension &ext = get_or_create_extension(view->raw);
+        std::lock_guard<std::mutex> lock(ext.mu);
+        ext.navigation_cb = cb;
+        ext.navigation_user = user;
+        if (ext.navigation_subscribed) return;
+        ext.navigation_subscribed = true;
+    }
+
+    // `NavigationStarting` is top-level only — WebView2 raises subframe
+    // navigations on `FrameNavigationStarting`, which we deliberately leave
+    // alone so an embedded iframe keeps working.
+    EventRegistrationToken nav_token{};
+    view->raw->add_NavigationStarting(
+        Callback<ICoreWebView2NavigationStartingEventHandler>(
+            [view](ICoreWebView2 *, ICoreWebView2NavigationStartingEventArgs *args) -> HRESULT {
+                wil::unique_cotaskmem_string uri;
+                args->get_Uri(&uri);
+                if (!uri) return S_OK;
+                std::string utf8 = wide_to_utf8(uri.get());
+
+                ViewExtension &ext = get_or_create_extension(view->raw);
+                swiftpwa_w2_navigation_cb cb_local = nullptr;
+                void *user_local = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(ext.mu);
+                    cb_local = ext.navigation_cb;
+                    user_local = ext.navigation_user;
+                }
+                if (!cb_local) return S_OK;
+                if (!cb_local(utf8.c_str(), 0, user_local)) {
+                    args->put_Cancel(TRUE);
+                }
+                return S_OK;
+            })
+            .Get(),
+        &nav_token
+    );
+
+    // `target="_blank"` / `window.open`. Marking it handled without supplying
+    // a new window is what keeps the page from getting one — the same answer
+    // the Apple backend gives by returning nil from `createWebViewWith`.
+    EventRegistrationToken window_token{};
+    view->raw->add_NewWindowRequested(
+        Callback<ICoreWebView2NewWindowRequestedEventHandler>(
+            [view](ICoreWebView2 *, ICoreWebView2NewWindowRequestedEventArgs *args) -> HRESULT {
+                wil::unique_cotaskmem_string uri;
+                args->get_Uri(&uri);
+                args->put_Handled(TRUE);
+                if (!uri) return S_OK;
+                std::string utf8 = wide_to_utf8(uri.get());
+
+                ViewExtension &ext = get_or_create_extension(view->raw);
+                swiftpwa_w2_navigation_cb cb_local = nullptr;
+                void *user_local = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(ext.mu);
+                    cb_local = ext.navigation_cb;
+                    user_local = ext.navigation_user;
+                }
+                if (cb_local) cb_local(utf8.c_str(), 1, user_local);
+                return S_OK;
+            })
+            .Get(),
+        &window_token
+    );
+}
+
+extern "C" int swiftpwa_w2_open_external(const char *utf8_uri) {
+    if (!utf8_uri) return 0;
+    std::wstring wide = utf8_to_wide(utf8_uri);
+    // ShellExecuteW returns a fake HINSTANCE; > 32 means it launched something.
+    HINSTANCE result = ShellExecuteW(nullptr, L"open", wide.c_str(), nullptr, nullptr, SW_SHOWNORMAL);
+    return (reinterpret_cast<INT_PTR>(result) > 32) ? 1 : 0;
 }
 
 extern "C" void swiftpwa_w2_view_set_permission_handler(
@@ -942,6 +1029,9 @@ extern "C" void swiftpwa_w2_resource_respond(swiftpwa_w2_view *, uint64_t, int32
 extern "C" char *swiftpwa_w2_resource_range_header(swiftpwa_w2_view *, uint64_t) { return NULL; }
 extern "C" void swiftpwa_w2_resource_passthrough(swiftpwa_w2_view *, uint64_t) {}
 extern "C" void swiftpwa_w2_resource_respond_file(swiftpwa_w2_view *, uint64_t, int32_t, const char *, const wchar_t *, int64_t, int64_t, int64_t) {}
+extern "C" void swiftpwa_w2_view_set_navigation_handler(
+    swiftpwa_w2_view *, swiftpwa_w2_navigation_cb, void *) {}
+extern "C" int swiftpwa_w2_open_external(const char *) { return 0; }
 extern "C" int swiftpwa_track_popup_menu(void *, unsigned int, int, int, void *) { return 0; }
 extern "C" swiftpwa_w2_hresult swiftpwa_w2_check_runtime(void) { return -1; }
 

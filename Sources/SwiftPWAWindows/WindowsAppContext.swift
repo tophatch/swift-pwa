@@ -36,7 +36,7 @@
         private init() {
             use(WindowPlugin())
             use(PlatformInfoPlugin())
-            use(SystemPlugin())
+            use(SystemPlugin(urlOpener: WindowsURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))

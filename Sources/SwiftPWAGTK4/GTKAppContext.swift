@@ -28,7 +28,7 @@
         private init() {
             use(WindowPlugin())
             use(PlatformInfoPlugin())
-            use(SystemPlugin())
+            use(SystemPlugin(urlOpener: GTKURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))

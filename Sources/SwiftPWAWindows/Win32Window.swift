@@ -132,7 +132,8 @@
                 content: config.content,
                 backgroundColor: config.backgroundColor.flatMap(RGBColor.init(hex:)),
                 sharedProvider: app.assetProvider,
-                permissions: app.permissions
+                permissions: app.permissions,
+                externalURLs: app.externalURLs
             )
             self.adapter = adapter
             webView = adapter

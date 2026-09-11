@@ -170,6 +170,28 @@ void swiftpwa_w2_view_set_web_message_handler(
     swiftpwa_w2_message_cb cb,
     void *user);
 
+// Decides one navigation: return 1 to let WebView2 load it, 0 to cancel.
+// `is_new_window` marks a `target="_blank"` / `window.open`, which WebView2
+// raises separately from an ordinary navigation.
+//
+// Only *top-level* navigations reach this: WebView2 raises subframe
+// navigations on `FrameNavigationStarting`, which this deliberately doesn't
+// subscribe to — an app embedding third-party content must keep working.
+typedef int (*swiftpwa_w2_navigation_cb)(const char *utf8_uri, int is_new_window, void *user);
+
+/// Route top-level navigations through `cb`, so an off-origin one can be
+/// handed to the desktop instead of loading in place and stranding the app
+/// (a swift-pwa window has no address bar and no back button).
+void swiftpwa_w2_view_set_navigation_handler(
+    swiftpwa_w2_view *view,
+    swiftpwa_w2_navigation_cb cb,
+    void *user
+);
+
+/// Hand a URI to the shell — the default browser for http(s), whichever app
+/// is registered for a custom scheme. Returns 1 if the shell accepted it.
+int swiftpwa_w2_open_external(const char *utf8_uri);
+
 /// Route WebView2 permission requests (camera, microphone, geolocation)
 /// through `cb`. Without this WebView2 keeps its own default, which is to
 /// prompt — fine on its own, but it leaves the app's declaration and veto

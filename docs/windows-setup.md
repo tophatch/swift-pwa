@@ -670,20 +670,26 @@ an app over SSH needs the `schtasks /it` launch described in
 Session 0 — plus `SWIFT_PWA_WEB_ROOT` when running the bare SwiftPM binary
 rather than a bundle.
 
-## Known limitations (Windows-specific)
+## Links out of the app
 
-**A page can't open a URL outside the app, and JavaScript dialogs do nothing.**
-The WebView2 backend subscribes to neither `NavigationStarting` nor `ScriptDialogOpening`. The consequence is that a main-frame
-navigation to another site **loads in place and strands the app** — a swift-pwa
-window has no address bar and no back button — and `alert()` / `confirm()` /
-`prompt()` return instantly with nothing on screen, which a page cannot
-feature-detect (`typeof alert` is still `"function"`). `system.openURL` is
-registered here but refuses with `E_UNIMPLEMENTED`. All three landed on macOS
-and iOS in 0.11 behind one shared Core policy (`ctx.externalURLs`), so this
-backend needs the translation rather than the rules; tracked as issues
-[#165](https://github.com/tophatch/swift-pwa/issues/165),
-[#166](https://github.com/tophatch/swift-pwa/issues/166) and
-[#167](https://github.com/tophatch/swift-pwa/issues/167).
+A main-frame navigation that leaves the app's own origin is cancelled and
+handed to the shell (`ShellExecuteW`) rather than loading in place — which is
+what strands an app whose window has no address bar and no back button. The
+rule is the shared `ctx.externalURLs` policy, seeded from `pwa.json`'s
+`external_urls`; see [the JS API](javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
+
+WebView2 makes this easier than the other backends: `NavigationStarting` is
+**top-level only** (subframe navigations are raised separately on
+`FrameNavigationStarting`, which the shim deliberately doesn't subscribe to),
+so an embedded iframe keeps working without any heuristics. `NewWindowRequested`
+covers `target="_blank"` / `window.open`.
+
+`alert()`, `confirm()` and `prompt()` need nothing from the runtime: WebView2
+shows its own script dialogs unless an app turns them off
+(`AreDefaultScriptDialogsEnabled`), and swift-pwa doesn't. Measured on an x64
+box — `alert()` blocks the page until it is dismissed.
+
+## Known limitations (Windows-specific)
 
 **HEIC decoding depends on a codec extension the machine may not have.** WebView2
 is Chromium, which has AVIF but no HEIC decoder, so an iPhone photo won't render

@@ -30,7 +30,9 @@
         private nonisolated(unsafe) var externalURLs: ExternalURLPolicy?
         /// The origin this window's own content lives on — set as content
         /// loads, because a `.remote` window's site *is* the app.
-        private nonisolated(unsafe) var appOrigin: WebOrigin?
+        private nonisolated(unsafe) var appOrigin: WebOrigin? {
+            didSet { externalURLs?.registerAppOrigin(appOrigin) }
+        }
 
         /// Read by the C trampoline, which can't reach private state.
         fileprivate var navigationInputs: (ExternalURLPolicy, WebOrigin?)? {

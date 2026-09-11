@@ -223,8 +223,11 @@ public struct SystemPlugin: Plugin {
                     message: reason == .undeclaredScheme
                         ? "this app hasn't declared the '\(url.scheme ?? "")' scheme — add it to "
                         + "`ctx.externalURLs.declare(schemes:)` and pwa.json's `external_urls.schemes`"
-                        : "'\(url.scheme ?? "")' URLs address this app's own content, not something "
-                        + "the system can open"
+                        // Deliberately not phrased as "'https' URLs are …":
+                        // the refusal is about *this* URL being the app's own
+                        // content (a `pwa:` URL, or the origin the bundle is
+                        // served from), not about its scheme in general.
+                        : "that URL is this app's own content, not something the system can open"
                 )
             }
             guard let urlOpener else {

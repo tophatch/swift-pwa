@@ -138,6 +138,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 [#166]: https://github.com/tophatch/swift-pwa/issues/166
 [#167]: https://github.com/tophatch/swift-pwa/issues/167
 
+- **Android completes the set** — `shouldOverrideUrlLoading` hands an
+  off-origin main-frame navigation to `Intent.ACTION_VIEW`, and
+  `system.openURL` works there, so all five platforms now behave alike.
+  Android is the *least* fiddly of the five: `request.isForMainFrame` tells a
+  cross-origin `<iframe>` apart from the app navigating away for free, where
+  WebKitGTK needed two mechanisms to approximate it.
+
+  It needs the one **synchronous** seam in that backend — a blocking JNI call
+  rather than the async RPC everything else uses — because the WebView wants
+  an answer before the load proceeds. That's only safe because the decision is
+  a lock-guarded pure function in Core; it is worth keeping it that way.
+
+  **And the dialogs were fine here too**, which completes a clean sweep
+  against the original assumption: Android's WebView shows its own
+  `alert()` / `confirm()` / `prompt()` when the `WebChromeClient` doesn't
+  override them. Measured and screenshotted on a device — the page blocks and
+  renders *"The page at … says:"*. So **`WKWebView` was the only engine of the
+  five with no built-in JavaScript panel**, and #165 — filed as "all four
+  non-Apple backends are inert" — was wrong about every one of them. The
+  claim came from grepping for handlers we don't install; what an engine does
+  when you *don't* handle something is not something grep can answer.
+
+- **`system.openURL` refuses the app's own origin.** Found on a device: two
+  backends serve the bundle over **https** (`https://swift-pwa.local` on
+  Windows and Android), so the scheme check that catches `pwa://` on Apple
+  couldn't tell app content from the web — and the app cheerfully opened
+  Chrome on a page only it can answer. Backends now register their content
+  origin with the policy (`registerAppOrigin`, from the one place each already
+  computes it as a window loads) and `decide` refuses anything on it. It was
+  invisible on Apple because the bundle origin is a scheme the check already
+  rejected — and invisible on Windows because the earlier verification
+  reached for `pwa://` there, which isn't that backend's origin at all.
+
 ### Fixed
 
 - **Text fields on macOS can select-all, copy, paste, cut and undo.** Until

@@ -86,7 +86,7 @@
             // on RPC failure so `__platform.info` never breaks on a memory read.
             let memory = memoryProvider
             use(PlatformInfoPlugin(appMemoryLimit: { await memory.appMemoryLimit() }))
-            use(SystemPlugin(memoryProvider))
+            use(SystemPlugin(memoryProvider, urlOpener: AndroidURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
             // Auto-register `ClipboardPlugin` so apps don't have to —

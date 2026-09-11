@@ -70,6 +70,8 @@ static void *g_inbound_user = NULL;
 
 // Quit (JNI -> Swift) callback registered by Swift.
 static swiftpwa_android_quit_fn g_quit_fn = NULL;
+static swiftpwa_android_navigation_fn g_navigation_fn = NULL;
+static void *g_navigation_user = NULL;
 static void *g_quit_user = NULL;
 
 // Main-thread runner registered by Swift.
@@ -649,6 +651,37 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeRunMain(JNIEnv *env,
 }
 
 // ---------------------------------------------------------------------
+// Navigation policy
+// ---------------------------------------------------------------------
+
+void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn handler,
+                                             void *user) {
+    g_navigation_fn = handler;
+    g_navigation_user = user;
+}
+
+int swiftpwa_android_dispatch_navigation(const char *uri, int is_main_frame) {
+    if (!g_navigation_fn || !uri) return SWIFTPWA_NAV_ALLOW;
+    return g_navigation_fn(uri, is_main_frame, g_navigation_user);
+}
+
+// JNI entry: `WebViewClient.shouldOverrideUrlLoading` calls in here and needs
+// an answer before it returns, so unlike the RPC path this is synchronous.
+JNIEXPORT jint JNICALL
+Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeDecideNavigation(JNIEnv *env,
+                                                                 jobject self,
+                                                                 jstring uri,
+                                                                 jboolean is_main_frame) {
+    (void)self;
+    if (!uri) return SWIFTPWA_NAV_ALLOW;
+    const char *chars = (*env)->GetStringUTFChars(env, uri, NULL);
+    if (!chars) return SWIFTPWA_NAV_ALLOW;
+    int decision = swiftpwa_android_dispatch_navigation(chars, is_main_frame ? 1 : 0);
+    (*env)->ReleaseStringUTFChars(env, uri, chars);
+    return (jint)decision;
+}
+
+// ---------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------
 
@@ -679,6 +712,8 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeQuit(JNIEnv *env,
 // itself `#if os(Android)`-guarded.
 
 void swiftpwa_android_log(const char *m) { (void)m; }
+void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn h, void *u) { (void)h; (void)u; }
+int  swiftpwa_android_dispatch_navigation(const char *u, int m) { (void)u; (void)m; return 0; }
 void swiftpwa_android_set_inbound_handler(swiftpwa_android_inbound_fn h, void *u) { (void)h; (void)u; }
 void swiftpwa_android_dispatch_inbound(const char *j) { (void)j; }
 void swiftpwa_android_attach_bridge(void *b) { (void)b; }

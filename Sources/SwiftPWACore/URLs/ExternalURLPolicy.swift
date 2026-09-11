@@ -69,6 +69,7 @@ public final class ExternalURLPolicy: @unchecked Sendable {
 
     private let lock = NSLock()
     private var declared: Set<String> = []
+    private var appOrigins: Set<WebOrigin> = []
     private var navigation: OffOriginNavigation = .system
     private var diagnosed: Set<String> = []
 
@@ -89,6 +90,22 @@ public final class ExternalURLPolicy: @unchecked Sendable {
 
     public func declare(schemes: String...) {
         declare(schemes: schemes)
+    }
+
+    /// Record an origin this app serves its own content on, so handing it to
+    /// the OS is refused: the desktop would open a URL only this app can
+    /// answer, and the user gets a browser error page.
+    ///
+    /// Backends call this as a window loads. It matters because two of them
+    /// serve the bundle over **https** — `https://swift-pwa.local` on Windows
+    /// and Android — where a scheme check can't tell app content from the
+    /// web. Measured on a device before this existed: `system.openURL` on the
+    /// bundle origin cheerfully opened Chrome on a page it can't fetch.
+    public func registerAppOrigin(_ origin: WebOrigin?) {
+        guard let origin else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        appOrigins.insert(origin)
     }
 
     /// Every scheme this app may open, defaults included.
@@ -135,6 +152,11 @@ public final class ExternalURLPolicy: @unchecked Sendable {
             diagnoseUndeclared(scheme)
             return .refuse(.undeclaredScheme)
         }
+        // The app's own content, reached over a scheme the OS *would* accept.
+        lock.lock()
+        let isOwnContent = appOrigins.contains { $0.covers(url) }
+        lock.unlock()
+        if isOwnContent { return .refuse(.notOpenable) }
         return .open
     }
 

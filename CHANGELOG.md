@@ -275,6 +275,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Three `SwiftPWAQwenTTS` adoption papercuts, all documentation.** Reported by
+  an adopter wiring up read-aloud, in descending order of what each cost them
+  ([#171]).
+
+  **The ONNX tier's env gate is named now.** Its products aren't in the package
+  graph unless `SWIFT_PWA_ONNXRUNTIME` is set when SwiftPM resolves, and the
+  string didn't appear in [docs/ai-plugin.md](docs/ai-plugin.md) at all — so the
+  first thing an adopter met was `product 'SwiftPWAQwenTTS' … not found in
+  package 'swift-pwa'`, which reads as a bad checkout or a version mismatch
+  rather than a missing flag. `swift-pwa build` sets it from
+  `ai.local_onnx_runtime`; every other way of building the package — plain
+  `swift build`, `swift test`, Xcode — doesn't, which is exactly when this bites.
+  A new *Opting in to the ONNX Runtime tier* section says so for all five
+  products, and the tutorial's flag table (which had omitted `SwiftPWAQwenTTS`
+  entirely) points at it.
+
+  **The streaming shape is stated as a contract, not a capability.** The docs
+  showed `subscribe('ai.generateAudioStream', …)` emitting play-as-it-arrives
+  `chunk`s next to the backend that ships, so the example read as if it applied
+  to it. It doesn't: `QwenTTSBackend` doesn't override `generateAudioStream`, so
+  a subscriber gets the protocol default — one `done` frame with the complete
+  WAV, no chunks — and the adopter wrote against the streaming shape first. Said
+  plainly in the callout and beside both examples. Genuine incremental synthesis
+  remains unbuilt; the bridge primitive it was once blocked on has shipped, and
+  the roadmap no longer claims otherwise.
+
+  **Two vendored-artifact comments that read as blockers are deleted.**
+  `Package.swift` said no release had published `onnxruntime.xcframework.zip`
+  and `QwenTTSModelSource` said the `qwen-tts-vendor` release "must be
+  published … before these URLs resolve". Both assets have existed for
+  releases (55 MB and ~2.6 GB, verified against the published releases); the
+  adopter nearly rejected the approach on those comments before testing them.
+  Also refreshed the doc's status block and the audio roadmap, which still
+  described on-device TTS as unshipped.
+
+[#171]: https://github.com/tophatch/swift-pwa/issues/171
+
 - **On Windows, a `ctx.serveDirectory(_:at:)` mount was unreachable: every
   fetch under it failed at the network layer.** An app that mounted a directory
   at `/packs` and fetched `/packs/photo.png` got a `TypeError` for *every* file

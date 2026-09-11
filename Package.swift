@@ -990,13 +990,9 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         let localOnnxXcframework = "Vendor/onnxruntime/onnxruntime.xcframework"
         let onnxRuntimeTarget: Target = FileManager.default.fileExists(atPath: localOnnxXcframework)
             ? .binaryTarget(name: "ONNXRuntime", path: localOnnxXcframework)
-            // PENDING: no swift-pwa release has published a
-            // `onnxruntime.xcframework.zip` asset yet (the llama.cpp
-            // equivalent of `.github/workflows/llama-xcframework.yml` +
-            // its release asset is a follow-up, not part of this spike).
-            // Until then this branch is unreachable for anyone without a
-            // local `Vendor/onnxruntime/` — run
-            // `Scripts/vendor-onnxruntime-apple.sh` to produce one.
+            // Published on the `onnxruntime-vendor` release, so this is the
+            // path an adopter takes; a local `Vendor/onnxruntime/` (from
+            // `Scripts/vendor-onnxruntime-apple.sh`) overrides it above.
             : .binaryTarget(
                 name: "ONNXRuntime",
                 url: "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor/onnxruntime.xcframework.zip",

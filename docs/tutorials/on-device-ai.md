@@ -54,8 +54,15 @@ Add a flag to your `pwa.json`. `swift-pwa build` reads it and links the right en
 | `ai.local_llama: true` | **llama.cpp** — any GGUF chat/instruct model. Text + streaming + JSON. GPU-accelerated (Metal on Apple, Vulkan on Linux/Windows). **The easiest place to start** — one flag, works everywhere. | `SwiftPWALlama` · `LlamaBackend` | macOS, iOS, Linux, Windows |
 | `ai.gemini_nano: true` | **Android Gemini Nano** — the OS's built-in model via ML Kit / AICore. No weights to ship; the OS downloads on demand. | (bundled) · `GeminiNanoBackend` | Android |
 | `ai.phi_silica: true` | **Windows Phi Silica** — the Copilot+ NPU model via the Windows App SDK. | `SwiftPWAPhiSilica` · `PhiSilicaBackend` | Windows (MSIX build) |
-| `ai.local_onnx_runtime: true` | **ONNX Runtime tier** — image *segmentation* (`MobileSAMBackend`), image *editing*/inpaint (`LaMaBackend`), and text→image *generation* (`StableDiffusionBackend`, SD-Turbo). | `SwiftPWASegmentation` / `SwiftPWAImageEdit` / `SwiftPWAStableDiffusion` | macOS, iOS, Linux, Windows, Android |
+| `ai.local_onnx_runtime: true` | **ONNX Runtime tier** — image *segmentation* (`MobileSAMBackend`), image *editing*/inpaint (`LaMaBackend`), text→image *generation* (`StableDiffusionBackend`, SD-Turbo), and text→speech (`QwenTTSBackend`). | `SwiftPWASegmentation` / `SwiftPWAImageEdit` / `SwiftPWAStableDiffusion` / `SwiftPWAQwenTTS` | macOS, iOS, Linux, Windows, Android |
 | `ai.onnx_gpu: true` | Optional GPU acceleration for the ONNX tier (Windows DirectML / Linux CUDA, auto-detect + CPU fallback). Layer on top of `ai.local_onnx_runtime`. | — | Linux, Windows desktop |
+
+> **The ONNX tier's products only exist when its flag is on.** `swift-pwa build`
+> sets `SWIFT_PWA_ONNXRUNTIME=1` from `ai.local_onnx_runtime` for you, but a
+> plain `swift build` / `swift test` / Xcode session doesn't go through the CLI
+> — set it yourself there, or SwiftPM fails with `product 'SwiftPWAQwenTTS' …
+> not found in package 'swift-pwa'`, which looks like a bad checkout and isn't.
+> See [the ONNX tier opt-in](../ai-plugin.md#opting-in-to-the-onnx-runtime-tier).
 
 On **Apple** there's also **Apple Foundation Models** (`SwiftPWAFoundationModels` · `FoundationModelsBackend`) — the OS model, no download, native schema-constrained JSON. It needs no flag; you construct it directly (Step 2).
 

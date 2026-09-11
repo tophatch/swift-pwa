@@ -15,14 +15,15 @@ through using a packaged backend, bringing your own model, writing your own
 `AIBackend`, and baking a LoRA into an on-device image model. This document
 is the full reference behind it.
 
-> **Status (0.7).** The full JS contract, the `AIBackend` protocol, the
-> shared structured-output fallback, and `NoneBackend` all ship. The first
-> real backend — **Apple Foundation Models** (`SwiftPWAFoundationModels`) —
-> is implemented and verified end-to-end on-device (text, token streaming,
-> and native schema-constrained `generateJSON`). The remaining per-platform
-> backends (Gemini Nano, Phi Silica, the portable Gemma fallback, and the
-> image/audio backends) are the roadmap below. A page integrates against
-> the frozen contract once and lights up on whatever backend is injected.
+> **Status.** The full JS contract, the `AIBackend` protocol, the shared
+> structured-output fallback, and `NoneBackend` all ship, and so do real
+> backends for every modality: **text** (Apple Foundation Models, Android
+> Gemini Nano, Windows Phi Silica, portable llama.cpp), **image** generation
+> and editing (Stable Diffusion, LaMa, plus cloud/LAN providers), **vision**
+> segmentation (MobileSAM), and **audio** output (Qwen3-TTS). What remains
+> roadmapped is listed at the [end of this
+> document](#backend-roadmap). A page integrates against the frozen contract
+> once and lights up on whatever backend is injected.
 
 ## JS surface
 
@@ -201,6 +202,12 @@ __SWIFT_PWA__.subscribe('ai.generateAudioStream', { prompt }, (e) => {
 });
 ```
 
+**`chunk` is part of the contract, not a promise about a backend.** A backend
+that can't synthesize incrementally inherits a default that runs the unary call
+and emits a single `done` with the finished audio — which is what the shipped
+`SwiftPWAQwenTTS` does. Write the handler for both shapes (as above) and it
+works either way; don't build a player that waits for a first `chunk`.
+
 When `info.voiceCloning` is true, pass `referenceAudio` (inline `dataBase64` or
 on-disk `path`) + `referenceText` to clone a voice per request — see
 [the worked example](#worked-example-a-custom-on-device-audio-tts-backend) for
@@ -234,6 +241,19 @@ the backend side.
 > trim lever** (not yet done): shrink that base — e.g. keep the talker fp16 at
 > runtime (avoid the CPU-arena fp32 expansion) or run the two talker graphs in a
 > shared session — for tighter-RAM devices. Fine on ≥8 GB devices today.
+>
+> **This backend is batch, and the stream yields one frame.** `QwenTTSBackend`
+> doesn't override `generateAudioStream`, so a subscriber gets the protocol
+> default: no incremental `chunk`s at all, one `done` carrying the complete WAV
+> once synthesis finishes. The streaming example above describes the *contract*,
+> which a future incremental backend can fill in; no shipped backend does today.
+> A page that wants to start playing sooner has to cut the text up and pipeline
+> the calls itself.
+>
+> **Opt in** with `ai.local_onnx_runtime: true` in `pwa.json` — and if you build
+> the package any way other than `swift-pwa build`, set `SWIFT_PWA_ONNXRUNTIME=1`
+> yourself, or the product isn't in the graph at all. See [Opting in to the ONNX
+> Runtime tier](#opting-in-to-the-onnx-runtime-tier).
 >
 > **Speed.** Expect a real-time factor around **2.5** on an M-series Mac — i.e.
 > six seconds of speech takes ~15 seconds to synthesize — so this is
@@ -588,6 +608,38 @@ lets you stream PCM out of an existing Python synthesizer through
 `process.stream` with the *same* page-side ring-buffer code, then swap to this
 `AIBackend` later without touching the page.
 
+### Opting in to the ONNX Runtime tier
+
+`SwiftPWAQwenTTS`, `SwiftPWASegmentation`, `SwiftPWAImageEdit`,
+`SwiftPWAStableDiffusion` and the shared `SwiftPWAONNX` are **not in the package
+graph by default** — they carry a per-platform ONNX Runtime binary, which
+nobody who isn't using them should pay for. They appear when
+`SWIFT_PWA_ONNXRUNTIME` is set in the environment *as SwiftPM resolves the
+manifest*.
+
+`ai.local_onnx_runtime: true` in `pwa.json` is how you ask for that:
+`swift-pwa build` reads it and sets `SWIFT_PWA_ONNXRUNTIME=1` for the child
+`swift build` (and stages the native library into the bundle). **Any other way
+of building the package — plain `swift build`, `swift test`, `swift-pwa dev`,
+opening it in Xcode — doesn't go through the CLI, so you set it yourself:**
+
+```bash
+SWIFT_PWA_ONNXRUNTIME=1 swift build
+```
+
+Miss it and SwiftPM fails during resolution, naming the product rather than the
+flag:
+
+```
+error: 'myapp': product 'SwiftPWAQwenTTS' required by package 'myapp' target
+'MyApp' not found in package 'swift-pwa'.
+```
+
+which reads like a bad checkout or a version mismatch. It isn't one — the
+product exists, it just wasn't declared for this resolve. (`ai.onnx_gpu: true`
+is the sibling flag, and sets `SWIFT_PWA_ONNXRUNTIME_GPU=1` on top of it; see
+[Linux](linux-setup.md) / [Windows](windows-setup.md) setup.)
+
 ### Bringing your own ONNX model (`SwiftPWAONNX`)
 
 If your model is an **ONNX** graph, you don't need to vendor ONNX Runtime
@@ -924,18 +976,20 @@ Gemini Nano's vision variants, a vision Gemma), gated by the `vision` flag.
 | --- | --- | --- | --- |
 | Image Playground (`apple-image-playground`) / Stable Diffusion via MLX (`stable-diffusion-mlx`) | MediaPipe Image Generation (`stable-diffusion-mediapipe`) | Stable Diffusion via ONNX Runtime (`stable-diffusion-onnx`) | (ONNX / llama.cpp-adjacent) |
 
-**Audio** — input (`audioInput`: ASR / phoneme evaluation) and output
-(`audioGeneration`: TTS). On Apple, `Speech` / `AVSpeechSynthesizer`
-(`apple-speech`) for the system path, Whisper-via-MLX (`whisper-mlx`) and a
-TTS model (`tts-mlx`) for the portable path; equivalents on the other OSes.
+**Audio** — output (`audioGeneration`: TTS) is **shipped ✅** on all five
+platforms via `SwiftPWAQwenTTS` (Qwen3-TTS on the shared ONNX Runtime tier),
+generate-then-play rather than incremental. Still roadmapped: a system path on
+Apple (`Speech` / `AVSpeechSynthesizer`, `apple-speech`) and the **input** side
+(`audioInput`: ASR / phoneme evaluation — Whisper-via-MLX and equivalents),
+which today rides whichever text backend is multimodal.
 
 ### Not in this contract (separate roadmap items)
 
 - **Live duplex audio streaming.** Continuous mic → incremental results
-  within an open session is not expressible on today's bridge (no
-  client→server push mid-subscription). It needs a bridge-level
-  bidirectional session primitive — broader than AI, so it's tracked
-  separately rather than designed speculatively here. Interim:
+  within an open session. The bridge-level primitive this was waiting on now
+  exists — duplex sessions (`registerSession` / `session()`) carry
+  client→server pushes mid-subscription — so what's missing is a backend that
+  consumes and emits incrementally, not a way to express it. Interim:
   `MediaRecorder` timeslices → repeated `ai.generateJSON`.
 - **Native audio capture / playback (platform audio).** The `ai.*`
   contract only moves audio *bytes*; the page already gets recordings from

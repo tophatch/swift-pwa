@@ -51,10 +51,6 @@ public struct QwenTTSModelSource: Sendable, Equatable {
     /// (Apache-2.0) with the talker + text-embedding converted to fp16; see
     /// `Scripts/vendor-qwen-tts.sh`. Checksums + sizes are pinned against the
     /// published assets. Pair with `QwenTTSModelSpec.customVoice0_6B`.
-    ///
-    /// > The `qwen-tts-vendor` release must be published (run
-    /// > `.github/workflows/qwen-tts-vendor.yml`, or upload the assembled files)
-    /// > before these URLs resolve.
     public static let customVoice0_6B = QwenTTSModelSource(files: [
         file(
             "talker_decode.fp16.onnx",

@@ -42,8 +42,21 @@ private let graph = Data("""
 }
 """.utf8)
 
+/// The poll interval is tight on purpose — it is what keeps these tests fast,
+/// since every fake server here answers in-process. The timeout is *not*: no
+/// test below asserts on the deadline, so it only has to be large enough to
+/// absorb a loaded CI runner's scheduling jitter while still failing a genuine
+/// hang in reasonable time.
+///
+/// It was 500 ms, and the three tests that hold `/history` empty for four polls
+/// went red together on the macOS runner twice (#180) — they are the only ones
+/// whose runtime depends on timer scheduling at all (14 ms against the 1 ms the
+/// single-round-trip tests take), so they are the only ones a slow wakeup can
+/// reach. What stretches those four sleeps on a hosted runner is not
+/// established: it did not reproduce under a saturated machine (load average 85
+/// on 10 cores, full suite) or a single-thread cooperative pool.
 private func provider() -> ComfyUIWorkflowProvider {
-    ComfyUIWorkflowProvider(pollInterval: .milliseconds(4), timeout: .milliseconds(500))
+    ComfyUIWorkflowProvider(pollInterval: .milliseconds(4), timeout: .seconds(30))
 }
 
 /// Serves the HTTP choreography, streams caller-supplied `/ws` frames, and holds
@@ -211,9 +224,22 @@ struct ComfyUIWorkflowProviderTests {
                 : NetResponse(status: 200, body: j([String: Any]()))
         }
         let config = AIWorkflowConfig(connection: base, jobId: "gone")
-        await #expect(throws: (any Error).self) {
-            for try await _ in provider().runWorkflow(config: config, client: client) {}
+        // The one test that asserts *on* the timeout, so it keeps a tiny budget
+        // of its own — and checks which error came back. A fail-fast regression
+        // would otherwise still satisfy "it threw" by polling to the deadline.
+        let fastFail = ComfyUIWorkflowProvider(pollInterval: .milliseconds(4), timeout: .milliseconds(500))
+        var thrown: (any Error)?
+        do {
+            for try await _ in fastFail.runWorkflow(config: config, client: client) {}
+        } catch {
+            thrown = error
         }
+        let error = try #require(thrown as? AIError)
+        guard case let .generationFailed(message) = error else {
+            Issue.record("expected .generationFailed, got \(error)")
+            return
+        }
+        #expect(message.contains("not found")) // the refusal, not "timed out after"
         #expect(!client.requests.contains { $0.url.path.hasSuffix("/prompt") })
     }
 

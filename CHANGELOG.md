@@ -275,6 +275,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A CI-only flake: three `ComfyUIWorkflowProviderTests` tests failed together
+  on the macOS runner against a 500 ms test-harness deadline.** The suite drives
+  a fake ComfyUI in the same process, and the deadline is a test constant no
+  assertion depends on — so an unrelated PR went red for a budget that was never
+  measuring anything, which trains people to re-run a red job without reading
+  it. The three that failed are exactly the three that hold `/history` empty for
+  four polls, making them the only ones whose runtime depends on timer
+  scheduling at all — 14 ms locally, against 1 ms for the tests that do a single
+  round trip. What stretches those four sleeps past 500 ms on a hosted runner
+  was not established: it did not reproduce locally with the full suite at load
+  average 85 on 10 cores, nor with a single-thread cooperative pool. The shared
+  helper now allows 30 s. The one test that asserts *on* timeout behaviour
+  keeps its own short budget and now also checks *which* error came back,
+  since a fail-fast regression would otherwise still satisfy "it threw" by
+  polling to the deadline ([#180]).
+
+[#180]: https://github.com/tophatch/swift-pwa/issues/180
+
 - **On Android, an `ACTION_VIEW` intent routed to an app that was already
   running stacked a second `MainActivity` — with a second Swift runtime.** Found
   while verifying the deep-link work, but it applies equally to a warm document

@@ -1001,7 +1001,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             : .binaryTarget(
                 name: "ONNXRuntime",
                 url: "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor/onnxruntime-1.29.0.xcframework.zip",
-                checksum: "a0aae655a8e5b8f7ea8f538ddcbb6c18c2ddd6153d147a89d4b3a6a3f12fb173"
+                checksum: "4c72b052a07eeff56f176c8007c738417876d1f9a6594adbf007bec309beddb6"
             )
 
         package.targets.append(contentsOf: [

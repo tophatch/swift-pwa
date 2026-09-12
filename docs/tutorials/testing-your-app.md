@@ -139,9 +139,21 @@ swift-pwa drive shot --simulator --device "iPad Pro 13-inch (M4)" ipad.png
 ```
 
 `drive` builds a debug `.app`, installs it, launches it with the driver enabled,
-runs the verb, and shuts the app down. The simulator shares your machine's
-network stack, which is why the control socket is reachable at all — and also
-why a *physical* device can't be driven: its loopback isn't yours.
+runs the verb, and shuts the app down.
+
+The same verbs run against a **physical** iPhone or iPad with `--target ios`,
+which does the whole loop including signing and installing:
+
+```bash
+swift-pwa drive shot --target ios --team ABCDE12345 ipad.png
+```
+
+A device needs a **USB cable** — the control socket is on the device's own
+loopback, and only usbmuxd's USB transport reaches into it, so a Wi-Fi-paired
+device installs and launches happily and then can't be driven. And the app has
+to stay **frontmost**: iOS suspends a backgrounded app, and a verb sent to a
+suspended one waits instead of failing, which looks exactly like a hang. See
+[ios-setup.md](../ios-setup.md#driving-a-physical-device).
 
 One thing to know before you plan a test around it: **`click` / `type` / `scroll`
 don't work on iOS.** There's no public API for injecting an event into a

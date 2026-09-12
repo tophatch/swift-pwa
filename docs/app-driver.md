@@ -186,7 +186,8 @@ best-effort `setPosition`.
 | Backend | `eval` | `screenshot` | Notes |
 | --- | --- | --- | --- |
 | **macOS** | Yes | Yes | `WKWebView.takeSnapshot` — renders offscreen, so no frontmost / unoccluded requirement and no TCC grant |
-| **iOS Simulator** | Yes | Yes | Same adapter as macOS. `drive --simulator` runs the whole loop; **no synthetic input** (iOS has no public event-synthesis API). A *device* can't be driven at all — its loopback isn't the host's |
+| **iOS Simulator** | Yes | Yes | Same adapter as macOS. `drive --simulator` runs the whole loop; **no synthetic input** (iOS has no public event-synthesis API) |
+| **iOS device** | Yes | Yes | `drive --target ios` runs the whole loop over **USB**. Same adapter and the same lack of synthetic input; the app must stay frontmost — see below |
 | **Linux GTK3** | Yes | Yes | `webkit_web_view_get_snapshot` → cairo PNG |
 | **Linux GTK4** | Yes | Yes | `webkit_web_view_get_snapshot` → `GdkTexture` → PNG. Wayland has no screen-grab fallback, so the renderer snapshot is the only option |
 | **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Verified against a running app on Windows 11 x64 — but the app has to be on an interactive desktop, see below |
@@ -217,6 +218,28 @@ best-effort `setPosition`.
 > file you can read the port and token back from. The control socket is loopback
 > TCP, which crosses the session boundary fine — so the CLI can keep running in
 > the SSH shell. A local RDP or console session needs none of this.
+
+> **iOS device: USB, and keep the app on screen.** `drive --target ios` builds,
+> signs, installs, launches and drives a real iPhone or iPad. Two limits are
+> particular to it.
+>
+> It needs a **cable**. The control socket listens on the *device's*
+> `127.0.0.1`, and `devicectl` has no port-forwarding verb — no networking verb
+> at all. The relay is `usbmuxd`: the host asks it to connect, and its
+> counterpart inside the device dials `127.0.0.1:<port>` locally, which is the
+> one path that reaches a loopback listener. Only the USB transport does that,
+> so a Wi-Fi-paired device — which installs and launches perfectly well — can't
+> be driven. A charge-only USB-C cable presents as no cable at all;
+> `ioreg -c IOUSBHostDevice -r -w 0` lists nothing when the link carries no
+> data.
+>
+> And the app has to stay **frontmost**. Everywhere else, driving a
+> backgrounded or occluded window is the whole point. iOS suspends an app that
+> isn't frontmost, and a verb sent to a suspended app *doesn't fail* — the TCP
+> connection still completes (the kernel accepts it from the listen backlog),
+> the request queues, and it answers the moment the app returns to the
+> foreground. A run that appears to hang is usually an app that went to the
+> background.
 
 ### Dragging
 

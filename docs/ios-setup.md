@@ -114,9 +114,10 @@ iOS has no public API for injecting events into a `WKWebView`, and
 Dispatch from the page instead (`drive eval
 "document.querySelector('#save').click()"`).
 
-And a **physical device** can't be driven at all: the socket listens on
-the device's loopback, which isn't your machine's. Use the simulator for
-layout iteration, and the device for what only a device can tell you.
+A **physical device** can be driven too — `drive --target ios`, over a USB
+cable — see [Driving a physical device](#driving-a-physical-device). Reach for
+the simulator for fast layout iteration, and the device for what only a device
+can tell you.
 
 ## 4. Build for a real device
 
@@ -247,6 +248,46 @@ Then install with `xcrun devicectl device install app build/ios/MyApp.ipa` (or
 For TestFlight / App Store distribution, `xcodebuild archive` →
 `xcodebuild -exportArchive -exportOptionsPlist ...` is still the canonical
 chain (a CLI wrapper is a later follow-up).
+
+### Driving a physical device
+
+`swift-pwa drive --target ios` runs the whole loop against a real iPhone or
+iPad — build, sign, install, launch, drive, tear down:
+
+```bash
+swift-pwa drive info   --target ios --team ABCDE12345
+swift-pwa drive eval   --target ios --team ABCDE12345 "document.title"
+swift-pwa drive shot   --target ios --team ABCDE12345 ipad.png
+```
+
+It takes the same signing options as `build` and `deploy` (`--team`, `--sign`,
+`--provisioning-profile`, `--entitlements`,
+`--allow-provisioning-registration`), and `--device <name|udid>` picks one when
+several are attached. `--simulator` still selects the simulator.
+
+Three things are worth knowing, because each one fails in a way that doesn't
+point at itself:
+
+- **It needs a USB cable.** The control socket listens on the *device's*
+  `127.0.0.1`, and nothing in `devicectl` forwards a port — it has no
+  networking verb at all. The relay is `usbmuxd`, and only its USB transport
+  dials the device's loopback from the inside; a Wi-Fi-paired device isn't
+  reachable that way. Installing and launching work fine over Wi-Fi, so a
+  device that deploys happily can still refuse to be driven. A **charge-only
+  USB-C cable** looks identical to no cable at all — check with
+  `ioreg -c IOUSBHostDevice -r -w 0`, which lists nothing if the link carries
+  no data.
+
+- **The app must stay frontmost.** On desktop the whole point of the driver is
+  that a backgrounded, occluded window still drives correctly. iOS suspends an
+  app that isn't frontmost, and a verb sent to a suspended app **doesn't
+  fail — it waits**, then completes the moment the app comes forward. A run
+  that looks hung is usually an app that went to the background.
+
+- **It's a debug build, so the app must be trusted once.** A development-signed
+  app won't launch until the developer is trusted on the device (Settings →
+  General → VPN & Device Management). Until then the launch is refused and the
+  driver never announces a port.
 
 ## 5. Sideloading for personal testing
 
@@ -416,12 +457,16 @@ Two iOS-specific things to expect:
 
 ## Known limitations on iOS
 
-- **The app driver is simulator-only, and can't synthesize input.**
-  `swift-pwa drive --simulator` gives you `eval` / `shot` / `windows` /
-  `--route` against a real iOS webview. A device is out of reach (its
-  loopback isn't the host's), and `click` / `type` / `scroll` are
-  refused on both — iOS has no public event-synthesis API. See
-  [docs/app-driver.md](app-driver.md).
+- **The app driver can't synthesize input on iOS.** `eval` / `shot` /
+  `windows` / `--route` all work against a real iOS webview, on the simulator
+  and on a device, but `click` / `type` / `scroll` are refused on both — iOS
+  has no public event-synthesis API, so dispatch DOM events through `eval`
+  instead. See [docs/app-driver.md](app-driver.md).
+
+- **Driving a device needs a USB cable, and the app must stay frontmost.**
+  Installing and launching work fine over Wi-Fi, but the control socket listens
+  on the *device's* loopback and only the USB transport relays into it — see
+  [Driving a physical device](#driving-a-physical-device).
 
 - **On-device install needs a provisioning profile — the CLI can mint one for
   free teams.** `swift-pwa build --target ios --sign <identity>` alone runs

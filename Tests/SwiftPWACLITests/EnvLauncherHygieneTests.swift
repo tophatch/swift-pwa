@@ -42,6 +42,10 @@ struct EnvLauncherHygieneTests {
         "Deploy.swift",
         // simctl, and only reachable behind `#if os(macOS)` / --simulator.
         "SimulatorControl.swift",
+        // devicectl, for driving a physical iOS device — behind `#if os(macOS)`.
+        // The *host* path in this file still launches `swift` by bare name,
+        // which is what the Windows-facing half of this rule is about.
+        "Drive.swift",
         // Linux-only: linuxdeploy / appimagetool.
         "AppImageBundler.swift",
         // Android cross-compilation is supported from POSIX hosts only.

@@ -5,6 +5,51 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The prebuilt Linux CLI runs on a machine that has nothing installed**
+  ([#199]). The first command a new user ran died in the dynamic loader —
+  `libswiftCore.so: cannot open shared object file` — before `main`, so
+  `swift-pwa doctor`, the tool whose whole job is explaining a missing
+  prerequisite, could never execute to say so. Having Swift installed didn't
+  help: a swiftly-managed toolchain keeps its runtime inside the toolchain
+  directory, off the loader's path. Found by running the published v0.10.4
+  binaries; v0.10.3 and every earlier Linux asset fail identically.
+
+  Two changes, because the first one alone left the same failure one library
+  later. The release binary is now built `--static-swift-stdlib` and stripped
+  (~66 MB, against 32 MB dynamic — a Swift crash backtrace loses its symbol
+  names, which is the right trade for a build tool). And **`CSecretShim`
+  `dlopen`s libsecret instead of linking it**, which is what removes
+  `libsecret-1.so.0` and the glib trio from the binary's `DT_NEEDED` list:
+  measured with libsecret masked out, the statically-linked build still
+  refused to start. The `swift-pwa` CLI never touches a keyring, and neither
+  does an app that doesn't register `SecretsPlugin`, but both used to require
+  the library to be installed merely to *start*.
+
+  Same move as `CHeifShim`, with the same knock-on: **`libsecret-1-dev` is no
+  longer a Linux build prerequisite** — dropped from five CI apt lists and the
+  setup docs. The hand-transcribed ABI is pinned by
+  `Scripts/verify-libsecret-abi.sh`, which `static_assert`s every struct size,
+  field offset and enum value against libsecret's real headers, because getting
+  it wrong would surface as a lookup that quietly finds nothing rather than as
+  a compile error.
+
+  `LinuxSecretStore` now also distinguishes **"libsecret isn't installed"** from
+  **"no Secret Service is running"** in the thrown message. They have different
+  fixes, and `dlopen` makes the first one a state an app can actually be in.
+
+  Verified on a real box: the stripped static binary runs under `env -i` and
+  with libsecret and glib masked out; `doctor` executes and correctly reports
+  the missing Swift toolchain; and the live `set → get → overwrite → delete`
+  round-trip passes against a real GNOME Keyring through the dlopen path. A new
+  release-workflow step runs the built Linux binary under `env -i` and fails the
+  job if it can't, since nothing else here would notice.
+
+[#199]: https://github.com/tophatch/swift-pwa/issues/199
+
 ## [0.10.4] - 2026-09-12
 
 ### Added

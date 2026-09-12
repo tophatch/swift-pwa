@@ -61,7 +61,6 @@ sudo apt-get install -y \
     libwebkit2gtk-4.1-dev \
     libayatana-appindicator3-dev \
     libglib2.0-dev \
-    libsecret-1-dev \
     xvfb \
     wget \
     file \
@@ -73,11 +72,15 @@ over D-Bus, with a fallback to `GtkStatusIcon` on legacy desktops).
 It's a hard build dep of the GTK3 backend even if you don't use
 `TrayPlugin` — the C shim is part of the target.
 
-`libsecret-1-dev` is likewise unconditional on Linux — `SwiftPWACore`
-pulls in the `CSecretShim`/`CLibSecret` pair that backs
-`LinuxSecretStore` (the `secrets.*` plugin), so *any* Linux build needs
-it, both backends, whether or not the app registers `SecretsPlugin`.
-Without it the build stops at `'libsecret/secret.h' file not found`.
+`libsecret-1-dev` is **not** needed to build, despite `SwiftPWACore`
+carrying `LinuxSecretStore` (the `secrets.*` plugin) on every Linux
+build. `CSecretShim` `dlopen`s libsecret at first use rather than
+linking it, so nothing includes its headers and nothing lands in the
+binary's `DT_NEEDED` list. An app that stores a secret needs the
+**runtime** library present (`libsecret-1-0`, which a desktop install
+already has) plus a running keyring; one that never does runs on a box
+without either, and `secrets.*` reports which of the two is missing
+rather than a generic failure.
 
 > The library prints `libayatana-appindicator is deprecated. Please
 > use libayatana-appindicator-glib in newly written code.` to stderr
@@ -122,7 +125,6 @@ sudo apt-get install -y \
     libgtk-4-dev \
     libwebkitgtk-6.0-dev \
     libglib2.0-dev \
-    libsecret-1-dev \
     xvfb \
     wget \
     file \

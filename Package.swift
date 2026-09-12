@@ -289,25 +289,22 @@ let package = Package(
 
         // A C shim over libsecret's variadic `secret_password_*_sync` + the
         // fixed-size `SecretSchema` (both awkward from Swift), exposing plain
-        // functions LinuxSecretStore calls. Depends on the `CLibSecret`
-        // systemLibrary for the pkg-config build flags. Linux-only (pulled in
-        // only via SwiftPWACore's `.when(.linux)` edge above).
+        // functions LinuxSecretStore calls. Linux-only (pulled in only via
+        // SwiftPWACore's `.when(.linux)` edge above).
+        //
+        // It `dlopen`s libsecret rather than linking it — the CHeifShim
+        // pattern, and for a sharper reason here. Linking put
+        // `libsecret-1.so.0` plus the glib trio in the `DT_NEEDED` list of
+        // *every* binary built from this package, so the `swift-pwa` CLI, which
+        // never touches a keyring, refused to start on a machine without them
+        // (#199). Nothing includes libsecret's headers any more either, so
+        // `libsecret-1-dev` is no longer a Linux build prerequisite and the
+        // `CLibSecret` pkg-config systemLibrary target is gone.
         .target(
             name: "CSecretShim",
-            // Gate the systemLibrary edge on Linux (matching the GTK/WebKit
-            // shims) so SwiftPM prunes `CLibSecret` from non-Linux build
-            // graphs and never probes its `libsecret-1` .pc file — otherwise
-            // a macOS/Windows host emits spurious pkg-config warnings for a
-            // target that never actually compiles or links there.
-            dependencies: [
-                .target(name: "CLibSecret", condition: .when(platforms: [.linux]))
+            linkerSettings: [
+                .linkedLibrary("dl", .when(platforms: [.linux]))
             ]
-        ),
-        .systemLibrary(
-            name: "CLibSecret",
-            path: "Sources/CLibSecret",
-            pkgConfig: "libsecret-1",
-            providers: [.apt(["libsecret-1-dev"])]
         ),
 
         // Vendored single-file Zstandard *decoder* (Sources/CZstd/zstddeclib.c),

@@ -10,7 +10,7 @@ plaintext file, or `pwa.json`.
 | **macOS / iOS** | **Keychain** (`kSecClassGenericPassword`, `kSecAttrAccessibleAfterFirstUnlock`, service = bundle id) |
 | **Android** | **`EncryptedSharedPreferences`** (Jetpack Security — AES-256 values, master key in the Android Keystore, hardware-backed where available) |
 | **Windows** | **DPAPI** (`CryptProtectData`, user scope) → encrypted blob under `%LOCALAPPDATA%\<service>\secrets\` |
-| **Linux** | **Secret Service** (libsecret → GNOME Keyring / KWallet) via a small C shim; build needs `libsecret-1-dev`, runtime needs the runtime lib (see below) |
+| **Linux** | **Secret Service** (libsecret → GNOME Keyring / KWallet) via a small C shim that `dlopen`s libsecret; nothing to install to build, runtime needs the library + a keyring (see below) |
 
 Registered without a store, `SecretsPlugin` falls back to `NoneSecretStore`: the
 command set exists but every call returns `E_SECRETS`. Inject your own
@@ -25,7 +25,11 @@ command set exists but every call returns `E_SECRETS`. Inject your own
 >   KWallet over D-Bus) provides it — end users on a normal desktop have it, and
 >   the runtime lib `libsecret-1.so.0` is already present (WebKitGTK depends on it,
 >   so any machine that can run the app has it). A *headless* box with no keyring
->   returns `E_SECRETS`. `libsecret-1-dev` is only needed to **build**, not to run.
+>   returns `E_SECRETS`. **Nothing is needed to build** — the shim `dlopen`s
+>   libsecret at first use, so neither `libsecret-1-dev` nor the library itself is
+>   required to compile or to *start* an app; only to store a secret. The thrown
+>   message distinguishes the two failures, since they have different fixes:
+>   "libsecret isn't installed" versus "no Secret Service / keyring?".
 
 > **swift-pwa never persists a secret for you.** This plugin is a thin, audited
 > bridge to the OS store — where a value lives is the store's business. Never

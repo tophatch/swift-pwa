@@ -25,13 +25,17 @@ import Foundation
 ///      — present after `Scripts/vendor-onnxruntime-linux.sh` inside the repo.
 ///   3. download the pinned release asset to a content-addressed cache.
 enum OnnxRuntimeLinuxArtifact {
+    /// The vendored ONNX Runtime version, carried in the asset name so a bump
+    /// publishes a new asset beside the old one instead of replacing bytes that
+    /// every already-released swift-pwa pins by checksum.
+    static let version = "1.29.0"
     static let url =
         "https://github.com/tophatch/swift-pwa/releases/download/" +
-        "onnxruntime-vendor-linux/libonnxruntime-linux-x86_64.so"
+        "onnxruntime-vendor-linux/libonnxruntime-linux-x86_64-\(version).so"
 
-    /// SHA-256 of Microsoft's ONNX Runtime 1.27.0 Linux x64 `libonnxruntime.so`
+    /// SHA-256 of Microsoft's ONNX Runtime Linux x64 `libonnxruntime.so`
     /// (see `Scripts/vendor-onnxruntime-linux.sh`).
-    static let sha256 = "4061866361d9a8d2872f5f419c5515ce35a830a0c5c77ce1723320ac0dbabfc7"
+    static let sha256 = "5715f06d8992ca8eeeddcce43df3a7d38f97d537052126f558e912cb312460ca"
 
     struct ArtifactError: Error, CustomStringConvertible {
         let description: String

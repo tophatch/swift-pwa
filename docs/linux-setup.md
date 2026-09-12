@@ -432,12 +432,21 @@ without an NVIDIA GPU. `ai.vision.info` reports the active `provider`
 (`"cuda"` or `"cpu"`).
 
 > **The CUDA runtime + cuDNN are *not* bundled** — they're expected on the
-> target machine, and ONNX Runtime pins the **major** versions it was built
-> against (ORT 1.27 → CUDA 12.x + cuDNN 9.x). Install NVIDIA's CUDA 12 toolkit +
-> cuDNN 9 (e.g. via NVIDIA's apt repo). A missing or mismatched CUDA runtime is
-> not an error — the CUDA EP just fails to load and the app runs on CPU (a
-> one-line notice on stderr; `ai.vision.info` reports `"cpu"`). This brittleness
-> is why Linux GPU is CUDA/NVIDIA-only and behind an explicit opt-in.
+> target machine, and the **minor** version matters more than the docs of either
+> project suggest. ORT 1.29's Linux CUDA build is compiled against **CUDA 12.8 +
+> cuDNN 9**, and its provider library imports `cudaLibraryGetKernel`, a symbol
+> **CUDA 12.4 does not export**. Measured on one box, same build, only
+> `LD_LIBRARY_PATH` differing: against the system CUDA 12.4 the EP fails to load
+> and `ai.vision.info` reports `"cpu"`; against a CUDA 12.8 runtime it reports
+> `"cuda"`. So install CUDA **12.8 or newer** (12.x, not 13 — we vendor the
+> `gpu_cuda12` build) plus cuDNN 9, e.g. via NVIDIA's apt repo. ORT 1.27 was
+> content with 12.4, so a machine that worked before the 1.29 bump can quietly
+> drop to CPU.
+>
+> A missing or mismatched CUDA runtime is not an error — the CUDA EP just fails
+> to load and the app runs on CPU (a one-line notice on stderr, naming the
+> symbol; `ai.vision.info` reports `"cpu"`). This brittleness is why Linux GPU is
+> CUDA/NVIDIA-only and behind an explicit opt-in.
 
 There is **no** cross-vendor prebuilt GPU path on Linux (unlike Windows
 DirectML, and unlike llama.cpp's single Vulkan build): AMD Radeon iGPUs aren't

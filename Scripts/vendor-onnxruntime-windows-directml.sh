@@ -17,11 +17,20 @@
 #   Microsoft.AI.DirectML              — a dependency, ships bin/x64-win/DirectML.dll
 #
 # The DirectML NuGet's latest is **1.24.4**, which LAGS the CPU/CUDA desktop
-# build's 1.27.0 — its headers declare `ORT_API_VERSION 24`, so requesting the
-# 1.27 header's version 27 from a 1.24.4 runtime would make
+# build's 1.29.0 — its headers declare `ORT_API_VERSION 24`, so requesting the
+# shared header set's version from a 1.24.4 runtime would make
 # `OrtGetApiBase()->GetApi()` return null and crash. This script therefore
 # writes a SEPARATE committed header set + module (ONNXRuntimeDirectML) matched
-# to the 1.24.4 runtime, kept apart from the shared 1.27 ONNXRuntimeDesktop set.
+# to the 1.24.4 runtime, kept apart from the shared ONNXRuntimeDesktop set.
+# **This version pin deliberately does NOT move with the others** — the whole
+# point of the separation is that the two runtimes drift.
+#
+# One thing to carry over when it DOES move: the CPU/CUDA assets carry their
+# ONNX Runtime version in the published filename, so a bump lands beside its
+# predecessor instead of overwriting bytes that already-released swift-pwa
+# versions pin by checksum. These four assets are still published under plain
+# names because this pin has never moved; give them the same treatment (and
+# update OnnxRuntimeWindowsDirectMLArtifact's URLs) on the first bump.
 # `dml_provider_factory.h` (for `OrtSessionOptionsAppendExecutionProvider_DML`)
 # ships only in this DirectML package.
 #

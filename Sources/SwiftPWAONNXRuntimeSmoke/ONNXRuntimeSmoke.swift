@@ -13,7 +13,7 @@
         }
 
         /// The API table's declared version (`OrtApiBase.GetVersionString`),
-        /// e.g. `"1.27.0"`.
+        /// e.g. `"1.29.0"`.
         public static func versionString() -> String? {
             guard let base = OrtGetApiBase(), let getVersion = base.pointee.GetVersionString,
                   let version = getVersion()

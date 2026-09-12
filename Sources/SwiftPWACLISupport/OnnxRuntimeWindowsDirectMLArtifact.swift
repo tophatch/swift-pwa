@@ -22,14 +22,14 @@ import Foundation
 /// The last three are staged next to the built `.exe` (see `WindowsBundler`).
 ///
 /// **Version note:** the DirectML build is NuGet-only and its latest is
-/// **1.24.4**, which lags the CPU/CUDA desktop build's 1.27.0. A 1.27 header
+/// **1.24.4**, which lags the CPU/CUDA desktop build. A newer header
 /// requests a newer `ORT_API_VERSION` than a 1.24.4 runtime provides
 /// (`OrtGetApiBase()->GetApi()` returns null → crash), so this artifact links
 /// against a **separate pinned 1.24.4 header set + module**
 /// (`ONNXRuntimeDirectML`, committed under `Vendor/onnxruntime-directml-headers/`,
 /// including `dml_provider_factory.h` for
 /// `OrtSessionOptionsAppendExecutionProvider_DML`), distinct from the shared
-/// 1.27 `ONNXRuntimeDesktop` set. Re-hosted on this repo's stable
+/// `ONNXRuntimeDesktop` set. Re-hosted on this repo's stable
 /// `onnxruntime-vendor-windows-directml` release by
 /// `.github/workflows/onnxruntime-desktop-gpu.yml` (vendored locally by
 /// `Scripts/vendor-onnxruntime-windows-directml.sh`).

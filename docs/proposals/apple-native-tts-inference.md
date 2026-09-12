@@ -127,13 +127,14 @@ The output also **forked**: 140,160 samples against 147,840, so the reduced
 precision changed the seeded sampler's path. Even a positive result here would
 have needed that resolving.
 
-**A second blocker found on the way.** ONNX Runtime **1.27** — the version we
-vendor — cannot even load an fp16 code-predictor at `ORT_ENABLE_ALL`:
-`SimplifiedLayerNormFusion` fails with `Attempting to get index by a name which
-does not exist: InsertedPrecisionFreeCast_…`, naming a node the graph does not
-contain. Reproduced in Python against 1.27 (fails at `ALL`, fine at `BASIC`) and
-**fixed by 1.29**. Anyone revisiting fp16 anywhere in this tier needs the
-runtime bumped first.
+**A second blocker found on the way — since removed.** ONNX Runtime **1.27**,
+the version vendored at the time, could not even load an fp16 code-predictor at
+`ORT_ENABLE_ALL`: `SimplifiedLayerNormFusion` failed with `Attempting to get
+index by a name which does not exist: InsertedPrecisionFreeCast_…`, naming a
+node the graph does not contain. Reproduced in Python against 1.27 (fails at
+`ALL`, fine at `BASIC`) and through this repo's own wrapper. The vendored
+runtime is **1.29** now, which loads it; the 0.52× measurement above is the
+reason not to reach for fp16 anyway.
 
 ### Also ruled out: fusing the 15 codebook calls
 
@@ -248,9 +249,9 @@ path.
 
 - **Answered:** fp16 on the code-predictor is 0.52× (2× slower) on the CPU
   provider, and forks the seeded token stream. See Option A.
-- ONNX Runtime **1.27** cannot load an fp16 code-predictor at
-  `ORT_ENABLE_ALL` (`SimplifiedLayerNormFusion`); **1.29** can. Worth bumping
-  the vendored runtime independently of this proposal?
+- **Answered:** ONNX Runtime 1.27 could not load an fp16 code-predictor at
+  `ORT_ENABLE_ALL` (`SimplifiedLayerNormFusion`); the vendored runtime was
+  bumped to **1.29** independently of this proposal.
 - Is `FluidInference/qwen3-tts-coreml` current, correctly licensed
   (Apache-2.0 upstream), and does it match the 12 Hz 0.6B CustomVoice pipeline
   we ship — including the 9 preset voices?

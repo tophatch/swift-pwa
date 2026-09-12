@@ -20,7 +20,7 @@
 # Headers are IDENTICAL to the CPU build (only cpu_provider_factory.h +
 # provider_options.h + the C API — CUDA uses the in-header
 # `OrtSessionOptionsAppendExecutionProvider_CUDA`, no extra header), and this is
-# ORT 1.27.0 like the CPU build, so the committed `Vendor/onnxruntime-desktop-
+# ORT 1.29.0 like the CPU build, so the committed `Vendor/onnxruntime-desktop-
 # headers/` (module ONNXRuntimeDesktop) is reused as-is — this script only
 # fetches the libs.
 #
@@ -30,7 +30,12 @@
 # platform-independent; only the link/run against the ELF `.so`s needs Linux).
 set -euo pipefail
 
-ONNXRUNTIME_VERSION="${1:-1.27.0}"
+# ORT 1.29's CUDA 12 build is compiled against **CUDA 12.8** and its provider
+# library imports `cudaLibraryGetKernel`, which CUDA 12.4 does not export — a
+# host with an older 12.x runtime loses the EP (transparently, to CPU). Upstream
+# also now ships a `gpu_cuda13` variant and calls the CUDA 12 packages
+# deprecated; we stay on 12 because that is what target machines have.
+ONNXRUNTIME_VERSION="${1:-1.29.0}"
 SLUG="onnxruntime-linux-x64-gpu_cuda12-${ONNXRUNTIME_VERSION}"
 URL="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${SLUG}.tgz"
 
@@ -63,9 +68,14 @@ for f in libonnxruntime_providers_shared.so libonnxruntime_providers_cuda.so; do
     [ -f "$SRC/lib/$f" ] || { echo "FATAL: no $f in $SRC/lib" >&2; exit 1; }
     cp "$SRC/lib/$f" "$OUT/$f"
 done
-# Publishable asset names (arch-tagged), mirroring the CPU script — the CLI's
-# OnnxRuntimeLinuxGpuArtifact downloads these directly.
-cp -f "$OUT/libonnxruntime.so.1" "$OUT/libonnxruntime-linux-x86_64-gpu.so"
+# Publishable asset names (arch- and version-tagged), mirroring the CPU script
+# — the CLI's OnnxRuntimeLinuxGpuArtifact downloads these directly. The version
+# suffix keeps a bump additive rather than replacing the bytes an older
+# swift-pwa release pins by checksum.
+V="$ONNXRUNTIME_VERSION"
+cp -f "$OUT/libonnxruntime.so.1" "$OUT/libonnxruntime-linux-x86_64-gpu-$V.so"
+cp -f "$OUT/libonnxruntime_providers_shared.so" "$OUT/libonnxruntime_providers_shared-$V.so"
+cp -f "$OUT/libonnxruntime_providers_cuda.so" "$OUT/libonnxruntime_providers_cuda-$V.so"
 
 echo
 echo "=== files ==="
@@ -74,7 +84,8 @@ for f in libonnxruntime.so.1 libonnxruntime_providers_shared.so libonnxruntime_p
 done
 echo
 echo "=== publishable asset checksums (sha256; pin into OnnxRuntimeLinuxGpuArtifact.swift) ==="
-for f in libonnxruntime-linux-x86_64-gpu.so libonnxruntime_providers_shared.so libonnxruntime_providers_cuda.so; do
+for f in "libonnxruntime-linux-x86_64-gpu-$V.so" "libonnxruntime_providers_shared-$V.so" \
+    "libonnxruntime_providers_cuda-$V.so"; do
     printf '%s: ' "$f"
     shasum -a 256 "$OUT/$f" | awk '{print $1}'
 done

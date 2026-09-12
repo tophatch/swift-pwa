@@ -17,7 +17,7 @@
 # Requires: curl, unzip, shasum.
 set -euo pipefail
 
-ONNXRUNTIME_VERSION="${1:-1.27.0}"
+ONNXRUNTIME_VERSION="${1:-1.29.0}"
 SLUG="onnxruntime-win-x64-${ONNXRUNTIME_VERSION}"
 URL="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${SLUG}.zip"
 
@@ -39,9 +39,12 @@ rm -rf "$EXTRACT" && mkdir -p "$EXTRACT"
 unzip -q "$ZIP" -d "$EXTRACT"
 SRC="$EXTRACT/$SLUG"
 
-# --- headers: identical to the Linux release's, so write the same committed
-# dir (the two scripts are interchangeable for headers; running either is
-# enough). ---
+# --- headers: this script OWNS the committed
+# `Vendor/onnxruntime-desktop-headers/` set that both desktop platforms compile
+# against (module ONNXRuntimeDesktop). The Linux release declares the same API
+# but isn't byte-identical (LF vs CRLF, and it drops the training headers), so
+# only one release can own the directory — this one, because it's what is
+# committed today. Scripts/vendor-onnxruntime-linux.sh leaves it alone. ---
 rm -rf "$HEADERS_OUT" && mkdir -p "$HEADERS_OUT"
 cp "$SRC"/include/*.h "$HEADERS_OUT/"
 cat > "$HEADERS_OUT/module.modulemap" <<'EOF'
@@ -59,9 +62,18 @@ for f in onnxruntime.lib onnxruntime.dll; do
     echo "=== wrote $OUT/$f ($(du -h "$OUT/$f" | cut -f1)) ==="
 done
 
+# Publishable copies carry the ONNX Runtime version in their names, so a bump
+# adds assets to the release instead of replacing the ones older swift-pwa
+# versions pin by checksum. The local (unversioned) copies above are what the
+# linker and the bundler consume.
+for ext in lib dll; do
+    cp -f "$OUT/onnxruntime.$ext" "$OUT/onnxruntime-${ONNXRUNTIME_VERSION}.$ext"
+done
+
 echo
 echo "=== publishable asset checksums (sha256; pin into OnnxRuntimeWindowsArtifact.swift) ==="
-for f in onnxruntime.lib onnxruntime.dll; do
+for ext in lib dll; do
+    f="onnxruntime-${ONNXRUNTIME_VERSION}.$ext"
     printf '%s: ' "$f"
     shasum -a 256 "$OUT/$f" | awk '{print $1}'
 done

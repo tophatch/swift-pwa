@@ -972,9 +972,9 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
 // throwaway executable target linked against the vendored
 // `libonnxruntime.so` via `swift build --swift-sdk
 // aarch64-unknown-linux-android28` (`nm -D` shows `OrtGetApiBase` as an
-// undefined symbol versioned `VERS_1.27.0`, i.e. resolving against the
-// real lib, not a stub), pushed + run via `adb shell` on a Galaxy Tab
-// S10+ (arm64-v8a) → printed the real version string `"1.27.0"`.
+// undefined symbol versioned `VERS_<ort version>`, i.e. resolving against
+// the real lib, not a stub), pushed + run via `adb shell` on an Android
+// tablet (arm64-v8a) → printed the vendored version string back.
 // `SwiftPWAONNXRuntimeAndroidSmoke` itself is a plain library target (no
 // product yet forces a real link on it — that arrives with a real
 // backend/example app), so it's a compile+module-resolution check; the
@@ -993,10 +993,15 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             // Published on the `onnxruntime-vendor` release, so this is the
             // path an adopter takes; a local `Vendor/onnxruntime/` (from
             // `Scripts/vendor-onnxruntime-apple.sh`) overrides it above.
+            //
+            // The asset name carries the ONNX Runtime version so a bump adds an
+            // asset instead of replacing one: this URL is pinned *with a
+            // checksum* by every already-tagged swift-pwa, and rewriting the
+            // bytes underneath would break `swift build` for all of them.
             : .binaryTarget(
                 name: "ONNXRuntime",
-                url: "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor/onnxruntime.xcframework.zip",
-                checksum: "1f9bbc51b73e9c3c996f68002ad4aabcbb5fd94f8ebf540da8e2c5f2877b2cd9"
+                url: "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor/onnxruntime-1.29.0.xcframework.zip",
+                checksum: "a0aae655a8e5b8f7ea8f538ddcbb6c18c2ddd6153d147a89d4b3a6a3f12fb173"
             )
 
         package.targets.append(contentsOf: [
@@ -1077,7 +1082,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // SWIFT_PWA_ONNXRUNTIME_GPU when the flag is on. It changes *which* ONNX
     // Runtime module the desktop segmentation build links: Linux keeps
     // `ONNXRuntimeDesktop` (the CUDA build's headers are the identical ORT
-    // 1.27 C API — CUDA's append-EP is an in-header C function), but Windows
+    // C API — CUDA's append-EP is an in-header C function), but Windows
     // swaps to `ONNXRuntimeDirectML`, whose own pinned ORT 1.24.4 headers match
     // the DirectML runtime's API version and add `dml_provider_factory.h`.
     let onnxGpu = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
@@ -1140,8 +1145,8 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // The Windows DirectML systemLibrary: its own pinned ORT 1.24.4 header set
     // (module `ONNXRuntimeDirectML`, committed under
     // `Vendor/onnxruntime-directml-headers/`, incl. `dml_provider_factory.h`),
-    // separate from the shared 1.27 `ONNXRuntimeDesktop` set because the
-    // DirectML NuGet runtime lags at 1.24.4 (a 1.27 header would request a
+    // separate from the shared `ONNXRuntimeDesktop` set because the
+    // DirectML NuGet runtime lags at 1.24.4 (a newer header would request a
     // newer `ORT_API_VERSION` than that runtime provides → crash). Only added
     // to the graph when `ai.onnx_gpu` is on — referencing a target name that
     // isn't declared is a SwiftPM error regardless of platform conditions, so

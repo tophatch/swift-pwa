@@ -6,6 +6,6 @@ struct ONNXRuntimeSmokeTests {
     @Test("the vendored xcframework links and its C API is callable")
     func linksAndCallable() {
         #expect(ONNXRuntimeSmoke.linked() == true)
-        #expect(ONNXRuntimeSmoke.versionString() == "1.27.0")
+        #expect(ONNXRuntimeSmoke.versionString() == "1.29.0")
     }
 }

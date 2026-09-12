@@ -33,6 +33,20 @@ jobs:
           # 6.0.3 and a fully loaded page under 6.2 / 6.3.1. Keep this in step
           # with `.swift-version`, which swiftly honours inside the checkout.
           swift-version: "6.2"
+      - name: Install the libcurl development package (Linux only)
+        # Needed only by the **static** link. A dynamic build resolves curl
+        # through `libFoundationNetworking.so`, which linked it at its own build
+        # time; `--static-swift-stdlib` instead pulls in
+        # `lib_CFURLSessionInterface.a`, whose curl references the final link
+        # has to resolve itself — so `-lcurl` must be satisfiable, which means
+        # the dev package (the runner has the runtime `libcurl.so.4` but not the
+        # `libcurl.so` symlink). Without it the job dies in ~40 lines of
+        # `undefined reference to 'curl_easy_init'`.
+        #
+        # It changes nothing for users: the published binary still links
+        # `libcurl.so.4` dynamically, which every Linux box has.
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libcurl4-openssl-dev
       - name: Build CLI
         # `--arch` on Apple, and it's load-bearing: the macos-15 runners are
         # Apple silicon, so a plain `swift build` ignores the matrix entry and

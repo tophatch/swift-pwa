@@ -130,12 +130,14 @@ your own CI, give the step a generous timeout and let its stderr reach the log �
 the phase lines (build → boot → install → launch) are what tell you where a
 stall is.
 
-Two honest limits. **Synthetic input is refused** — `drive info` reports
-`input.pointer: false`, because iOS exposes no public way to inject an event into
-a `WKWebView`; dispatch from the page instead (`drive eval
-"document.querySelector('#save').click()"`). And a **physical device** is out of
-reach: the control socket listens on the device's loopback, which is not this
-machine's, so there is nothing for `--attach` to connect to.
+One honest limit, shared with a real device: **synthetic input is refused** —
+`drive info` reports `input.pointer: false`, because iOS exposes no public way to
+inject an event into a `WKWebView`; dispatch from the page instead (`drive eval
+"document.querySelector('#save').click()"`).
+
+A **physical device** is driven by `drive --target ios` (no `--simulator`), over
+USB — see [Per-backend support](#per-backend-support) for the cable and
+stay-frontmost requirements that come with it.
 
 ### Driving an app you launched yourself
 

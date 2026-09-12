@@ -115,6 +115,18 @@
         var registeredBusName: String {
             trayPtr.map { String(cString: swiftpwa_tray_bus_name($0)) } ?? ""
         }
+
+        /// The `org.kde.StatusNotifierItem` object path. Fixed on this
+        /// backend, which exports the objects itself; the GTK3 backend's
+        /// libayatana derives one from the item id.
+        var itemObjectPath: String {
+            trayPtr.map { String(cString: swiftpwa_tray_item_path($0)) } ?? ""
+        }
+
+        /// The `com.canonical.dbusmenu` object path.
+        var menuObjectPath: String {
+            trayPtr.map { String(cString: swiftpwa_tray_menu_path($0)) } ?? ""
+        }
     }
 
     /// `@convention(c)` callback for `swiftpwa_tray_*`. Fires on the

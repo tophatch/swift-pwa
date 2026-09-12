@@ -136,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   platform's driver limitation would have looked like an editing regression on
   all of them.
 
+[#193]: https://github.com/tophatch/swift-pwa/issues/193
 [#170]: https://github.com/tophatch/swift-pwa/issues/170
 [#175]: https://github.com/tophatch/swift-pwa/issues/175
 [#164]: https://github.com/tophatch/swift-pwa/issues/164
@@ -409,6 +410,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached for `pwa://` there, which isn't that backend's origin at all.
 
 ### Fixed
+
+- **A disabled tray menu item could still be activated on Linux.** Both
+  backends export `enabled: false` correctly, so a panel greys the item out and
+  a user can't click it — but a panel isn't the only thing that can send a
+  `com.canonical.dbusmenu.Event`, and neither backend checked the flag on the
+  way in. Our GTK4 shim tested only `!separator` before firing the callback;
+  on GTK3, libayatana routes an Event straight to `gtk_menu_item_activate`,
+  which doesn't consult widget sensitivity. Either way an app that disabled an
+  item — the usual reason being that the action isn't valid right now — could
+  still be told it was clicked, by anything in the user's session. Both shims
+  now refuse it. Found by the negative control for the test work above ([#193]).
+
+- **The Linux tray is verified on both backends, and a failing tray test no
+  longer costs the rest of the run its result.** `GTKTraySNITests` asserted the
+  addresses our *GTK4* shim publishes at — a name it owns, `/StatusNotifierItem`
+  and `/MenuBar` — against whichever backend was built. The GTK3 backend
+  delegates to `libayatana-appindicator3`, which exports onto the app's own
+  connection under `/org/ayatana/NotificationItem/<id>`, so the suite could
+  never pass there and the GTK3 tray had no coverage at all. The test now asks
+  the tray where it lives ([#193]).
+
+  It also assumed a panel was needed to make any of this appear. Measured, it
+  isn't: libayatana exports the item and its dbusmenu as soon as the indicator
+  exists, with no `StatusNotifierWatcher` on the bus at all — a watcher is who
+  gets *told*, not what makes the objects exist. So the GTK3 tray is drivable
+  headlessly, and the coverage is real rather than skipped: menu layout,
+  `separator`, and a `com.canonical.dbusmenu.Event` arriving on the app's event
+  stream. The icon is asserted per backend, because the backends genuinely
+  differ — our GTK4 shim marshals the file into an ARGB `IconPixmap`, while
+  libayatana passes the path through as `IconName` for the panel to load.
+
+  The worse half was the failure mode. The test raced the incoming event against
+  a timeout in a task group so "a regression fails the test instead of hanging
+  it" — but on the timeout branch the group was left awaiting a child still
+  iterating the stream, and the test never completed. Every suite in flight
+  behind it was stranded: on a GTK3 box the four other GUI suites printed
+  `started` and were never heard from again, so one structurally-impossible
+  assertion was quietly costing four suites their verification. The wait is now
+  bounded polling with no `await` in it, so an event that never arrives fails.
 
 - **`Shell.capture`'s timeout didn't bound a command that spawns subprocesses.**
   The deadline fired and terminated the child, but the call then sat in

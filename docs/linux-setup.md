@@ -626,9 +626,12 @@ remain:
   (GTK3 via `libayatana-appindicator`, GTK4 hand-rolled over GDBus). It
   shows in Plasma, Sway/waybar, XFCE, MATE, Cinnamon, etc. out of the
   box; **bare GNOME Shell needs the AppIndicator extension** (GNOME
-  dropped its own tray host). Where no host is present the app owns its
-  bus name, registers as soon as a host appears, and never crashes — the
-  icon just isn't drawn until then. Also per the SNI spec, icon clicks
+  dropped its own tray host). Where no host is present the item is
+  published anyway — GTK4 owning a bus name of its own, GTK3 exporting
+  onto the app's own connection — and registers as soon as a host
+  appears, so nothing crashes and the icon just isn't drawn until then.
+  (That the objects exist with no panel running is also what lets the
+  tray be tested headlessly.) Also per the SNI spec, icon clicks
   are owned by the panel, so `.click` (`tray.subscribe`) never fires on
   Linux; only menu-item activations do.
 - **Nothing recolours *your* tray art, but the panel's likely polarity is

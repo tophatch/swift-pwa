@@ -157,7 +157,7 @@ struct BridgeCatalogTests {
 
         let inv = Invocation(id: 1, command: "__bridge.describe", payload: Data("{}".utf8))
         let result = await app.registry.dispatch(
-            CommandContext(invocation: inv, originWindow: nil, appContext: app)
+            CommandContext(invocation: inv, caller: .agent, appContext: app)
         )
         guard case let .ok(data) = result else { Issue.record("expected .ok"); return }
         let descriptors = try JSONDecoder().decode([CommandDescriptor].self, from: data)

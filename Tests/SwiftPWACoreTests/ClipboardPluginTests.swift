@@ -17,7 +17,7 @@ struct ClipboardPluginTests {
     func readText() async throws {
         let (app, clipboard) = makeApp(initial: "hello")
         let inv = Invocation(id: 1, command: "clipboard.readText", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(ClipboardTextResult.self, from: data)
@@ -29,7 +29,7 @@ struct ClipboardPluginTests {
     func readTextEmpty() async throws {
         let (app, _) = makeApp(initial: nil)
         let inv = Invocation(id: 1, command: "clipboard.readText", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(ClipboardTextResult.self, from: data)
@@ -41,7 +41,7 @@ struct ClipboardPluginTests {
         let (app, clipboard) = makeApp(initial: "old")
         let payload = try JSONEncoder().encode(ClipboardWriteTextArgs(text: "new"))
         let inv = Invocation(id: 1, command: "clipboard.writeText", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(clipboard.text == "new")
@@ -52,7 +52,7 @@ struct ClipboardPluginTests {
     func clearText() async {
         let (app, clipboard) = makeApp(initial: "stuff")
         let inv = Invocation(id: 1, command: "clipboard.clear", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(clipboard.text == nil)

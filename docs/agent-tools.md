@@ -165,6 +165,33 @@ Arguments that carry no schema (a type that doesn't conform to `BridgeType`)
 also warn: the agent will be told the field accepts any JSON, which in practice
 means guessing.
 
+### Answering an agent differently from your page
+
+The allowlist is per *command*, and some of the interesting cases are per
+*call*: the same `stories.list` your page uses is fine for an agent too, except
+for the rows the user has locked. Rather than a parallel set of `*.forAgent`
+commands, a handler can ask who it is answering:
+
+```swift
+ctx.registry.register("stories.list", typed: { (args: ListArgs, ctx) -> [Story] in
+    switch ctx.caller {
+    case .page:  store.all(matching: args)
+    case .agent: store.all(matching: args).filter { !$0.isLocked }
+    }
+})
+```
+
+`CommandCaller` is `.page(WindowID)` or `.agent`, and `ctx.originWindow` is
+derived from it, so the two can't drift apart. Switching exhaustively — rather
+than testing for one case — means a future caller kind is a compile error in
+your app, not a filter that silently stopped filtering.
+
+There is deliberately no `.driver` case. `swift-pwa drive eval` runs its
+JavaScript inside the page, so a driven call is a page call, with that window's
+id; anything you show a page, you are showing the driver. That's the same
+relationship a devtools console has to your app, and it's why the driver only
+compiles into debug builds.
+
 ## Schema lowering
 
 `BridgeSchema` lowers to JSON Schema structurally, and `swift-pwa codegen`'s

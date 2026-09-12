@@ -14,7 +14,7 @@ struct SystemPluginTests {
 
     private func dispatch(_ command: String, payload: Data, on app: MockAppContext) async -> InvocationResult {
         let inv = Invocation(id: 1, command: command, payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         return await app.registry.dispatch(ctx)
     }
 
@@ -64,7 +64,7 @@ struct SystemPluginTests {
 struct PlatformInfoMemoryTests {
     private func dispatch(_ command: String, on app: MockAppContext) async -> InvocationResult {
         let inv = Invocation(id: 1, command: command, payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         return await app.registry.dispatch(ctx)
     }
 

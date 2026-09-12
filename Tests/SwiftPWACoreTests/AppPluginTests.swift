@@ -14,7 +14,7 @@ struct AppPluginTests {
 
     private func dispatch(_ command: String, payload: Data, on app: MockAppContext) async -> InvocationResult {
         let inv = Invocation(id: 1, command: command, payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         return await app.registry.dispatch(ctx)
     }
 

@@ -245,7 +245,7 @@ public final class BridgeRuntime: @unchecked Sendable {
     private func dispatchInvoke(id: UInt64, command: String, payload: Data, epoch: String?) async {
         guard let app = app as? any AppContext else { return }
         let inv = Invocation(id: id, command: command, payload: payload)
-        let context = CommandContext(invocation: inv, originWindow: windowID, appContext: app)
+        let context = CommandContext(invocation: inv, caller: .page(windowID), appContext: app)
         let result = await registry.dispatch(context)
         await deliver(result, id: id, epoch: epoch)
     }
@@ -282,7 +282,7 @@ public final class BridgeRuntime: @unchecked Sendable {
 
         let context = CommandContext(
             invocation: inv,
-            originWindow: windowID,
+            caller: .page(windowID),
             appContext: app,
             sessionInbound: SessionInbound(frames: inbound, droppedCount: { drops.value })
         )

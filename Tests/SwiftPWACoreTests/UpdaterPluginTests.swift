@@ -32,7 +32,7 @@ struct UpdaterPluginTests {
         let (app, updater) = makeApp()
         updater.nextCheckResult = nil
         let inv = Invocation(id: 1, command: "updater.check", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let value = try JSONDecoder().decode(UpdateInfo?.self, from: data)
@@ -46,7 +46,7 @@ struct UpdaterPluginTests {
         let info = sampleInfo()
         updater.nextCheckResult = info
         let inv = Invocation(id: 1, command: "updater.check", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let value = try JSONDecoder().decode(UpdateInfo?.self, from: data)
@@ -172,7 +172,7 @@ struct UpdaterPluginTests {
     func installAndRelaunch() async {
         let (app, updater) = makeApp()
         let inv = Invocation(id: 1, command: "updater.installAndRelaunch", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(updater.actions == [.installAndRelaunch])
@@ -183,7 +183,7 @@ struct UpdaterPluginTests {
         let (app, updater) = makeApp()
         updater.nextInstallError = BridgeError(code: BridgeError.handler, message: "no staged update")
         let inv = Invocation(id: 1, command: "updater.installAndRelaunch", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.handler)
@@ -276,7 +276,7 @@ struct UpdaterPluginTests {
         expectError: Bool
     ) async throws -> [UpdaterEvent] {
         let inv = Invocation(id: 1, command: command, payload: Data(args.utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .stream(stream) = result else {
             Issue.record("expected stream result for \(command)")

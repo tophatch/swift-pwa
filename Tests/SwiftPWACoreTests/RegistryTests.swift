@@ -10,7 +10,7 @@ struct RegistryTests {
         let registry = CommandRegistry()
         let app = await MainActor.run { MockAppContext(registry: registry) }
         let inv = Invocation(id: 1, command: "missing", payload: Data("null".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await registry.dispatch(ctx)
         guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.notFound)
@@ -32,7 +32,7 @@ struct RegistryTests {
             command: "double",
             payload: JSONEncoder().encode(Args(n: 21))
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(Out.self, from: data)
@@ -46,7 +46,7 @@ struct RegistryTests {
         registry.register("strict", typed: { (_: Args, _) -> Int in 0 })
         let app = await MainActor.run { MockAppContext(registry: registry) }
         let inv = Invocation(id: 1, command: "strict", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await registry.dispatch(ctx)
         guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.decode)
@@ -60,7 +60,7 @@ struct RegistryTests {
         })
         let app = await MainActor.run { MockAppContext(registry: registry) }
         let inv = Invocation(id: 1, command: "bang", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await registry.dispatch(ctx)
         guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == "E_CUSTOM")
@@ -81,7 +81,7 @@ struct RegistryTests {
 
         let app = await MainActor.run { MockAppContext(registry: registry) }
         let inv = Invocation(id: 1, command: "count", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await registry.dispatch(ctx)
         guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
         var received: [Int] = []

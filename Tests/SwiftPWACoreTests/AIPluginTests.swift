@@ -220,7 +220,7 @@ struct AIPluginTests {
 
     private func dispatch(_ app: MockAppContext, _ command: String, _ payload: String) async -> InvocationResult {
         let inv = Invocation(id: 1, command: command, payload: Data(payload.utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         return await app.registry.dispatch(ctx)
     }
 

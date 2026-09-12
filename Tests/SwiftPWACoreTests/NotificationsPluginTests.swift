@@ -22,7 +22,7 @@ struct NotificationsPluginTests {
             command: "notifications.requestAuthorization",
             payload: Data("{}".utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(NotificationAuthResult.self, from: data)
@@ -39,7 +39,7 @@ struct NotificationsPluginTests {
             command: "notifications.requestAuthorization",
             payload: Data("{}".utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(NotificationAuthResult.self, from: data)
@@ -53,7 +53,7 @@ struct NotificationsPluginTests {
         let request = NotificationRequest(title: "Hello", body: "world", sound: true)
         let payload = try JSONEncoder().encode(request)
         let inv = Invocation(id: 1, command: "notifications.send", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(NotificationSendResult.self, from: data)
@@ -69,7 +69,7 @@ struct NotificationsPluginTests {
             command: "notifications.send",
             payload: Data(#"{"title":"hi","sound":false}"#.utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(notif.sent.first?.body == nil)

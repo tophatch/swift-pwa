@@ -64,7 +64,7 @@ struct AIWorkflowPluginTests {
     ) async -> InvocationResult {
         let data = try! JSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
         let inv = Invocation(id: 1, command: command, payload: data)
-        return await app.registry.dispatch(CommandContext(invocation: inv, originWindow: nil, appContext: app))
+        return await app.registry.dispatch(CommandContext(invocation: inv, caller: .agent, appContext: app))
     }
 
     @Test("ai.describeInputs routes to the named provider and returns its schema")

@@ -22,7 +22,7 @@ struct WindowPluginTests {
         let (app, win) = await makeApp()
         let payload = try JSONEncoder().encode(SetTitleArgs(id: nil, title: "renamed"))
         let inv = Invocation(id: 1, command: "window.setTitle", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: win.id, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .page(win.id), appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         await MainActor.run {
@@ -38,7 +38,7 @@ struct WindowPluginTests {
             id: nil, width: 1024, height: 768, animated: false
         ))
         let inv = Invocation(id: 1, command: "window.setSize", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: win.id, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .page(win.id), appContext: app)
         _ = await app.registry.dispatch(ctx)
         await MainActor.run {
             #expect(win.size() == Size(width: 1024, height: 768))
@@ -49,7 +49,7 @@ struct WindowPluginTests {
     func windowIDNoOrigin() async {
         let (app, _) = await makeApp()
         let inv = Invocation(id: 1, command: "window.id", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .failure(err) = result else { Issue.record("expected failure"); return }
         #expect(err.code == BridgeError.notFound)
@@ -59,7 +59,7 @@ struct WindowPluginTests {
     func subscribe() async throws {
         let (app, win) = await makeApp()
         let inv = Invocation(id: 1, command: "window.subscribe", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: win.id, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .page(win.id), appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
 
@@ -84,7 +84,7 @@ struct WindowPluginTests {
             content: .remote(#require(URL(string: "about:blank")))
         ))
         let inv = Invocation(id: 1, command: "window.list", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: win.id, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .page(win.id), appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(WindowListResult.self, from: data)

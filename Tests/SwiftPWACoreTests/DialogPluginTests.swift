@@ -18,7 +18,7 @@ struct DialogPluginTests {
         let (app, dialog) = makeApp()
         let args = DialogMessageArgs(title: "Title", message: "Hi", kind: .warning)
         let inv = try Invocation(id: 1, command: "dialog.message", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(dialog.actions == [.message(args, parent: nil)])
@@ -30,7 +30,7 @@ struct DialogPluginTests {
         let originID = WindowID()
         let args = DialogMessageArgs(message: "Hi")
         let inv = try Invocation(id: 1, command: "dialog.message", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: originID, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .page(originID), appContext: app)
         _ = await app.registry.dispatch(ctx)
         #expect(dialog.actions == [.message(args, parent: originID)])
     }
@@ -41,7 +41,7 @@ struct DialogPluginTests {
         dialog.nextConfirm = true
         let args = DialogConfirmArgs(message: "Sure?", okLabel: "Yes", cancelLabel: "No")
         let inv = try Invocation(id: 1, command: "dialog.confirm", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogConfirmResult.self, from: data)
@@ -58,7 +58,7 @@ struct DialogPluginTests {
             command: "dialog.confirm",
             payload: Data(#"{"message":"Sure?"}"#.utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogConfirmResult.self, from: data)
@@ -74,7 +74,7 @@ struct DialogPluginTests {
             multiple: true
         )
         let inv = try Invocation(id: 1, command: "dialog.openFile", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenFileResult.self, from: data)
@@ -85,7 +85,7 @@ struct DialogPluginTests {
     func openFileCancel() async throws {
         let (app, _) = makeApp()
         let inv = Invocation(id: 1, command: "dialog.openFile", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenFileResult.self, from: data)
@@ -101,7 +101,7 @@ struct DialogPluginTests {
             command: "dialog.saveFile",
             payload: Data(#"{"defaultName":"out.png"}"#.utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogPathResult.self, from: data)
@@ -112,7 +112,7 @@ struct DialogPluginTests {
     func saveFileCancel() async throws {
         let (app, _) = makeApp()
         let inv = Invocation(id: 1, command: "dialog.saveFile", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogPathResult.self, from: data)
@@ -125,7 +125,7 @@ struct DialogPluginTests {
         dialog.nextExportFilePath = "/Users/me/Downloads/report.csv"
         let args = DialogExportFileArgs(defaultName: "report.csv", dataBase64: "aGk=")
         let inv = try Invocation(id: 1, command: "dialog.exportFile", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogPathResult.self, from: data)
@@ -141,7 +141,7 @@ struct DialogPluginTests {
             command: "dialog.exportFile",
             payload: Data(#"{"dataBase64":"aGk="}"#.utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogPathResult.self, from: data)
@@ -153,7 +153,7 @@ struct DialogPluginTests {
         let (app, dialog) = makeApp()
         dialog.nextOpenDirectoryPaths = ["/Users/me/Documents"]
         let inv = Invocation(id: 1, command: "dialog.openDirectory", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenDirectoryResult.self, from: data)
@@ -168,7 +168,7 @@ struct DialogPluginTests {
         dialog.nextOpenDirectoryPaths = ["/Users/me/A", "/Users/me/B"]
         let args = DialogOpenDirectoryArgs(multiple: true)
         let inv = try Invocation(id: 1, command: "dialog.openDirectory", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenDirectoryResult.self, from: data)
@@ -185,7 +185,7 @@ struct DialogPluginTests {
     func openDirectoryCancel() async throws {
         let (app, _) = makeApp()
         let inv = Invocation(id: 1, command: "dialog.openDirectory", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenDirectoryResult.self, from: data)
@@ -199,7 +199,7 @@ struct DialogPluginTests {
         dialog.nextOpenDirectoryPaths = ["/Users/me/A", "/Users/me/B"]
         dialog.nextBookmarksByPath = ["/Users/me/A": "b1:AAA=", "/Users/me/B": "b1:BBB="]
         let inv = Invocation(id: 1, command: "dialog.openDirectory", payload: Data(#"{"multiple":true}"#.utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenDirectoryResult.self, from: data)
@@ -215,7 +215,7 @@ struct DialogPluginTests {
         dialog.nextOpenFilePaths = ["/tmp/a.png", "/tmp/b.png"]
         dialog.nextBookmarksByPath = ["/tmp/b.png": "b1:BBB="]
         let inv = Invocation(id: 1, command: "dialog.openFile", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenFileResult.self, from: data)
@@ -227,7 +227,7 @@ struct DialogPluginTests {
     func cancelledPickMintsNothing() async throws {
         let (app, dialog) = makeApp()
         let inv = Invocation(id: 1, command: "dialog.openDirectory", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogOpenDirectoryResult.self, from: data)
@@ -246,7 +246,7 @@ struct DialogPluginTests {
         )
         let args = DialogResolveBookmarkArgs(bookmark: "b1:OLD=")
         let inv = try Invocation(id: 1, command: "dialog.resolveBookmark", payload: JSONEncoder().encode(args))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogResolveBookmarkResult.self, from: data)
@@ -265,7 +265,7 @@ struct DialogPluginTests {
             command: "dialog.resolveBookmark",
             payload: Data(#"{"bookmark":"b1:OLD="}"#.utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .ok(data) = result else { Issue.record("expected ok"); return }
         let out = try JSONDecoder().decode(DialogResolveBookmarkResult.self, from: data)

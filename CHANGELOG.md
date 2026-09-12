@@ -9,6 +9,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A command handler can tell a page from an agent (`CommandContext.caller`).**
+  It previously could not: the only difference visible to a handler was that an
+  agent call passed `originWindow: nil`, which is a consequence of the agent
+  path having no window rather than a contract — and it fails in the dangerous
+  direction. Give agent calls a window id one day and every guard built on that
+  check silently stops filtering, with no error and no warning: a tool that was
+  scoped is now unscoped. `caller` is `.page(WindowID)` or `.agent`, switched on
+  exhaustively, so a new caller kind is a compile error in the app rather than a
+  filter that quietly stopped working ([#170]).
+
+  It matters because the `agent.expose` allowlist is per *command* while the
+  interesting cases are per *call*: the reporting adopter wanted content the
+  user had locked kept out of the six read-only tools their app exposes — the
+  same `stories.list` an agent may call, answering with less. Without a
+  dependable signal they left the tools alone and wrote the gap down instead.
+  The alternative shape, a parallel set of `*.forAgent` commands, is worse in
+  every way.
+
+  `originWindow` stays as a computed property over `caller`, so window-targeting
+  commands are unchanged and can't drift from it. There is deliberately **no
+  `.driver` case**, despite the issue proposing one: `swift-pwa drive eval` runs
+  its JavaScript inside the page and arrives through the page's own message
+  handler with the page's window id, so a driven call is not distinguishable
+  here — a case that can never be constructed would read like a filter that
+  works. The old `init(invocation:originWindow:appContext:)` is kept and
+  deprecated for source compatibility.
+
 - **`swift-pwa drive drag` — press, move along a path, release.** `drive` could
   click, type and scroll but had no press-move-release verb, so anything driven
   by a drag was unreachable; the reporting adopter was exercising a sheet
@@ -109,6 +136,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   platform's driver limitation would have looked like an editing regression on
   all of them.
 
+[#170]: https://github.com/tophatch/swift-pwa/issues/170
 [#175]: https://github.com/tophatch/swift-pwa/issues/175
 [#164]: https://github.com/tophatch/swift-pwa/issues/164
 [#163]: https://github.com/tophatch/swift-pwa/issues/163

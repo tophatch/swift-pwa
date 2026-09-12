@@ -40,7 +40,7 @@ struct SystemOpenURLTests {
     private func openURL(_ app: MockAppContext, _ payload: String) async -> InvocationResult {
         let invocation = Invocation(id: 1, command: "system.openURL", payload: Data(payload.utf8))
         return await app.registry.dispatch(
-            CommandContext(invocation: invocation, originWindow: nil, appContext: app)
+            CommandContext(invocation: invocation, caller: .agent, appContext: app)
         )
     }
 

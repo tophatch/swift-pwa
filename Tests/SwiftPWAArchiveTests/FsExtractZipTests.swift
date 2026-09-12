@@ -48,7 +48,7 @@
         private func dispatch(_ reg: CommandRegistry, _ cmd: String, _ payload: Data) async -> InvocationResult {
             let inv = Invocation(id: 1, command: cmd, payload: payload)
             let app = MockAppContext()
-            return await reg.dispatch(CommandContext(invocation: inv, originWindow: nil, appContext: app))
+            return await reg.dispatch(CommandContext(invocation: inv, caller: .agent, appContext: app))
         }
 
         @Test("fs.extractZip lands files on disk and returns a summary")

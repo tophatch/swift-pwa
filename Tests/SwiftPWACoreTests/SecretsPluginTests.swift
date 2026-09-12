@@ -55,7 +55,7 @@ struct SecretsPluginTests {
     ) async -> InvocationResult {
         let data = try! JSONSerialization.data(withJSONObject: payload, options: [.fragmentsAllowed])
         let inv = Invocation(id: 1, command: command, payload: data)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         return await app.registry.dispatch(ctx)
     }
 

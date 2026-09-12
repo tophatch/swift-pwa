@@ -51,7 +51,7 @@ struct GeoPluginTests {
     ) async -> InvocationResult {
         let invocation = Invocation(id: 1, command: "geo.current", payload: Data(payload.utf8))
         return await app.registry.dispatch(
-            CommandContext(invocation: invocation, originWindow: nil, appContext: app)
+            CommandContext(invocation: invocation, caller: .agent, appContext: app)
         )
     }
 

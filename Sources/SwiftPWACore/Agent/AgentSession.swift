@@ -151,7 +151,7 @@ final class AgentSession: Sendable {
         // the UI thread; `CommandRegistry.dispatch` is not, and runs here.
         let registry = await MainThread.run { context.registry }
         let command = await MainThread.run {
-            CommandContext(invocation: invocation, originWindow: nil, appContext: context)
+            CommandContext(invocation: invocation, caller: .agent, appContext: context)
         }
         switch await registry.dispatch(command) {
         case let .ok(data):

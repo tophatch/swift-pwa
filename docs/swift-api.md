@@ -58,6 +58,28 @@ try runtime.run { ctx in
 runtime serializes them through `JSONEncoder` / `JSONDecoder`, so any
 JSON-compatible shape works.
 
+### Who is calling
+
+The second parameter a typed handler receives is the `CommandContext`. Its
+`caller` says where the call came from — `.page(WindowID)` for the app's own web
+content, `.agent` for a tool call through [`AgentPlugin`](agent-tools.md):
+
+```swift
+ctx.registry.register("stories.list", typed: { (_: EmptyArgs, ctx) -> [Story] in
+    switch ctx.caller {
+    case .page:  store.all()
+    case .agent: store.all().filter { !$0.isLocked }
+    }
+})
+```
+
+`ctx.originWindow` is derived from `caller` (the window id for a page, `nil`
+otherwise), so a `window.*`-style command that targets the originating window
+keeps working unchanged. Prefer switching on `caller` over testing
+`originWindow` for nil: the nil-ness is a consequence of the agent path having
+no window, not a contract, and a guard built on it would fail *open* if that
+ever changed.
+
 ### Duplex sessions
 
 `registerStream` is server → client only. `registerSession` is the two-way

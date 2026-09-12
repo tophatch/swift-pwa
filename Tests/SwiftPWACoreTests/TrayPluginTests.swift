@@ -18,7 +18,7 @@ struct TrayPluginTests {
         let (app, tray) = makeApp()
         let payload = try JSONEncoder().encode(TraySetIconArgs(path: "/tmp/icon.png", template: true))
         let inv = Invocation(id: 1, command: "tray.setIcon", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(tray.iconPath == "/tmp/icon.png")
@@ -34,7 +34,7 @@ struct TrayPluginTests {
             command: "tray.setIcon",
             payload: Data(#"{"path":"/tmp/icon.png"}"#.utf8)
         )
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(tray.iconTemplate == false)
@@ -45,7 +45,7 @@ struct TrayPluginTests {
         let (app, tray) = makeApp()
         let payload = try JSONEncoder().encode(TraySetTooltipArgs(text: "Hello"))
         let inv = Invocation(id: 1, command: "tray.setTooltip", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(tray.tooltip == "Hello")
@@ -61,7 +61,7 @@ struct TrayPluginTests {
         ])
         let payload = try JSONEncoder().encode(menu)
         let inv = Invocation(id: 1, command: "tray.setMenu", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(tray.menu == menu)
@@ -72,7 +72,7 @@ struct TrayPluginTests {
         let (app, tray) = makeApp()
         let payload = try JSONEncoder().encode(TraySetVisibleArgs(visible: false))
         let inv = Invocation(id: 1, command: "tray.setVisible", payload: payload)
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case .ok = result else { Issue.record("expected ok"); return }
         #expect(tray.visible == false)
@@ -82,7 +82,7 @@ struct TrayPluginTests {
     func subscribe() async throws {
         let (app, tray) = makeApp()
         let inv = Invocation(id: 1, command: "tray.subscribe", payload: Data("{}".utf8))
-        let ctx = CommandContext(invocation: inv, originWindow: nil, appContext: app)
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
         let result = await app.registry.dispatch(ctx)
         guard case let .stream(stream) = result else { Issue.record("expected stream"); return }
 

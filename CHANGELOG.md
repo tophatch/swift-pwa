@@ -382,6 +382,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`Shell.capture`'s timeout didn't bound a command that spawns subprocesses.**
+  The deadline fired and terminated the child, but the call then sat in
+  `readDataToEndOfFile` anyway: a pipe reaches EOF when the last *writer* closes
+  it, and a child's own children inherit the write end. So terminating the child
+  produced no EOF whenever it had spawned anything that outlived it — which is
+  most of what this timeout exists to bound, since `linuxdeploy`, `xcodebuild`
+  and `simctl` all spawn subprocesses. The code comment asserted the opposite
+  ("a child that wedges without closing it is still bounded by the timeout,
+  whose `terminate` produces the EOF"), true only for a childless child.
+
+  Measured on Linux: after `terminate()`, `sh -c "echo hello; sleep 60"` leaves
+  `sleep` holding the pipe and the read is **still blocked eight seconds
+  later**. stdout is now drained on a background thread and the deadline is
+  waited on directly, so a wedged child is genuinely bounded; the repo's own
+  `aWedgedChildTimesOutWithATimedOutError` went from never completing on Linux
+  to passing in 4.0s.
+
+  **It had never passed on Linux, and CI called it green** — the test started,
+  never reported, and the quiescence rule below read the silence as the post-run
+  park. It surfaced on the first run after that rule was fixed, which is the
+  clearest demonstration available of what the old one was hiding.
+
 - **A driven drag delivered no movement at all, on both backends that had
   synthetic input.** `PointerInput` carried the button that *changed* but not
   the buttons *held*, and a move is a hover or a drag depending entirely on the

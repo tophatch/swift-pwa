@@ -337,6 +337,49 @@ enum Shell {
 
     /// One-bit box so the timeout timer and the waiting thread can agree on
     /// *why* a process ended, without either capturing the other's state.
+    /// Carries the drained stdout back from the reader thread, and lets the
+    /// caller wait for it with a deadline.
+    ///
+    /// `NSCondition` rather than `DispatchSemaphore`, which is unavailable from
+    /// an async context — it can park a cooperative thread. This blocks the
+    /// calling thread exactly as the `waitUntilExit()` below it already does.
+    /// `@unchecked` for the same reason as ``TimeoutFlag``: the lock is the
+    /// invariant.
+    private final class OutputBox: @unchecked Sendable {
+        private let condition = NSCondition()
+        private var data: Data?
+
+        func set(_ value: Data) {
+            condition.lock()
+            data = value
+            condition.broadcast()
+            condition.unlock()
+        }
+
+        /// Whether the drain finished before `deadline`.
+        func wait(until deadline: Date) -> Bool {
+            condition.lock()
+            defer { condition.unlock() }
+            while data == nil {
+                if !condition.wait(until: deadline) { return false }
+            }
+            return true
+        }
+
+        func wait() {
+            condition.lock()
+            while data == nil { condition.wait() }
+            condition.unlock()
+        }
+
+        /// Whatever was drained — empty if the read never finished.
+        var value: Data {
+            condition.lock()
+            defer { condition.unlock() }
+            return data ?? Data()
+        }
+    }
+
     private final class TimeoutFlag: @unchecked Sendable {
         private let lock = NSLock()
         private var value = false
@@ -391,28 +434,53 @@ enum Shell {
         task.standardError = discardStderr ? FileHandle.nullDevice : FileHandle.standardError
         try task.run()
         let timedOut = TimeoutFlag()
-        if let timeout {
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if task.isRunning {
-                    timedOut.set()
-                    task.terminate()
-                }
-            }
+
+        // Drain concurrently with the wait, never in sequence before it. The
+        // other order deadlocks as soon as the child writes more than the pipe
+        // buffer holds (64 KiB on macOS): the child blocks in `write`, we block
+        // in `waitUntilExit`, and neither ever moves. `xcrun simctl list
+        // runtimes -j` crosses that line on a machine with several runtimes
+        // installed — which is how a CI job sat for 39 minutes inside what read
+        // like a slow iOS build.
+        //
+        // On a *background* thread rather than inline, because EOF is not ours
+        // to wait for. A pipe reaches EOF when the last writer closes it, and
+        // the child's own children inherit that write end — so terminating the
+        // child does **not** produce EOF if it spawned anything that outlives
+        // it. Measured on Linux: after `terminate()`, `sh -c "echo hello; sleep
+        // 60"` leaves `sleep` holding the pipe and the read is still blocked
+        // eight seconds later. An inline read therefore ignored `timeout`
+        // entirely and waited out the grandchild — which is most of what the
+        // timeout exists to bound, since `linuxdeploy`, `xcodebuild` and
+        // `simctl` all spawn subprocesses.
+        let collected = OutputBox()
+        DispatchQueue.global().async {
+            collected.set(stdout.fileHandleForReading.readDataToEndOfFile())
         }
-        // Drain to EOF *before* waiting for exit. The other order deadlocks as
-        // soon as the child writes more than the pipe buffer holds (64 KiB on
-        // macOS): the child blocks in `write`, we block in `waitUntilExit`, and
-        // neither ever moves. `xcrun simctl list runtimes -j` crosses that line
-        // on a machine with several runtimes installed — which is how a CI job
-        // sat for 39 minutes inside what read like a slow iOS build. EOF arrives
-        // when the child closes its stdout, so `waitUntilExit` below returns
-        // immediately; a child that wedges *without* closing it is still bounded
-        // by the timeout above, whose `terminate` produces the EOF.
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
+
+        if let timeout {
+            if !collected.wait(until: Date().addingTimeInterval(timeout)) {
+                timedOut.set()
+                task.terminate()
+                // A short grace for the child's own last bytes. Not waited on
+                // indefinitely: whatever is holding the pipe open has already
+                // outlived the deadline, and the reader thread parks until it
+                // exits on its own. One parked thread on a path that is failing
+                // anyway beats a timeout that doesn't bound anything.
+                _ = collected.wait(until: Date().addingTimeInterval(1))
+            }
+        } else {
+            collected.wait()
+        }
+        let outData = collected.value
+
         if timedOut.isSet, let timeout {
+            // Deliberately no `waitUntilExit()` here: it would wait on a child
+            // we just asked to die, and the point of this branch is that we
+            // stop waiting.
             throw BundlerError.timedOut(([executable] + arguments).joined(separator: " "), seconds: timeout)
         }
+        task.waitUntilExit()
         if task.terminationStatus != 0 {
             throw BundlerError.shell(
                 task.terminationStatus,

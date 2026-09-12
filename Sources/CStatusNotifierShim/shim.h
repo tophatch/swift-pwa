@@ -359,7 +359,13 @@ static void swiftpwa_menu_method_call(
         g_dbus_method_invocation_return_value(invocation, NULL);
         if (g_strcmp0(event_id, "clicked") == 0) {
             const swiftpwa_tray_item *it = swiftpwa_tray_find(t, id);
-            if (it && !it->separator && t->cb) t->cb(1, it->id ? it->id : "", t->user_data);
+            // `enabled` is exported so a panel greys the item out, but a panel
+            // isn't the only sender — anything on the session bus can call
+            // Event — so the refusal has to happen here rather than in the UI
+            // that usually prevents the click.
+            if (it && !it->separator && it->enabled && t->cb) {
+                t->cb(1, it->id ? it->id : "", t->user_data);
+            }
         }
         g_variant_unref(data);
         return;

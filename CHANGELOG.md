@@ -411,6 +411,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A disabled tray menu item could still be activated on Linux.** Both
+  backends export `enabled: false` correctly, so a panel greys the item out and
+  a user can't click it — but a panel isn't the only thing that can send a
+  `com.canonical.dbusmenu.Event`, and neither backend checked the flag on the
+  way in. Our GTK4 shim tested only `!separator` before firing the callback;
+  on GTK3, libayatana routes an Event straight to `gtk_menu_item_activate`,
+  which doesn't consult widget sensitivity. Either way an app that disabled an
+  item — the usual reason being that the action isn't valid right now — could
+  still be told it was clicked, by anything in the user's session. Both shims
+  now refuse it. Found by the negative control for the test work above ([#193]).
+
 - **The Linux tray is verified on both backends, and a failing tray test no
   longer costs the rest of the run its result.** `GTKTraySNITests` asserted the
   addresses our *GTK4* shim publishes at — a name it owns, `/StatusNotifierItem`

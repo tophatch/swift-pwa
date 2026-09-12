@@ -160,6 +160,25 @@
                 pumpMainContextForTesting(seconds: 0.05)
             }
             #expect(recorder.first == .menuItemClicked(id: "open"))
+
+            // 3) A *disabled* item does not activate. `enabled: false` is
+            //    exported so a panel greys the item out, but a panel is not the
+            //    only thing that can send an Event — anything on the session
+            //    bus can — so refusing it has to happen in the app, not in the
+            //    UI that usually prevents the click.
+            let quitID = try #require(Self.menuItemID(labelled: "Quit", in: layout))
+            let (quitOut, quitCode) = gdbus([
+                "call", "--session", "--dest", dest,
+                "--object-path", menuPath,
+                "--method", "com.canonical.dbusmenu.Event",
+                quitID, "clicked", "<int32 0>", "0"
+            ])
+            #expect(quitCode == 0, "Event on the disabled item: \(quitOut)")
+            pumpMainContextForTesting(seconds: 0.3)
+            #expect(
+                !recorder.all.contains(.menuItemClicked(id: "quit")),
+                "a disabled menu item activated: \(recorder.all)"
+            )
         }
 
         /// The dbusmenu id of the item carrying `label`, read out of a
@@ -201,6 +220,12 @@
                 lock.lock()
                 defer { lock.unlock() }
                 return events.first
+            }
+
+            var all: [TrayEvent] {
+                lock.lock()
+                defer { lock.unlock() }
+                return events
             }
         }
     }

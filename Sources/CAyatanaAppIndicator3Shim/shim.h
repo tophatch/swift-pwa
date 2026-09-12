@@ -56,7 +56,12 @@ static void swiftpwa_tray_item_box_free(gpointer data, GClosure *closure) {
 }
 
 static void swiftpwa_tray_menu_item_activate(GtkMenuItem *item, gpointer user_data) {
-    (void)item;
+    // A dbusmenu Event reaches `gtk_menu_item_activate` without consulting
+    // sensitivity, so a disabled item would otherwise reach the app. The
+    // exported `enabled: false` only stops a *panel* offering the click, and a
+    // panel isn't the only thing that can send an Event — anything on the
+    // session bus can.
+    if (item && !gtk_widget_get_sensitive(GTK_WIDGET(item))) return;
     swiftpwa_tray_item_box *b = (swiftpwa_tray_item_box *)user_data;
     if (b && b->tray) b->tray->cb(1, b->id, b->tray->user_data);
 }

@@ -33,27 +33,53 @@ jobs:
           # 6.0.3 and a fully loaded page under 6.2 / 6.3.1. Keep this in step
           # with `.swift-version`, which swiftly honours inside the checkout.
           swift-version: "6.2"
-      - name: Install libsecret (Linux only)
-        # Building the CLI compiles SwiftPWACore, which pulls the
-        # CSecretShim/CLibSecret libsecret dep on Linux (secrets.* store).
-        if: runner.os == 'Linux'
-        run: sudo apt-get update && sudo apt-get install -y libsecret-1-dev
       - name: Build CLI
         # `--arch` on Apple, and it's load-bearing: the macos-15 runners are
         # Apple silicon, so a plain `swift build` ignores the matrix entry and
         # builds for the host. That's how the asset named x86_64 came to be a
         # second arm64 binary. Not passed on Linux — SwiftPM only accepts
         # `--arch` on Apple platforms.
+        #
+        # `--static-swift-stdlib` on Linux, because the alternative is that the
+        # very first command a new user runs dies in the dynamic loader:
+        # `libswiftCore.so: cannot open shared object file`. A Swift toolchain
+        # being installed doesn't fix it — a swiftly-managed one keeps its
+        # runtime inside the toolchain directory, off the loader's path — and
+        # no check inside the binary can report it, since nothing runs before
+        # `main` (#199). macOS and Windows have no equivalent problem.
         run: |
           if [ "$RUNNER_OS" = "macOS" ]; then
             swift build -c release --product swift-pwa --arch ${{ matrix.arch }}
           else
-            swift build -c release --product swift-pwa
+            swift build -c release --product swift-pwa --static-swift-stdlib
           fi
       - name: Stage binary
         run: |
           mkdir dist
           cp .build/release/swift-pwa dist/${{ matrix.artifact }}
+      - name: Strip the Linux binary
+        # A static stdlib takes the binary to ~102 MB; stripping brings it to
+        # ~66 MB, and it is a download every user makes at least once. The
+        # tradeoff is that a Swift crash backtrace on Linux loses its symbol
+        # names — acceptable for a build tool, where a reproducer matters more
+        # than a symbolicated frame.
+        if: runner.os == 'Linux'
+        run: |
+          before=$(stat -c %s dist/${{ matrix.artifact }})
+          strip dist/${{ matrix.artifact }}
+          after=$(stat -c %s dist/${{ matrix.artifact }})
+          echo "stripped: $before -> $after bytes"
+      - name: The Linux binary must run with no Swift toolchain present
+        # The regression this guards is invisible to every other check here:
+        # the binary builds, uploads, and then fails in the loader on a machine
+        # that doesn't happen to have Swift's runtime on its library path. `env
+        # -i` is the cheapest stand-in for a fresh machine — no PATH, no
+        # LD_LIBRARY_PATH, nothing inherited.
+        if: runner.os == 'Linux'
+        run: |
+          got=$(env -i ./dist/${{ matrix.artifact }} --version)
+          echo "version in a bare environment: $got"
+          [ -n "$got" ] || { echo "::error::the Linux CLI cannot run without an inherited environment"; exit 1; }
       - name: Check the binary is the architecture its name claims
         # The matrix `arch` was decorative for several releases, and nothing
         # noticed: an Intel Mac downloading `swift-pwa-macos-x86_64` got a

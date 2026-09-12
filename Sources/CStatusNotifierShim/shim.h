@@ -526,6 +526,20 @@ static inline const char *swiftpwa_tray_bus_name(swiftpwa_tray *t) {
     return (t && t->bus_name) ? t->bus_name : "";
 }
 
+/// The `org.kde.StatusNotifierItem` object path. Fixed here because this
+/// shim exports the objects itself; the GTK3 backend's libayatana derives
+/// one from the item id instead, so tests ask rather than assume.
+static inline const char *swiftpwa_tray_item_path(swiftpwa_tray *t) {
+    (void)t;
+    return "/StatusNotifierItem";
+}
+
+/// The `com.canonical.dbusmenu` object path — see `swiftpwa_tray_item_path`.
+static inline const char *swiftpwa_tray_menu_path(swiftpwa_tray *t) {
+    (void)t;
+    return "/MenuBar";
+}
+
 static inline void swiftpwa_tray_set_icon_path(swiftpwa_tray *t, const char *path) {
     if (!t || !path) return;
     GdkPixbuf *pb = gdk_pixbuf_new_from_file(path, NULL);

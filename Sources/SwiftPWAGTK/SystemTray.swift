@@ -22,9 +22,10 @@
     /// **`.click` events are never emitted on Linux.** SNI gives the
     /// desktop panel ownership of click semantics — the host decides
     /// what happens (typically: open the menu). Apps only see menu
-    /// activations. The GTK4 backend's `SystemTray` stays a no-op
-    /// stub because `libayatana-appindicator3` is GTK3-only and a
-    /// process can't link both GTK versions at once.
+    /// activations. The GTK4 backend can't use this library at all —
+    /// `libayatana-appindicator3` is GTK3-only and a process can't link
+    /// both GTK versions — so it speaks the same two D-Bus protocols
+    /// directly instead.
     @MainActor
     public final class SystemTray: Tray {
         // Swift's clang importer sees the full struct definition in
@@ -126,11 +127,26 @@
             for c in continuations.values { c.yield(event) }
         }
 
-        /// Parity with the GTK4 backend's test accessor. The GTK3 tray
-        /// goes through `libayatana-appindicator`, which owns and hides
-        /// the SNI bus name, so there's nothing to report here.
+        /// Where this tray is reachable on the session bus. libayatana
+        /// exports onto the app's own connection rather than owning a name
+        /// of its own, and it does so whether or not a panel is listening —
+        /// a `StatusNotifierWatcher` is who gets *told*, not what makes the
+        /// objects appear. That is what lets the tray be driven headlessly
+        /// in tests. Not part of the public cross-platform `Tray` surface.
         var registeredBusName: String {
-            ""
+            trayPtr.map { String(cString: swiftpwa_tray_bus_name($0)) } ?? ""
+        }
+
+        /// The `org.kde.StatusNotifierItem` object path. libayatana derives
+        /// it from the item id, so it differs from the GTK4 backend's fixed
+        /// `/StatusNotifierItem` — tests ask rather than assume.
+        var itemObjectPath: String {
+            trayPtr.map { String(cString: swiftpwa_tray_item_path($0)) } ?? ""
+        }
+
+        /// The `com.canonical.dbusmenu` object path.
+        var menuObjectPath: String {
+            trayPtr.map { String(cString: swiftpwa_tray_menu_path($0)) } ?? ""
         }
     }
 

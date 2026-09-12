@@ -20,8 +20,9 @@
 //
 // The GTK4 backend cannot use this shim — `libayatana-appindicator3`
 // is built against GTK3, and a single process cannot link both GTK3
-// and GTK4. The GTK4 `SystemTray` stays a no-op stub until
-// `libayatana-appindicator-gtk4` becomes broadly packaged.
+// and GTK4. It speaks the two tray D-Bus protocols directly instead
+// (`CStatusNotifierShim`), which is why the two backends are addressed
+// differently over the bus — see `swiftpwa_tray_item_path`.
 // ---------------------------------------------------------------------
 
 /// Tray-event kinds reported through the Swift callback.
@@ -38,6 +39,9 @@ typedef struct _swiftpwa_tray {
     GtkWidget *pending;    // GtkMenu being built between begin + commit
     swiftpwa_tray_event_cb cb;
     void *user_data;
+    char *item_path;       // /org/ayatana/NotificationItem/<id>
+    char *menu_path;       // …/<id>/Menu
+    char *bus_name;        // the connection's unique name, resolved lazily
 } swiftpwa_tray;
 
 typedef struct {
@@ -94,6 +98,21 @@ static inline swiftpwa_tray *swiftpwa_tray_new(
     g_object_ref_sink(empty);
     app_indicator_set_menu(t->indicator, GTK_MENU(empty));
     t->menu = empty;
+
+    // Where libayatana exports this item. It does so on the app's own
+    // session-bus connection as soon as the indicator exists — a
+    // StatusNotifierWatcher is only who gets *told*, not what makes the
+    // objects appear — so this is addressable with no panel running,
+    // which is what lets the tray be tested headlessly. The id is
+    // sanitized the way libayatana sanitizes it for a path: anything
+    // that isn't alphanumeric becomes '_'.
+    char sanitized[64];
+    g_strlcpy(sanitized, id, sizeof(sanitized));
+    for (char *c = sanitized; *c; c++) {
+        if (!g_ascii_isalnum(*c)) *c = '_';
+    }
+    t->item_path = g_strdup_printf("/org/ayatana/NotificationItem/%s", sanitized);
+    t->menu_path = g_strdup_printf("%s/Menu", t->item_path);
     return t;
 }
 
@@ -106,7 +125,39 @@ static inline void swiftpwa_tray_free(swiftpwa_tray *t) {
         g_object_unref(t->pending);
     }
     if (t->indicator) g_object_unref(t->indicator);
+    g_free(t->item_path);
+    g_free(t->menu_path);
+    g_free(t->bus_name);
     g_free(t);
+}
+
+/// The session-bus name this tray is reachable at. Unlike the GTK4
+/// backend — which owns a name of its own — libayatana exports onto the
+/// connection's unique name (`:1.42`), so that is what addresses it.
+/// Exposed so tests can drive the item over the bus.
+static inline const char *swiftpwa_tray_bus_name(swiftpwa_tray *t) {
+    if (!t) return "";
+    if (!t->bus_name) {
+        GDBusConnection *conn = g_bus_get_sync(G_BUS_TYPE_SESSION, NULL, NULL);
+        if (!conn) return "";
+        const char *name = g_dbus_connection_get_unique_name(conn);
+        // Copied rather than returned directly: the string belongs to the
+        // connection, and this shim holds no ref on it afterwards.
+        t->bus_name = g_strdup(name ? name : "");
+        g_object_unref(conn);
+    }
+    return t->bus_name;
+}
+
+/// The `org.kde.StatusNotifierItem` object path (GTK4's shim uses
+/// `/StatusNotifierItem`; libayatana derives one from the item id).
+static inline const char *swiftpwa_tray_item_path(swiftpwa_tray *t) {
+    return (t && t->item_path) ? t->item_path : "";
+}
+
+/// The `com.canonical.dbusmenu` object path (GTK4's shim uses `/MenuBar`).
+static inline const char *swiftpwa_tray_menu_path(swiftpwa_tray *t) {
+    return (t && t->menu_path) ? t->menu_path : "";
 }
 
 static inline void swiftpwa_tray_set_icon_path(swiftpwa_tray *t, const char *path) {

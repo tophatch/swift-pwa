@@ -1,9 +1,23 @@
-// StatusNotifierItem tray, exercised end-to-end over a real session bus.
+// StatusNotifierItem tray, exercised end-to-end over a real session bus,
+// on whichever Linux backend is in the package graph.
 //
 // Gated on SWIFT_PWA_LINUX_GUI=1 (needs GTK initialized) AND a session
 // bus (DBUS_SESSION_BUS_ADDRESS) — run under `dbus-run-session` on the
-// GTK box. CI doesn't build the GTK backend at all, so this only ever
-// runs on a GTK-capable machine.
+// GTK box. CI has no session bus, so this only ever runs on a desktop
+// machine.
+//
+// **No panel is required.** Both backends export their D-Bus objects as
+// soon as the tray exists; a `StatusNotifierWatcher` is who gets *told*,
+// not what makes the objects appear. That is true of our own GTK4 shim by
+// construction and measured to be true of libayatana on GTK3, which is
+// what lets this run headlessly.
+//
+// The two backends are addressed differently, so the test asks the tray
+// where it lives rather than assuming: our GTK4 shim owns a name of its
+// own and exports at `/StatusNotifierItem` + `/MenuBar`, while libayatana
+// exports onto the app's own connection under
+// `/org/ayatana/NotificationItem/<id>`. Asserting GTK4's addresses on
+// GTK3 is what made this suite unpassable there (#193).
 //
 // The tray registers its D-Bus objects on the session bus in-process;
 // we drive them with the `gdbus` CLI (a separate process, so no
@@ -14,8 +28,7 @@
 // One tray per process is the supported model (one
 // `TrayPlugin(SystemTray())`). GDBus shares a single session-bus
 // connection process-wide, so a second `SystemTray` would collide on the
-// `/StatusNotifierItem` + `/MenuBar` object paths — hence a single tray
-// drives both assertions here.
+// object paths — hence a single tray drives both assertions here.
 #if os(Linux)
     import Foundation
     import SwiftPWACore
@@ -52,7 +65,7 @@
         }
 
         @Test("menu exports over dbusmenu and a click Event reaches the stream")
-        func exportsMenuAndRoutesEvents() async throws {
+        func exportsMenuAndRoutesEvents() throws {
             initGTKForTesting()
             let tray = SystemTray()
             tray.setTooltip("swift-pwa test tray")
@@ -71,20 +84,27 @@
             defer { try? FileManager.default.removeItem(atPath: iconPath) }
             tray.setIcon(path: iconPath, template: false)
 
-            // Let g_bus_own_name acquire the name + register the objects.
+            // Let the bus name be acquired + the objects registered.
             pumpMainContextForTesting(seconds: 1.0)
             let dest = tray.registeredBusName
-            #expect(dest.hasPrefix("org.kde.StatusNotifierItem-"))
+            let itemPath = tray.itemObjectPath
+            let menuPath = tray.menuObjectPath
+            try #require(!dest.isEmpty, "the tray reported no bus name to address")
 
-            // 0) The icon marshals as a 4×3 ARGB pixmap on the SNI object.
+            // 0) The icon reaches the item. The two backends advertise it
+            //    differently and that is the backend difference, not a bug:
+            //    our GTK4 shim marshals the file into an ARGB IconPixmap,
+            //    while libayatana passes the path through as IconName and
+            //    leaves loading it to the panel.
+            let iconProperty = Self.usesOwnSNIShim ? "IconPixmap" : "IconName"
             let (icon, iconCode) = gdbus([
                 "call", "--session", "--dest", dest,
-                "--object-path", "/StatusNotifierItem",
+                "--object-path", itemPath,
                 "--method", "org.freedesktop.DBus.Properties.Get",
-                "org.kde.StatusNotifierItem", "IconPixmap"
+                "org.kde.StatusNotifierItem", iconProperty
             ])
-            #expect(iconCode == 0)
-            #expect(icon.contains("(4, 3,"))
+            #expect(iconCode == 0, "\(iconProperty) on \(itemPath): \(icon)")
+            #expect(icon.contains(Self.usesOwnSNIShim ? "(4, 3," : iconPath))
 
             // 1) The menu is exported and marshals correctly.
             //    recursionDepth is `1` not `-1`: gdbus's option parser would
@@ -92,35 +112,96 @@
             //    depth and always returns the full flat tree anyway.
             let (layout, layoutCode) = gdbus([
                 "call", "--session", "--dest", dest,
-                "--object-path", "/MenuBar",
+                "--object-path", menuPath,
                 "--method", "com.canonical.dbusmenu.GetLayout", "0", "1", "[]"
             ])
-            #expect(layoutCode == 0)
+            #expect(layoutCode == 0, "GetLayout on \(menuPath): \(layout)")
             #expect(layout.contains("Open App"))
             #expect(layout.contains("Quit"))
             #expect(layout.contains("separator"))
 
-            // 2) An Event on item id 1 ("open") reaches the event stream.
-            let stream = tray.eventStream()
-            let (_, eventCode) = gdbus([
-                "call", "--session", "--dest", dest,
-                "--object-path", "/MenuBar",
-                "--method", "com.canonical.dbusmenu.Event",
-                "1", "clicked", "<int32 0>", "0"
-            ])
-            #expect(eventCode == 0)
-            pumpMainContextForTesting(seconds: 0.2)
+            // 2) An Event on the "open" item reaches the event stream. Its
+            //    dbusmenu id is read back from the layout rather than assumed:
+            //    our GTK4 shim numbers items in the order it was given them,
+            //    libayatana assigns its own (the same item is 1 on one backend
+            //    and 2 on the other). Looking it up also makes this assert what
+            //    it claims to — that the item we *named* is the one that fires.
+            //    The collector is detached on purpose: a `Task {}` here would
+            //    inherit this suite's MainActor isolation and could not run
+            //    while the test blocks the main thread pumping GLib, so it
+            //    would never drain the stream.
+            let openID = try #require(
+                Self.menuItemID(labelled: "Open App", in: layout),
+                "no 'Open App' item in the layout: \(layout)"
+            )
 
-            // Race the (already-buffered) event against a timeout so a
-            // regression fails the test instead of hanging it.
-            let received: TrayEvent? = await withTaskGroup(of: TrayEvent?.self) { group in
-                group.addTask { for await ev in stream { return ev }; return nil }
-                group.addTask { try? await Task.sleep(nanoseconds: 2_000_000_000); return nil }
-                let first = await group.next() ?? nil
-                group.cancelAll()
-                return first
+            let stream = tray.eventStream()
+            let recorder = EventRecorder()
+            let collector = Task.detached { for await ev in stream { recorder.append(ev) } }
+            defer { collector.cancel() }
+
+            let (eventOut, eventCode) = gdbus([
+                "call", "--session", "--dest", dest,
+                "--object-path", menuPath,
+                "--method", "com.canonical.dbusmenu.Event",
+                openID, "clicked", "<int32 0>", "0"
+            ])
+            #expect(eventCode == 0, "Event on \(menuPath): \(eventOut)")
+
+            // Pump until the menu callback has fired and the collector has
+            // drained it, then assert. Bounded polling rather than awaiting a
+            // task group: an event that never arrives has to *fail* this test,
+            // and the previous racing shape hung instead — which cost every
+            // other GUI suite in the same run its result (#193). The test body
+            // is deliberately non-`async` as a result: with no suspension point
+            // in it, there is nothing that can be left unresumed.
+            let deadline = Date().addingTimeInterval(2)
+            while recorder.first == nil, Date() < deadline {
+                pumpMainContextForTesting(seconds: 0.05)
             }
-            #expect(received == .menuItemClicked(id: "open"))
+            #expect(recorder.first == .menuItemClicked(id: "open"))
+        }
+
+        /// The dbusmenu id of the item carrying `label`, read out of a
+        /// `GetLayout` reply — `…[<(2, {'label': <'Open App'>, …}, @av [])>…]`.
+        /// The id is the integer opening the tuple the label sits in.
+        static func menuItemID(labelled label: String, in layout: String) -> String? {
+            guard let labelRange = layout.range(of: "'label': <'\(label)'>") else { return nil }
+            let head = layout[layout.startIndex ..< labelRange.lowerBound]
+            guard let open = head.range(of: "(", options: .backwards) else { return nil }
+            let digits = head[open.upperBound...].prefix(while: \.isNumber)
+            return digits.isEmpty ? nil : String(digits)
+        }
+
+        /// True on the GTK4 backend, which implements SNI + dbusmenu itself.
+        /// The GTK3 backend delegates to `libayatana-appindicator3`, and the
+        /// two publish the item at different addresses and advertise the icon
+        /// differently.
+        static var usesOwnSNIShim: Bool {
+            #if canImport(CStatusNotifierShim)
+                true
+            #else
+                false
+            #endif
+        }
+
+        /// Collects stream events from the detached collector task, which
+        /// runs on the cooperative pool while the test blocks the main thread.
+        final class EventRecorder: @unchecked Sendable {
+            private let lock = NSLock()
+            private var events: [TrayEvent] = []
+
+            func append(_ event: TrayEvent) {
+                lock.lock()
+                events.append(event)
+                lock.unlock()
+            }
+
+            var first: TrayEvent? {
+                lock.lock()
+                defer { lock.unlock() }
+                return events.first
+            }
         }
     }
 #endif

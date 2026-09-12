@@ -5,6 +5,16 @@ import Testing
 /// The driver handshake parse, and where a driven build's own output goes.
 @Suite("drive launch plumbing")
 struct DriveLaunchTests {
+    /// Driving an iOS target needs `xcrun` and usbmuxd, so those paths — and
+    /// the option validation guarding them — only exist on macOS.
+    static var isMacOS: Bool {
+        #if os(macOS)
+            true
+        #else
+            false
+        #endif
+    }
+
     @Test("parses the announcement line")
     func parsesAnnouncement() throws {
         let parsed = try #require(
@@ -46,7 +56,11 @@ struct DriveLaunchTests {
     /// ask for. Before device driving existed the two were the same thing, so a
     /// regression here would silently send a device run to the simulator (or the
     /// reverse) rather than failing.
-    @Test("--target ios picks the device, --simulator picks the simulator")
+    ///
+    /// macOS-only because it goes through `parse`, which runs `validate()` —
+    /// and validation refuses both iOS targets off-macOS, which is correct:
+    /// neither `xcrun` nor usbmuxd exists there.
+    @Test("--target ios picks the device, --simulator picks the simulator", .enabled(if: isMacOS))
     func iosTargetResolution() throws {
         let device = try DriveInfo.parse(["--target", "ios"])
         #expect(device.options.runsOnDevice)

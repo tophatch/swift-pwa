@@ -32,6 +32,10 @@ struct Drive: AsyncParsableCommand {
         without the real cursor moving and without the app needing to be frontmost. Not every \
         backend can do it — `drive info` reports what the one in front of you actually supports, \
         and a request it can't honour is refused rather than quietly downgraded.
+
+        An iOS device is the exception to the backgrounding story: iOS suspends an app that isn't \
+        frontmost, and a verb sent to a suspended app doesn't fail — it waits, and completes when \
+        the app comes forward. Keep the app on screen for the duration of a run.
         """,
         subcommands: [
             DriveEval.self, DriveShot.self, DriveClick.self, DriveDrag.self,
@@ -52,17 +56,21 @@ struct DriveOptions: ParsableArguments {
     @Option(
         name: .long,
         help: """
-        Where to run the app: the host (default), or ios with --simulator. An iOS *device* can't be \
-        driven — its loopback isn't this machine's — but the simulator shares the host network stack, \
-        so everything works there.
+        Where to run the app: the host (default), or ios — a cabled device by default, or the \
+        simulator with --simulator. A device needs USB: the control socket is on the device's own \
+        loopback, and only the USB transport relays into it (installing and launching work over \
+        Wi-Fi, driving doesn't).
         """
     )
     var target: BuildTarget = .host
 
-    @Flag(help: "Run on the iOS Simulator (implies --target ios).")
+    @Flag(help: "Run on the iOS Simulator rather than a device (implies --target ios).")
     var simulator: Bool = false
 
-    @Option(name: .long, help: "iOS Simulator name or UDID. Defaults to a booted one, else the first available.")
+    @Option(
+        name: .long,
+        help: "iOS device or simulator name/UDID. Defaults to the sole connected device, or a booted simulator."
+    )
     var device: String?
 
     @Option(name: .long, help: "Talk to an already-running app on this loopback port instead of launching one.")
@@ -92,25 +100,49 @@ struct DriveOptions: ParsableArguments {
     @Flag(help: "Don't wait for document.readyState === 'complete' before running the verb.")
     var noPageWait: Bool = false
 
+    // MARK: iOS device signing
+
+    //
+    // An on-device build has to be signed before it will install, so `drive`
+    // takes the same signing options `build` and `deploy` do and passes them
+    // straight through. They're inert for every other target.
+
+    @Option(name: .long, help: "iOS device: a 10-character Apple Developer Team ID to sign with.")
+    var team: String?
+
+    @Option(name: .long, help: "iOS/macOS: codesign identity (e.g. \"Apple Development: …\").")
+    var sign: String?
+
+    @Option(name: .long, help: "iOS device: path to a provisioning profile (.mobileprovision).")
+    var provisioningProfile: String?
+
+    @Option(name: .long, help: "iOS device: path to an entitlements plist (pair with --provisioning-profile).")
+    var entitlements: String?
+
+    @Flag(help: "iOS device: let --team mint a provisioning profile for a free personal Apple team.")
+    var allowProvisioningRegistration: Bool = false
+
     /// Whether this run goes to the iOS Simulator rather than the host.
     var runsOnSimulator: Bool {
-        simulator || target == .ios
+        simulator
+    }
+
+    /// Whether this run goes to a physically-attached iOS device. `--target ios`
+    /// means the device now; the simulator is the one that needs asking for.
+    var runsOnDevice: Bool {
+        target == .ios && !simulator
     }
 
     func validate() throws {
-        if target == .ios, !simulator {
-            throw ValidationError("""
-            an iOS device can't be driven — the control socket listens on the device's loopback, which \
-            isn't this machine's. Add --simulator to drive the simulator (it shares the host network \
-            stack), or drive the same page on macOS.
-            """)
-        }
         if simulator, target != .ios, target != .host {
             throw ValidationError("--simulator is iOS-only; drop --target \(target.rawValue).")
         }
         #if !os(macOS)
             if runsOnSimulator {
                 throw ValidationError("the iOS Simulator is only available on macOS.")
+            }
+            if runsOnDevice {
+                throw ValidationError("driving an iOS device is only available on macOS.")
             }
         #endif
     }
@@ -808,6 +840,9 @@ struct LaunchedApp {
         if options.runsOnSimulator {
             return try await buildForSimulator(options, log: log)
         }
+        if options.runsOnDevice {
+            return try await buildForDevice(options, log: log)
+        }
         let fm = FileManager.default
         let cwd = URL(fileURLWithPath: fm.currentDirectoryPath)
         let manifestURL = cwd.appendingPathComponent(options.manifest)
@@ -945,11 +980,146 @@ struct LaunchedApp {
                 stop: { SimulatorControl.terminate(bundleID: bundleID, on: udid) }
             )
         }
+        /// The device path. Everything the *app* needs has been in place since
+        /// the driver shipped — `IOSSceneDelegate` starts the control socket like
+        /// every other backend. What was missing was purely host-side plumbing,
+        /// and the guess in the issue behind this (that `devicectl` could forward
+        /// a port) turned out to be wrong: it has no networking verb at all.
+        ///
+        /// So the four gates are met by four different mechanisms:
+        ///   1. compiled in — a debug build, same as everywhere
+        ///   2. SWIFT_PWA_DRIVE — `devicectl … launch -e`
+        ///   3. the token — read off `--console`, which relays the app's stdout
+        ///   4. the socket — `USBMux`, because the port is on the *device's*
+        ///      loopback and only the USB transport relays into it
+        ///
+        /// Steps 1–3 work over Wi-Fi; only the socket needs a cable.
+        private static func buildForDevice(
+            _ options: DriveOptions, log _: FileHandle
+        ) async throws -> LaunchedApp {
+            let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+            let pwa: PWAManifest
+            do {
+                pwa = try PWAManifest.load(from: cwd.appendingPathComponent(options.manifest))
+            } catch {
+                throw ValidationError(
+                    "Couldn't read \(options.manifest): \(error). Run `swift-pwa drive` from your app's directory."
+                )
+            }
+            let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
+            let app = cwd
+                .appendingPathComponent(Build.resolveOutput(nil, target: .ios, simulator: false))
+                .appendingPathComponent("\(pwa.name).app")
+
+            let sink = progressSink
+            // Resolve before building: a signed device build takes minutes, and
+            // "no device attached" should not cost them.
+            let target = try await IOSDeviceResolver.resolve(explicit: options.device)
+
+            try await withStdout(redirectedTo: sink) {
+                sink.writeQuietly(Data("→ building \(pwa.name) for \(target.name) (\(options.configuration))\n".utf8))
+                var arguments = [
+                    "--target", "ios",
+                    "--configuration", options.configuration,
+                    "--manifest", options.manifest,
+                    "--device", target.udid
+                ]
+                if let team = options.team { arguments += ["--team", team] }
+                if let sign = options.sign { arguments += ["--sign", sign] }
+                if let profile = options.provisioningProfile { arguments += ["--provisioning-profile", profile] }
+                if let entitlements = options.entitlements { arguments += ["--entitlements", entitlements] }
+                if options.allowProvisioningRegistration { arguments.append("--allow-provisioning-registration") }
+                let build = try Build.parse(arguments)
+                try await build.run()
+
+                sink.writeQuietly(Data("→ installing \(app.lastPathComponent) to \(target.name)\n".utf8))
+                try await Shell.run(
+                    "/usr/bin/env",
+                    ["xcrun", "devicectl", "device", "install", "app", "--device", target.udid, app.path],
+                    stdoutTo: sink
+                )
+                sink.writeQuietly(Data("→ launching \(bundleID)\n".utf8))
+            }
+
+            var childEnvironment = [AppDriver.environmentVariable: "0"]
+            if let route = options.route {
+                childEnvironment[InitialRoute.environmentVariable] = route
+            }
+            let environmentJSON = try String(
+                data: JSONSerialization.data(withJSONObject: childEnvironment, options: [.sortedKeys]),
+                encoding: .utf8
+            ) ?? "{}"
+
+            let stdout = Pipe()
+            let handshake = HandshakeReader()
+            stdout.fileHandleForReading.readabilityHandler = { handle in
+                let data = handle.availableData
+                guard !data.isEmpty else { return }
+                handshake.consume(data)
+            }
+            let console = Process()
+            console.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+            console.arguments = [
+                "xcrun", "devicectl", "device", "process", "launch",
+                "--device", target.udid,
+                "--terminate-existing",
+                // `--console` is what makes the handshake readable at all: it
+                // attaches to the app's stdout and relays it here. It also means
+                // this process stays alive for the app's lifetime, so signalling
+                // it is how the app gets torn down (devicectl forwards catchable
+                // signals to the app — `process terminate` would need a pid we
+                // are never told).
+                "--console",
+                "-e", environmentJSON,
+                bundleID
+            ]
+            console.standardOutput = stdout
+            console.standardError = FileHandle.standardError
+            try console.run()
+
+            guard let announcement = handshake.wait(seconds: min(options.timeout, 60)) else {
+                console.terminate()
+                throw DriveError.launch("""
+                the app launched on \(target.name) but never announced a driver port.
+
+                The control socket is compiled into debug builds only — drop --configuration release. \
+                A development-signed app also has to be trusted on the device once before it will run \
+                (Settings → General → VPN & Device Management). If it did launch, its own output is above.
+                """)
+            }
+
+            // The port is on the device's loopback, so it is reached through
+            // usbmuxd rather than connected to directly. Everything downstream
+            // talks to the local end and never learns a device was involved.
+            let forwarder: USBMuxPortForwarder
+            do {
+                forwarder = try USBMux.forwarder(toDeviceSerial: target.udid, devicePort: announcement.port)
+            } catch {
+                console.terminate()
+                throw DriveError.connect("\(error)")
+            }
+
+            sink.writeQuietly(Data(
+                "→ forwarding 127.0.0.1:\(forwarder.localPort) to \(target.name) port \(announcement.port)\n".utf8
+            ))
+            return LaunchedApp(
+                process: console,
+                port: forwarder.localPort,
+                token: announcement.token,
+                stop: { forwarder.stop() }
+            )
+        }
     #else
         private static func buildForSimulator(
             _: DriveOptions, log _: FileHandle
         ) async throws -> LaunchedApp {
             throw ValidationError("the iOS Simulator is only available on macOS.")
+        }
+
+        private static func buildForDevice(
+            _: DriveOptions, log _: FileHandle
+        ) async throws -> LaunchedApp {
+            throw ValidationError("driving an iOS device is only available on macOS.")
         }
     #endif
 

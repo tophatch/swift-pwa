@@ -9,6 +9,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **A physical iOS device can be driven (`swift-pwa drive --target ios`).**
+  Until now a real iPhone or iPad was the one platform in the matrix where a
+  behavioural claim couldn't be checked without a person holding the device —
+  every `eval`, screenshot and layout check on iPadOS was done by hand, by two
+  adopters and by us, while the simulator had the full loop. That's the wrong
+  way round: a device is where the interesting failures are, and this project's
+  own history is mostly bugs that only appeared on hardware ([#176]).
+
+  It needed nothing from the driver. The app half has been in place since the
+  driver shipped — `IOSSceneDelegate` starts the control socket like every
+  other backend — so this is host-side plumbing only: `devicectl … launch -e`
+  sets `SWIFT_PWA_DRIVE`, `--console` relays the app's stdout so the port and
+  per-launch token can be read, and the socket is reached through **usbmuxd**.
+  `drive` takes the same signing options as `build` and `deploy`, and
+  `--attach` was already able to talk to whatever it was pointed at.
+
+  The obvious route doesn't exist: `devicectl` has **no port-forwarding verb**,
+  and no networking verb at all. usbmuxd is the mechanism — the host asks it to
+  connect, and its counterpart inside the device dials `127.0.0.1:<port>`
+  locally, which is the only way to reach a loopback listener from outside.
+  Speaking its property-list protocol directly costs about a hundred lines and
+  keeps this dependency-free; the alternative was vendoring libimobiledevice
+  for one message type.
+
+  Two limits, both measured rather than assumed, and both documented because
+  neither announces itself. **A cable is required**: only usbmuxd's USB
+  transport dials the device's loopback, so a Wi-Fi-paired device installs and
+  launches perfectly well and then can't be driven (and a charge-only USB-C
+  cable presents exactly like no cable). **The app must stay frontmost**: iOS
+  suspends a backgrounded app, and a verb sent to a suspended one *doesn't
+  fail* — the TCP connection still completes from the kernel's listen backlog,
+  the request queues, and it answers when the app comes forward. Measured at
+  60+ seconds of apparent hang that resolved the instant the app was
+  foregrounded. That inverts the desktop behaviour, where driving an occluded
+  window is the whole point. Synthetic input stays refused on iOS, exactly as
+  on the simulator — there is no public event-synthesis API.
+
+  Verified end to end on a physical iPad: `info`, `eval` and `shot` (a 2816×1940
+  capture off the device's own renderer) through the full build → install →
+  launch → forward → drive → teardown loop.
+
 - **A command handler can tell a page from an agent (`CommandContext.caller`).**
   It previously could not: the only difference visible to a handler was that an
   agent call passed `originWindow: nil`, which is a consequence of the agent
@@ -136,6 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   platform's driver limitation would have looked like an editing regression on
   all of them.
 
+[#176]: https://github.com/tophatch/swift-pwa/issues/176
 [#193]: https://github.com/tophatch/swift-pwa/issues/193
 [#170]: https://github.com/tophatch/swift-pwa/issues/170
 [#175]: https://github.com/tophatch/swift-pwa/issues/175

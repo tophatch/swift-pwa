@@ -305,9 +305,10 @@ public struct StableDiffusionModelSource: Sendable, Equatable {
     /// One downloadable pipeline file.
     public struct File: Sendable, Equatable {
         public let url: URL
-        /// Pinned SHA-256 (lowercase hex), or `nil` until pinned. The
-        /// canonical source below is unpinned pending the `sd-vendor`
-        /// publish + real-weights pass.
+        /// Pinned SHA-256 (lowercase hex), or `nil` where the file isn't
+        /// hosted by us. The shipped fp16 sources (`sdTurboFp16`,
+        /// `lcmDreamshaperFp16`) are all pinned against the `sd-vendor`
+        /// release; only `sdTurbo` (fp32, unhosted — see below) is `nil`.
         public let sha256: String?
         public let fileName: String
         public let sizeBytes: Int64

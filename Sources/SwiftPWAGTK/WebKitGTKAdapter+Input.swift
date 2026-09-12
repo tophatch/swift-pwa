@@ -82,9 +82,14 @@
             case .up: 1
             case .move: 2
             }
+            // A motion event is a drag only if its state carries the button
+            // mask; without it GDK — and so WebKit — reads the same event as a
+            // hover, and a drag reaches the page as a press and a release with
+            // no path between them.
             swiftpwa_send_pointer_event(
                 widget, phase, pointer.x, pointer.y,
-                button, Int32(pointer.clickCount), state(pointer.modifiers)
+                button, Int32(pointer.clickCount),
+                state(pointer.modifiers) | buttonMask(pointer.buttons)
             )
         }
 
@@ -124,13 +129,39 @@
             return key.withCString { swiftpwa_keyval_from_name($0) }
         }
 
+        /// Held buttons to the `GdkModifierType` mask a real motion event
+        /// carries while one is down. GDK has no mask for a stylus barrel or
+        /// eraser, so the barrel rides on button 3 as it does everywhere else
+        /// here, and the eraser is already refused before this point.
+        private static func buttonMask(_ buttons: Set<PointerButton>) -> UInt32 {
+            var mask: UInt32 = 0
+            if buttons.contains(.left) {
+                mask |= GDK_BUTTON1_MASK.rawValue
+            }
+            if buttons.contains(.middle) {
+                mask |= GDK_BUTTON2_MASK.rawValue
+            }
+            if buttons.contains(.right) || buttons.contains(.barrel) {
+                mask |= GDK_BUTTON3_MASK.rawValue
+            }
+            return mask
+        }
+
         /// `InputModifiers` to a `GdkModifierType` mask.
         private static func state(_ modifiers: InputModifiers) -> UInt32 {
             var mask: UInt32 = 0
-            if modifiers.contains(.shift) { mask |= GDK_SHIFT_MASK.rawValue }
-            if modifiers.contains(.control) { mask |= GDK_CONTROL_MASK.rawValue }
-            if modifiers.contains(.alt) { mask |= GDK_MOD1_MASK.rawValue }
-            if modifiers.contains(.meta) { mask |= GDK_META_MASK.rawValue }
+            if modifiers.contains(.shift) {
+                mask |= GDK_SHIFT_MASK.rawValue
+            }
+            if modifiers.contains(.control) {
+                mask |= GDK_CONTROL_MASK.rawValue
+            }
+            if modifiers.contains(.alt) {
+                mask |= GDK_MOD1_MASK.rawValue
+            }
+            if modifiers.contains(.meta) {
+                mask |= GDK_META_MASK.rawValue
+            }
             return mask
         }
     }

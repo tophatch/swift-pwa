@@ -37,6 +37,14 @@
         /// Guards work deferred onto the GTK main thread against the widget
         /// being destroyed first. See ``ViewLifetime``.
         let lifetime = ViewLifetime()
+        /// Whether the app driver can synthesize input in this session.
+        ///
+        /// Resolved once, here, because ``inputCapabilities`` is synchronous
+        /// and the answer can't change while the app runs: it turns on which
+        /// display backend GDK picked (XTEST reaches X11 and XWayland, never a
+        /// native Wayland client) and whether libXtst is installed at all.
+        /// See `WebKitGTKAdapter+Input.swift` for why GTK4 needs XTEST.
+        let canSynthesizeInput: Bool
 
         private var webView: UnsafeMutablePointer<WebKitWebView> {
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
@@ -74,6 +82,7 @@
                 throw BridgeError(code: BridgeError.handler, message: "webkit_web_view_new failed")
             }
             viewWidget = view
+            canSynthesizeInput = swiftpwa_x11_input_available(view) != 0
 
             if case let .bundled(directory, entry, spaFallback) = content {
                 // Use the context-level shared router so runtime

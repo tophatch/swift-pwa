@@ -1,0 +1,88 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>swift-pwa driven-input probe</title>
+<!--
+  The page Scripts/verify-driven-input.sh drives.
+
+  Everything here exists to make a *driven* assertion possible: each check reads
+  back state the page only reaches if a real, trusted event travelled the real
+  path. Nothing is asserted by counting events alone — an engine is free to
+  coalesce those — so the checks look at what the event *did*.
+-->
+<style>
+  html, body { margin: 0; height: 100%; font: 14px system-ui, sans-serif; }
+  #field { position: absolute; left: 20px; top: 20px; width: 320px; font-size: 16px; }
+  #pad { position: absolute; left: 0; top: 80px; right: 0; bottom: 0; background: #f4f4f5; touch-action: none; }
+  #box { position: absolute; left: 40px; top: 40px; width: 60px; height: 60px; background: #2563eb; }
+</style>
+
+<input id="field" value="">
+<div id="pad"><div id="box"></div></div>
+
+<script>
+  const probe = {
+    // Drag
+    down: null, up: null, moves: [], endSpeed: null, trusted: null, captured: null,
+    // Keyboard
+    sawUndoKey: 0, swallowUndo: false
+  };
+  window.__probe = probe;
+
+  const field = document.getElementById('field');
+  const pad = document.getElementById('pad');
+  const box = document.getElementById('box');
+
+  // --- Keyboard -----------------------------------------------------------
+  // The undo chord, as the page would bind it. When `swallowUndo` is set the
+  // page claims the key with preventDefault; the embedder's own undo must then
+  // NOT also fire, or an app implementing its own undo loses it. That is the
+  // regression the Linux binding was deliberately designed around, and the
+  // easiest thing to break later by "simplifying" it to an accelerator.
+  window.addEventListener('keydown', (e) => {
+    const undoChord = (e.key === 'z' || e.key === 'Z') && (e.metaKey || e.ctrlKey);
+    if (!undoChord) return;
+    probe.sawUndoKey++;
+    if (probe.swallowUndo) e.preventDefault();
+  });
+
+  // --- Drag ---------------------------------------------------------------
+  let dragging = false, grab = null;
+  pad.addEventListener('pointerdown', (e) => {
+    probe.down = { x: e.clientX, y: e.clientY };
+    probe.trusted = e.isTrusted;
+    // setPointerCapture only succeeds for a real pointer id, so this alone
+    // separates an injected event from one dispatched by eval.
+    try { pad.setPointerCapture(e.pointerId); probe.captured = true; }
+    catch (err) { probe.captured = String(err); }
+    const r = box.getBoundingClientRect();
+    grab = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+    dragging = true;
+  });
+  pad.addEventListener('pointermove', (e) => {
+    if (!dragging) return;
+    probe.moves.push({ x: e.clientX, y: e.clientY });
+    box.style.left = (e.clientX - grab.dx) + 'px';
+    box.style.top = (e.clientY - grab.dy) + 'px';
+  });
+  pad.addEventListener('pointerup', (e) => {
+    dragging = false;
+    probe.up = { x: e.clientX, y: e.clientY };
+    // Speed over the last few moves — the thing a two-point "drag" can't
+    // produce, and what momentum and inertia are computed from.
+    const n = probe.moves.length;
+    if (n >= 6) {
+      const a = probe.moves[n - 6], b = probe.moves[n - 1];
+      probe.endSpeed = Math.round(Math.hypot(b.x - a.x, b.y - a.y));
+    }
+  });
+
+  // --- Helpers the script calls through `drive eval` -----------------------
+  window.__reset = () => {
+    probe.down = probe.up = probe.endSpeed = null;
+    probe.moves.length = 0;
+    probe.sawUndoKey = 0;
+    return 'ok';
+  };
+  window.__setField = (value) => { field.value = value; field.focus(); return field.value; };
+  window.__field = () => field.value;
+</script>

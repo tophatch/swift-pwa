@@ -54,6 +54,13 @@
         // unannotated reads are immutable-by-convention.
         private nonisolated(unsafe) var controller: OpaquePointer?
         private nonisolated(unsafe) var view: OpaquePointer?
+        /// The live `ICoreWebView2`, for the driver's synthetic-input
+        /// extension in `WebView2Adapter+Input.swift`. A read-only door rather
+        /// than widening `view` itself, which stays private so nothing else
+        /// can reach past the adapter's own lifecycle handling.
+        var driverView: OpaquePointer? {
+            view
+        }
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
         /// Eager `let` rather than a `lazy var` for the same reason

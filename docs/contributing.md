@@ -36,6 +36,25 @@ swiftformat .                                  # apply it
   left installed hangs every later test that awaits `MainThread.run`. Keep the
   body synchronous for the same reason (it is non-`async` so you can't suspend
   by accident).
+- **Keyboard, editing and drag are checked by driving a real app, not by a unit
+  test.** `Scripts/verify-driven-input.sh` (and `verify-driven-input.ps1` on
+  Windows, which has no bash) builds a probe app, launches it, and drives it
+  through select-all / cut / type, cut-and-paste, type → undo → redo, a page
+  claiming the undo key with `preventDefault`, typing into a freshly focused
+  field, and a multi-segment drag. Run it on a box whose backend you touched;
+  the opt-in `driven-input` CI job runs the Linux one weekly.
+
+  Two things it is written around, because both make a run green while proving
+  nothing. The obvious editing sequence (⌘A → ⌘C → ⌘V → ⌘X → ⌘Z) **round-trips
+  to its starting value**, which is equally consistent with everything working
+  and with only select-all working — so every step leaves a *distinct* value.
+  And **a quiet environment is not a passing test**: a locked macOS screen has
+  no key window and an SSH shell has no interactive desktop, in which every
+  shortcut fails exactly as a broken fix would. Hence the leading control
+  keystroke, the second macOS control for whether the app can become active at
+  all, and `SKIP` rather than `PASS` wherever a backend or session genuinely
+  can't run a check. If you add a check, give it the same treatment.
+
 - **swiftformat is enforced by CI.** 4-space indent, 120 columns, `--self remove`.
   Run it before you push.
 - **Tests use [swift-testing](https://github.com/apple/swift-testing)** (`@Test`,

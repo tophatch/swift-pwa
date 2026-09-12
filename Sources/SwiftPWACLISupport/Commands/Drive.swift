@@ -34,8 +34,8 @@ struct Drive: AsyncParsableCommand {
         and a request it can't honour is refused rather than quietly downgraded.
         """,
         subcommands: [
-            DriveEval.self, DriveShot.self, DriveClick.self, DriveType.self,
-            DriveScroll.self, DriveWindows.self, DriveInfo.self
+            DriveEval.self, DriveShot.self, DriveClick.self, DriveDrag.self,
+            DriveType.self, DriveScroll.self, DriveWindows.self, DriveInfo.self
         ]
     )
 }
@@ -145,7 +145,9 @@ struct DriveEval: AsyncParsableCommand {
             // The page's CSP forbids `eval`, so the script hasn't run yet.
             // Evaluate it directly — the pre-0.10 path, minus promise support.
             var payload: [String: BridgeJSON] = ["js": .string(script)]
-            if let window = options.window { payload["window"] = .string(window) }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             try print(client.invoke("eval", payload).prettyPrinted)
         }
     }
@@ -169,7 +171,9 @@ struct DriveShot: AsyncParsableCommand {
     func run() async throws {
         try await DriveSession.run(options) { client in
             var payload: [String: BridgeJSON] = [:]
-            if let window = options.window { payload["window"] = .string(window) }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             let result = try client.invoke("screenshot", payload)
             guard let base64 = result["pngBase64"]?.stringValue,
                   let png = Data(base64Encoded: base64)
@@ -230,7 +234,9 @@ struct DriveClick: AsyncParsableCommand {
                     "clickCount": .number(Double(count)),
                     "pointerType": .string(pointerType)
                 ]
-                if let window = options.window { payload["window"] = .string(window) }
+                if let window = options.window {
+                    payload["window"] = .string(window)
+                }
                 try client.invoke("input.pointer", payload)
             }
             print("Clicked at \(Int(point.x)), \(Int(point.y)).")
@@ -247,6 +253,269 @@ struct DriveClick: AsyncParsableCommand {
         guard fraction else { return (x, y) }
         let viewport = try client.viewportSize(window: options.window)
         return (x * viewport.width, y * viewport.height)
+    }
+}
+
+/// Parses `--modifiers` for the verbs that take it.
+///
+/// The wire accepts these; `InputModifiers(names:)` ignores anything else so a
+/// newer client can't break an older app. At the CLI that leniency is the wrong
+/// trade — a typo'd `--modifiers commnd` would send an unmodified keystroke and
+/// report success, which is a measurement that lies — so names are checked here
+/// and a bad one is a usage error.
+enum DriveModifiers {
+    private static let names: Set<String> = [
+        "shift", "control", "ctrl", "alt", "option", "meta", "command", "cmd"
+    ]
+
+    static func parse(_ raw: String?) throws -> [String] {
+        guard let raw else { return [] }
+        let parsed = raw
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
+            .filter { !$0.isEmpty }
+        if let unknown = parsed.first(where: { !names.contains($0) }) {
+            throw ValidationError(
+                "Unknown modifier \"\(unknown)\". Use shift, control, alt or command."
+            )
+        }
+        return parsed
+    }
+}
+
+/// One end of a drag, as `x,y`.
+///
+/// A dedicated type rather than two options per point so `--to` can repeat and
+/// still read as a path: `--from 20,20 --to 200,20 --to 200,200`.
+struct DragPoint: ExpressibleByArgument {
+    var x: Double
+    var y: Double
+
+    init?(argument: String) {
+        let parts = argument.split(separator: ",", omittingEmptySubsequences: false)
+        guard parts.count == 2,
+              let x = Double(parts[0].trimmingCharacters(in: .whitespaces)),
+              let y = Double(parts[1].trimmingCharacters(in: .whitespaces))
+        else { return nil }
+        self.x = x
+        self.y = y
+    }
+
+    static var defaultValueDescription: String {
+        "x,y"
+    }
+}
+
+struct DriveDrag: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "drag",
+        abstract: "Press, move and release — a drag gesture along a path.",
+        discussion: """
+        The moves in between are the point. A press and a release at two coordinates with nothing         between them doesn't drive momentum, inertia, rubber-banding, or anything else that reads         velocity — which is most of what a drag gesture is for — so this interpolates a path and         paces it over --duration.
+
+        --to repeats, so a multi-segment gesture is one command:
+
+          swift-pwa drive drag --from 20,20 --to 200,20 --to 200,200
+
+        Coordinates are window-local CSS pixels, or viewport fractions with --fraction. Prefer         --from-selector / --to-selector where the endpoints are elements: they survive a layout         change, and each is measured immediately before the gesture starts.
+        """
+    )
+
+    @Option(name: .long, help: "Where the drag starts, as x,y. Omit when using --from-selector.")
+    var from: DragPoint?
+
+    @Option(name: .long, help: "A point to drag to, as x,y. Repeat for a multi-segment path.")
+    var to: [DragPoint] = []
+
+    @Option(name: .long, help: "Start at the centre of the first element matching this CSS selector.")
+    var fromSelector: String?
+
+    @Option(name: .long, help: "End at the centre of the first element matching this CSS selector.")
+    var toSelector: String?
+
+    @Flag(help: "Treat coordinates as fractions of the viewport (0-1) rather than CSS pixels.")
+    var fraction: Bool = false
+
+    @Option(
+        name: .long,
+        help: """
+        How long the gesture takes, in milliseconds. Real elapsed time, because a page reading \
+        velocity gets a different answer from the same path delivered faster.
+        """
+    )
+    var duration: Double = 250
+
+    @Option(name: .long, help: "Intermediate move events across the whole path. Default: one per ~8ms.")
+    var steps: Int?
+
+    @Option(name: .long, help: "Which button to hold: left (default), right, middle, barrel or eraser.")
+    var button: String = "left"
+
+    @Option(name: .long, help: "Pointer type: mouse (default), pen or touch. Refused if the backend can't produce it.")
+    var pointerType: String = "mouse"
+
+    @Option(
+        name: .long,
+        help: "Modifiers held for the whole gesture, comma-separated: shift, control, alt, command."
+    )
+    var modifiers: String?
+
+    @OptionGroup var options: DriveOptions
+
+    func run() async throws {
+        // Validated before the app is built and launched: a usage error should
+        // cost a usage error, not a compile and a window.
+        let held = try DriveModifiers.parse(modifiers)
+        guard duration >= 0 else {
+            throw ValidationError("--duration can't be negative.")
+        }
+        if let steps, steps < 1 {
+            throw ValidationError("--steps must be at least 1.")
+        }
+        if from == nil, fromSelector == nil {
+            throw ValidationError("Give a start point: --from x,y or --from-selector <css>.")
+        }
+        if from != nil, fromSelector != nil {
+            throw ValidationError("Give --from or --from-selector, not both.")
+        }
+        if toSelector != nil, !to.isEmpty {
+            throw ValidationError("Give --to or --to-selector, not both.")
+        }
+        if to.isEmpty, toSelector == nil {
+            throw ValidationError("Give somewhere to drag to: --to x,y or --to-selector <css>.")
+        }
+
+        try await DriveSession.run(options) { client in
+            let path = try resolvePath(client)
+            let plan = Self.interpolate(path, steps: steps ?? Self.defaultSteps(forMilliseconds: duration))
+            let interval = plan.count > 1 ? duration / 1000 / Double(plan.count - 1) : 0
+
+            // A move before the press: a real gesture hovers first, and a page
+            // whose handler arms on pointerover would otherwise never see it.
+            try send(client, phase: "move", at: path[0], modifiers: held)
+            try send(client, phase: "down", at: path[0], modifiers: held)
+
+            // Paced to a deadline, not by sleeping between sends. Every move is
+            // a synchronous round trip to the app, so adding a fixed sleep to
+            // each one overshoots — measured at ~2x on a local macOS app, and a
+            // page computing velocity would read a slower gesture than the one
+            // that was asked for.
+            let start = Date()
+            for (index, point) in plan.dropFirst().enumerated() {
+                let due = start.addingTimeInterval(Double(index + 1) * interval)
+                let wait = due.timeIntervalSinceNow
+                if wait > 0 {
+                    Thread.sleep(forTimeInterval: wait)
+                }
+                try send(client, phase: "move", at: point, modifiers: held, holding: true)
+            }
+            let elapsed = Date().timeIntervalSince(start) * 1000
+            try send(client, phase: "up", at: plan[plan.count - 1], modifiers: held)
+
+            let route = path.map { "\(Int($0.x)),\(Int($0.y))" }.joined(separator: " → ")
+            var line = "Dragged \(route) in \(plan.count - 1) move\(plan.count == 2 ? "" : "s") over \(Int(elapsed)) ms."
+            // Round trips can't be compressed, so a short --duration with many
+            // steps is simply unachievable. Say so rather than let a velocity
+            // assertion fail against a gesture that was never delivered at the
+            // requested speed.
+            if elapsed > duration * 1.25, duration > 0 {
+                line += " Asked for \(Int(duration)) ms — the app couldn't be driven that fast;"
+                line += " use fewer --steps for a quicker gesture."
+            }
+            print(line)
+        }
+    }
+
+    /// The gesture's corners, in window-local CSS pixels.
+    private func resolvePath(_ client: DriverClient) throws -> [DragPoint] {
+        var viewport: (width: Double, height: Double)?
+        func scaled(_ point: DragPoint) throws -> DragPoint {
+            guard fraction else { return point }
+            let size = try viewport ?? client.viewportSize(window: options.window)
+            viewport = size
+            return DragPoint(argument: "\(point.x * size.width),\(point.y * size.height)")!
+        }
+
+        var path: [DragPoint] = []
+        if let fromSelector {
+            let centre = try client.center(of: fromSelector, window: options.window)
+            path.append(DragPoint(argument: "\(centre.x),\(centre.y)")!)
+        } else if let from {
+            try path.append(scaled(from))
+        }
+        if let toSelector {
+            let centre = try client.center(of: toSelector, window: options.window)
+            path.append(DragPoint(argument: "\(centre.x),\(centre.y)")!)
+        } else {
+            for point in to { try path.append(scaled(point)) }
+        }
+        return path
+    }
+
+    private func send(
+        _ client: DriverClient,
+        phase: String,
+        at point: DragPoint,
+        modifiers: [String],
+        holding: Bool = false
+    ) throws {
+        var payload: [String: BridgeJSON] = [
+            "type": .string(phase),
+            "x": .number(point.x),
+            "y": .number(point.y),
+            "button": .string(button),
+            "pointerType": .string(pointerType)
+        ]
+        // Says this move is a drag rather than a hover. Without it the
+        // platforms deliver a different event entirely (or none) and the page
+        // sees a press and a release with no path between them.
+        if holding {
+            payload["buttons"] = .array([.string(button)])
+        }
+        if !modifiers.isEmpty {
+            payload["modifiers"] = .array(modifiers.map { .string($0) })
+        }
+        if let window = options.window {
+            payload["window"] = .string(window)
+        }
+        try client.invoke("input.pointer", payload)
+    }
+
+    /// ~8 ms per move — about half a 60 Hz frame, so a page sampling per frame
+    /// sees a fresh position every time — bounded at both ends. The floor keeps
+    /// a `--duration 0` gesture from collapsing to a press and a release; the
+    /// ceiling keeps a long drag from spending its whole budget on round trips,
+    /// each of which is a synchronous request to the app.
+    static func defaultSteps(forMilliseconds duration: Double) -> Int {
+        min(60, max(8, Int((duration / 8).rounded())))
+    }
+
+    /// `steps` points along the path, corners included.
+    ///
+    /// Steps are spread by *distance*, not per segment, so an L-shaped drag
+    /// doesn't crawl along its short leg and jump along its long one — a page
+    /// reading velocity would see two different gestures.
+    static func interpolate(_ path: [DragPoint], steps: Int) -> [DragPoint] {
+        guard path.count > 1 else { return path }
+        let lengths = zip(path, path.dropFirst()).map { a, b in
+            (pow(b.x - a.x, 2) + pow(b.y - a.y, 2)).squareRoot()
+        }
+        let total = lengths.reduce(0, +)
+        var result = [path[0]]
+        for (index, length) in lengths.enumerated() {
+            // A zero-length segment still gets one step: the caller asked to
+            // pass through that corner, and dropping it would silently change
+            // the path.
+            let share = total > 0 ? Int((Double(steps) * length / total).rounded()) : steps / lengths.count
+            let count = max(1, share)
+            let a = path[index]
+            let b = path[index + 1]
+            for step in 1 ... count {
+                let t = Double(step) / Double(count)
+                result.append(DragPoint(argument: "\(a.x + (b.x - a.x) * t),\(a.y + (b.y - a.y) * t)")!)
+            }
+        }
+        return result
     }
 }
 
@@ -296,7 +565,7 @@ struct DriveType: AsyncParsableCommand {
     func run() async throws {
         // Parsed before the app is launched, so a typo'd modifier costs a usage
         // error rather than a build and a run.
-        let held = try parsedModifiers()
+        let held = try DriveModifiers.parse(modifiers)
         let withHeld = held.isEmpty ? "" : " with \(held.joined(separator: "+"))"
         try await DriveSession.run(options) { client in
             if let selector {
@@ -324,40 +593,27 @@ struct DriveType: AsyncParsableCommand {
         var payload: [String: BridgeJSON] = [
             "type": .string(phase), "x": .number(point.x), "y": .number(point.y)
         ]
-        if let window = options.window { payload["window"] = .string(window) }
-        return payload
-    }
-
-    /// The wire accepts these; `InputModifiers(names:)` ignores anything else so
-    /// a newer client can't break an older app. At the CLI that leniency is the
-    /// wrong trade — a typo'd `--modifiers commnd` would send an unmodified key
-    /// and report success, which is a measurement that lies — so names are
-    /// checked here and a bad one is a usage error.
-    private static let modifierNames: Set<String> = [
-        "shift", "control", "ctrl", "alt", "option", "meta", "command", "cmd"
-    ]
-
-    private func parsedModifiers() throws -> [String] {
-        guard let modifiers else { return [] }
-        let names = modifiers
-            .split(separator: ",")
-            .map { $0.trimmingCharacters(in: .whitespaces).lowercased() }
-            .filter { !$0.isEmpty }
-        if let unknown = names.first(where: { !Self.modifierNames.contains($0) }) {
-            throw ValidationError(
-                "Unknown modifier \"\(unknown)\". Use shift, control, alt or command."
-            )
+        if let window = options.window {
+            payload["window"] = .string(window)
         }
-        return names
+        return payload
     }
 
     private func press(_ client: DriverClient, key: String, text: String?, modifiers: [String]) throws {
         for phase in ["down", "up"] {
             var payload: [String: BridgeJSON] = ["type": .string(phase), "key": .string(key)]
-            if let text { payload["text"] = .string(text) }
-            if !modifiers.isEmpty { payload["modifiers"] = .array(modifiers.map { .string($0) }) }
-            if activate { payload["activate"] = .bool(true) }
-            if let window = options.window { payload["window"] = .string(window) }
+            if let text {
+                payload["text"] = .string(text)
+            }
+            if !modifiers.isEmpty {
+                payload["modifiers"] = .array(modifiers.map { .string($0) })
+            }
+            if activate {
+                payload["activate"] = .bool(true)
+            }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             try client.invoke("input.key", payload)
         }
     }
@@ -400,7 +656,9 @@ struct DriveScroll: AsyncParsableCommand {
                 "x": .number(point.x), "y": .number(point.y),
                 "deltaX": .number(dx), "deltaY": .number(amount)
             ]
-            if let window = options.window { payload["window"] = .string(window) }
+            if let window = options.window {
+                payload["window"] = .string(window)
+            }
             try client.invoke("input.wheel", payload)
             print("Scrolled \(Int(amount)) px vertically\(dx == 0 ? "" : ", \(Int(dx)) px horizontally").")
         }
@@ -655,7 +913,9 @@ struct LaunchedApp {
             }
 
             var childEnvironment = [AppDriver.environmentVariable: "0"]
-            if let route = options.route { childEnvironment[InitialRoute.environmentVariable] = route }
+            if let route = options.route {
+                childEnvironment[InitialRoute.environmentVariable] = route
+            }
             let stdout = Pipe()
             let handshake = HandshakeReader()
             stdout.fileHandleForReading.readabilityHandler = { handle in
@@ -753,7 +1013,9 @@ struct LaunchedApp {
         // Leave a real directory alone — that's a build product, not ours to
         // replace. Refresh only a link we could have made ourselves.
         if let existing = try? fm.destinationOfSymbolicLink(atPath: link.path) {
-            if existing == webRoot.path { return }
+            if existing == webRoot.path {
+                return
+            }
             try? fm.removeItem(at: link)
         } else if fm.fileExists(atPath: link.path) {
             return
@@ -786,12 +1048,16 @@ struct LaunchedApp {
         // Land on a specific screen without navigating there by hand — and
         // without the usual hack of patching `location.replace` into the built
         // bundle, which mutates the artifact under test.
-        if let route { env[InitialRoute.environmentVariable] = route }
+        if let route {
+            env[InitialRoute.environmentVariable] = route
+        }
         // Point the runtime at the project's real web/ rather than hoping one
         // was staged. Handles the cases a staged link can't: a web directory
         // outside the SwiftPM target (`../public`), and a tree too large to
         // declare as a SwiftPM resource.
-        if let webRoot { env[WebRoot.environmentVariable] = webRoot.path }
+        if let webRoot {
+            env[WebRoot.environmentVariable] = webRoot.path
+        }
         process.environment = env
 
         let stdout = Pipe()
@@ -841,7 +1107,9 @@ struct LaunchedApp {
     }
 
     func terminate() {
-        if let stop { stop() }
+        if let stop {
+            stop()
+        }
         guard process.isRunning else { return }
         process.terminate()
         // Give the app a moment to close its window cleanly rather than
@@ -884,7 +1152,9 @@ final class HandshakeReader: @unchecked Sendable {
             lines.filter { Self.parse($0) == nil }
                 .map { $0 + "\n" }.joined().utf8
         ))
-        if found != nil { semaphore.signal() }
+        if found != nil {
+            semaphore.signal()
+        }
     }
 
     func wait(seconds: TimeInterval) -> Announcement? {
@@ -905,8 +1175,12 @@ final class HandshakeReader: @unchecked Sendable {
         var port: UInt16?
         var token: String?
         for field in line.split(whereSeparator: \.isWhitespace) {
-            if field.hasPrefix("port=") { port = UInt16(field.dropFirst(5)) }
-            if field.hasPrefix("token=") { token = String(field.dropFirst(6)) }
+            if field.hasPrefix("port=") {
+                port = UInt16(field.dropFirst(5))
+            }
+            if field.hasPrefix("token=") {
+                token = String(field.dropFirst(6))
+            }
         }
         guard let port, let token else { return nil }
         return Announcement(port: port, token: token)

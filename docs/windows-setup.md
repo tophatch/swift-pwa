@@ -800,12 +800,22 @@ same file served out of a mount.
   is loopback TCP, so it crosses the session boundary fine. A local console or
   RDP session needs none of this. Recipe in
   [docs/app-driver.md](app-driver.md#per-backend-support).
-- **Synthetic input isn't available on Windows.** `drive`'s `click` / `type` /
-  `scroll` return `E_DRIVER_UNSUPPORTED` — WebView2 needs a composition
-  controller swift-pwa doesn't create. `eval` and `screenshot` both work;
-  dispatch DOM events through `eval` where you need interaction, remembering
-  they arrive untrusted. `drive info` reports this honestly rather than
-  accepting the call and doing nothing.
+- **Synthetic input can't reach the clipboard.** `drive`'s `click` / `type` /
+  `drag` / `scroll` all work here — they go through the DevTools protocol
+  (`Input.dispatchKeyEvent` / `dispatchMouseEvent`), which injects at the
+  browser level, so the page sees trusted events without the window needing to
+  be foreground. WebView2's own `SendPointerInput` is still out of reach (it
+  needs a composition controller swift-pwa doesn't create), but nothing depends
+  on it.
+
+  The exception is the clipboard: a driven `Ctrl+X` or `Ctrl+C` runs the *edit*
+  — the field empties — while nothing lands on the system clipboard, so a
+  following `Ctrl+V` restores nothing. Measured: the field goes empty and
+  `Get-Clipboard` is still empty. Chromium runs clipboard commands in the
+  browser process off a native key event, and the DevTools protocol dispatches
+  into the renderer, so this is a property of driving rather than a bug in the
+  app — a real user's `Ctrl+C` works normally. Move text through the page's own
+  clipboard API or set the value via `eval`.
 - **A tray icon lands in the hidden-icon overflow, not on the taskbar.**
   Windows 11 puts every newly-registered notification-area icon behind the
   taskbar's chevron by default, and there's no supported API to promote it out —

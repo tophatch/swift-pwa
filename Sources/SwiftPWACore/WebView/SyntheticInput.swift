@@ -32,6 +32,26 @@ public enum SyntheticInput: Sendable {
 /// but pressure and tilt are a different matter, and a stylus test that silently
 /// ran as a mouse click would pass while proving nothing.
 public struct InputCapabilities: Sendable, Equatable {
+    /// How a backend's synthetic events actually reach the page.
+    ///
+    /// Not a detail: the two have different preconditions, and a harness that
+    /// can't tell them apart writes a test that works on one machine and fails
+    /// on another for reasons nothing reports.
+    public enum Delivery: String, Sendable, Equatable {
+        /// Into the app's own event queue. Nothing touches the OS input layer,
+        /// so the real cursor never moves, the window needn't be focused, and a
+        /// run can proceed while the machine is in use. This is the default and
+        /// what the driver exists to provide.
+        case appQueue
+        /// Through the display server's test extension, because the toolkit
+        /// offers nothing else — GTK4 removed event synthesis entirely. Real
+        /// input: the target window **must hold input focus**, the pointer
+        /// genuinely moves, and it reaches X11 and XWayland clients only. Fine
+        /// under Xvfb, where CI runs and nothing competes for focus; intrusive
+        /// on a desktop you are using.
+        case displayServer
+    }
+
     public var pointer: Bool
     public var key: Bool
     public var wheel: Bool
@@ -42,6 +62,8 @@ public struct InputCapabilities: Sendable, Equatable {
     public var pressure: Bool
     /// Whether ``PointerInput/tiltX`` / ``PointerInput/tiltY`` reach the page.
     public var tilt: Bool
+    /// How these events reach the page. See ``Delivery``.
+    public var delivery: Delivery
 
     public init(
         pointer: Bool = false,
@@ -49,7 +71,8 @@ public struct InputCapabilities: Sendable, Equatable {
         wheel: Bool = false,
         pointerTypes: [PointerType] = [],
         pressure: Bool = false,
-        tilt: Bool = false
+        tilt: Bool = false,
+        delivery: Delivery = .appQueue
     ) {
         self.pointer = pointer
         self.key = key
@@ -57,11 +80,12 @@ public struct InputCapabilities: Sendable, Equatable {
         self.pointerTypes = pointerTypes
         self.pressure = pressure
         self.tilt = tilt
+        self.delivery = delivery
     }
 
     /// A backend with no synthetic input at all — the default, and the honest
-    /// answer for WebView2 (its `SendPointerInput` needs a composition
-    /// controller we don't create) and GTK4 (which removed event synthesis).
+    /// answer for iOS, which exposes no public way to inject an event into a
+    /// `WKWebView`.
     public static let none = InputCapabilities()
 
     /// Whether this backend can produce `type`.
@@ -113,7 +137,7 @@ public enum PointerType: String, Sendable, CaseIterable {
 /// Which button the event carries. `barrel` is the stylus side switch, which
 /// the DOM surfaces as button 2 (the same as a right-click) — named for what it
 /// physically is so a caller isn't left translating.
-public enum PointerButton: String, Sendable {
+public enum PointerButton: String, Sendable, Hashable {
     case left, right, middle, barrel, eraser
 
     /// The DOM `MouseEvent.button` number.
@@ -144,6 +168,21 @@ public struct PointerInput: Sendable {
     public var x: Double
     public var y: Double
     public var button: PointerButton
+    /// Buttons held down *during* this event, as the DOM's
+    /// `PointerEvent.buttons` — distinct from ``button``, which names the one
+    /// that changed.
+    ///
+    /// Load-bearing for `move`, which is otherwise ambiguous: the same
+    /// coordinates are a hover with nothing held and a drag with a button
+    /// held, and the platforms don't express them with the same event at all
+    /// (AppKit sends `mouseDragged` rather than `mouseMoved`; GDK sets a
+    /// button mask in the motion event's state). Without it every synthesized
+    /// move was a hover, so a drag delivered a press and a release with
+    /// nothing in between — which no page reading velocity can act on.
+    ///
+    /// Empty on a plain `down` / `up`, where ``button`` already says
+    /// everything and the platform derives the rest.
+    public var buttons: Set<PointerButton>
     /// 1 for a single click, 2 for a double-click, and so on. Carried through
     /// so a double-click selects a word rather than reading as two clicks.
     public var clickCount: Int
@@ -162,6 +201,7 @@ public struct PointerInput: Sendable {
         y: Double,
         pointerType: PointerType = .mouse,
         button: PointerButton = .left,
+        buttons: Set<PointerButton> = [],
         clickCount: Int = 1,
         pressure: Double? = nil,
         tiltX: Double? = nil,
@@ -173,6 +213,7 @@ public struct PointerInput: Sendable {
         self.x = x
         self.y = y
         self.button = button
+        self.buttons = buttons
         self.clickCount = clickCount
         self.pressure = pressure
         self.tiltX = tiltX

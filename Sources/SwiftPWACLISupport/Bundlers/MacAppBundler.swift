@@ -337,6 +337,32 @@ enum Shell {
 
     /// One-bit box so the timeout timer and the waiting thread can agree on
     /// *why* a process ended, without either capturing the other's state.
+    /// Hands `capture`'s result back from whichever of its two paths gets
+    /// there first — the reader thread, or the timeout.
+    ///
+    /// Resume-once is the whole job: both paths can run (a timeout fires, then
+    /// the child finally exits and the reader finishes), and resuming a
+    /// continuation twice is a crash, not a warning.
+    private final class CaptureResolver: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<String, any Error>?
+
+        init(_ continuation: CheckedContinuation<String, any Error>) {
+            self.continuation = continuation
+        }
+
+        func resume(returning value: String) { take()?.resume(returning: value) }
+        func resume(throwing error: any Error) { take()?.resume(throwing: error) }
+
+        private func take() -> CheckedContinuation<String, any Error>? {
+            lock.lock()
+            defer { lock.unlock() }
+            let pending = continuation
+            continuation = nil
+            return pending
+        }
+    }
+
     private final class TimeoutFlag: @unchecked Sendable {
         private let lock = NSLock()
         private var value = false
@@ -390,36 +416,64 @@ enum Shell {
         // banners from a half-configured toolchain).
         task.standardError = discardStderr ? FileHandle.nullDevice : FileHandle.standardError
         try task.run()
-        let timedOut = TimeoutFlag()
-        if let timeout {
-            DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
-                if task.isRunning {
-                    timedOut.set()
+        let command = ([executable] + arguments).joined(separator: " ")
+
+        // Nothing below blocks the caller's thread. `capture` is `async`, so the
+        // thread it runs on belongs to Swift's cooperative pool — which has
+        // roughly one thread per core — and parking one there to wait on work
+        // scheduled elsewhere is how a three-core CI runner deadlocks while an
+        // eight-core laptop never does. The suspension is a continuation; the
+        // blocking read gets a thread of its own.
+        return try await withCheckedThrowingContinuation { continuation in
+            let resolver = CaptureResolver(continuation)
+
+            // A dedicated thread, not `DispatchQueue.global()`: the read blocks
+            // for as long as the child holds the pipe, and a blocked pool thread
+            // is one the pool can't reuse. Enough concurrent captures and the
+            // queue stops scheduling, so a drain that never starts leaves its
+            // caller waiting forever.
+            Thread.detachNewThread {
+                // Drain to EOF *before* waiting for exit. The other order
+                // deadlocks as soon as the child writes more than the pipe
+                // buffer holds (64 KiB on macOS): the child blocks in `write`,
+                // we block in `waitUntilExit`, and neither moves. `xcrun simctl
+                // list runtimes -j` crosses that line on a machine with several
+                // runtimes installed — which is how a CI job sat for 39 minutes
+                // inside what read like a slow iOS build.
+                let data = stdout.fileHandleForReading.readDataToEndOfFile()
+                task.waitUntilExit()
+                if task.terminationStatus != 0 {
+                    resolver.resume(throwing: BundlerError.shell(task.terminationStatus, command))
+                } else {
+                    resolver.resume(returning: String(data: data, encoding: .utf8) ?? "")
+                }
+            }
+
+            // The deadline is a timer rather than a thread that sleeps, so it
+            // costs nothing while the command behaves.
+            //
+            // It answers the caller itself rather than unblocking the read,
+            // because **EOF is not ours to wait for**: a pipe reaches EOF when
+            // the last *writer* closes it, and the child's own children inherit
+            // that write end. Terminating the child therefore produces no EOF
+            // if it spawned anything that outlives it. Measured on Linux: after
+            // `terminate()`, `sh -c "echo hello; sleep 60"` leaves `sleep`
+            // holding the pipe and the read is still blocked eight seconds
+            // later. Waiting for the read to finish would have made `timeout`
+            // mean nothing for exactly the commands it exists to bound —
+            // `linuxdeploy`, `xcodebuild` and `simctl` all spawn subprocesses.
+            //
+            // The reader thread is left to finish on its own and finds the
+            // continuation already spent. One parked thread on a path that has
+            // already failed beats a timeout that doesn't bound anything.
+            if let timeout {
+                DispatchQueue.global().asyncAfter(deadline: .now() + timeout) {
+                    guard task.isRunning else { return }
                     task.terminate()
+                    resolver.resume(throwing: BundlerError.timedOut(command, seconds: timeout))
                 }
             }
         }
-        // Drain to EOF *before* waiting for exit. The other order deadlocks as
-        // soon as the child writes more than the pipe buffer holds (64 KiB on
-        // macOS): the child blocks in `write`, we block in `waitUntilExit`, and
-        // neither ever moves. `xcrun simctl list runtimes -j` crosses that line
-        // on a machine with several runtimes installed — which is how a CI job
-        // sat for 39 minutes inside what read like a slow iOS build. EOF arrives
-        // when the child closes its stdout, so `waitUntilExit` below returns
-        // immediately; a child that wedges *without* closing it is still bounded
-        // by the timeout above, whose `terminate` produces the EOF.
-        let outData = stdout.fileHandleForReading.readDataToEndOfFile()
-        task.waitUntilExit()
-        if timedOut.isSet, let timeout {
-            throw BundlerError.timedOut(([executable] + arguments).joined(separator: " "), seconds: timeout)
-        }
-        if task.terminationStatus != 0 {
-            throw BundlerError.shell(
-                task.terminationStatus,
-                ([executable] + arguments).joined(separator: " ")
-            )
-        }
-        return String(data: outData, encoding: .utf8) ?? ""
     }
 
     /// Resolve an executable name to an absolute URL.

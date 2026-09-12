@@ -9,6 +9,110 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`swift-pwa drive drag` — press, move along a path, release.** `drive` could
+  click, type and scroll but had no press-move-release verb, so anything driven
+  by a drag was unreachable; the reporting adopter was exercising a sheet
+  gesture with synthesized `PointerEvent`s through `drive eval` instead, which
+  tests the page's handlers and not the path the OS actually delivers. That is
+  the same distinction that hid the `key: "Dead"` bug for two releases —
+  `eval`-dispatched events looked identical while real ones were wrong ([#175]).
+
+  **The moves in between are the feature.** A press and a release at two points
+  drives no momentum, inertia or rubber-banding — most of what a drag gesture is
+  for — so the verb interpolates a path and paces it over `--duration` in real
+  elapsed time. `--to` repeats, so a multi-segment gesture is one command
+  (`--from 20,20 --to 200,20 --to 200,200`), and steps are spread by *distance*
+  rather than one share per segment, so an L-shaped drag doesn't crawl along its
+  short leg and jump along its long one. Endpoints can be `--from-selector` /
+  `--to-selector`, which survive a layout change. Also served to agents as the
+  `app_drag` MCP tool.
+
+  Pacing is to a deadline rather than a sleep between sends: every move is a
+  synchronous round trip to the app, so adding a fixed sleep to each one
+  overshoots — measured at roughly 2x on a local macOS app, which a page
+  computing velocity reads as a slower gesture than the one requested. Where the
+  round trips genuinely can't keep up, the verb says so instead of reporting the
+  duration it was asked for.
+
+- **Synthetic input on Windows, over the DevTools protocol.** WebView2's own
+  `SendPointerInput` lives on `ICoreWebView2CompositionController` and swift-pwa
+  creates a *windowed* controller, so this backend reported no input at all and
+  every keyboard, pointer and wheel verb was refused on it. The obvious fix —
+  `SendInput` / `keybd_event` — would have cost the property the whole driver is
+  built on, since OS-level injection moves the real cursor, needs the window
+  foreground, and makes the machine unusable while a run is in progress.
+
+  `CallDevToolsProtocolMethod` is on the base `ICoreWebView2`, well below the
+  SDK version this project already requires, and CDP's `Input.dispatchKeyEvent`
+  / `Input.dispatchMouseEvent` inject at the *browser* level: trusted events,
+  hit testing, focus, default actions, nothing near the OS input queue, and a
+  backgrounded window drives correctly. The same mechanism Puppeteer and
+  Playwright drive Chromium with. Windows therefore keeps the same
+  "needn't be frontmost" guarantee as macOS and GTK3 ([#164]).
+
+- **Synthetic input on GTK4, over XTEST — and a capability field that says how
+  it differs.** GTK4 removed event synthesis outright: `GdkEvent` is opaque with
+  no public constructors and `gtk_main_do_event` is gone, so
+  `gdk_display_put_event` survives with nothing to hand it, and WebKitGTK
+  exposes no injection API of its own. The X server's test extension is what is
+  left, and it is a genuinely weaker guarantee — events enter at the *server*,
+  so the window must hold input focus, the real pointer moves, and it reaches
+  X11 and XWayland clients only. Under Xvfb, where CI runs and nothing competes
+  for focus, none of that costs anything, and it is the only way the GTK4
+  backend's keyboard behaviour can be checked by anything but a person.
+
+  Rather than report that as a plain `true`, `InputCapabilities` gains
+  **`delivery`** (`appQueue` / `displayServer`), surfaced by `drive info`, so a
+  harness can branch on it instead of writing a test that works on one machine
+  and fails on another for reasons nothing reports. libXtst is `dlopen`ed rather
+  than linked — it is not a GTK dependency, and a box without it reports no
+  input support instead of failing to link the whole Linux backend.
+
+- **`Scripts/verify-driven-input.sh` (and a `.ps1` sibling for Windows, which
+  has no bash) — the editing and drag checks, as a script rather than a
+  paragraph in a PR.** Every keyboard fix in [#163] was verified by
+  hand on real hardware while CI only compiled the backends, so all of them could
+  regress silently. This drives a real app through select-all / cut / type /
+  paste, type → undo → redo, a page that claims the undo key with
+  `preventDefault` keeping it, typing into a freshly focused field, and a
+  multi-segment drag ([#164]).
+
+  It is written around the two traps that make such a run green while proving
+  nothing. The obvious editing sequence **round-trips to its own starting
+  state**, which is equally consistent with everything working and with only
+  select-all working — so every step here leaves a *distinct* value. And a quiet
+  environment is not a passing test: a locked macOS screen has no key window and
+  an SSH shell has no interactive desktop, in which every shortcut fails exactly
+  as a broken fix would. So the script leads with a control keystroke that must
+  land, adds a second control on macOS for whether the app can become active at
+  all (menu key equivalents need a key window, and plain typing doesn't — so the
+  first control can't tell the two apart), and **skips** rather than passes the
+  checks a backend or session genuinely can't run.
+
+  The Windows script also handles the session-0 problem on its own: an SSH shell
+  there has no interactive desktop, WebView2 refuses to create a controller, and
+  every page-dependent verb times out behind `0x80070578`. It launches the app
+  into the active console session with a scheduled task and attaches over
+  loopback, which crosses the session boundary fine.
+
+  Run on demand or weekly by a new opt-in `driven-input` CI job (Linux, under
+  Xvfb — the one hosted environment that can do this; a macOS runner has no
+  logged-in desktop, so it would correctly skip every menu shortcut).
+
+  **Found while writing it: the clipboard is the one thing the driver can't
+  reach on Windows.** A driven `Ctrl+X` runs the edit — the field empties — but
+  nothing lands on the system clipboard, so the following `Ctrl+V` restores
+  nothing. Chromium runs clipboard commands in the browser process off a native
+  key event while the DevTools protocol dispatches into the renderer. A real
+  user's `Ctrl+C` works; only driving it doesn't, so the check is reported as a
+  skip with that reason rather than folded into the editing assertion, where one
+  platform's driver limitation would have looked like an editing regression on
+  all of them.
+
+[#175]: https://github.com/tophatch/swift-pwa/issues/175
+[#164]: https://github.com/tophatch/swift-pwa/issues/164
+[#163]: https://github.com/tophatch/swift-pwa/issues/163
+
 - **`app.openURL` — a deep link the OS routes to the app reaches the page.**
   The outbound half shipped first, which left the capability half-built: an app
   could *send* a `myapp://…` link but had nowhere to *receive* one. A URL the OS
@@ -277,6 +381,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   reached for `pwa://` there, which isn't that backend's origin at all.
 
 ### Fixed
+
+- **`Shell.capture`'s timeout didn't bound a command that spawns subprocesses.**
+  The deadline fired and terminated the child, but the call then sat in
+  `readDataToEndOfFile` anyway: a pipe reaches EOF when the last *writer* closes
+  it, and a child's own children inherit the write end. So terminating the child
+  produced no EOF whenever it had spawned anything that outlived it — which is
+  most of what this timeout exists to bound, since `linuxdeploy`, `xcodebuild`
+  and `simctl` all spawn subprocesses. The code comment asserted the opposite
+  ("a child that wedges without closing it is still bounded by the timeout,
+  whose `terminate` produces the EOF"), true only for a childless child.
+
+  Measured on Linux: after `terminate()`, `sh -c "echo hello; sleep 60"` leaves
+  `sleep` holding the pipe and the read is **still blocked eight seconds
+  later**. stdout is now drained on a background thread and the deadline is
+  waited on directly, so a wedged child is genuinely bounded; the repo's own
+  `aWedgedChildTimesOutWithATimedOutError` went from never completing on Linux
+  to passing in 4.0s.
+
+  **It had never passed on Linux, and CI called it green** — the test started,
+  never reported, and the quiescence rule below read the silence as the post-run
+  park. It surfaced on the first run after that rule was fixed, which is the
+  clearest demonstration available of what the old one was hiding.
+
+- **A driven drag delivered no movement at all, on both backends that had
+  synthetic input.** `PointerInput` carried the button that *changed* but not
+  the buttons *held*, and a move is a hover or a drag depending entirely on the
+  latter — which the platforms express with different events, not a flag. AppKit
+  wants `mouseDragged` rather than `mouseMoved` (and discards a plain
+  `mouseMoved` outright unless the window accepts moved events); GDK wants the
+  button mask set in the motion event's state. So every synthesized move was a
+  hover, and a drag reached the page as a press and a release with nothing in
+  between.
+
+  Latent until now because nothing exercised the `move` phase: `drive click` is
+  a press and a release, and the drag verb above is the first caller. Measured
+  against a page that records the gesture: **0 of 50 moves reached the page and
+  the dragged element never moved**; with the fix, 50 of 50, the path passes
+  through its corner, and the page computes a real end-of-gesture velocity.
+  Confirmed load-bearing by putting the old behaviour back and watching the
+  same page go to zero again.
+
+  `PointerInput` gains `buttons`, modelled on the DOM's `PointerEvent.buttons`
+  as the rest of the type already is. Additive and defaulted, so a `down` / `up`
+  is unchanged.
+
+- **A Linux GUI test run could report a pass while tests were still running.**
+  `Scripts/ci-test-linux.sh` reads its verdict from swift-testing's structured
+  event stream because the swift-corelibs exit-hang eats the console summary
+  ([#39]), and one of its three pass conditions is *quiescence*: 8 seconds with
+  no growth in the event file plus any `testEnded` was read as "parked at the
+  post-run exit-hang", whereupon the loop breaks and `kill -9`s the bundle —
+  discarding anything that had not yet run or not yet flushed its failure.
+
+  The script documented exactly this as its one caveat, and said the assumption
+  held because "the suite has no such test (all are fast and event-dense)". That
+  stopped being true when the GUI-gated GTK suites arrived: they pump a
+  GMainContext for up to 4 seconds at a stretch emitting nothing, and one test
+  takes ~18 seconds on its own, so a gap longer than the threshold is normal for
+  them rather than hypothetical. Measured on the GTK3 box against a suite with a
+  genuine failure, the old rule reported `no failures` and exited 0 on **1 run
+  in 5** — a race rather than a systematic false green, which is worse, because
+  the failing run is the one you don't repeat ([#190]).
+
+  The event stream carries `testStarted` / `testEnded` per `testID`, so "a test
+  is still in flight" is directly observable rather than inferred from file
+  growth. With nothing in flight the short quiet window still passes
+  immediately; with something in flight it now waits far longer than any test in
+  the suite takes, because a live test reports inside that window and a tail
+  lost to block buffering never will. Passing on the long window is still a
+  judgement call, and it now says so, naming the tests that never reported.
+
+- **`Scripts/remote-linux.sh test` ran no GTK suites by default.** It passed an
+  empty filter straight through to `ci-test-linux.sh`, whose own default is the
+  two backend-agnostic CI targets — correct for CI, wrong for a box whose only
+  purpose is the GTK backend. The obvious invocation ran 952 Core + CLI tests
+  with zero GTK suites among them and printed a green verdict that read as "the
+  full suite passed on the box". It now defaults to `SwiftPWAGTKTests`; hosted CI
+  already covers the other two ([#190]).
+
+[#39]: https://github.com/tophatch/swift-pwa/issues/39
+[#190]: https://github.com/tophatch/swift-pwa/issues/190
 
 - **A GTK window can be closed while the webview still has work queued, without
   taking the process with it.** `WebKitGTKAdapter` defers every WebKit call onto

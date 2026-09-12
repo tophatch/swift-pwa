@@ -582,4 +582,275 @@ static inline void swiftpwa_window_connect_undo(
     gtk_widget_add_controller(GTK_WIDGET(window), ctrl);
 }
 
+/// GDK keyval for a key name ("Return", "Left") — 0 if GDK doesn't know it.
+/// Wrapped because the GTK4 backend has no other reason to import gdkkeysyms.
+static inline unsigned int swiftpwa_gtk4_keyval_from_name(const char *name) {
+    return (unsigned int)gdk_keyval_from_name(name);
+}
+
+/// GDK keyval for a Unicode scalar — how an ordinary character is spelled.
+static inline unsigned int swiftpwa_gtk4_keyval_from_unicode(unsigned int scalar) {
+    return (unsigned int)gdk_unicode_to_keyval((guint32)scalar);
+}
+
+// MARK: - Synthetic input (app driver)
+//
+// GTK4 removed every way to fabricate an event: `GdkEvent` is opaque with no
+// public constructors, and `gtk_main_do_event` is gone. `gdk_display_put_event`
+// survives with nothing to put in it. So unlike the GTK3 backend — which pushes
+// events straight into GTK's own dispatch — the only route left on GTK4 is the
+// display server's own test extension, XTEST.
+//
+// That is a genuinely different kind of input and the capability report says so:
+// XTEST events enter at the *server*, so the target window has to hold input
+// focus and the real pointer really moves. It also means X11 only; a native
+// Wayland session can't be driven this way (XWayland clients can). Under Xvfb —
+// where CI runs, and where there is no input device at all — it works, which is
+// the case this exists for.
+//
+// libXtst is loaded with `dlopen` rather than linked: it is not a GTK
+// dependency, and making the whole Linux backend fail to link on a box without
+// it would be a poor trade for a dev-only verb. Absent, the backend reports no
+// input support and every request is refused rather than silently dropped.
+
+#ifdef GDK_WINDOWING_X11
+
+#include <dlfcn.h>
+
+// X11 and GDK-X11 are declared here by hand rather than by including
+// <gdk/x11/gdkx.h>.
+//
+// That header drags in Xlib.h, which typedefs `Window` — and the Swift importer
+// exports every name in this module, so `Window` then collides with swift-pwa's
+// own `Window` protocol and *every* Linux file referring to one stops compiling
+// with "'Window' is ambiguous for type lookup". Declaring the four symbols we
+// use keeps X11's namespace out of Swift entirely. `Display *` is opaque to us,
+// so `void *` is ABI-identical, and an XID is an `unsigned long` by definition.
+extern void *gdk_x11_display_get_xdisplay(GdkDisplay *display);
+extern unsigned long gdk_x11_surface_get_xid(GdkSurface *surface);
+
+typedef int (*swiftpwa_xtest_key_fn)(void *, unsigned int, int, unsigned long);
+typedef int (*swiftpwa_xtest_button_fn)(void *, unsigned int, int, unsigned long);
+typedef int (*swiftpwa_xtest_motion_fn)(void *, int, int, int, unsigned long);
+typedef unsigned long (*swiftpwa_x_root_fn)(void *);
+typedef int (*swiftpwa_x_translate_fn)(
+    void *, unsigned long, unsigned long, int, int, int *, int *, unsigned long *);
+
+typedef struct {
+    int loaded;                       // 1 once we've tried; 0 before
+    swiftpwa_xtest_key_fn key;
+    swiftpwa_xtest_button_fn button;
+    swiftpwa_xtest_motion_fn motion;
+    swiftpwa_x_root_fn root;
+    swiftpwa_x_translate_fn translate;
+} swiftpwa_xtest_api;
+
+static swiftpwa_xtest_api swiftpwa_xtest = {0, NULL, NULL, NULL, NULL, NULL};
+
+/// Resolve XTEST once. Every symbol has to be present or the whole thing stays
+/// unavailable: a half-loaded API would let a key event through and drop a
+/// pointer event, which is worse than refusing both.
+static void swiftpwa_xtest_load(void) {
+    if (swiftpwa_xtest.loaded) return;
+    swiftpwa_xtest.loaded = 1;
+
+    void *xtst = dlopen("libXtst.so.6", RTLD_LAZY | RTLD_LOCAL);
+    if (!xtst) return;
+    // libX11 is already in the process — GTK's X11 backend links it — so this
+    // hands back the same instance rather than a second copy.
+    void *x11 = dlopen("libX11.so.6", RTLD_LAZY | RTLD_LOCAL);
+    if (!x11) return;
+
+    swiftpwa_xtest.key = (swiftpwa_xtest_key_fn)dlsym(xtst, "XTestFakeKeyEvent");
+    swiftpwa_xtest.button = (swiftpwa_xtest_button_fn)dlsym(xtst, "XTestFakeButtonEvent");
+    swiftpwa_xtest.motion = (swiftpwa_xtest_motion_fn)dlsym(xtst, "XTestFakeMotionEvent");
+    swiftpwa_xtest.root = (swiftpwa_x_root_fn)dlsym(x11, "XDefaultRootWindow");
+    swiftpwa_xtest.translate = (swiftpwa_x_translate_fn)dlsym(x11, "XTranslateCoordinates");
+
+    if (!swiftpwa_xtest.key || !swiftpwa_xtest.button || !swiftpwa_xtest.motion
+        || !swiftpwa_xtest.root || !swiftpwa_xtest.translate) {
+        swiftpwa_xtest.key = NULL;
+        swiftpwa_xtest.button = NULL;
+        swiftpwa_xtest.motion = NULL;
+    }
+}
+
+/// `GDK_IS_X11_DISPLAY` without the header: the X11 backend registers its
+/// GTypes by name whether or not we can see the macro.
+static int swiftpwa_is_gtype(gpointer instance, const char *type_name) {
+    if (!instance) return 0;
+    GType wanted = g_type_from_name(type_name);
+    return wanted != 0 && g_type_is_a(G_OBJECT_TYPE(instance), wanted);
+}
+
+static void *swiftpwa_xdisplay(GtkWidget *widget) {
+    GdkDisplay *display = gtk_widget_get_display(widget);
+    if (!swiftpwa_is_gtype(display, "GdkX11Display")) return NULL;
+    return gdk_x11_display_get_xdisplay(display);
+}
+
+/// The keycode carrying `keyval` on the active keymap, and (if `level` is
+/// non-NULL) the shift level it sits at — 0 if the layout has no key for it.
+///
+/// GDK's keymap rather than `XKeysymToKeycode`: it answers the level too, and
+/// it costs no link-time dependency on libX11. The level matters because a
+/// keysym reachable only with Shift held needs Shift actually pressed, or the
+/// server delivers the unshifted character and a test asserting on `:` quietly
+/// receives `;`.
+static unsigned int swiftpwa_x11_keycode(GdkDisplay *display, unsigned int keyval, int *level) {
+    GdkKeymapKey *keys = NULL;
+    int n_keys = 0;
+    if (!gdk_display_map_keyval(display, keyval, &keys, &n_keys) || n_keys == 0) {
+        g_free(keys);
+        return 0;
+    }
+    unsigned int keycode = (unsigned int)keys[0].keycode;
+    if (level) *level = keys[0].level;
+    g_free(keys);
+    return keycode;
+}
+
+/// Whether this build, this box and this session can synthesize input.
+///
+/// All three have to hold: the X11 backend compiled into GDK, libXtst present,
+/// and the app actually running on X11 rather than Wayland. A Wayland session
+/// answers 0 even though the first two are true.
+static inline int swiftpwa_x11_input_available(GtkWidget *widget) {
+    swiftpwa_xtest_load();
+    if (!swiftpwa_xtest.key) return 0;
+    return swiftpwa_xdisplay(widget) != NULL;
+}
+
+/// Press (`phase` 0) or release (`phase` 1) the key carrying `keyval`.
+///
+/// Returns 0 if the keyval isn't on the active keymap at all.
+static inline int swiftpwa_x11_send_key(
+    GtkWidget *widget, int phase, unsigned int keyval, unsigned int gdk_state
+) {
+    swiftpwa_xtest_load();
+    void *dpy = swiftpwa_xdisplay(widget);
+    if (!dpy || !swiftpwa_xtest.key) return 0;
+
+    GdkDisplay *display = gtk_widget_get_display(widget);
+    int level = 0;
+    unsigned int keycode = swiftpwa_x11_keycode(display, keyval, &level);
+    if (keycode == 0) return 0;
+
+    // Modifiers are pressed around the key the way a keyboard produces them,
+    // rather than passed as a state mask: XTEST has no state field, the server
+    // derives it from which modifier keys are physically down.
+    unsigned int mods[4];
+    int n_mods = 0;
+    if ((gdk_state & GDK_CONTROL_MASK) != 0) {
+        mods[n_mods++] = swiftpwa_x11_keycode(display, GDK_KEY_Control_L, NULL);
+    }
+    if ((gdk_state & GDK_SHIFT_MASK) != 0 || level > 0) {
+        mods[n_mods++] = swiftpwa_x11_keycode(display, GDK_KEY_Shift_L, NULL);
+    }
+    if ((gdk_state & GDK_ALT_MASK) != 0) {
+        mods[n_mods++] = swiftpwa_x11_keycode(display, GDK_KEY_Alt_L, NULL);
+    }
+    if ((gdk_state & GDK_SUPER_MASK) != 0) {
+        mods[n_mods++] = swiftpwa_x11_keycode(display, GDK_KEY_Super_L, NULL);
+    }
+    // A modifier missing from the keymap would otherwise be sent as keycode 0,
+    // which the server reads as a real key and delivers as nonsense.
+    for (int i = 0; i < n_mods; i++) {
+        if (mods[i] == 0) return 0;
+    }
+
+    if (phase == 0) {
+        for (int i = 0; i < n_mods; i++) swiftpwa_xtest.key(dpy, mods[i], 1, 0);
+        swiftpwa_xtest.key(dpy, keycode, 1, 0);
+    } else {
+        swiftpwa_xtest.key(dpy, keycode, 0, 0);
+        for (int i = n_mods - 1; i >= 0; i--) swiftpwa_xtest.key(dpy, mods[i], 0, 0);
+    }
+    gdk_display_flush(display);
+    return 1;
+}
+
+/// Press / release / move the pointer at widget-relative `x`,`y`.
+///
+/// XTEST takes root-window coordinates, so the widget's position on screen has
+/// to be resolved for real — the surface's X id plus the widget's offset inside
+/// it, scaled to device pixels. Guessing any part of that lands the click
+/// somewhere else on a HiDPI display or under a header bar.
+static inline int swiftpwa_x11_send_pointer(
+    GtkWidget *widget, int phase, double x, double y, int button
+) {
+    swiftpwa_xtest_load();
+    void *dpy = swiftpwa_xdisplay(widget);
+    if (!dpy || !swiftpwa_xtest.motion) return 0;
+
+    GtkNative *native = gtk_widget_get_native(widget);
+    if (!native) return 0;
+    GdkSurface *surface = gtk_native_get_surface(native);
+    if (!swiftpwa_is_gtype(surface, "GdkX11Surface")) return 0;
+
+    // Widget-local to surface-local: the widget sits below a header bar, and
+    // the native's own origin is offset inside the surface again.
+    graphene_point_t local = GRAPHENE_POINT_INIT((float)x, (float)y);
+    graphene_point_t in_native;
+    if (!gtk_widget_compute_point(widget, GTK_WIDGET(native), &local, &in_native)) return 0;
+    double nx = 0, ny = 0;
+    gtk_native_get_surface_transform(native, &nx, &ny);
+
+    int scale = gdk_surface_get_scale_factor(surface);
+    if (scale < 1) scale = 1;
+    int sx = (int)((in_native.x + nx) * scale);
+    int sy = (int)((in_native.y + ny) * scale);
+
+    unsigned long xid = gdk_x11_surface_get_xid(surface);
+    unsigned long root = swiftpwa_xtest.root(dpy);
+    int rx = 0, ry = 0;
+    unsigned long child = 0;
+    if (!swiftpwa_xtest.translate(dpy, xid, root, sx, sy, &rx, &ry, &child)) return 0;
+
+    // Move first even for a press: XTEST's button event carries no position, so
+    // the server uses wherever the pointer already is.
+    swiftpwa_xtest.motion(dpy, -1, rx, ry, 0);
+    if (phase == 0) {
+        swiftpwa_xtest.button(dpy, (unsigned int)button, 1, 0);
+    } else if (phase == 1) {
+        swiftpwa_xtest.button(dpy, (unsigned int)button, 0, 0);
+    }
+    gdk_display_flush(gtk_widget_get_display(widget));
+    return 1;
+}
+
+/// A wheel notch. X11 has no scroll axis — buttons 4/5 are up/down and 6/7 are
+/// left/right — so a pixel delta becomes a count of clicks.
+static inline int swiftpwa_x11_send_scroll(
+    GtkWidget *widget, double x, double y, int button, int clicks
+) {
+    swiftpwa_xtest_load();
+    void *dpy = swiftpwa_xdisplay(widget);
+    if (!dpy || !swiftpwa_xtest.button) return 0;
+    if (!swiftpwa_x11_send_pointer(widget, 2, x, y, 1)) return 0;
+    for (int i = 0; i < clicks; i++) {
+        swiftpwa_xtest.button(dpy, (unsigned int)button, 1, 0);
+        swiftpwa_xtest.button(dpy, (unsigned int)button, 0, 0);
+    }
+    gdk_display_flush(gtk_widget_get_display(widget));
+    return 1;
+}
+
+#else
+
+// GDK without its X11 backend: nothing here can work, and saying so lets the
+// Swift side report no input support rather than fail to compile.
+static inline int swiftpwa_x11_input_available(GtkWidget *widget) { (void)widget; return 0; }
+static inline int swiftpwa_x11_send_key(
+    GtkWidget *widget, int phase, unsigned int keyval, unsigned int gdk_state
+) { (void)widget; (void)phase; (void)keyval; (void)gdk_state; return 0; }
+static inline int swiftpwa_x11_send_pointer(
+    GtkWidget *widget, int phase, double x, double y, int button
+) { (void)widget; (void)phase; (void)x; (void)y; (void)button; return 0; }
+static inline int swiftpwa_x11_send_scroll(
+    GtkWidget *widget, double x, double y, int button, int clicks
+) { (void)widget; (void)x; (void)y; (void)button; (void)clicks; return 0; }
+
+#endif // GDK_WINDOWING_X11
+
 #endif

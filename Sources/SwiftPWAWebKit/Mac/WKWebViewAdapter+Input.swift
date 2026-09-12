@@ -62,7 +62,17 @@
             // synthesizable equivalent, and `inputCapabilities` already refuses
             // a pen pointer, so treat the barrel as its DOM equivalent (a
             // secondary click) and refuse the eraser outright.
+            // A move is a *drag* when a button is held, and AppKit says so with
+            // a different event type — `mouseDragged`, not `mouseMoved`. WebKit
+            // reads the two quite differently, so a drag delivered as a series
+            // of `mouseMoved`s reaches the page as nothing at all: the plain
+            // move is also discarded outright unless the window accepts moved
+            // events, which it doesn't by default.
+            let held = pointer.buttons
             let type: NSEvent.EventType = switch (pointer.phase, pointer.button) {
+            case (.move, _) where held.contains(.left): .leftMouseDragged
+            case (.move, _) where held.contains(.right) || held.contains(.barrel): .rightMouseDragged
+            case (.move, _) where held.contains(.middle): .otherMouseDragged
             case (.move, _): .mouseMoved
             case (.down, .left): .leftMouseDown
             case (.up, .left): .leftMouseUp
@@ -92,6 +102,13 @@
                     code: BridgeError.handler,
                     message: "couldn't build a \(type) mouse event"
                 )
+            }
+            // A hover move is dropped on the floor unless the window opts in.
+            // Only for the hover case: a drag arrives as `mouseDragged`, which
+            // is delivered regardless, and flipping this on for every event
+            // would change a driver build's behaviour more than it needs to.
+            if type == .mouseMoved, !window.acceptsMouseMovedEvents {
+                window.acceptsMouseMovedEvents = true
             }
             send(event, to: window)
         }
@@ -144,7 +161,9 @@
             // Real navigation/function-key events carry these flags; WebKit and
             // page code can both read them, so match what a keyboard produces.
             var modifierFlags = Self.flags(key.modifiers)
-            if let named { modifierFlags.formUnion(named.flags) }
+            if let named {
+                modifierFlags.formUnion(named.flags)
+            }
             guard let event = NSEvent.keyEvent(
                 with: key.phase == .down ? .keyDown : .keyUp,
                 location: .zero,
@@ -244,19 +263,35 @@
 
         private static func flags(_ modifiers: InputModifiers) -> NSEvent.ModifierFlags {
             var flags = NSEvent.ModifierFlags()
-            if modifiers.contains(.shift) { flags.insert(.shift) }
-            if modifiers.contains(.control) { flags.insert(.control) }
-            if modifiers.contains(.alt) { flags.insert(.option) }
-            if modifiers.contains(.meta) { flags.insert(.command) }
+            if modifiers.contains(.shift) {
+                flags.insert(.shift)
+            }
+            if modifiers.contains(.control) {
+                flags.insert(.control)
+            }
+            if modifiers.contains(.alt) {
+                flags.insert(.option)
+            }
+            if modifiers.contains(.meta) {
+                flags.insert(.command)
+            }
             return flags
         }
 
         private static func cgFlags(_ modifiers: InputModifiers) -> CGEventFlags {
             var flags = CGEventFlags()
-            if modifiers.contains(.shift) { flags.insert(.maskShift) }
-            if modifiers.contains(.control) { flags.insert(.maskControl) }
-            if modifiers.contains(.alt) { flags.insert(.maskAlternate) }
-            if modifiers.contains(.meta) { flags.insert(.maskCommand) }
+            if modifiers.contains(.shift) {
+                flags.insert(.maskShift)
+            }
+            if modifiers.contains(.control) {
+                flags.insert(.maskControl)
+            }
+            if modifiers.contains(.alt) {
+                flags.insert(.maskAlternate)
+            }
+            if modifiers.contains(.meta) {
+                flags.insert(.maskCommand)
+            }
             return flags
         }
 
@@ -286,7 +321,9 @@
                 "k": 40, ";": 41, "\\": 42, ",": 43, "/": 44, "n": 45, "m": 46,
                 ".": 47, "`": 50
             ]
-            if lowercased.count == 1, let match = others[Character(lowercased)] { return match }
+            if lowercased.count == 1, let match = others[Character(lowercased)] {
+                return match
+            }
             return 0
         }
     }

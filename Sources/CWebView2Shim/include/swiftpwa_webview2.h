@@ -151,6 +151,26 @@ void swiftpwa_w2_view_execute_script(
     swiftpwa_w2_view *view, const wchar_t *script,
     swiftpwa_w2_eval_complete_cb cb, void *user);
 
+// Call a Chrome DevTools Protocol method on the page — how the app driver
+// synthesizes input on Windows.
+//
+// WebView2's own `SendPointerInput` lives on `ICoreWebView2Composition
+// Controller`, and swift-pwa creates a *windowed* controller, so it is out of
+// reach. CDP's `Input.dispatchKeyEvent` / `Input.dispatchMouseEvent` inject at
+// the browser level instead: the page sees trusted events with hit testing,
+// focus and default actions, the OS input queue is never touched, the real
+// cursor doesn't move, and the window needn't be foreground — the same
+// guarantees the other backends give, which `SendInput` would have cost.
+//
+// `parameters_json` is the method's parameter object as UTF-16 JSON ("{}" for
+// none). The callback receives the method's JSON result, or an error message.
+void swiftpwa_w2_view_call_devtools_protocol(
+    swiftpwa_w2_view *view,
+    const wchar_t *method,
+    const wchar_t *parameters_json,
+    swiftpwa_w2_eval_complete_cb cb,
+    void *user);
+
 // Capture the webview's rendered contents and write them to `path` as a
 // PNG. Backs the app driver's `screenshot` verb; goes via a file rather
 // than a buffer to match the GTK shims (and because `CapturePreview`

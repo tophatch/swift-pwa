@@ -24,14 +24,15 @@
 # against the resulting ELF `.so` needs a Linux host.
 set -euo pipefail
 
-ONNXRUNTIME_VERSION="${1:-1.27.0}"
+ONNXRUNTIME_VERSION="${1:-1.29.0}"
 SLUG="onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}"
 URL="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${SLUG}.tgz"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 WORK="${WORK:-$ROOT/.build/onnxruntime-linux}"
 OUT="${OUT:-$ROOT/Vendor/onnxruntime-desktop/linux-x86_64}"            # gitignored; .so lands here
-HEADERS_OUT="${HEADERS_OUT:-$ROOT/Vendor/onnxruntime-desktop-headers}" # COMMITTED (Package.swift systemLibrary)
+# The committed header set (Package.swift systemLibrary) is written by
+# Scripts/vendor-onnxruntime-windows.sh — see the headers block below.
 
 mkdir -p "$WORK" "$OUT"
 
@@ -46,19 +47,26 @@ rm -rf "$EXTRACT" && mkdir -p "$EXTRACT"
 tar -xzf "$TGZ" -C "$EXTRACT"
 SRC="$EXTRACT/$SLUG"
 
-# --- headers: the release ships the full public C API set under include/;
-# our own module map (below) names the surface the Swift wrapper imports. The
-# headers are identical across desktop platforms, so the Windows script writes
-# the same committed dir (idempotent). ---
-rm -rf "$HEADERS_OUT" && mkdir -p "$HEADERS_OUT"
-cp "$SRC"/include/*.h "$HEADERS_OUT/"
-cat > "$HEADERS_OUT/module.modulemap" <<'EOF'
+# --- headers: NOT written here by default. The committed
+# `Vendor/onnxruntime-desktop-headers/` (module ONNXRuntimeDesktop) is shared by
+# Linux and Windows and is owned by Scripts/vendor-onnxruntime-windows.sh —
+# the two upstream releases declare the same API but are not byte-identical
+# (the Windows zip ships CRLF headers plus the training headers the Linux
+# tarball drops), so whichever script ran last used to decide, and running the
+# other one rewrote every line of every header for no change in meaning.
+# Pass HEADERS_OUT explicitly to write the Linux set somewhere for comparison. ---
+if [ -n "${HEADERS_OUT:-}" ]; then
+    rm -rf "$HEADERS_OUT" && mkdir -p "$HEADERS_OUT"
+    cp "$SRC"/include/*.h "$HEADERS_OUT/"
+    cat > "$HEADERS_OUT/module.modulemap" <<'EOF'
 module ONNXRuntimeDesktop {
     header "onnxruntime_c_api.h"
     header "cpu_provider_factory.h"
     export *
 }
 EOF
+    echo "=== wrote headers to $HEADERS_OUT ==="
+fi
 
 # --- shared lib: the release ships lib/libonnxruntime.so.<ver> plus an
 # unversioned libonnxruntime.so symlink. The lib's SONAME is
@@ -73,13 +81,17 @@ cp "$REALSO" "$OUT/libonnxruntime.so.1"
 ln -sf libonnxruntime.so.1 "$OUT/libonnxruntime.so"
 echo "=== wrote $OUT/libonnxruntime.so.1 ($(du -h "$OUT/libonnxruntime.so.1" | cut -f1)) + libonnxruntime.so symlink ==="
 
-# The publishable asset: the raw lib with an arch-tagged name (mirroring
-# build-llama-linux.sh's `libllama-linux-$ARCH.a`) — the CLI's
+# The publishable asset: the raw lib with an arch- and version-tagged name
+# (mirroring build-llama-linux.sh's `libllama-linux-$ARCH.a`) — the CLI's
 # OnnxRuntimeLinuxArtifact downloads this directly, saves it under the SONAME
 # name, and re-creates the `.so` symlink. (Content is identical to the .so.1,
-# so the pinned SHA-256 is unaffected by the naming.)
-cp -f "$OUT/libonnxruntime.so.1" "$OUT/libonnxruntime-linux-x86_64.so"
+# so the pinned SHA-256 is unaffected by the naming.) The **version** in the
+# name is what makes a bump additive: the asset sits beside its predecessor on
+# the same release, so a CLI pinned to the old checksum keeps resolving.
+ASSET="libonnxruntime-linux-x86_64-${ONNXRUNTIME_VERSION}.so"
+cp -f "$OUT/libonnxruntime.so.1" "$OUT/$ASSET"
 
 echo
 echo "=== publishable asset checksum (sha256; pin into OnnxRuntimeLinuxArtifact.swift) ==="
-shasum -a 256 "$OUT/libonnxruntime-linux-x86_64.so" | awk '{print $1}'
+echo "asset name: $ASSET"
+shasum -a 256 "$OUT/$ASSET" | awk '{print $1}'

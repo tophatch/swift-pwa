@@ -22,15 +22,21 @@ import Foundation
 ///      after `Scripts/vendor-onnxruntime-windows.sh` inside the repo.
 ///   3. download the pinned release assets to a content-addressed cache.
 enum OnnxRuntimeWindowsArtifact {
+    /// The vendored ONNX Runtime version, carried in the asset names so a
+    /// bump adds assets rather than replacing the bytes older swift-pwa
+    /// releases pin by checksum.
+    static let version = "1.29.0"
     static let libURL =
-        "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/onnxruntime.lib"
+        "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/" +
+        "onnxruntime-\(version).lib"
     static let dllURL =
-        "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/onnxruntime.dll"
+        "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/" +
+        "onnxruntime-\(version).dll"
 
-    /// SHA-256 of Microsoft's ONNX Runtime 1.27.0 Windows x64 files (see
+    /// SHA-256 of Microsoft's ONNX Runtime Windows x64 files (see
     /// `Scripts/vendor-onnxruntime-windows.sh`).
     static let libSha256 = "b9fc3cd678257d88a111b0773ede4bfceaf0fe95daab4379f2b2b37348a68781"
-    static let dllSha256 = "fd6dd0a8b1f5562d642abdcbd36bc54251482d2ebaa3f4f88669bfdad92e7525"
+    static let dllSha256 = "69d8e6d3879a3b4001cdc74c8ed9ccc7e7f799a5b847059738323404519ec471"
 
     struct ArtifactError: Error, CustomStringConvertible {
         let description: String

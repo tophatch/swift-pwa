@@ -406,6 +406,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- **The vendored ONNX Runtime moves 1.27 → 1.29 on Apple, Android, Linux and
+  Windows** ([#158]). Nothing was broken at 1.27, which is the point: it
+  carried a trap with no symptom until an adopter hit it. ORT 1.27 cannot
+  *create a session* for an fp16-converted transformer graph at
+  `ORT_ENABLE_ALL` — its own `SimplifiedLayerNormFusion` fails naming an
+  `InsertedPrecisionFreeCast_…` node the graph doesn't contain — and v0.10.2
+  made `.all` the default everywhere except Android. So converting any model in
+  this tier to fp16 produced a refusal pointing at a node that isn't there.
+  Reproduced through this repo's own `OrtModelSession` against the vendored
+  build (1.27: `basic` loads, `all` refuses; 1.29: both load), not just in
+  Python.
+
+  Two things deliberately did **not** move. The Windows **DirectML** build
+  stays at 1.24.4 with its own committed `ORT_API_VERSION 24` header set — the
+  separation exists precisely so the two runtimes can drift, and collapsing it
+  would mean a null `GetApi()` and a crash. And 1.29.**1** / 1.30 were ruled
+  out by checking the artifacts rather than the release notes: neither ships
+  the Android AAR, and 1.29.1 has no Apple pod either.
+
+  **Linux CUDA now needs CUDA 12.8, where 12.4 was enough.** ORT 1.29's CUDA 12
+  build is compiled against 12.8 and its provider library imports
+  `cudaLibraryGetKernel`, a symbol CUDA 12.4 doesn't export. Measured on one
+  machine with only `LD_LIBRARY_PATH` differing: against the system CUDA 12.4
+  the EP refuses to load and `ai.vision.info` reports `"cpu"`; against a 12.8
+  runtime it reports `"cuda"`. The transparent CPU fallback means this shows up
+  as *slower*, not broken — so it is called out in
+  [`docs/linux-setup.md`](docs/linux-setup.md) rather than left to be discovered.
+  Nothing else in the tier changed behaviour.
+
+  **Published artifacts now carry the ONNX Runtime version in their filenames.**
+  Every artifact was previously published under a plain name on a long-lived
+  release tag, and both `Package.swift` and the CLI resolvers pin it *by
+  checksum* — so re-publishing a new version over the old bytes would have
+  broken `swift build` for v0.10.3 and every earlier tag, with no workaround
+  but upgrading. A bump is now additive: the new asset lands beside its
+  predecessor and old pins keep resolving. (The DirectML assets keep their
+  plain names until that pin first moves; the script says so.) A new
+  `OnnxRuntimeArtifactPinTests` holds that invariant, because the way to break
+  it is to update a checksum and forget the URL — a failure that shows up
+  nowhere near here, in other people's builds of older tags.
+
 - **`AppContext` gains `externalURLs`** (an `ExternalURLPolicy`, the way
   `permissions` is a `PermissionPolicy`). Additive for anyone using the
   built-in backends, but a **source break for an out-of-tree `AppContext`
@@ -414,6 +455,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   an optional `urlOpener:`, defaulted, so existing `SystemPlugin(…)` calls are
   unchanged.
 
+[#158]: https://github.com/tophatch/swift-pwa/issues/158
 [#165]: https://github.com/tophatch/swift-pwa/issues/165
 [#166]: https://github.com/tophatch/swift-pwa/issues/166
 [#167]: https://github.com/tophatch/swift-pwa/issues/167

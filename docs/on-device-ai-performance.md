@@ -150,7 +150,7 @@ and is the obvious next candidate to measure. It has not been measured yet, so
 `coreml_provider_factory.h` documents the `MLComputeUnits` values as
 `MLComputeUnitsAll` / `MLComputeUnitsCPUAndGPU` / `MLComputeUnitsCPUAndNeuralEngine`
 / `MLComputeUnitsCPUOnly`. **The implementation accepts none of those spellings.**
-ORT 1.27 takes the bare names `CPUAndGPU` / `CPUAndNeuralEngine` / `CPUOnly`, and
+ORT takes the bare names `CPUAndGPU` / `CPUAndNeuralEngine` / `CPUOnly`, and
 "all" is not settable at all — it's the default you get by omitting the key.
 
 Passing a documented-but-wrong value throws at session creation, which the
@@ -182,11 +182,13 @@ re-derived:
 | ORT IO binding / reused input buffers | **≤4%.** Targets the same `Run` boundary. |
 | fp16 the code-predictor | **0.52× — 2× slower.** ORT's CPU provider has no native fp16 kernels for these ops and emulates them via fp32, so halving weight bytes buys nothing while every op pays a conversion. It also forked the seeded token stream (140,160 vs 147,840 samples). |
 
-> **Trap:** ONNX Runtime **1.27** (the version vendored here) cannot load an
-> fp16 code-predictor at `ORT_ENABLE_ALL` at all — `SimplifiedLayerNormFusion`
-> fails naming an `InsertedPrecisionFreeCast_…` node the graph does not
-> contain. Fixed in **1.29**. Bump the runtime before revisiting fp16 anywhere
-> in this tier.
+> **Fixed in 1.29, which is what we now vendor.** ONNX Runtime **1.27** could
+> not load an fp16 code-predictor at `ORT_ENABLE_ALL` at all —
+> `SimplifiedLayerNormFusion` failed naming an `InsertedPrecisionFreeCast_…`
+> node the graph does not contain. Since `.all` is the default off Android,
+> that refused any fp16 graph in this tier on any build vendoring 1.27. The
+> measurement above still stands: fp16 loads now, and is still 2× slower on
+> the CPU provider.
 
 Single-token decode is `MatMul`-bound and the CPU provider computes those in
 fp32. **Moving them to the GPU or ANE is the only remaining lever that changes

@@ -13,9 +13,16 @@ name: onnxruntime desktop gpu
 # *linking*/running against the result needs the matching OS), so one ubuntu
 # runner vendors both.
 #
+# Asset names carry the ONNX Runtime version, so a bump adds assets to these
+# releases rather than replacing bytes that already-tagged swift-pwa versions
+# pin by checksum. The two pins move INDEPENDENTLY: the DirectML build is
+# NuGet-only and lags (1.24.4), with its own committed header set — see
+# Scripts/vendor-onnxruntime-windows-directml.sh.
+#
 # Run manually (workflow_dispatch) only when the pinned versions in
 # Scripts/vendor-onnxruntime-{linux-gpu,windows-directml}.sh change; then update
-# the pinned checksums in the two CLI resolvers to the ones this prints.
+# the pinned versions + checksums in the two CLI resolvers to the ones this
+# prints.
 on:
   workflow_dispatch:
 
@@ -37,9 +44,9 @@ jobs:
           name: ONNX Runtime Linux x86_64 CUDA 12 libs (vendored, GPU)
           prerelease: true
           files: |
-            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime-linux-x86_64-gpu.so
-            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime_providers_shared.so
-            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime_providers_cuda.so
+            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime-linux-x86_64-gpu-*.so
+            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime_providers_shared-*.so
+            Vendor/onnxruntime-desktop-gpu/linux-x86_64/libonnxruntime_providers_cuda-*.so
 
       - name: Vendor Windows x64 DirectML libs
         run: bash Scripts/vendor-onnxruntime-windows-directml.sh
@@ -63,8 +70,10 @@ jobs:
             echo
             echo "Pin into OnnxRuntimeLinuxGpuArtifact.swift:"
             echo
-            for f in libonnxruntime-linux-x86_64-gpu.so libonnxruntime_providers_shared.so libonnxruntime_providers_cuda.so; do
-              echo "- linux $f: \`$(sha256sum "$gpu/linux-x86_64/$f" | awk '{print $1}')\`"
+            for f in "$gpu"/linux-x86_64/libonnxruntime-linux-x86_64-gpu-*.so \
+                     "$gpu"/linux-x86_64/libonnxruntime_providers_shared-*.so \
+                     "$gpu"/linux-x86_64/libonnxruntime_providers_cuda-*.so; do
+              echo "- linux \`$(basename "$f")\`: \`$(sha256sum "$f" | awk '{print $1}')\`"
             done
             echo
             echo "Pin into OnnxRuntimeWindowsDirectMLArtifact.swift:"

@@ -11,10 +11,15 @@ name: onnxruntime xcframework
 # long-lived `onnxruntime-vendor` release rather than being rebuilt for every
 # `v*` tag.
 #
+# The asset name carries the ONNX Runtime version, so a bump publishes a NEW
+# asset beside the old one rather than replacing it — every already-tagged
+# swift-pwa pins this URL together with a checksum, and rewriting the bytes
+# underneath would break `swift build` for all of them with no way out.
+#
 # It is self-completing: after building + publishing the xcframework, it pins
-# the new SHA-256 into the `ONNXRuntime` binaryTarget in Package.swift and
-# opens a PR with the change (the `url:` is stable and already points here).
-# So the entire operation is "Run workflow" → merge the PR it opens.
+# the new URL + SHA-256 into the `ONNXRuntime` binaryTarget in Package.swift and
+# opens a PR with the change. So the entire operation is "Run workflow" → merge
+# the PR it opens.
 #
 # NOTE: workflow_dispatch only appears once this file is on the default branch.
 on:
@@ -33,24 +38,28 @@ jobs:
         run: bash Scripts/vendor-onnxruntime-apple.sh
       - name: Compute checksum
         id: sum
-        run: echo "sha256=$(swift package compute-checksum Vendor/onnxruntime/onnxruntime.xcframework.zip)" >> "$GITHUB_OUTPUT"
+        run: |
+          zip="$(ls Vendor/onnxruntime/onnxruntime-*.xcframework.zip)"
+          echo "zip=$zip" >> "$GITHUB_OUTPUT"
+          echo "name=$(basename "$zip")" >> "$GITHUB_OUTPUT"
+          echo "sha256=$(swift package compute-checksum "$zip")" >> "$GITHUB_OUTPUT"
       - name: Publish to the stable onnxruntime-vendor release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: onnxruntime-vendor
           name: ONNX Runtime xcframework (vendored, Apple)
           prerelease: true
-          files: Vendor/onnxruntime/onnxruntime.xcframework.zip
-      - name: Pin the checksum in Package.swift
-        # Replace the ONNXRuntime binaryTarget's checksum specifically —
-        # scoped to the line following its `url:` (Package.swift has more
-        # than one `.binaryTarget` with a 64-hex checksum, e.g. CLlama's, so
-        # an unscoped replace would clobber the wrong one). The value is
-        # computed from the exact zip just uploaded, so the pin matches by
-        # construction — no CI re-verification needed.
+          files: ${{ steps.sum.outputs.zip }}
+      - name: Pin the URL + checksum in Package.swift
+        # Replace the ONNXRuntime binaryTarget's asset name and checksum
+        # specifically — scoped to its `url:` line and the `checksum:` on the
+        # line after (Package.swift has more than one `.binaryTarget` with a
+        # 64-hex checksum, e.g. CLlama's, so an unscoped replace would clobber
+        # the wrong one). Both values come from the exact zip just uploaded, so
+        # the pin matches by construction — no CI re-verification needed.
         run: |
-          sed -i '' -E '/onnxruntime\.xcframework\.zip/{N;s/checksum: "[0-9a-f]{64}"/checksum: "${{ steps.sum.outputs.sha256 }}"/;}' Package.swift
-          echo "::notice::Pinned ONNXRuntime checksum = ${{ steps.sum.outputs.sha256 }}"
+          sed -i '' -E '/onnxruntime-[0-9.]+\.xcframework\.zip/{s|onnxruntime-[0-9.]+\.xcframework\.zip|${{ steps.sum.outputs.name }}|;N;s/checksum: "[0-9a-f]{64}"/checksum: "${{ steps.sum.outputs.sha256 }}"/;}' Package.swift
+          echo "::notice::Pinned ONNXRuntime ${{ steps.sum.outputs.name }} = ${{ steps.sum.outputs.sha256 }}"
       - name: Open PR with the pinned checksum
         uses: peter-evans/create-pull-request@v7
         with:
@@ -71,7 +80,7 @@ jobs:
             **onnxruntime-xcframework** workflow.
 
             - checksum: `${{ steps.sum.outputs.sha256 }}`
-            - url: `https://github.com/${{ github.repository }}/releases/download/onnxruntime-vendor/onnxruntime.xcframework.zip`
+            - url: `https://github.com/${{ github.repository }}/releases/download/onnxruntime-vendor/${{ steps.sum.outputs.name }}`
 
             Correct by construction (the checksum is of the exact uploaded zip).
 

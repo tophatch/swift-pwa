@@ -35,7 +35,7 @@
 # Microsoft's binary is already a combined per-slice universal archive).
 set -euo pipefail
 
-ONNXRUNTIME_VERSION="${1:-1.27.0}"
+ONNXRUNTIME_VERSION="${1:-1.29.0}"
 POD_URL="https://download.onnxruntime.ai/pod-archive-onnxruntime-c-${ONNXRUNTIME_VERSION}.zip"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
@@ -138,6 +138,12 @@ mkdir -p "$OUT"
 xcrun xcodebuild -create-xcframework "${CREATE_ARGS[@]}" -output "$OUT/onnxruntime.xcframework"
 
 echo "=== wrote $OUT/onnxruntime.xcframework (slices: ${SLICES[*]}) ==="
-( cd "$OUT" && zip -q -r -X onnxruntime.xcframework.zip onnxruntime.xcframework )
+# The zip carries the ONNX Runtime version in its name so a bump publishes a
+# NEW asset beside the old one rather than replacing it: every already-tagged
+# swift-pwa pins this URL *and* a checksum, so overwriting the bytes in place
+# would break `swift build` for those releases with no way out but upgrading.
+ZIP_NAME="onnxruntime-${ONNXRUNTIME_VERSION}.xcframework.zip"
+( cd "$OUT" && rm -f "$ZIP_NAME" && zip -q -r -X "$ZIP_NAME" onnxruntime.xcframework )
+echo "asset name: $ZIP_NAME"
 echo "checksum to pin in Package.swift (once this zip is published as a release asset):"
-swift package compute-checksum "$OUT/onnxruntime.xcframework.zip" 2>/dev/null || shasum -a 256 "$OUT/onnxruntime.xcframework.zip"
+swift package compute-checksum "$OUT/$ZIP_NAME" 2>/dev/null || shasum -a 256 "$OUT/$ZIP_NAME"

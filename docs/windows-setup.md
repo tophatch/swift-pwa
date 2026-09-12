@@ -509,7 +509,7 @@ windows` vendors the checksum-pinned DirectML ONNX Runtime and stages
 reports the active `provider` (`"directml"` or `"cpu"`).
 
 > The DirectML build is NuGet-only and its latest version (ORT 1.24.4) lags the
-> CPU build (1.27.0), so it links against its own pinned header set — an
+> CPU build (1.29.0), so it links against its own pinned header set — an
 > internal detail that doesn't affect the `pwa.json` opt-in. See
 > [docs/proposals/onnx-gpu-execution-providers.md](proposals/onnx-gpu-execution-providers.md).
 

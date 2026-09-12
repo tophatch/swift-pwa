@@ -42,6 +42,13 @@
 #     --with-vendor     also sync Vendor/ (~1 GB of Apple/Android/desktop ONNX
 #                       and llama artifacts). Excluded by default: the Linux box
 #                       resolves its own, and syncing them dominates the transfer.
+#     --onnx            build the ONNX Runtime tier (SWIFT_PWA_ONNXRUNTIME=1),
+#                       syncing just the desktop `libonnxruntime.so` and pointing
+#                       LIBRARY_PATH / LD_LIBRARY_PATH at it. Run
+#                       Scripts/vendor-onnxruntime-linux.sh here first. This is
+#                       how a runtime bump gets checked against the committed
+#                       headers on a real Linux box — hosted CI never builds
+#                       this tier.
 #     --clean           rm -rf the remote .build first. Required after a C-shim
 #                       *header* change — SwiftPM does not pick those up
 #                       incrementally — and after a toolchain switch.
@@ -77,6 +84,7 @@ TOOLCHAIN=""
 FILTER=""
 CLEAN=0
 WITH_VENDOR=0
+ONNX=0
 COMMAND=""
 
 while [[ $# -gt 0 ]]; do
@@ -87,6 +95,7 @@ while [[ $# -gt 0 ]]; do
         --remote-dir) REMOTE_DIR="$2"; shift 2 ;;
         --filter) FILTER="$2"; shift 2 ;;
         --with-vendor) WITH_VENDOR=1; shift ;;
+        --onnx) ONNX=1; shift ;;
         --clean) CLEAN=1; shift ;;
         sync|build|test|provision|shell) COMMAND="$1"; shift ;;
         -h|--help) sed -n '2,60p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
@@ -110,6 +119,14 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REMOTE_ENV='export PATH="$HOME/.local/share/swiftly/bin:$HOME/.swiftly/bin:$PATH";'
 if [[ "$GTK4" == "1" ]]; then
     REMOTE_ENV+=' export SWIFT_PWA_GTK4=1;'
+fi
+ONNX_LIB_DIR="Vendor/onnxruntime-desktop/linux-x86_64"
+if [[ "$ONNX" == "1" ]]; then
+    # LIBRARY_PATH resolves `.linkedLibrary("onnxruntime")` at link time and
+    # LD_LIBRARY_PATH at run time — the same pair the CLI sets for an app build.
+    REMOTE_ENV+=" export SWIFT_PWA_ONNXRUNTIME=1"
+    REMOTE_ENV+=" LIBRARY_PATH=\"\$HOME/$REMOTE_DIR/$ONNX_LIB_DIR\${LIBRARY_PATH:+:\$LIBRARY_PATH}\""
+    REMOTE_ENV+=" LD_LIBRARY_PATH=\"\$HOME/$REMOTE_DIR/$ONNX_LIB_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}\";"
 fi
 
 SWIFT="swift"
@@ -161,7 +178,23 @@ RSYNC_EXCLUDES=(
     --exclude='*.xcframework'
 )
 if [[ "$WITH_VENDOR" == "0" ]]; then
-    RSYNC_EXCLUDES+=(--exclude='Vendor/')
+    # First match wins, so name what must travel before the catch-all exclude.
+    # The `Vendor/*-headers/` dirs are committed and tiny, and Package.swift
+    # fails to *load* without them ("invalid custom path" for a systemLibrary
+    # target) — unlike the multi-GB binaries beside them, they always travel.
+    RSYNC_EXCLUDES+=(
+        --include='Vendor/'
+        --include='Vendor/*-headers/'
+        --include='Vendor/*-headers/**'
+    )
+    if [[ "$ONNX" == "1" ]]; then
+        RSYNC_EXCLUDES+=(
+            --include='Vendor/onnxruntime-desktop/'
+            --include="$ONNX_LIB_DIR/"
+            --include="$ONNX_LIB_DIR/libonnxruntime.so*"
+        )
+    fi
+    RSYNC_EXCLUDES+=(--exclude='Vendor/**')
 fi
 rsync -az --delete "${RSYNC_EXCLUDES[@]}" "$REPO_ROOT/" "$HOST:$REMOTE_DIR/"
 

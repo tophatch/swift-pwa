@@ -37,17 +37,26 @@ import Foundation
 enum OnnxRuntimeAndroidArtifact {
     /// Stable release asset (NOT per swift-pwa version), paralleling
     /// Apple's `onnxruntime-vendor` release. `<abi>` is substituted at
-    /// runtime.
+    /// runtime; the ONNX Runtime version is part of the asset name so a
+    /// bump publishes a new asset **beside** the old one — every released
+    /// swift-pwa pins a checksum against this URL, and overwriting the bytes
+    /// in place would turn a version bump into a hard failure for all of them.
     static let urlTemplate =
         "https://github.com/tophatch/swift-pwa/releases/download/" +
-        "onnxruntime-vendor-android/libonnxruntime-android-<abi>.so"
+        "onnxruntime-vendor-android/libonnxruntime-android-<abi>-\(version).so"
+
+    /// The vendored ONNX Runtime version — matches
+    /// `Scripts/vendor-onnxruntime-android.sh`'s pin and the other desktop /
+    /// Apple artifacts. (The Windows **DirectML** build is deliberately not in
+    /// lockstep; see `OnnxRuntimeWindowsDirectMLArtifact`.)
+    static let version = "1.29.0"
 
     /// SHA-256 per ABI, auto-pinned by the publish workflow. Only ABIs
     /// verified against real Android hardware (Fold7 / Tab S10+, both
     /// arm64-v8a) are published so far — see `ensureLibDir`'s error for
     /// anything else.
     static let sha256ByABI: [String: String] = [
-        "arm64-v8a": "12c870ee77349d0e80e0d85eb293849ebe8f56717a81eec62b53ecb1446e7de8"
+        "arm64-v8a": "3a602b463d434d20fbf69cd1b8bdfd2f86a2cb67d08de97aec8f62476fa4ab87"
     ]
 
     struct ArtifactError: Error, CustomStringConvertible {
@@ -83,7 +92,7 @@ enum OnnxRuntimeAndroidArtifact {
             throw ArtifactError(
                 description: "ai.local_onnx_runtime has no published libonnxruntime.so for ABI \(abi) yet "
                     + "(published: \(sha256ByABI.keys.sorted().joined(separator: ", "))) — run "
-                    + "Scripts/vendor-onnxruntime-android.sh 1.27.0 \(abi) and set "
+                    + "Scripts/vendor-onnxruntime-android.sh \(version) \(abi) and set "
                     + "SWIFT_PWA_ONNXRUNTIME_ANDROID_LIB_DIR to its Vendor/onnxruntime-android/\(abi) dir, "
                     + "or drop that ABI from --android-abis."
             )

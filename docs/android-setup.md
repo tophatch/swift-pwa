@@ -1012,7 +1012,7 @@ The real `MobileSAMBackend` (`SwiftPWASegmentation` target) is verified the
 same way at the link level — a throwaway executable depending on the
 `SwiftPWASegmentation` product, built with the same
 `TOOLCHAINS`/`LIBRARY_PATH`/`--swift-sdk` invocation, links successfully
-with `OrtGetApiBase@VERS_1.27.0` showing as an undefined symbol resolving
+with `OrtGetApiBase@VERS_<ort version>` showing as an undefined symbol resolving
 against the real vendored `.so` (`nm` on the resulting binary, not a stub).
 
 Beyond that, a **full on-device `openSession`/`segment` round trip through

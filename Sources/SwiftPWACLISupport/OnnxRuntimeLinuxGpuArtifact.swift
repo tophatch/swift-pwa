@@ -21,7 +21,7 @@ import Foundation
 /// are **not** vendored — a missing/mismatched CUDA runtime makes the CUDA EP
 /// fail to load, which the backend turns into a transparent CPU fallback.
 ///
-/// Headers are identical to the CPU 1.27.0 build (CUDA uses the in-header
+/// Headers are identical to the CPU build at the same version (CUDA uses the in-header
 /// `OrtSessionOptionsAppendExecutionProvider_CUDA`, no extra header), so this
 /// reuses the committed `ONNXRuntimeDesktop` module — only the libs differ.
 /// Re-hosted on this repo's stable `onnxruntime-vendor-linux-gpu` release by
@@ -35,21 +35,26 @@ import Foundation
 ///      after `Scripts/vendor-onnxruntime-linux-gpu.sh` inside the repo.
 ///   3. download the pinned release assets to a content-addressed cache.
 enum OnnxRuntimeLinuxGpuArtifact {
+    /// The vendored ONNX Runtime version — in lockstep with the CPU desktop
+    /// build, since both share the committed `ONNXRuntimeDesktop` header set.
+    /// Carried in the asset names so a bump is additive rather than replacing
+    /// bytes older swift-pwa releases pin by checksum.
+    static let version = "1.29.0"
     static let runtimeURL =
         "https://github.com/tophatch/swift-pwa/releases/download/" +
-        "onnxruntime-vendor-linux-gpu/libonnxruntime-linux-x86_64-gpu.so"
+        "onnxruntime-vendor-linux-gpu/libonnxruntime-linux-x86_64-gpu-\(version).so"
     static let providersSharedURL =
         "https://github.com/tophatch/swift-pwa/releases/download/" +
-        "onnxruntime-vendor-linux-gpu/libonnxruntime_providers_shared.so"
+        "onnxruntime-vendor-linux-gpu/libonnxruntime_providers_shared-\(version).so"
     static let providersCudaURL =
         "https://github.com/tophatch/swift-pwa/releases/download/" +
-        "onnxruntime-vendor-linux-gpu/libonnxruntime_providers_cuda.so"
+        "onnxruntime-vendor-linux-gpu/libonnxruntime_providers_cuda-\(version).so"
 
-    /// SHA-256 of Microsoft's ONNX Runtime 1.27.0 Linux x64 **GPU (CUDA 12)**
-    /// libs (see `Scripts/vendor-onnxruntime-linux-gpu.sh`).
-    static let runtimeSha256 = "3718b5be5e75d0dd09139d5ea90f7e8c4f140888187ddb61c1eb5953d0e3e32e"
+    /// SHA-256 of Microsoft's ONNX Runtime Linux x64 **GPU (CUDA 12)** libs
+    /// (see `Scripts/vendor-onnxruntime-linux-gpu.sh`).
+    static let runtimeSha256 = "b81e7ceaba1131e391f94c455d71ecf9af8ec7999d7130beebb79c67a0c7e05d"
     static let providersSharedSha256 = "c6a12593396095f5670160e284c35d1700b7708cf3037b7042e2a5200ccae772"
-    static let providersCudaSha256 = "85e74c8144f538eba1eccb48e0cecc88f3bb41c2fd7cf01ed4bee4edd36df10a"
+    static let providersCudaSha256 = "d16907fb98d12c7e7a27b88367dd34466f4f2a07a0989677496c0f0f16f54947"
 
     /// The three lib basenames, as they must land in the resolved dir. The
     /// runtime is stored under its SONAME (`.so.1`); `normalizeSoname` adds the

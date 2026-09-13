@@ -465,6 +465,9 @@ enum Templates {
                 let list = schemes.map { "\"\($0)\"" }.joined(separator: ", ")
                 lines.append("    ctx.externalURLs.declare(schemes: \(list))")
             }
+            if externalUrls?.allowAnyScheme == true {
+                lines.append("    ctx.externalURLs.allowAnyScheme = true")
+            }
             if let raw = externalUrls?.offOriginNavigation,
                let navigation = OffOriginNavigation(rawValue: raw),
                navigation != .system

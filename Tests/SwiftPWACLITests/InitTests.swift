@@ -312,6 +312,22 @@ struct InitTests {
             externalUrls: .init(offOriginNavigation: "system")
         )
         #expect(!explicitDefault.contains("offOriginNavigation"))
+
+        // The opt-out of the allowlist is a separate key rather than a magic
+        // entry in `schemes`, so it seeds a property the same way
+        // off_origin_navigation does — and, like that one, says nothing when
+        // it's left at the default.
+        let anyScheme = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X"),
+            externalUrls: .init(schemes: ["things"], allowAnyScheme: true)
+        )
+        #expect(anyScheme.contains("ctx.externalURLs.allowAnyScheme = true"))
+        #expect(anyScheme.contains(#"ctx.externalURLs.declare(schemes: "things")"#))
+        let notAny = Templates.mainSwift(
+            structName: "MyApp", window: .init(title: "X"),
+            externalUrls: .init(schemes: ["things"], allowAnyScheme: false)
+        )
+        #expect(!notAny.contains("allowAnyScheme"))
     }
 
     @Test("an unspelled external_urls entry fails the build instead of being ignored")

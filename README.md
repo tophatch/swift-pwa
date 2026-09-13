@@ -166,6 +166,8 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 }
 ```
 
+`allow_any_scheme: true` opts out of the allowlist entirely, for an app whose URLs are typed by the person using it rather than written by its own code — there the list can only be a guess. It keeps every other refusal (`pwa:`, `file:`, `javascript:`, the app's own origin), but since `bridge.js` runs in subframes it means *any scheme, from any frame*: not for an app that hosts other people's content.
+
 `off_origin_navigation` defaults to `system`: a main-frame navigation to another site opens in the system browser and the app stays put, because loading it in place strands the app — no address bar, no back button. Set it to `in-app` for an app that deliberately hosts other people's pages and has its own way back. Same-origin navigation, subframes, and `about:` / `blob:` / `data:` URLs are unaffected. See [docs/javascript-api.md](docs/javascript-api.md#systemopenurl--hand-a-url-to-the-operating-system).
 
 **Optional `build.prebuild`** — a command run from the project root *before* `web/` is staged into the bundle, on every `swift-pwa build` (and so on every cloud release that calls it, no hand-maintained "regenerate before tagging" ritual). Use it for a codegen / asset step that produces part of `web/` — an esbuild / Tailwind pass, a sprite-atlas packer, a generated index. A non-zero exit aborts the build, so a half-generated `web/` never ships. It runs through the platform shell (`/bin/sh -c`, `cmd /c` on Windows); skip it for fast local iteration with `build --skip-prebuild`. If it needs a toolchain (Node, etc.), add a setup step to the generated workflow's jobs.

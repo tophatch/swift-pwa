@@ -440,6 +440,26 @@ and a link in user-authored content is written by the user):
 scheme that can't be one. A refusal logs a diagnostic naming the fix, because
 all the page sees is an error code.
 
+**When you can't know the schemes in advance**, opt out of the allowlist:
+
+```json
+"external_urls": { "allow_any_scheme": true }
+```
+
+This is for an app whose URLs are written by the person using it rather than by
+its own code — a note with whatever deep link they typed, where the list is
+"whatever they have installed". An allowlist there can only be a guess, and the
+app they own that you didn't list is refused with no fix short of a rebuild,
+while the OS is already the thing that decides what a scheme routes to (an
+unhandled one answers `{ opened: false }` either way).
+
+It softens nothing else: `pwa:`, `file:`, `about:`, `javascript:`, `data:`,
+`blob:` and the app's own origin stay refused, so the `E_URL` row above is
+unchanged. What it does cost is the reason the allowlist exists — `bridge.js`
+runs in subframes, and the runtime can't yet tell a subframe's call from the
+main frame's, so this means *any scheme, from any frame*. Turn it on for an app
+that doesn't host other people's content; leave it off for one that does.
+
 > **Platform coverage.** All five.
 
 #### Leaving the app: off-origin links

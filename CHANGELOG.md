@@ -34,11 +34,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   [`docs/linux-setup.md`](docs/linux-setup.md)'s Known limitations; Windows and
   Android can report it and aren't wired yet ([#204] stays open for both).
 
-  Found while testing it: **a subframe's reply never reaches it.** `deliver`
-  evaluates into the main frame, so an embedded frame's correlation id belongs
-  to a bridge instance that never sees the answer — it can *cause* a command to
-  run but not read the result. That is exactly why the reach worth scoping is
-  side effects like `system.openURL`.
+  Worth restating, because it decides what the scoping is *for*: an embedded
+  frame's reply never reaches it. `deliver` evaluates into the main frame, so
+  its correlation id belongs to a bridge instance that never sees the answer —
+  already documented in [`docs/javascript-api.md`](docs/javascript-api.md) as
+  "don't drive the bridge from an iframe", but stated there as advice to the app
+  author. Read as a security property it means an embedded frame can *cause* any
+  registered command to run while reading nothing back, so side effects — not
+  data — are the reach worth narrowing.
 
   The seam is `PWAWebView.inboundFrames()` → **`inboundMessages()`**, carrying
   an `InboundMessage` (frame + caller frame). A **source break for an

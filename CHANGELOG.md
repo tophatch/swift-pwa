@@ -5,6 +5,43 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`external_urls.allow_any_scheme` — accept the OS's routing instead of an
+  allowlist** ([#203]). `external_urls.schemes` is an exact set-membership test,
+  which assumes the app can enumerate its schemes at build time. An app that
+  renders links from *user-authored* text can't: the list is "whatever that
+  person has installed", so the declaration is a guess, and the eleventh app
+  they own is refused with `E_URL_SCHEME` — indistinguishable, from where they
+  sit, from the app not being installed, and fixable only by a rebuild. The
+  reporting adopter had shipped ten schemes and was still guessing.
+
+  The flag is opt-in and off by default, because the allowlist's reasoning still
+  holds for the apps it was written for: `bridge.js` is injected into subframes,
+  so a third-party `<iframe>` can invoke commands. It moves exactly one step of
+  `ExternalURLPolicy.decide` and leaves the refusals either side of it — `pwa:`,
+  `file:`, `about:`, `javascript:`, `data:`, `blob:`, and the app's own
+  registered origin, which is what catches `https://swift-pwa.local` on Windows
+  and Android. Those are what the tests pin, rather than the happy path.
+
+  **It means any scheme from any frame, and the docs say so**, because the
+  runtime cannot currently tell a subframe's `invoke` from the main frame's on
+  any backend — `WKWebViewAdapter` drops `message.frameInfo`, and the other four
+  never carried it. The sharp version of this feature (allowlist for third-party
+  frames, OS routing for the app's own) needs frame identity plumbed into
+  `CommandContext` the way `caller` was in #170; filed separately rather than
+  smuggled in here.
+
+  Spelled as its own key rather than `"*"` in the schemes list: every other
+  `pwa.json` key maps 1:1 onto a Swift property (`ctx.externalURLs.allowAnyScheme`),
+  the scheme validator keeps its single invariant instead of special-casing a
+  value that inverts the list's meaning, and a named switch is visible when
+  someone reviews a manifest where one entry among ten isn't.
+
+[#203]: https://github.com/tophatch/swift-pwa/issues/203
+
 ## [0.10.5] - 2026-09-12
 
 ### Fixed

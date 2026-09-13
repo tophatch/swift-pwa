@@ -52,6 +52,75 @@ struct ExternalURLPolicyTests {
         #expect(policy.allowedSchemes.isSuperset(of: ExternalURLPolicy.defaultSchemes))
     }
 
+    // MARK: - Opting out of the allowlist
+
+    /// The case the flag exists for: an app whose URLs are typed by the person
+    /// using it can't enumerate the schemes, so the allowlist is a guess and
+    /// the app they own that you didn't list is refused for good.
+    @Test("allowAnyScheme opens a scheme nobody declared")
+    func anySchemeOpensUndeclared() throws {
+        let policy = ExternalURLPolicy()
+        let deepLink = try url("x-devonthink-item://5B2C3F")
+        #expect(policy.decide(deepLink) == .refuse(.undeclaredScheme))
+        policy.allowAnyScheme = true
+        #expect(policy.decide(deepLink) == .open)
+    }
+
+    /// The whole safety argument for the flag is that it moves exactly one
+    /// step of `decide` and leaves the hard refusals either side of it — so
+    /// those are what to pin, not the happy path.
+    @Test("allowAnyScheme does not soften the never-openable schemes")
+    func anySchemeKeepsHardRefusals() throws {
+        let policy = ExternalURLPolicy()
+        policy.allowAnyScheme = true
+        for spelling in [
+            "pwa://localhost/index.html", "file:///etc/passwd", "javascript:alert(1)",
+            "about:blank", "data:text/html,<b>x</b>", "blob:https://example.com/abc"
+        ] {
+            #expect(try policy.decide(url(spelling)) == .refuse(.notOpenable), "\(spelling)")
+        }
+    }
+
+    /// `https://swift-pwa.local` is the bundle origin on Windows and Android,
+    /// where a scheme check can't tell app content from the web — the reason
+    /// `registerAppOrigin` exists at all. A wildcard must not reach past it.
+    @Test("allowAnyScheme still refuses the app's own registered origin")
+    func anySchemeKeepsOwnOriginRefusal() throws {
+        let policy = ExternalURLPolicy()
+        policy.allowAnyScheme = true
+        policy.registerAppOrigin(WebOrigin(scheme: "https", host: "swift-pwa.local"))
+        #expect(try policy.decide(url("https://swift-pwa.local/index.html")) == .refuse(.notOpenable))
+        #expect(try policy.decide(url("https://example.com")) == .open)
+    }
+
+    @Test("allowAnyScheme is off by default and reversible")
+    func anySchemeDefaultsOff() throws {
+        let policy = ExternalURLPolicy()
+        #expect(policy.allowAnyScheme == false)
+        policy.allowAnyScheme = true
+        #expect(try policy.decide(url("things:///add")) == .open)
+        policy.allowAnyScheme = false
+        #expect(try policy.decide(url("things:///add")) == .refuse(.undeclaredScheme))
+    }
+
+    /// An off-origin navigation and an explicit `system.openURL` go through
+    /// the same `decide`, so the flag has to reach both — otherwise a link the
+    /// page opens works while the identical one the user clicks is blocked.
+    @Test("allowAnyScheme reaches the navigation path too")
+    func anySchemeAppliesToNavigation() throws {
+        let policy = ExternalURLPolicy()
+        let deepLink = try url("obsidian://open?vault=notes")
+        #expect(
+            policy.navigationDisposition(for: deepLink, appOrigin: bundle, isMainFrame: true)
+                == .block(.undeclaredScheme)
+        )
+        policy.allowAnyScheme = true
+        #expect(
+            policy.navigationDisposition(for: deepLink, appOrigin: bundle, isMainFrame: true)
+                == .openExternally
+        )
+    }
+
     /// These address the app's own content or the machine it runs on. Handing
     /// one to the desktop asks it to open something only this app can serve —
     /// and `javascript:` handed to a browser is a script-execution vector, not

@@ -51,6 +51,10 @@ public enum NavigationDisposition: Sendable, Equatable {
 /// common web schemes allowed out of the box because refusing those would make
 /// every app declare the obvious.
 ///
+/// ``allowAnyScheme`` opts out of the allowlist for an app whose URLs are
+/// written by the person using it rather than by its own code, where the list
+/// can only be a guess.
+///
 /// ``defaultSchemes`` are the four that address a *document or a contact* —
 /// they open a browser or a mail/dialler app, which is what a link in a page
 /// means. Everything else — an app's own deep-link scheme (`things:`,
@@ -69,6 +73,7 @@ public final class ExternalURLPolicy: @unchecked Sendable {
 
     private let lock = NSLock()
     private var declared: Set<String> = []
+    private var anyScheme = false
     private var appOrigins: Set<WebOrigin> = []
     private var navigation: OffOriginNavigation = .system
     private var diagnosed: Set<String> = []
@@ -90,6 +95,43 @@ public final class ExternalURLPolicy: @unchecked Sendable {
 
     public func declare(schemes: String...) {
         declare(schemes: schemes)
+    }
+
+    /// Accept the operating system's routing decision for **any** scheme,
+    /// instead of the declared allowlist. Off by default; seeded from
+    /// `pwa.json`'s `external_urls.allow_any_scheme`.
+    ///
+    /// For an app whose URLs come from the person using it rather than from
+    /// its own code — a note with a `things:` link in it, where the list of
+    /// schemes is "whatever they have installed" — the allowlist can only ever
+    /// be a guess, and the eleventh app they own is refused with no way to fix
+    /// it but a rebuild. Since the OS already decides what a scheme routes to,
+    /// and an unhandled one answers `opened: false` either way, the allowlist's
+    /// only effect there is to refuse things that would have worked.
+    ///
+    /// **It does not soften anything else.** `pwa:`, `file:`, `about:`,
+    /// `javascript:`, `data:` and `blob:` stay refused, and so does the app's
+    /// own registered origin — the case where `https://swift-pwa.local` on
+    /// Windows and Android would otherwise hand the desktop a URL only this
+    /// app can serve.
+    ///
+    /// **What it costs.** The allowlist exists because `bridge.js` is injected
+    /// into subframes too, so a third-party `<iframe>` can invoke commands —
+    /// and the runtime cannot currently tell a subframe's invoke from the main
+    /// frame's, on any backend. So this really does mean *any scheme, from any
+    /// frame*: turn it on for an app that doesn't host other people's content,
+    /// and leave it off for one that does.
+    public var allowAnyScheme: Bool {
+        get {
+            lock.lock()
+            defer { lock.unlock() }
+            return anyScheme
+        }
+        set {
+            lock.lock()
+            defer { lock.unlock() }
+            anyScheme = newValue
+        }
     }
 
     /// Record an origin this app serves its own content on, so handing it to
@@ -148,7 +190,7 @@ public final class ExternalURLPolicy: @unchecked Sendable {
         guard !["pwa", "file", "about", "javascript", "data", "blob"].contains(scheme) else {
             return .refuse(.notOpenable)
         }
-        guard allowedSchemes.contains(scheme) else {
+        if !allowAnyScheme, !allowedSchemes.contains(scheme) {
             diagnoseUndeclared(scheme)
             return .refuse(.undeclaredScheme)
         }

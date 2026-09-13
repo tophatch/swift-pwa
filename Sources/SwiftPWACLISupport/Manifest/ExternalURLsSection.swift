@@ -8,11 +8,12 @@ public extension PWAManifest {
     /// ```json
     /// "external_urls": {
     ///   "schemes": ["things", "obsidian"],
+    ///   "allow_any_scheme": false,
     ///   "off_origin_navigation": "system"
     /// }
     /// ```
     ///
-    /// Both fields seed `ctx.externalURLs` in the generated `App.swift`, the
+    /// All three seed `ctx.externalURLs` in the generated `App.swift`, the
     /// way the `window` block seeds `WindowConfig`: the value in the running
     /// app is the source of truth, and editing `pwa.json` afterwards doesn't
     /// change a built app. Unlike `permissions`, nothing here reaches a
@@ -30,6 +31,22 @@ public extension PWAManifest {
         /// colon.
         public var schemes: [String]?
 
+        /// Accept the OS's routing for **any** scheme instead of the
+        /// allowlist above. Off by default.
+        ///
+        /// For an app whose URLs are written by the person using it — a note
+        /// with whatever deep link they typed — `schemes` can only be a guess,
+        /// and the app they own that you didn't list is refused with no fix
+        /// short of a rebuild. This says "the OS decides", which it already
+        /// does: an unhandled scheme answers `opened: false` either way.
+        ///
+        /// It softens nothing else — `pwa:`, `file:`, `javascript:` and the
+        /// app's own origin stay refused. But `bridge.js` runs in subframes
+        /// and the runtime can't yet tell a subframe's call from the main
+        /// frame's, so it means *any scheme, from any frame*: not for an app
+        /// that hosts other people's content.
+        public var allowAnyScheme: Bool?
+
         /// `"system"` (the default) hands an off-origin main-frame navigation
         /// to the system browser and leaves the app where it was. `"in-app"`
         /// loads it in place, as a browser tab would — for an app that
@@ -37,8 +54,13 @@ public extension PWAManifest {
         /// its own way back.
         public var offOriginNavigation: String?
 
-        public init(schemes: [String]? = nil, offOriginNavigation: String? = nil) {
+        public init(
+            schemes: [String]? = nil,
+            allowAnyScheme: Bool? = nil,
+            offOriginNavigation: String? = nil
+        ) {
             self.schemes = schemes
+            self.allowAnyScheme = allowAnyScheme
             self.offOriginNavigation = offOriginNavigation
         }
     }

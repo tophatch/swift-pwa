@@ -80,6 +80,41 @@ keeps working unchanged. Prefer switching on `caller` over testing
 no window, not a contract, and a guard built on it would fail *open* if that
 ever changed.
 
+### Which frame is calling
+
+`ctx.frame` says *which frame of the page* called — `.main` for the window's own
+top-level document, `.subframe(origin:)` for content it embedded, `.unknown`
+where the backend can't tell.
+
+This matters because **`bridge.js` is injected into every frame**. An `<iframe>`
+in your page — an embedded map, a video, a widget — reaches every command you
+register, with the same arguments your own code would use. Replies go to the top
+frame, so an embedded frame can't *read* anything back, but the handler still
+runs: side effects are the exposure.
+
+```swift
+ctx.registry.register("notes.delete", typed: { (args: DeleteArgs, ctx) -> EmptyResult in
+    guard ctx.frame == .main else {
+        throw BridgeError(code: "E_FORBIDDEN", message: "not available to embedded content")
+    }
+    try store.delete(args.id)
+    return EmptyResult()
+})
+```
+
+Take it from `ctx.frame` and never from the page: `bridge.js` runs *inside* the
+frame in question, so anything it reports about itself — `window.top === window`,
+`location.origin` — is written by whoever wrote that frame's content, and content
+you don't trust with a capability can't be trusted to describe itself either.
+
+**`.unknown` is a real answer on some platforms**, not a "not implemented yet":
+both GTK backends can't report it (the WebKitGTK UI process isn't told which
+frame sent a script message), so a guard like the one above would refuse *every*
+call there. Where you need a check that behaves the same on all five, gate on
+something you control — a capability handed to the frame, or a command the
+embedded content simply isn't told about — rather than on frame identity. See
+[docs/linux-setup.md](linux-setup.md#known-limitations-on-linux).
+
 ### Duplex sessions
 
 `registerStream` is server → client only. `registerSession` is the two-way

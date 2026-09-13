@@ -263,7 +263,20 @@
         /// reports about itself is written by whoever wrote that frame's
         /// content. The same `frameInfo` drives which origin a cross-origin
         /// `confirm()` names, in `WKJavaScriptPanels`.
+        ///
+        /// `WKFrameInfo`'s properties are `@MainActor` on the Swift 6.1
+        /// toolchain CI builds with, and not on newer ones — so reading them
+        /// from this `nonisolated` context compiles locally and fails there.
+        /// `assumeIsolated` states the invariant instead of depending on the
+        /// compiler's opinion of it: WebKit delivers a script message on the
+        /// main thread, which is the same guarantee the rest of this class
+        /// already runs on.
         private nonisolated static func callerFrame(of message: WKScriptMessage) -> CallerFrame {
+            MainActor.assumeIsolated { frameIdentity(of: message) }
+        }
+
+        @MainActor
+        private static func frameIdentity(of message: WKScriptMessage) -> CallerFrame {
             let info = message.frameInfo
             if info.isMainFrame { return .main }
             let security = info.securityOrigin

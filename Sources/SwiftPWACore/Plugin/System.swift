@@ -207,37 +207,40 @@ public struct SystemPlugin: Plugin {
 
         let urlOpener = urlOpener
         let policy = app.externalURLs
-        registry.register("system.openURL", typed: { (args: SystemOpenURLArgs, _) async throws -> SystemOpenURLResult in
-            guard let url = URL(string: args.url), url.scheme != nil else {
-                throw BridgeError(
-                    code: BridgeError.url,
-                    message: "not a URL the system can open: '\(args.url)'"
-                )
+        registry.register(
+            "system.openURL",
+            typed: { (args: SystemOpenURLArgs, ctx) async throws -> SystemOpenURLResult in
+                guard let url = URL(string: args.url), url.scheme != nil else {
+                    throw BridgeError(
+                        code: BridgeError.url,
+                        message: "not a URL the system can open: '\(args.url)'"
+                    )
+                }
+                switch policy.decide(url, from: ctx.frame) {
+                case .open:
+                    break
+                case let .refuse(reason):
+                    throw BridgeError(
+                        code: reason == .undeclaredScheme ? BridgeError.urlScheme : BridgeError.url,
+                        message: reason == .undeclaredScheme
+                            ? "this app hasn't declared the '\(url.scheme ?? "")' scheme — add it to "
+                            + "`ctx.externalURLs.declare(schemes:)` and pwa.json's `external_urls.schemes`"
+                            // Deliberately not phrased as "'https' URLs are …":
+                            // the refusal is about *this* URL being the app's own
+                            // content (a `pwa:` URL, or the origin the bundle is
+                            // served from), not about its scheme in general.
+                            : "that URL is this app's own content, not something the system can open"
+                    )
+                }
+                guard let urlOpener else {
+                    throw BridgeError(
+                        code: BridgeError.unimplemented,
+                        message: "system.openURL isn't implemented on this platform yet"
+                    )
+                }
+                return await SystemOpenURLResult(opened: urlOpener.open(url))
             }
-            switch policy.decide(url) {
-            case .open:
-                break
-            case let .refuse(reason):
-                throw BridgeError(
-                    code: reason == .undeclaredScheme ? BridgeError.urlScheme : BridgeError.url,
-                    message: reason == .undeclaredScheme
-                        ? "this app hasn't declared the '\(url.scheme ?? "")' scheme — add it to "
-                        + "`ctx.externalURLs.declare(schemes:)` and pwa.json's `external_urls.schemes`"
-                        // Deliberately not phrased as "'https' URLs are …":
-                        // the refusal is about *this* URL being the app's own
-                        // content (a `pwa:` URL, or the origin the bundle is
-                        // served from), not about its scheme in general.
-                        : "that URL is this app's own content, not something the system can open"
-                )
-            }
-            guard let urlOpener else {
-                throw BridgeError(
-                    code: BridgeError.unimplemented,
-                    message: "system.openURL isn't implemented on this platform yet"
-                )
-            }
-            return await SystemOpenURLResult(opened: urlOpener.open(url))
-        })
+        )
 
         // Emit `system.memoryPressure` on the app-wide event bus where the OS
         // gives us a signal. Apple's `DispatchSource` is the one core can reach

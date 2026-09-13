@@ -180,7 +180,7 @@ public final class ExternalURLPolicy: @unchecked Sendable {
     /// error the app author reads as "opening URLs is broken" rather than
     /// "this scheme needs declaring". Once per scheme, so a page that retries
     /// doesn't bury the rest of the output.
-    public func decide(_ url: URL) -> ExternalURLDecision {
+    public func decide(_ url: URL, from callerFrame: CallerFrame = .unknown) -> ExternalURLDecision {
         guard let scheme = url.scheme.map(Self.normalize), !scheme.isEmpty else {
             return .refuse(.notOpenable)
         }
@@ -190,8 +190,8 @@ public final class ExternalURLPolicy: @unchecked Sendable {
         guard !["pwa", "file", "about", "javascript", "data", "blob"].contains(scheme) else {
             return .refuse(.notOpenable)
         }
-        if !allowAnyScheme, !allowedSchemes.contains(scheme) {
-            diagnoseUndeclared(scheme)
+        if !schemeIsAllowed(scheme, from: callerFrame) {
+            diagnoseUndeclared(scheme, from: callerFrame)
             return .refuse(.undeclaredScheme)
         }
         // The app's own content, reached over a scheme the OS *would* accept.
@@ -232,13 +232,39 @@ public final class ExternalURLPolicy: @unchecked Sendable {
             return .allowInApp
         }
         guard offOriginNavigation == .system else { return .allowInApp }
-        switch decide(url) {
+        // Every non-main-frame navigation returned `.allowInApp` above, so
+        // anything reaching here is the window's own top-level document.
+        switch decide(url, from: .main) {
         case .open: return .openExternally
         case let .refuse(reason): return .block(reason)
         }
     }
 
-    private func diagnoseUndeclared(_ scheme: String) {
+    /// Whether `scheme` may be opened on behalf of `callerFrame`.
+    ///
+    /// ``allowAnyScheme`` is scoped to the app's own top-level document. The
+    /// allowlist exists because `bridge.js` is injected into embedded frames
+    /// too, so an `<iframe>` of someone else's content can invoke commands —
+    /// and an app that opted out of the allowlist for *its own* links didn't
+    /// thereby offer that reach to content it embedded.
+    ///
+    /// ``CallerFrame/unknown`` keeps the opt-out. Both GTK backends can't
+    /// report frame identity (the UI process isn't told), and the alternative
+    /// — treating "can't tell" as "an embedded frame" — would mean
+    /// `allow_any_scheme` silently did nothing on Linux, which is a worse
+    /// failure than the one it is guarding: an app that set it would find its
+    /// links working on four platforms and refused on one, with no diagnostic
+    /// that explains why. Documented as a platform limitation instead.
+    private func schemeIsAllowed(_ scheme: String, from callerFrame: CallerFrame) -> Bool {
+        if allowedSchemes.contains(scheme) { return true }
+        guard allowAnyScheme else { return false }
+        switch callerFrame {
+        case .main, .unknown: return true
+        case .subframe: return false
+        }
+    }
+
+    private func diagnoseUndeclared(_ scheme: String, from callerFrame: CallerFrame) {
         lock.lock()
         let isNew = diagnosed.insert(scheme).inserted
         lock.unlock()
@@ -246,6 +272,18 @@ public final class ExternalURLPolicy: @unchecked Sendable {
         // Through the sink rather than straight to stderr: on Android stderr
         // goes to /dev/null, and a message explaining a refusal the page
         // reports as a bare error code must not itself be silent.
+        // An app that opted out of the allowlist and *still* sees a refusal
+        // is in the one case the opt-out doesn't cover, and the generic advice
+        // ("declare the scheme") would send it to the wrong fix.
+        if allowAnyScheme, case let .subframe(origin) = callerFrame {
+            RuntimeDiagnostics.emit("""
+            swift-pwa: refused to open a '\(scheme):' URL requested by an embedded frame\
+            \(origin.map { " (\($0.scheme)://\($0.host))" } ?? ""). `allow_any_scheme` covers the app's \
+            own page, not content it embeds — declare the scheme explicitly if an embedded \
+            frame is meant to open it.
+            """)
+            return
+        }
         RuntimeDiagnostics.emit("""
         swift-pwa: refused to open a '\(scheme):' URL because this app has not declared \
         the scheme. Add `ctx.externalURLs.declare(schemes: "\(scheme)")` to your configure \

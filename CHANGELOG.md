@@ -9,6 +9,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`CommandContext.frame` — a handler can tell the app's own page from an
+  `<iframe>` it embedded** ([#204]). `bridge.js` is injected into every frame,
+  so embedded content reaches the same commands as the app's own code; until
+  now nothing above a webview adapter could see the difference. Apple reports
+  it from `WKScriptMessage.frameInfo` (`.main` / `.subframe(origin:)`), and the
+  first consumer is `external_urls.allow_any_scheme`, which now covers the
+  app's own page while an embedded frame keeps the declared allowlist.
+
+  **Not self-reported, deliberately.** `bridge.js` could send
+  `window.top === window` in the envelope — one line, looks like the same
+  answer — but the frame this identifies is content we don't trust, and it
+  would simply lie. Only the backend, which sits outside the web content, can
+  answer it.
+
+  **`.unknown` is a real answer**, not a stub: measured on both boxes, the GTK
+  UI process genuinely isn't told. WebKitGTK's `script-message-received`
+  carries only the message value, and `WebKitFrame` is guarded to the
+  web-process extension API in both 4.1 and 6.0, so reaching it means shipping
+  a second `.so` into WebKit's web process. Where the frame is unknown,
+  `allow_any_scheme` keeps its broader meaning rather than silently doing
+  nothing — an app would otherwise find its links working on some platforms and
+  refused on others with no diagnostic explaining why. Documented in
+  [`docs/linux-setup.md`](docs/linux-setup.md)'s Known limitations; Windows and
+  Android can report it and aren't wired yet ([#204] stays open for both).
+
+  Found while testing it: **a subframe's reply never reaches it.** `deliver`
+  evaluates into the main frame, so an embedded frame's correlation id belongs
+  to a bridge instance that never sees the answer — it can *cause* a command to
+  run but not read the result. That is exactly why the reach worth scoping is
+  side effects like `system.openURL`.
+
+  The seam is `PWAWebView.inboundFrames()` → **`inboundMessages()`**, carrying
+  an `InboundMessage` (frame + caller frame). A **source break for an
+  out-of-tree backend**; all five in-tree adapters and the test mock are
+  updated, and `MockWebView.send` defaults to `.main` so a test that means "an
+  embedded frame said this" has to say so.
+
 - **`external_urls.allow_any_scheme` — accept the OS's routing instead of an
   allowlist** ([#203]). `external_urls.schemes` is an exact set-membership test,
   which assumes the app can enumerate its schemes at build time. An app that
@@ -41,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   someone reviews a manifest where one entry among ten isn't.
 
 [#203]: https://github.com/tophatch/swift-pwa/issues/203
+[#204]: https://github.com/tophatch/swift-pwa/issues/204
 
 ## [0.10.5] - 2026-09-12
 

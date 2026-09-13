@@ -121,6 +121,54 @@ struct ExternalURLPolicyTests {
         )
     }
 
+    // MARK: - Who asked
+
+    /// The point of the opt-out is the app's *own* links. An `<iframe>` of
+    /// someone else's content invokes commands through the same bridge, and an
+    /// app that stopped enumerating its schemes didn't thereby hand that reach
+    /// to content it embedded.
+    @Test("allowAnyScheme covers the app's own page, not an embedded frame")
+    func anySchemeIsScopedToTheMainFrame() throws {
+        let policy = ExternalURLPolicy()
+        policy.allowAnyScheme = true
+        let deepLink = try url("things:///add?title=x")
+
+        #expect(policy.decide(deepLink, from: .main) == .open)
+        #expect(
+            policy.decide(deepLink, from: .subframe(origin: WebOrigin(scheme: "https", host: "ads.example")))
+                == .refuse(.undeclaredScheme)
+        )
+        // A scheme the app *did* declare is openable from anywhere, exactly as
+        // before — the frame check narrows the wildcard, not the allowlist.
+        policy.declare(schemes: "things")
+        #expect(policy.decide(deepLink, from: .subframe(origin: nil)) == .open)
+    }
+
+    /// Both GTK backends can't report frame identity, so `.unknown` has to mean
+    /// something deliberate. It keeps the opt-out: the alternative makes
+    /// `allow_any_scheme` silently do nothing on one platform, which is a worse
+    /// failure than the one it guards — and an app would have no way to tell.
+    @Test("an unknown frame keeps the opt-out rather than silently disabling it")
+    func unknownFrameKeepsTheOptOut() throws {
+        let policy = ExternalURLPolicy()
+        let deepLink = try url("obsidian://open?vault=notes")
+        #expect(policy.decide(deepLink, from: .unknown) == .refuse(.undeclaredScheme))
+        policy.allowAnyScheme = true
+        #expect(policy.decide(deepLink, from: .unknown) == .open)
+    }
+
+    /// Without the opt-out the frame is irrelevant — the allowlist already
+    /// answers, and nothing about this change may widen the default.
+    @Test("the frame changes nothing when the allowlist is in force")
+    func frameIsIrrelevantWithoutTheOptOut() throws {
+        let policy = ExternalURLPolicy()
+        let deepLink = try url("things:///add")
+        for frame: CallerFrame in [.main, .unknown, .subframe(origin: nil)] {
+            #expect(policy.decide(deepLink, from: frame) == .refuse(.undeclaredScheme), "\(frame)")
+        }
+        #expect(try policy.decide(url("https://example.com"), from: .subframe(origin: nil)) == .open)
+    }
+
     /// These address the app's own content or the machine it runs on. Handing
     /// one to the desktop asks it to open something only this app can serve —
     /// and `javascript:` handed to a browser is a script-execution vector, not

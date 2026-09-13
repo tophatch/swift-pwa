@@ -62,7 +62,7 @@
             view
         }
         private nonisolated(unsafe) var ready = false
-        private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
+        private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         /// Eager `let` rather than a `lazy var` for the same reason
         /// as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
         /// toolchain) refuses `nonisolated` on lazy properties, and
@@ -72,7 +72,7 @@
         /// so we lift the continuation out and assign it after the
         /// stored property is set. (`AsyncStream` is itself
         /// Sendable, so no `nonisolated(unsafe)` modifier needed.)
-        private let stream: AsyncStream<InboundFrame>
+        private let stream: AsyncStream<InboundMessage>
         /// The context-level shared router (bundle `/` mount + any
         /// `serveDirectory` mounts). Set in `init`; the bundle root is
         /// installed in `load(_:)`. `WebResourceRequested` interception
@@ -119,7 +119,7 @@
             self.parent = parent
             self.backgroundColor = backgroundColor
             assetProvider = sharedProvider
-            var captured: AsyncStream<InboundFrame>.Continuation?
+            var captured: AsyncStream<InboundMessage>.Continuation?
             stream = AsyncStream { captured = $0 }
             continuation = captured
             // Async controller creation kicks off here; the caller
@@ -549,7 +549,7 @@
             }
         }
 
-        public func inboundFrames() -> AsyncStream<InboundFrame> {
+        public func inboundMessages() -> AsyncStream<InboundMessage> {
             stream
         }
 
@@ -561,7 +561,12 @@
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
                 let frame = try Envelope.decode(data)
-                continuation?.yield(frame)
+                // `.unknown` for now. `ICoreWebView2WebMessageReceivedEventArgs`
+                // has `get_Source` (the sending document's URI), but that
+                // can't separate a *same-origin* iframe from the main frame,
+                // and whether this handler even receives iframe messages is
+                // unmeasured — both need a run on a real box (#204).
+                continuation?.yield(InboundMessage(frame: frame))
             } catch {
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")

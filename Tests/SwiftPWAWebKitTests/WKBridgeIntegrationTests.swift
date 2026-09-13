@@ -310,6 +310,91 @@
             let count = try await adapter.evaluateJavaScript("window.__count")
             #expect(count == "1", "the parent's subscription saw the emit \(count ?? "nil") times")
         }
+
+        /// The whole point of taking frame identity from `WKScriptMessage`
+        /// rather than from the page: an embedded frame runs the same
+        /// `bridge.js` and reaches the same handler, so nothing the *page* says
+        /// about itself can separate them. WebKit can.
+        ///
+        /// Asserted on the Swift side rather than by reading the iframe's
+        /// promise, because **a subframe's reply never reaches it**: `deliver`
+        /// evaluates into the main frame, so the correlation id belongs to a
+        /// bridge instance that never sees the answer. A subframe can therefore
+        /// *cause* a command to run but not read its result — which is exactly
+        /// why the reach worth scoping is side effects like `system.openURL`.
+        ///
+        /// A `srcdoc` iframe inherits its parent's origin, so this pins the
+        /// main/subframe split rather than a cross-origin one. That split is
+        /// what `ExternalURLPolicy` narrows the allowlist opt-out with.
+        @Test("a handler sees which frame called it")
+        func handlerSeesTheCallingFrame() async throws {
+            let seen = FrameCollector()
+            let app = MockAppContext()
+            app.registry.register("whoami", typed: { (_: EmptyArgs, ctx) -> EmptyResult in
+                seen.record(FrameIdentity.describe(ctx.frame))
+                return EmptyResult()
+            })
+
+            let adapter = try WKWebViewAdapter(configuration: WKWebViewConfiguration())
+            let win = MockWindow(webView: adapter)
+            app.attach(win)
+
+            let bridge = BridgeRuntime(
+                webView: adapter, registry: app.registry, windowID: win.id, app: app
+            )
+            bridge.start()
+            defer { bridge.stop() }
+
+            let inner = "__SWIFT_PWA__.invoke('whoami');"
+            let html = """
+            <!doctype html><html><head><meta charset="utf-8"></head><body>
+            <iframe srcdoc="<script>\(inner)</script>"></iframe>
+            <script>
+              __SWIFT_PWA__.invoke('whoami').then(() => { window.__done = 'yes'; });
+            </script></body></html>
+            """
+            adapter.webView.loadHTMLString(html, baseURL: nil)
+            _ = try await waitForJSExpr(in: adapter, "window.__done")
+            // The subframe loads and runs its injected copy on its own schedule.
+            try await Task.sleep(for: .milliseconds(400))
+
+            let frames = seen.all
+            #expect(frames.contains("main"), "the page's own call wasn't reported as the main frame: \(frames)")
+            #expect(
+                frames.contains { $0.hasPrefix("subframe:") },
+                "the iframe's call wasn't distinguished from the page's: \(frames)"
+            )
+        }
+    }
+
+    /// Records what each dispatched handler saw, since a subframe can't be
+    /// asked for the answer (its reply is delivered into the main frame).
+    private final class FrameCollector: @unchecked Sendable {
+        private let lock = NSLock()
+        private var frames: [String] = []
+
+        func record(_ frame: String) {
+            lock.lock()
+            defer { lock.unlock() }
+            frames.append(frame)
+        }
+
+        var all: [String] {
+            lock.lock()
+            defer { lock.unlock() }
+            return frames
+        }
+    }
+
+    private enum FrameIdentity {
+        /// A short spelling of `CallerFrame` the page can compare against.
+        static func describe(_ frame: CallerFrame) -> String {
+            switch frame {
+            case .main: "main"
+            case let .subframe(origin): "subframe:\(origin.map { "\($0.scheme)://\($0.host)" } ?? "-")"
+            case .unknown: "unknown"
+            }
+        }
     }
 
     private struct EchoArgs: Codable, Equatable {

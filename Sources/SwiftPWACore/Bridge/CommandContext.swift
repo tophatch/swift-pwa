@@ -32,6 +32,16 @@ public enum CommandCaller: Sendable, Equatable {
 public struct CommandContext: Sendable {
     public let invocation: Invocation
     public let caller: CommandCaller
+    /// Which frame of the page made the call — the app's own top-level
+    /// document, an embedded one, or ``CallerFrame/unknown`` where the backend
+    /// can't tell (both GTK backends) or there is no frame at all (an agent).
+    ///
+    /// Separate from ``caller`` rather than folded into `.page` because most
+    /// handlers have no business caring, while the ones that do — anything
+    /// handing a capability to the page — need it at the same moment they
+    /// already have the context. See ``CallerFrame`` for why it isn't taken
+    /// from the page's own word for it.
+    public let frame: CallerFrame
     public let appContext: any AppContext
 
     /// The window whose webview originated the call, or `nil` for a caller
@@ -51,11 +61,13 @@ public struct CommandContext: Sendable {
     public init(
         invocation: Invocation,
         caller: CommandCaller,
+        frame: CallerFrame = .unknown,
         appContext: any AppContext,
         sessionInbound: SessionInbound? = nil
     ) {
         self.invocation = invocation
         self.caller = caller
+        self.frame = frame
         self.appContext = appContext
         self.sessionInbound = sessionInbound
     }

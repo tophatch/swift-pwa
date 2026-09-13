@@ -26,9 +26,14 @@ public protocol PWAWebView: AnyObject, Sendable {
     /// and dispatches `globalThis.__SWIFT_PWA__.__deliver(<json>)`.
     func deliver(_ frame: OutboundFrame) async throws
 
-    /// Stream of frames received from JS. Each `WebView` exposes its
-    /// own broadcast; `BridgeRuntime` consumes one stream per webview.
-    func inboundFrames() -> AsyncStream<InboundFrame>
+    /// Stream of messages received from JS. Each `WebView` exposes its own
+    /// broadcast; `BridgeRuntime` consumes one stream per webview.
+    ///
+    /// Each element pairs the frame with what this backend can say about the
+    /// *frame of content* that sent it — see ``CallerFrame``. A backend that
+    /// can't tell reports ``CallerFrame/unknown``, which is a real answer here
+    /// rather than a stub: both GTK backends genuinely cannot.
+    func inboundMessages() -> AsyncStream<InboundMessage>
 
     /// Open the platform's web inspector / DevTools window. Called
     /// from the platform-standard accelerator (Cmd+Opt+J on Apple,

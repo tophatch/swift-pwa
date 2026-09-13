@@ -20,8 +20,8 @@
         /// `internal` so the synthetic-input extension can address it.
         let viewWidget: UnsafeMutablePointer<GtkWidget>
         private let userContent: UnsafeMutablePointer<WebKitUserContentManager>
-        private var continuation: AsyncStream<InboundFrame>.Continuation?
-        private lazy var stream: AsyncStream<InboundFrame> = AsyncStream { c in self.continuation = c }
+        private var continuation: AsyncStream<InboundMessage>.Continuation?
+        private lazy var stream: AsyncStream<InboundMessage> = AsyncStream { c in self.continuation = c }
         private var assetProvider: AssetProvider?
         /// Opaque pointer to the retained `NavigationBox`, so `load` can tell
         /// it which origin this window's content lives on. Owned by the
@@ -245,7 +245,7 @@
             _ = try await evaluateJavaScript(snippet)
         }
 
-        public func inboundFrames() -> AsyncStream<InboundFrame> {
+        public func inboundMessages() -> AsyncStream<InboundMessage> {
             _ = stream
             return stream
         }
@@ -353,7 +353,11 @@
             do {
                 let frame = try Envelope.decode(data)
                 _ = stream
-                continuation?.yield(frame)
+                // `.unknown`, and not a placeholder: WebKitGTK's
+                // `script-message-received` carries only the value, and
+                // `WebKitFrame` is web-process-extension-only. See
+                // `CallerFrame`.
+                continuation?.yield(InboundMessage(frame: frame))
             } catch {
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")

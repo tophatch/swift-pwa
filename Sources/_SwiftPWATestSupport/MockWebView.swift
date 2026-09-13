@@ -48,17 +48,22 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
     private var _inputCapabilities: InputCapabilities = .none
     private var _receivedInput: [SyntheticInput] = []
 
-    private var inboundContinuation: AsyncStream<InboundFrame>.Continuation?
-    private lazy var inboundStream: AsyncStream<InboundFrame> = AsyncStream { continuation in
+    private var inboundContinuation: AsyncStream<InboundMessage>.Continuation?
+    private lazy var inboundStream: AsyncStream<InboundMessage> = AsyncStream { continuation in
         self.inboundContinuation = continuation
     }
 
     public init() {}
 
     /// Inject a frame as if it had arrived from the JS side.
-    public func send(_ frame: InboundFrame) {
+    ///
+    /// `callerFrame` defaults to ``CallerFrame/main`` rather than `.unknown`:
+    /// the overwhelming majority of tests are speaking as the app's own page,
+    /// and a test that means "an embedded frame said this" should have to say
+    /// so.
+    public func send(_ frame: InboundFrame, from callerFrame: CallerFrame = .main) {
         _ = inboundStream // ensure continuation has been captured
-        inboundContinuation?.yield(frame)
+        inboundContinuation?.yield(InboundMessage(frame: frame, callerFrame: callerFrame))
     }
 
     /// Announce a document, as `bridge.js` does at document start. Sending a
@@ -110,7 +115,7 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         lock.withLock { _deliveredFrames.append(frame) }
     }
 
-    public func inboundFrames() -> AsyncStream<InboundFrame> {
+    public func inboundMessages() -> AsyncStream<InboundMessage> {
         inboundStream
     }
 

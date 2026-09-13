@@ -25,11 +25,11 @@
         // The continuation drives the inbound stream; mutated only at
         // init time, never re-set, so it's safe to read across
         // isolation boundaries.
-        private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
-        private let stream: AsyncStream<InboundFrame>
+        private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
+        private let stream: AsyncStream<InboundMessage>
 
         public init() {
-            var captured: AsyncStream<InboundFrame>.Continuation?
+            var captured: AsyncStream<InboundMessage>.Continuation?
             stream = AsyncStream { captured = $0 }
             continuation = captured
         }
@@ -101,7 +101,7 @@
             }
         }
 
-        public func inboundFrames() -> AsyncStream<InboundFrame> { stream }
+        public func inboundMessages() -> AsyncStream<InboundMessage> { stream }
 
         public func openDevTools() {
             swiftpwa_android_open_devtools()
@@ -114,7 +114,13 @@
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
                 let frame = try Envelope.decode(data)
-                continuation?.yield(frame)
+                // `.unknown` for now: the inbound channel is
+                // `addJavascriptInterface`, which reports nothing about the
+                // calling frame. `WebViewCompat.addWebMessageListener` does
+                // (`isMainFrame` + `sourceOrigin`) and androidx.webkit is
+                // already a dependency — swapping the channel is its own
+                // change (#204).
+                continuation?.yield(InboundMessage(frame: frame))
             } catch {
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")

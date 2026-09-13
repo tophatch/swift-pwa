@@ -79,13 +79,13 @@ public final class BridgeRuntime: @unchecked Sendable {
     /// Begin pumping inbound frames from the webview into the registry.
     /// Idempotent — calling twice is a no-op.
     public func start() {
-        let stream = webView.inboundFrames()
+        let stream = webView.inboundMessages()
         lock.withLock {
             guard pumpTask == nil else { return }
             pumpTask = Task { [weak self] in
-                for await frame in stream {
+                for await message in stream {
                     guard let self else { return }
-                    await handle(frame)
+                    await handle(message.frame, from: message.callerFrame)
                 }
             }
         }
@@ -141,7 +141,7 @@ public final class BridgeRuntime: @unchecked Sendable {
 
     // MARK: - private
 
-    private func handle(_ frame: InboundFrame) async {
+    private func handle(_ frame: InboundFrame, from callerFrame: CallerFrame) async {
         if case let .hello(epoch) = frame {
             adoptDocument(epoch)
             return
@@ -171,7 +171,9 @@ public final class BridgeRuntime: @unchecked Sendable {
             // registered. Making those concurrent would trade this bug for a
             // race.
             let task = Task { [weak self] in
-                await self?.dispatchInvoke(id: id, command: command, payload: payload, epoch: epoch)
+                await self?.dispatchInvoke(
+                    id: id, command: command, payload: payload, epoch: epoch, frame: callerFrame
+                )
                 self?.finishInvocation(id, generation: generation)
             }
             lock.withLock { invocations[id] = Entry(task: task, generation: generation) }
@@ -181,7 +183,8 @@ public final class BridgeRuntime: @unchecked Sendable {
                 command: command,
                 payload: payload,
                 epoch: epoch,
-                generation: generation
+                generation: generation,
+                frame: callerFrame
             )
         case let .unsubscribe(id, _):
             removeSubscription(id, generation: generation)
@@ -242,10 +245,14 @@ public final class BridgeRuntime: @unchecked Sendable {
         if case .dropped = sink.continuation.yield(payload) { sink.drops.increment() }
     }
 
-    private func dispatchInvoke(id: UInt64, command: String, payload: Data, epoch: String?) async {
+    private func dispatchInvoke(
+        id: UInt64, command: String, payload: Data, epoch: String?, frame: CallerFrame
+    ) async {
         guard let app = app as? any AppContext else { return }
         let inv = Invocation(id: id, command: command, payload: payload)
-        let context = CommandContext(invocation: inv, caller: .page(windowID), appContext: app)
+        let context = CommandContext(
+            invocation: inv, caller: .page(windowID), frame: frame, appContext: app
+        )
         let result = await registry.dispatch(context)
         await deliver(result, id: id, epoch: epoch)
     }
@@ -255,7 +262,8 @@ public final class BridgeRuntime: @unchecked Sendable {
         command: String,
         payload: Data,
         epoch: String?,
-        generation: UInt64
+        generation: UInt64,
+        frame: CallerFrame
     ) async {
         guard let app = app as? any AppContext else { return }
         let inv = Invocation(id: id, command: command, payload: payload)
@@ -283,6 +291,7 @@ public final class BridgeRuntime: @unchecked Sendable {
         let context = CommandContext(
             invocation: inv,
             caller: .page(windowID),
+            frame: frame,
             appContext: app,
             sessionInbound: SessionInbound(frames: inbound, droppedCount: { drops.value })
         )

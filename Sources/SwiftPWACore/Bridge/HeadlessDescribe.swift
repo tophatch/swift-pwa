@@ -222,7 +222,7 @@ final class HeadlessWebView: PWAWebView {
     func load(_: WindowContent) {}
     func evaluateJavaScript(_: String) async throws -> String? { nil }
     func deliver(_: OutboundFrame) async throws {}
-    func inboundFrames() -> AsyncStream<InboundFrame> { AsyncStream { $0.finish() } }
+    func inboundMessages() -> AsyncStream<InboundMessage> { AsyncStream { $0.finish() } }
 }
 
 /// No-op ``Clipboard`` for the headless context — `ClipboardPlugin` only needs a

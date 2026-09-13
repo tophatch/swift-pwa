@@ -549,6 +549,22 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**A command handler can't tell which frame called it.** `CommandContext.frame`
+is `.unknown` on both GTK backends, where Apple reports `.main` or
+`.subframe`. This isn't a gap we haven't got to — the UI process genuinely
+isn't told: WebKitGTK's `script-message-received` signal carries only the
+message value, and `WebKitFrame` is guarded to the web-process extension API
+(`#error "Only <webkit/webkit-web-process-extension.h> can be included
+directly"`) in both 4.1 and 6.0. Reaching it means shipping a second `.so` that
+loads inside WebKit's own web process and bundling it into the AppImage.
+
+The visible consequence is `external_urls.allow_any_scheme`: on Apple it covers
+the app's own page while an embedded `<iframe>` keeps the declared allowlist,
+and on Linux it applies to any frame. It is not self-reportable — `bridge.js`
+runs *inside* the frame in question, so asking the page would mean trusting the
+content the check exists to constrain. Don't turn the flag on for a Linux app
+that embeds other people's content.
+
 **HEIC / AVIF need libheif at runtime, and the webview can't render them at
 all.** WebKitGTK (both 4.1 and 6.0, as distros ship them) links no HEIF or AVIF
 decoder — verified with `ldd`, they carry JPEG XL instead — so an `<img>` for

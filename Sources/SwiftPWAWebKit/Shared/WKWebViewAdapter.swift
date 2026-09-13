@@ -14,7 +14,7 @@
     public final class WKWebViewAdapter: NSObject, PWAWebView, WKScriptMessageHandler, @unchecked Sendable {
         public nonisolated let webView: WKWebView
         private nonisolated(unsafe) var assetProvider: AssetProvider?
-        private nonisolated(unsafe) var continuation: AsyncStream<InboundFrame>.Continuation?
+        private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         /// Eager `let` rather than a lazy var — Swift 6.0 (Xcode 16.4)
         /// refuses `nonisolated` on `lazy` properties, and dropping
         /// the modifier promotes `stream` to MainActor isolation
@@ -23,16 +23,16 @@
         /// `AsyncStream`'s initializer invokes the captured-continuation
         /// closure synchronously, so we can lift `continuation` out of
         /// it during init and assign it after `super.init`.
-        /// `AsyncStream<InboundFrame>` is `Sendable`, so a plain
+        /// `AsyncStream<InboundMessage>` is `Sendable`, so a plain
         /// `nonisolated let` suffices — no `(unsafe)`.
-        private nonisolated let stream: AsyncStream<InboundFrame>
+        private nonisolated let stream: AsyncStream<InboundMessage>
         /// Retained here because `WKWebView` holds its delegates weakly, and
         /// installed by the window rather than at init so the adapter stays
         /// constructible without an `AppContext` (the driver builds one).
         private nonisolated(unsafe) var webPolicy: WKWebPolicy?
 
         public init(configuration: WKWebViewConfiguration? = nil) throws {
-            var captured: AsyncStream<InboundFrame>.Continuation?
+            var captured: AsyncStream<InboundMessage>.Continuation?
             stream = AsyncStream { captured = $0 }
 
             let cfg = configuration ?? WKWebViewConfiguration()
@@ -178,7 +178,7 @@
             _ = try await evaluateJavaScript(snippet)
         }
 
-        public nonisolated func inboundFrames() -> AsyncStream<InboundFrame> {
+        public nonisolated func inboundMessages() -> AsyncStream<InboundMessage> {
             _ = stream // ensure continuation is captured
             return stream
         }
@@ -256,6 +256,40 @@
 
         // MARK: - WKScriptMessageHandler
 
+        /// Which frame posted `message`, straight from WebKit.
+        ///
+        /// `WKScriptMessage.frameInfo` is the only trustworthy source for this
+        /// — `bridge.js` runs inside the frame in question, so anything it
+        /// reports about itself is written by whoever wrote that frame's
+        /// content. The same `frameInfo` drives which origin a cross-origin
+        /// `confirm()` names, in `WKJavaScriptPanels`.
+        ///
+        /// `WKFrameInfo`'s properties are `@MainActor` on the Swift 6.1
+        /// toolchain CI builds with, and not on newer ones — so reading them
+        /// from this `nonisolated` context compiles locally and fails there.
+        /// `assumeIsolated` states the invariant instead of depending on the
+        /// compiler's opinion of it: WebKit delivers a script message on the
+        /// main thread, which is the same guarantee the rest of this class
+        /// already runs on.
+        private nonisolated static func callerFrame(of message: WKScriptMessage) -> CallerFrame {
+            MainActor.assumeIsolated { frameIdentity(of: message) }
+        }
+
+        @MainActor
+        private static func frameIdentity(of message: WKScriptMessage) -> CallerFrame {
+            let info = message.frameInfo
+            if info.isMainFrame { return .main }
+            let security = info.securityOrigin
+            let origin = security.host.isEmpty
+                ? nil
+                : WebOrigin(
+                    scheme: security.protocol,
+                    host: security.host,
+                    port: security.port == 0 ? nil : Int(security.port)
+                )
+            return .subframe(origin: origin)
+        }
+
         public func userContentController(
             _ userContentController: WKUserContentController,
             didReceive message: WKScriptMessage
@@ -266,7 +300,7 @@
             do {
                 let frame = try Envelope.decode(data)
                 _ = stream
-                continuation?.yield(frame)
+                continuation?.yield(InboundMessage(frame: frame, callerFrame: Self.callerFrame(of: message)))
             } catch {
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")

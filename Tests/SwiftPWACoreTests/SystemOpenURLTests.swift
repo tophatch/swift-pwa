@@ -37,11 +37,38 @@ struct SystemOpenURLTests {
         return app
     }
 
-    private func openURL(_ app: MockAppContext, _ payload: String) async -> InvocationResult {
+    private func openURL(
+        _ app: MockAppContext, _ payload: String, from frame: CallerFrame = .unknown
+    ) async -> InvocationResult {
         let invocation = Invocation(id: 1, command: "system.openURL", payload: Data(payload.utf8))
         return await app.registry.dispatch(
-            CommandContext(invocation: invocation, caller: .agent, appContext: app)
+            CommandContext(invocation: invocation, caller: .agent, frame: frame, appContext: app)
         )
+    }
+
+    /// The plugin has to pass the calling frame through to the policy, or the
+    /// scoping in `ExternalURLPolicy` is unreachable from the outside — the
+    /// kind of gap that unit-testing the policy alone would never show.
+    @Test("an embedded frame doesn't get the app's allowlist opt-out")
+    func optOutIsScopedThroughThePlugin() async {
+        let opener = StubURLOpener()
+        let app = makeApp(opener: opener)
+        app.externalURLs.allowAnyScheme = true
+
+        let fromPage = await openURL(app, #"{"url":"things:///add"}"#, from: .main)
+        guard case .ok = fromPage else { Issue.record("expected ok, got \(fromPage)"); return }
+
+        let fromFrame = await openURL(
+            app, #"{"url":"things:///add"}"#,
+            from: .subframe(origin: WebOrigin(scheme: "https", host: "ads.example"))
+        )
+        guard case let .failure(error) = fromFrame else {
+            Issue.record("an embedded frame should not inherit the opt-out, got \(fromFrame)")
+            return
+        }
+        #expect(error.code == BridgeError.urlScheme)
+        // Only the page's call reached the OS.
+        #expect(opener.opened.count == 1)
     }
 
     @Test("an https URL reaches the opener and reports that it opened")

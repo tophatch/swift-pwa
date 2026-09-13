@@ -455,10 +455,26 @@ unhandled one answers `{ opened: false }` either way).
 
 It softens nothing else: `pwa:`, `file:`, `about:`, `javascript:`, `data:`,
 `blob:` and the app's own origin stay refused, so the `E_URL` row above is
-unchanged. What it does cost is the reason the allowlist exists — `bridge.js`
-runs in subframes, and the runtime can't yet tell a subframe's call from the
-main frame's, so this means *any scheme, from any frame*. Turn it on for an app
-that doesn't host other people's content; leave it off for one that does.
+unchanged.
+
+**It applies to the app's own page, not to content it embeds** — on the backends
+that can tell the difference. `bridge.js` is injected into every frame, so an
+`<iframe>` reaches the same commands; where the backend reports which frame
+called, an embedded one keeps the declared allowlist and is refused with
+`E_URL_SCHEME` plus a diagnostic saying so. The identity comes from the webview,
+never from the page: content that can't be trusted with a capability can't be
+trusted to describe itself either.
+
+| Backend | Reports the calling frame | So `allow_any_scheme` is |
+|---|---|---|
+| macOS, iOS | Yes — `WKScriptMessage.frameInfo` | scoped to the app's own page |
+| Linux GTK3, GTK4 | **No** — the UI process isn't told (`WebKitFrame` is web-process-extension only) | any frame |
+| Windows, Android | Not yet wired | any frame |
+
+Where it isn't reported, the flag keeps its broader meaning rather than silently
+doing nothing — an app that set it would otherwise find its links working on some
+platforms and refused on others with no diagnostic that explains why. Either way,
+leave it off for an app that hosts other people's content.
 
 > **Platform coverage.** All five.
 

@@ -41,10 +41,12 @@ public extension PWAManifest {
         /// does: an unhandled scheme answers `opened: false` either way.
         ///
         /// It softens nothing else — `pwa:`, `file:`, `javascript:` and the
-        /// app's own origin stay refused. But `bridge.js` runs in subframes
-        /// and the runtime can't yet tell a subframe's call from the main
-        /// frame's, so it means *any scheme, from any frame*: not for an app
-        /// that hosts other people's content.
+        /// app's own origin stay refused. `bridge.js` runs in subframes too, so
+        /// it is scoped to the app's own page **where the backend reports which
+        /// frame called** (Apple today): content the page embeds keeps the
+        /// declared allowlist. Where it can't — both GTK backends — the flag
+        /// applies to any frame, so leave it off for an app that hosts other
+        /// people's content there.
         public var allowAnyScheme: Bool?
 
         /// `"system"` (the default) hands an off-origin main-frame navigation

@@ -75,8 +75,10 @@ struct swiftpwa_w2_controller {
     // together; tracking tokens here keeps the cleanup correct.
     EventRegistrationToken web_message_token{};
     EventRegistrationToken web_resource_token{};
+    EventRegistrationToken frame_created_token{};
     bool web_message_subscribed = false;
     bool web_resource_subscribed = false;
+    bool frame_created_subscribed = false;
 };
 
 // `swiftpwa_w2_view` is just a re-tag of the controller's view pointer
@@ -294,6 +296,12 @@ extern "C" void swiftpwa_w2_controller_release(swiftpwa_w2_controller *ctrl) {
         ICoreWebView2 *raw = ctrl->view_strong.Get();
         if (ctrl->web_message_subscribed) {
             raw->remove_WebMessageReceived(ctrl->web_message_token);
+        }
+        if (ctrl->frame_created_subscribed) {
+            ComPtr<ICoreWebView2_4> view4;
+            if (SUCCEEDED(raw->QueryInterface(IID_PPV_ARGS(&view4)))) {
+                view4->remove_FrameCreated(ctrl->frame_created_token);
+            }
         }
         if (ctrl->web_resource_subscribed) {
             raw->remove_WebResourceRequested(ctrl->web_resource_token);
@@ -525,6 +533,82 @@ extern "C" void swiftpwa_w2_view_open_devtools(swiftpwa_w2_view *view) {
     }
 }
 
+namespace {
+
+// Shared tail of both WebMessageReceived events: the top-level document's
+// and an embedded frame's. `is_main_frame` is the event the message arrived
+// on, not a comparison of URIs — a same-origin iframe loaded from its
+// parent's own URL reports an identical `get_Source`, so the URI can never
+// answer the question the caller is asking.
+void deliver_web_message(ICoreWebView2 *view,
+                         ICoreWebView2WebMessageReceivedEventArgs *args,
+                         int is_main_frame) {
+    wil::unique_cotaskmem_string raw;
+    // `TryGetWebMessageAsString` returns S_OK with a NULL string when the
+    // JS side sent a non-string (e.g. `postMessage({...})`). bridge.js
+    // always sends the already-stringified envelope, so non-strings are an
+    // error case we silently drop.
+    if (FAILED(args->TryGetWebMessageAsString(&raw)) || !raw) return;
+    std::string utf8 = wide_to_utf8(raw.get());
+
+    std::string source;
+    wil::unique_cotaskmem_string source_w;
+    if (SUCCEEDED(args->get_Source(&source_w)) && source_w) {
+        source = wide_to_utf8(source_w.get());
+    }
+
+    ViewExtension &ext = get_or_create_extension(view);
+    swiftpwa_w2_message_cb cb_local = nullptr;
+    void *user_local = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(ext.mu);
+        cb_local = ext.message_cb;
+        user_local = ext.message_user;
+    }
+    if (cb_local) {
+        cb_local(utf8.c_str(), source.empty() ? nullptr : source.c_str(), is_main_frame, user_local);
+    }
+}
+
+// Subscribe one frame's message event, and its own `FrameCreated` so the
+// frames *it* embeds are covered too. `ICoreWebView2_4::FrameCreated` reports
+// only first-level frames — measured: three events for three direct children
+// and none for a grandchild whose document had loaded and run — so without
+// the recursion an invoke from a frame two deep reaches nobody at all, which
+// is a silent partial rather than a policy.
+void subscribe_frame(ICoreWebView2 *view, ICoreWebView2Frame *frame) {
+    ComPtr<ICoreWebView2Frame2> frame2;
+    if (SUCCEEDED(frame->QueryInterface(IID_PPV_ARGS(&frame2))) && frame2) {
+        EventRegistrationToken msg_token{};
+        // Not unsubscribed: the subscription dies with the frame, and the
+        // teardown path has no handle to key a removal off once it is gone.
+        frame2->add_WebMessageReceived(
+            Callback<ICoreWebView2FrameWebMessageReceivedEventHandler>(
+                [view](ICoreWebView2Frame *,
+                       ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
+                    deliver_web_message(view, args, /*is_main_frame=*/0);
+                    return S_OK;
+                }).Get(),
+            &msg_token);
+    }
+    ComPtr<ICoreWebView2Frame7> frame7;
+    if (SUCCEEDED(frame->QueryInterface(IID_PPV_ARGS(&frame7))) && frame7) {
+        EventRegistrationToken child_token{};
+        frame7->add_FrameCreated(
+            Callback<ICoreWebView2FrameChildFrameCreatedEventHandler>(
+                [view](ICoreWebView2Frame *, ICoreWebView2FrameCreatedEventArgs *args) -> HRESULT {
+                    ComPtr<ICoreWebView2Frame> child;
+                    if (SUCCEEDED(args->get_Frame(&child)) && child) {
+                        subscribe_frame(view, child.Get());
+                    }
+                    return S_OK;
+                }).Get(),
+            &child_token);
+    }
+}
+
+} // namespace
+
 extern "C" void swiftpwa_w2_view_set_web_message_handler(
     swiftpwa_w2_view *view,
     swiftpwa_w2_message_cb cb,
@@ -542,29 +626,40 @@ extern "C" void swiftpwa_w2_view_set_web_message_handler(
     HRESULT hr = view->raw->add_WebMessageReceived(
         Callback<ICoreWebView2WebMessageReceivedEventHandler>(
             [view](ICoreWebView2 *, ICoreWebView2WebMessageReceivedEventArgs *args) -> HRESULT {
-                wil::unique_cotaskmem_string raw;
-                // `TryGetWebMessageAsString` returns S_OK with a NULL
-                // string when the JS side sent a non-string (e.g.
-                // `postMessage({...})`). bridge.js always sends the
-                // already-stringified envelope, so non-strings are an
-                // error case we silently drop.
-                if (FAILED(args->TryGetWebMessageAsString(&raw)) || !raw) return S_OK;
-                std::string utf8 = wide_to_utf8(raw.get());
-                ViewExtension &ext = get_or_create_extension(view->raw);
-                swiftpwa_w2_message_cb cb_local = nullptr;
-                void *user_local = nullptr;
-                {
-                    std::lock_guard<std::mutex> lock(ext.mu);
-                    cb_local = ext.message_cb;
-                    user_local = ext.message_user;
-                }
-                if (cb_local) cb_local(utf8.c_str(), user_local);
+                deliver_web_message(view->raw, args, /*is_main_frame=*/1);
                 return S_OK;
             }).Get(),
         &token);
     if (SUCCEEDED(hr) && view->owner) {
         view->owner->web_message_token = token;
         view->owner->web_message_subscribed = true;
+    }
+
+    // bridge.js is injected with `AddScriptToExecuteOnDocumentCreated`,
+    // which runs in *every* frame — so an `<iframe>` of embedded content
+    // can call `postMessage` exactly as the app's own page does. Those
+    // messages do not reach the event subscribed above: WebView2 raises
+    // them on the frame's own `ICoreWebView2Frame2::WebMessageReceived`,
+    // and with nobody subscribed there they are simply dropped. Subscribe,
+    // so an embedded frame's invoke reaches the bridge the same way it does
+    // on every other backend, and arrives labelled as what it is.
+    ComPtr<ICoreWebView2_4> view4;
+    if (view->owner && !view->owner->frame_created_subscribed &&
+        SUCCEEDED(view->raw->QueryInterface(IID_PPV_ARGS(&view4)))) {
+        EventRegistrationToken frame_token{};
+        HRESULT fhr = view4->add_FrameCreated(
+            Callback<ICoreWebView2FrameCreatedEventHandler>(
+                [view](ICoreWebView2 *, ICoreWebView2FrameCreatedEventArgs *args) -> HRESULT {
+                    ComPtr<ICoreWebView2Frame> frame;
+                    if (FAILED(args->get_Frame(&frame)) || !frame) return S_OK;
+                    subscribe_frame(view->raw, frame.Get());
+                    return S_OK;
+                }).Get(),
+            &frame_token);
+        if (SUCCEEDED(fhr)) {
+            view->owner->frame_created_token = frame_token;
+            view->owner->frame_created_subscribed = true;
+        }
     }
 }
 

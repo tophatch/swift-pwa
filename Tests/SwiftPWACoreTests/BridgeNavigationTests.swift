@@ -162,6 +162,54 @@ struct BridgeNavigationTests {
         try webView.sendSubscribe(id: 1, command: "events.subscribe", payload: ChannelArgs(channel: "prefs"))
         try await waitForCondition { bridge.hasActiveSubscription(id: 1) }
     }
+
+    /// Taking a `hello` cancels everything the previous document subscribed, so
+    /// an embedded frame that could send one could cancel the app's own
+    /// in-flight work. `bridge.js` sends it only from the top frame, but that
+    /// test runs *inside* the frame making the claim and a forged envelope
+    /// needn't respect it.
+    @Test("a subframe cannot claim the window and cancel its subscriptions")
+    func helloFromASubframeIsRefused() async throws {
+        let (_, _, webView, bridge) = await setUp()
+        defer { bridge.stop() }
+
+        webView.sendHello(epoch: "doc-a")
+        try webView.sendSubscribe(
+            id: 1,
+            command: "events.subscribe",
+            payload: ChannelArgs(channel: "prefs"),
+            epoch: "doc-a"
+        )
+        try await waitForCondition { bridge.hasActiveSubscription(id: 1) }
+
+        webView.send(
+            .hello(epoch: "forged"),
+            from: .subframe(origin: WebOrigin(scheme: "https", host: "embedded.example"))
+        )
+        try await Task.sleep(for: .milliseconds(100))
+        #expect(bridge.hasActiveSubscription(id: 1))
+    }
+
+    /// A backend that can't report the frame must still adopt documents, or
+    /// navigation teardown would never happen there at all — which is every
+    /// call on both GTK backends.
+    @Test("a hello from a backend that can't report the frame is still taken")
+    func helloFromAnUnknownFrameIsAccepted() async throws {
+        let (_, _, webView, bridge) = await setUp()
+        defer { bridge.stop() }
+
+        webView.send(.hello(epoch: "doc-a"), from: .unknown)
+        try webView.sendSubscribe(
+            id: 1,
+            command: "events.subscribe",
+            payload: ChannelArgs(channel: "prefs"),
+            epoch: "doc-a"
+        )
+        try await waitForCondition { bridge.hasActiveSubscription(id: 1) }
+
+        webView.send(.hello(epoch: "doc-b"), from: .unknown)
+        try await waitForCondition { !bridge.hasActiveSubscription(id: 1) }
+    }
 }
 
 private struct ChannelArgs: Codable {

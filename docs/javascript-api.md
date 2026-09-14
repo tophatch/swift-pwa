@@ -84,7 +84,11 @@ a subframe announcing its own epoch would read as a navigation and cancel the
 parent's subscriptions — so a subframe sends unstamped frames instead and keeps
 the behaviour it has always had here: its correlation ids share the window's id
 space, and replies are delivered to the top frame. Don't drive the bridge from
-an iframe.
+an iframe — and on Windows you can't: WebView2 raises a frame's messages on an
+event of its own, so embedded content reaches no command there at all (it is
+told why, in the app's log). Have the top-level document call on the frame's
+behalf instead; that works everywhere, since the reply comes back to it either
+way.
 
 One limit: the teardown is triggered by the new document announcing itself, so
 a window navigated to content that runs no JavaScript at all (a PDF or an image

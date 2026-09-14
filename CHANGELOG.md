@@ -5,6 +5,58 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Windows reports the calling frame, and stops embedded content reaching the
+  app's commands at all** ([#204]). `CommandContext.frame` is `.main` on
+  Windows now rather than `.unknown`, so the `external_urls.allow_any_scheme`
+  opt-out covers the app's own page there as it does on Apple.
+
+  **The measurement inverted the issue's assumption.** #204 expected the answer
+  to come from `ICoreWebView2WebMessageReceivedEventArgs::get_Source` and
+  expected it to be imprecise, since a same-origin iframe reports a URI
+  indistinguishable from its parent's. Measured on a real box, WebView2 doesn't
+  route embedded frames through that event *at all*: their `postMessage` is
+  raised on the frame's own `ICoreWebView2Frame2::WebMessageReceived`, which
+  nothing was subscribed to — so on Windows an embedded frame had never been
+  able to reach the bridge, and the top-level event only ever fires for the
+  window's own document. Which event fired is therefore the whole answer, and a
+  structural one: verified against an iframe loaded from *its parent's own
+  URL*, the case no comparison of URIs can decide.
+
+  **That silence is what changed.** WebView2 drops a message from a frame
+  nobody subscribed to without a word anywhere, so an app whose own iframe
+  called `invoke` saw it work on the other four backends and do nothing here,
+  with no way to find out why. The frames are subscribed now purely so the
+  refusal can be *explained*: one diagnostic naming the frame's document, the
+  command it tried, and the way round it (have the top-level document call on
+  the frame's behalf). Embedded content still reaches nothing — this is the
+  safest of the five backends and stays that way — but it now says so.
+  `FrameCreated` on the webview reports only first-level frames (measured: a
+  grandchild whose document had loaded and run was never announced), so each
+  frame's own `ICoreWebView2Frame7::FrameCreated` is subscribed too and the
+  refusal reaches every nesting depth.
+
+  New `Scripts/verify-windows-frame-identity.ps1` drives all of it on a real
+  box, checking the app's *diagnostics* as well as its commands — a refusal
+  nobody is told about is the failure this guards, and absence alone can't tell
+  it from a frame that never loaded.
+
+### Fixed
+
+- **An embedded frame could cancel the app's in-flight work** ([#204]). `hello`
+  is the frame that hands a window to a new document, and taking it tears down
+  everything the previous one subscribed. `bridge.js` sends it only from the
+  top frame — but that test is `window.top === window`, evaluated *inside* the
+  frame making the claim, so an embedded frame posting a forged envelope could
+  cancel every open subscription in the window. `BridgeRuntime` now refuses a
+  `hello` from a known subframe, which is the first thing `CommandContext.frame`
+  is used for beyond a policy input. Backends that can't report the frame are
+  unaffected: `.unknown` still adopts, or they would never adopt a document at
+  all.
+
 ## [0.10.6] - 2026-09-13
 
 ### Added

@@ -63,6 +63,10 @@
         }
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
+        /// Documents already named in an embedded-frame refusal. Both
+        /// WebMessageReceived events are raised on the UI thread, which is the
+        /// only thread that touches this.
+        private nonisolated(unsafe) var reportedEmbeddedFrames: Set<String> = []
         /// Eager `let` rather than a `lazy var` for the same reason
         /// as `WKWebViewAdapter.stream`: Swift 6.1 (CI's Windows
         /// toolchain) refuses `nonisolated` on lazy properties, and
@@ -553,25 +557,56 @@
             stream
         }
 
-        /// Called from `messageReceivedTrampoline` whenever the page
-        /// posts a string via `window.chrome.webview.postMessage(json)`.
-        /// Always invoked on the UI thread; the continuation it writes
-        /// to is intrinsically thread-safe.
-        func _ingest(jsonString: String) {
+        /// Called from `messageReceivedTrampoline` whenever a document
+        /// posts a string via `window.chrome.webview.postMessage(json)` —
+        /// the window's own, or a frame it embeds. Always invoked on the
+        /// UI thread; the continuation it writes to is intrinsically
+        /// thread-safe.
+        func _ingest(jsonString: String, sourceURI: String?, isMainFrame: Bool) {
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
                 let frame = try Envelope.decode(data)
-                // `.unknown` for now. `ICoreWebView2WebMessageReceivedEventArgs`
-                // has `get_Source` (the sending document's URI), but that
-                // can't separate a *same-origin* iframe from the main frame,
-                // and whether this handler even receives iframe messages is
-                // unmeasured — both need a run on a real box (#204).
-                continuation?.yield(InboundMessage(frame: frame))
+                guard isMainFrame else {
+                    refuseEmbeddedFrame(frame, from: sourceURI)
+                    return
+                }
+                continuation?.yield(InboundMessage(frame: frame, callerFrame: .main))
             } catch {
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")
                 #endif
             }
+        }
+
+        /// Embedded content does not reach this app's commands on Windows.
+        ///
+        /// The message is refused here rather than left unsubscribed in the
+        /// shim so the refusal can be *explained*: WebView2 would otherwise
+        /// drop it with nothing on any log, and a developer whose own iframe
+        /// calls `invoke` would see it work on the other four backends and do
+        /// nothing here, with no way to find out why. Only `hello` is silent —
+        /// `bridge.js` posts one per document and a page that embeds anything
+        /// would otherwise fill the log with them.
+        ///
+        /// Reported once per frame. The rule doesn't change with the command,
+        /// and content that polls one in a loop would otherwise bury every
+        /// other line in the log — including the first of these.
+        private func refuseEmbeddedFrame(_ frame: InboundFrame, from sourceURI: String?) {
+            let what: String
+            switch frame {
+            case .hello: return
+            case let .invoke(_, command, _, _): what = "invoke '\(command)'"
+            case let .subscribe(_, command, _, _): what = "subscribe '\(command)'"
+            case .unsubscribe, .push: what = "continue a subscription"
+            }
+            let document = sourceURI ?? "an unnamed document"
+            guard reportedEmbeddedFrames.insert(document).inserted else { return }
+            RuntimeDiagnostics.emit(
+                "swift-pwa: refused a bridge call from embedded content — the frame at "
+                    + "'\(document)' tried to \(what). On Windows only "
+                    + "the window's own top-level document reaches your commands; have that "
+                    + "document call on the frame's behalf (`window.postMessage`)."
+            )
         }
 
         deinit {
@@ -694,12 +729,13 @@
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_set_web_message_handler`.
     let messageReceivedTrampoline: @convention(c) (
-        UnsafePointer<CChar>?, UnsafeMutableRawPointer?
-    ) -> Void = { jsonPtr, userData in
+        UnsafePointer<CChar>?, UnsafePointer<CChar>?, Int32, UnsafeMutableRawPointer?
+    ) -> Void = { jsonPtr, sourcePtr, isMainFrame, userData in
         guard let jsonPtr, let userData else { return }
         let json = String(cString: jsonPtr)
+        let source = sourcePtr.map { String(cString: $0) }
         let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
-        adapter._ingest(jsonString: json)
+        adapter._ingest(jsonString: json, sourceURI: source, isMainFrame: isMainFrame != 0)
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_intercept_resources`.

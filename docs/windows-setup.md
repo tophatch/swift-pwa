@@ -776,6 +776,21 @@ to cover only the latter, with the bundle served natively by
 So a bundled file's type is ours to get right, and it no longer differs from the
 same file served out of a mount.
 
+- **An `<iframe>` can't reach the bridge at all.** `bridge.js` is injected into
+  every frame, but WebView2 raises a frame's `postMessage` on that frame's own
+  `ICoreWebView2Frame2::WebMessageReceived` rather than the window's — so a
+  call from embedded content reaches no command here, where it would on the
+  other four backends. That makes Windows the strictest of the five and
+  `ctx.frame` always `.main`, which is why `external_urls.allow_any_scheme`
+  covers the app's own page here with nothing to scope it against.
+
+  The refusal is *reported*: each one logs a line naming the frame's document
+  and the command it tried, because WebView2 would otherwise drop it with
+  nothing anywhere to explain the difference. If a frame of yours needs a
+  command, have the top-level document call on its behalf — the pattern that
+  works on every backend, since a reply goes to the top frame regardless.
+  `Scripts/verify-windows-frame-identity.ps1` checks all of this on a real box.
+
 - **`ble.*` in an MSIX build needs the `bluetooth` device capability**, which
   `swift-pwa build` emits from `permissions.device` in `pwa.json`. A portable
   `.exe` reaches the radio with no declaration at all, so an app that declares

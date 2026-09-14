@@ -107,6 +107,28 @@ frame in question, so anything it reports about itself — `window.top === windo
 `location.origin` — is written by whoever wrote that frame's content, and content
 you don't trust with a capability can't be trusted to describe itself either.
 
+What each backend can tell you differs, and the differences are measured rather
+than assumed:
+
+| Backend | `ctx.frame` |
+| --- | --- |
+| macOS / iOS | `.main` or `.subframe(origin:)`, from `WKScriptMessage.frameInfo` |
+| Windows | Always `.main` — **embedded frames don't reach your commands at all** |
+| Linux (GTK3 / GTK4) | Always `.unknown` — the WebKitGTK UI process isn't told |
+| Android | Always `.unknown` for now ([#204]) |
+
+[#204]: https://github.com/tophatch/swift-pwa/issues/204
+
+**Windows refuses embedded content outright.** WebView2 raises a frame's
+`postMessage` on that frame's own event rather than the window's, so a call
+from an `<iframe>` never reaches the bridge there — which makes `.main` always
+true, and makes Windows the strictest of the five. It is *reported* rather than
+dropped in silence: each refused call logs one line naming the frame's document
+and the command it tried. If an iframe of yours needs a command, have the
+top-level document call on its behalf (`window.postMessage` up, `invoke` from
+there) — which is the only pattern that works everywhere anyway, because a
+frame's reply is delivered to the top frame on every backend.
+
 **`.unknown` is a real answer on some platforms**, not a "not implemented yet":
 both GTK backends can't report it (the WebKitGTK UI process isn't told which
 frame sent a script message), so a guard like the one above would refuse *every*

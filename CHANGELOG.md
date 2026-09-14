@@ -44,6 +44,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   nobody is told about is the failure this guards, and absence alone can't tell
   it from a frame that never loaded.
 
+- **Android reports the calling frame too, and a cross-origin frame no longer
+  reaches the bridge behind `bridge.js`'s back** ([#204]). The inbound channel
+  moves from `addJavascriptInterface`, which reports nothing about the caller,
+  to `WebViewCompat.addWebMessageListener`, which carries `isMainFrame` and the
+  sending document's origin. `bridge.js` needed no change: the object that API
+  injects has the same `postMessage(String)` shape it already calls.
+
+  The channel also takes **origin rules**, where `addJavascriptInterface`
+  injects into every frame regardless of origin. `bridge.js` was already scoped
+  to the app's origin by `addDocumentStartJavaScript`, but `__SwiftPWA__post`
+  was not — so a cross-origin iframe could reach it directly and post a raw
+  envelope without `bridge.js` ever running in that frame. Both are scoped to
+  the same origin now.
+
+  Unlike Windows, embedded frames still *reach* the bridge on Android and are
+  reported rather than refused: they always could, and narrowing that is the
+  app's call through `ctx.frame` (or a decision to make across all five at
+  once, which this isn't). The `addJavascriptInterface` path stays as a
+  fallback for a System WebView with no `WEB_MESSAGE_LISTENER` — reporting
+  `.unknown`, which the JNI ABI carries as a genuine third state rather than
+  defaulting to "main", since an app narrowing a permission must not read "I
+  can't tell" as "the app's own page". New
+  `Scripts/verify-android-frame-identity.sh` drives it on a real device.
+
 ### Fixed
 
 - **An embedded frame could cancel the app's in-flight work** ([#204]). `hello`

@@ -1053,7 +1053,38 @@ enum AndroidTemplates {
                 // just break `audio.play()` (silent, since a long async breaks the
                 // user-gesture chain). Allow programmatic playback without a gesture.
                 webView.settings.mediaPlaybackRequiresUserGesture = false
-                webView.addJavascriptInterface(JsBridge(this), "__SwiftPWA__post")
+                // Inbound JS -> Swift. `WebViewCompat.addWebMessageListener`
+                // injects an object with the same `postMessage(String)` shape
+                // bridge.js already calls, and additionally reports which frame
+                // called (`isMainFrame` + `sourceOrigin`) - which
+                // `addJavascriptInterface` does not, at all. It is also scoped
+                // to the origin rules below, where `addJavascriptInterface`
+                // injects into *every* frame regardless of origin: a
+                // cross-origin iframe could reach `__SwiftPWA__post` directly
+                // and post a raw envelope, without bridge.js ever running in
+                // it. The fallback stays for a System WebView too old for the
+                // API (requires WebView 85+, against 83+ for document-start
+                // scripts), and reports the frame as unknown.
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+                    WebViewCompat.addWebMessageListener(
+                        webView,
+                        "__SwiftPWA__post",
+                        setOf("https://swift-pwa.local")
+                    ) { _, message, sourceOrigin, isMainFrame, _ ->
+                        nativeIngestFromFrame(
+                            message.data ?: "",
+                            sourceOrigin?.toString(),
+                            isMainFrame
+                        )
+                    }
+                } else {
+                    android.util.Log.w(
+                        "swift-pwa",
+                        "WEB_MESSAGE_LISTENER unsupported on this WebView; falling back to " +
+                            "addJavascriptInterface (the calling frame can't be reported)"
+                    )
+                    webView.addJavascriptInterface(JsBridge(this), "__SwiftPWA__post")
+                }
 
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                     WebViewCompat.addDocumentStartJavaScript(
@@ -1335,6 +1366,9 @@ enum AndroidTemplates {
             // Inbound: JS -> Java -> Swift
             // -------------------------------------------------------------
 
+            /// The fallback inbound channel, for a System WebView with no
+            /// `WebViewCompat.addWebMessageListener`. Reports nothing about
+            /// which frame called, so the runtime sees `.unknown` there.
             private class JsBridge(private val outer: SwiftPWABridge) {
                 @JavascriptInterface
                 fun postMessage(json: String) {
@@ -1349,6 +1383,11 @@ enum AndroidTemplates {
             private external fun nativeAttach(self: SwiftPWABridge)
             private external fun nativeDetach()
             private external fun nativeIngest(json: String)
+            private external fun nativeIngestFromFrame(
+                json: String,
+                sourceOrigin: String?,
+                isMainFrame: Boolean
+            )
             private external fun nativeEvalDone(
                 result: String?,
                 error: String?,

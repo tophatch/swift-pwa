@@ -55,14 +55,32 @@ void swiftpwa_android_log(const char *message_utf8);
 // the duration of the call; copy if you need to retain it.
 // ---------------------------------------------------------------------
 
-typedef void (*swiftpwa_android_inbound_fn)(const char *json_utf8, void *user);
+// `source_origin_utf8` is the calling document's origin and
+// `is_main_frame` says whether it was the WebView's own top-level
+// document, both from `WebViewCompat.addWebMessageListener`.
+//
+// `is_main_frame` is a tri-state because one of the two inbound
+// channels genuinely cannot tell: 1 = the main frame, 0 = a frame it
+// embeds, -1 = unknown. The `addJavascriptInterface` fallback, used on
+// a System WebView too old for the message-listener API, reports
+// nothing about the caller and always passes -1.
+#define SWIFTPWA_FRAME_UNKNOWN (-1)
+#define SWIFTPWA_FRAME_SUBFRAME 0
+#define SWIFTPWA_FRAME_MAIN 1
+
+typedef void (*swiftpwa_android_inbound_fn)(const char *json_utf8,
+                                            const char *source_origin_utf8,
+                                            int is_main_frame,
+                                            void *user);
 
 void swiftpwa_android_set_inbound_handler(swiftpwa_android_inbound_fn handler,
                                           void *user);
 
 // Called by the Kotlin host (`SwiftPWABridge.deliver`) on the binder
 // thread. Looks up the registered handler and dispatches.
-void swiftpwa_android_dispatch_inbound(const char *json_utf8);
+void swiftpwa_android_dispatch_inbound(const char *json_utf8,
+                                       const char *source_origin_utf8,
+                                       int is_main_frame);
 
 // ---------------------------------------------------------------------
 // Outbound: Swift -> Java.

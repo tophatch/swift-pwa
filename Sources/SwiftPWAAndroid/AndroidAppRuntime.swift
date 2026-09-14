@@ -63,10 +63,15 @@
             // Android (multi-window is a v0.5.x follow-up — the
             // platform-native UX is single-Activity), so we forward
             // unconditionally to the most recently created adapter.
-            swiftpwa_android_set_inbound_handler({ jsonPtr, _ in
+            swiftpwa_android_set_inbound_handler({ jsonPtr, originPtr, isMainFrame, _ in
                 guard let jsonPtr else { return }
                 let json = String(cString: jsonPtr)
-                AndroidAppContext.shared.routeInbound(jsonString: json)
+                let origin = originPtr.map { String(cString: $0) }
+                AndroidAppContext.shared.routeInbound(
+                    jsonString: json,
+                    sourceOrigin: origin,
+                    frameKind: isMainFrame
+                )
             }, nil)
 
             // Quit handler: JNI calls this when the Activity tears

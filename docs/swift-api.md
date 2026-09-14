@@ -114,10 +114,8 @@ than assumed:
 | --- | --- |
 | macOS / iOS | `.main` or `.subframe(origin:)`, from `WKScriptMessage.frameInfo` |
 | Windows | Always `.main` — **embedded frames don't reach your commands at all** |
+| Android | `.main` or `.subframe(origin:)`, from `WebViewCompat.addWebMessageListener` — `.unknown` on a System WebView too old for it |
 | Linux (GTK3 / GTK4) | Always `.unknown` — the WebKitGTK UI process isn't told |
-| Android | Always `.unknown` for now ([#204]) |
-
-[#204]: https://github.com/tophatch/swift-pwa/issues/204
 
 **Windows refuses embedded content outright.** WebView2 raises a frame's
 `postMessage` on that frame's own event rather than the window's, so a call

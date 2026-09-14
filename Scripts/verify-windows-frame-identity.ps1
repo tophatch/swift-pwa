@@ -190,7 +190,7 @@ Write-Utf8NoBom (Join-Path $appDir "web\child.html") @"
   if (next) {
     document.addEventListener('DOMContentLoaded', function () {
       var f = document.createElement('iframe');
-      f.src = '/child.html?label=' + next + '&depth=' + (depth + 1);
+      f.src = 'child.html?label=' + next + '&depth=' + (depth + 1);
       document.body.appendChild(f);
     });
   }
@@ -213,7 +213,7 @@ Write-Utf8NoBom (Join-Path $appDir "web\index.html") @"
     f.setAttribute(attr, value);
     document.body.appendChild(f);
   }
-  frame('src', '/child.html?label=child-path');
+  frame('src', 'child.html?label=child-path');
   frame('src', location.pathname);
   frame('srcdoc', '<script>__SWIFT_PWA__.invoke("probe.record", { label: "srcdoc" });<\/script>');
   // Long enough for four frames to load, run bridge.js and post. What each

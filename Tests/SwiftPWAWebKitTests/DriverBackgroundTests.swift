@@ -36,34 +36,51 @@
         /// right for a window a person owns — and exactly what parking one has
         /// to defeat.
         ///
-        /// The constraint lands at **order-front**, not at `setFrameOrigin`: a
-        /// parked frame reads back fine right up until the window is shown, and
-        /// then snaps to the screen edge. So this orders both windows in, the
-        /// same way `MacWindow` does, or it would pass while testing nothing.
-        @Test("a parked window stays parked, and a normal one doesn't")
+        /// Asks the window the same question AppKit asks it, rather than
+        /// ordering it on screen and reading the frame back.
+        ///
+        /// That's deliberate. The constraint really lands at **order-front**
+        /// (setting the origin alone is never constrained, on either path), so
+        /// the tempting test is to show both windows and compare — but showing
+        /// a window needs a window server, and on a CI runner without one that
+        /// took down the whole Apple test process, every unrelated suite in it
+        /// included. `constrainFrameRect(_:to:)` is the override itself and is
+        /// public, so this tests the seam without needing a screen to put a
+        /// window on. That the parked frame survives a real order-front is
+        /// covered where it can be: by driving a real app.
+        @Test("the constraint is lifted for a parked window and kept for every other")
         func offscreenPlacementIsScoped() {
-            let far = NSPoint(x: DriverBackground.parkedOrigin.x, y: DriverBackground.parkedOrigin.y)
-
-            func show(allowingOffscreen: Bool) -> NSPoint {
+            let far = NSRect(
+                x: DriverBackground.parkedOrigin.x,
+                y: DriverBackground.parkedOrigin.y,
+                width: 800,
+                height: 600
+            )
+            func window(allowingOffscreen: Bool) -> DriverWindow {
                 let window = DriverWindow(
                     contentRect: NSRect(x: 0, y: 0, width: 800, height: 600),
                     styleMask: [.titled, .closable, .miniaturizable, .resizable],
                     backing: .buffered,
                     defer: false
                 )
+                // ARC owns these; AppKit's default would release them a second
+                // time on close, and a window is never closed here anyway.
+                window.isReleasedWhenClosed = false
                 window.allowsOffscreenPlacement = allowingOffscreen
-                window.setFrameOrigin(far)
-                window.contentView = NSView(frame: NSRect(x: 0, y: 0, width: 800, height: 600))
-                window.orderFrontRegardless()
-                defer { window.close() }
-                return window.frame.origin
+                return window
             }
 
-            #expect(show(allowingOffscreen: true) == far)
-            #expect(
-                show(allowingOffscreen: false) != far,
-                "AppKit should have constrained an ordinary driver window back to a screen"
-            )
+            #expect(window(allowingOffscreen: true).constrainFrameRect(far, to: NSScreen.main) == far)
+            // AppKit only has somewhere to pull the window back *to* when a
+            // screen exists; with none (a headless runner) it answers the rect
+            // it was given, which would make this assertion meaningless rather
+            // than failing honestly.
+            if let screen = NSScreen.main {
+                #expect(
+                    window(allowingOffscreen: false).constrainFrameRect(far, to: screen) != far,
+                    "AppKit should have constrained an ordinary driver window back to the screen"
+                )
+            }
         }
 
         /// Requested and *honoured* are different questions — a backend that

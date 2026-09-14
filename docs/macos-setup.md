@@ -393,6 +393,17 @@ returns a clean error explaining how to bundle first.
 
 ## Known limitations on macOS
 
+- **A backgrounded driven run rests on private API.** `swift-pwa drive
+  --background` parks the app's window off screen, and WebKit is the only
+  engine swift-pwa ships on that stops servicing `requestAnimationFrame` for a
+  window it isn't showing — so the mode also turns window occlusion detection
+  off, through `-[WKWebView _setWindowOcclusionDetectionEnabled:]`. If a future
+  macOS drops that selector the mode degrades to a **visible** run with a line
+  on stderr, rather than an invisible one whose page never paints; a unit test
+  pins the selector so the change surfaces here rather than in an adopter's
+  suite. Driver builds only — a shipped app contains none of it. See
+  [docs/app-driver.md](app-driver.md#running-a-suite-without-losing-the-machine----background).
+
 - **Auto-updater install fires no UI before swapping.** The runtime
   hands off to the detached helper as soon as `updater.installAndRelaunch`
   is called. Apps that want a "Restart now / later" dialog should gate

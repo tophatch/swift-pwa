@@ -365,6 +365,57 @@
                 "the iframe's call wasn't distinguished from the page's: \(frames)"
             )
         }
+
+        /// The limit of what frame identity can defend, measured rather than
+        /// reasoned about: a **same-origin** frame reaches its parent's realm,
+        /// and calling the parent's `__SWIFT_PWA__` posts from the parent's
+        /// frame — so the runtime sees the main frame, correctly, and the
+        /// scoping is bypassed in one line.
+        ///
+        /// That is inherent to the same-origin policy rather than a hole here:
+        /// a same-origin frame is the same trust domain and can already drive
+        /// the parent's DOM. What it means is that `ctx.frame` separates the
+        /// app's page from **cross-origin** embedded content, and must not be
+        /// used to sandbox same-origin content the app doesn't trust.
+        @Test("a same-origin frame can call through its parent and is seen as the main frame")
+        func sameOriginFrameCanCallThroughItsParent() async throws {
+            let seen = FrameCollector()
+            let app = MockAppContext()
+            app.registry.register("whoami", typed: { (_: EmptyArgs, ctx) -> EmptyResult in
+                seen.record(FrameIdentity.describe(ctx.frame))
+                return EmptyResult()
+            })
+
+            let adapter = try WKWebViewAdapter(configuration: WKWebViewConfiguration())
+            let win = MockWindow(webView: adapter)
+            app.attach(win)
+
+            let bridge = BridgeRuntime(
+                webView: adapter, registry: app.registry, windowID: win.id, app: app
+            )
+            bridge.start()
+            defer { bridge.stop() }
+
+            // `srcdoc` inherits the parent's origin, so `window.parent` is
+            // reachable. The call is made on the *parent's* bridge object.
+            let inner = "window.parent.__SWIFT_PWA__.invoke('whoami');"
+            let html = """
+            <!doctype html><html><head><meta charset="utf-8"></head><body>
+            <iframe srcdoc="<script>\(inner)</script>"></iframe>
+            <script>
+              window.__ready = 'yes';
+            </script></body></html>
+            """
+            adapter.webView.loadHTMLString(html, baseURL: nil)
+            _ = try await waitForJSExpr(in: adapter, "window.__ready")
+            try await Task.sleep(for: .milliseconds(400))
+
+            let frames = seen.all
+            #expect(
+                frames == ["main"],
+                "a same-origin frame calling through its parent should be indistinguishable from the parent itself, but saw: \(frames)"
+            )
+        }
     }
 
     /// Records what each dispatched handler saw, since a subframe can't be

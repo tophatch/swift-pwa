@@ -70,6 +70,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Documented the limit of what `CommandContext.frame` can defend** ([#204]).
+  A **same-origin** frame can call the parent's bridge object
+  (`window.parent.__SWIFT_PWA__.invoke(...)`), which posts from the parent's
+  frame — so the runtime sees `.main`, correctly, and the scoping is bypassed in
+  one line. Measured against a real `WKWebView`, not reasoned about. It is
+  inherent to the same-origin policy rather than a hole (such a frame can
+  already drive the parent's DOM), but it decides what the feature is *for*:
+  `ctx.frame` separates the app's page from **cross-origin** embedded content,
+  and must not be used to sandbox same-origin content the app doesn't trust —
+  give that its own origin first. Now stated in `docs/swift-api.md` and pinned
+  by a test, because the wrong reading of this is the one that would ship a
+  vulnerability while looking careful.
+
 - **`allowAnyScheme`'s own documentation still described the world before frame
   identity existed** ([#204], reported by the adopter from [#203]). The property
   said the runtime "cannot currently tell a subframe's invoke from the main

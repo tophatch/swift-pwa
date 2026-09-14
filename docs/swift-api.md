@@ -127,6 +127,19 @@ top-level document call on its behalf (`window.postMessage` up, `invoke` from
 there) — which is the only pattern that works everywhere anyway, because a
 frame's reply is delivered to the top frame on every backend.
 
+**It separates cross-origin content, not untrusted content.** A **same-origin**
+frame can reach its parent's realm and call the parent's bridge object —
+`window.parent.__SWIFT_PWA__.invoke(...)` — which posts from the parent's frame,
+so the runtime correctly sees `.main` and the check is bypassed in one line.
+That is inherent to the same-origin policy rather than a gap here: a same-origin
+frame is already the same trust domain and can drive the parent's DOM directly.
+The consequence is what matters — **do not use `ctx.frame` to sandbox
+same-origin content you don't trust**, such as user-authored HTML rendered into
+an iframe on your own origin. Give that content its own origin (a different
+host, or a `sandbox` attribute without `allow-same-origin`) and then `ctx.frame`
+separates it. Verified against a real `WKWebView` in
+`WKBridgeIntegrationTests`.
+
 **`.unknown` is a real answer on some platforms**, not a "not implemented yet":
 both GTK backends can't report it (the WebKitGTK UI process isn't told which
 frame sent a script message), so a guard like the one above would refuse *every*

@@ -54,6 +54,10 @@
             // The agent surface's indicator: a runtime-owned status item, so a user
             // can see access is open (and close it) without the app's cooperation.
             AgentIndicator.installTray { SystemTray() }
+            // A backgrounded driven run is applied by the window itself (off
+            // screen, no focus on map); say so, so `capabilities.background`
+            // reports what actually happened rather than what was asked for.
+            if DriverBackground.isRequested { DriverBackground.markHonoured() }
             AppDriver.startIfRequested(context, backend: "gtk3")
             gtk_main()
             exit(context.pendingExitCode ?? 0)

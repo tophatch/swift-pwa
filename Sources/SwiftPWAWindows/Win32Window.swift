@@ -94,7 +94,17 @@
             // reconciles the size/position if the target monitor's DPI differs.
             let initialX: Int32
             let initialY: Int32
-            if let origin = config.origin {
+            if DriverBackground.isRequested {
+                // A backgrounded driven run: off screen, so a suite that
+                // launches one app per test file doesn't take over the
+                // machine. Windows places a window wherever it's asked —
+                // there's no constraining to a monitor, unlike AppKit, and no
+                // clamping by a window manager, unlike GTK.
+                let parked = DriverBackground.parkedOrigin
+                initialX = Int32((parked.x * Double(initialDpi) / 96.0).rounded())
+                initialY = Int32((parked.y * Double(initialDpi) / 96.0).rounded())
+                lastPosition = parked
+            } else if let origin = config.origin {
                 initialX = Int32((origin.x * Double(initialDpi) / 96.0).rounded())
                 initialY = Int32((origin.y * Double(initialDpi) / 96.0).rounded())
                 lastPosition = origin
@@ -105,7 +115,13 @@
             let hwndOpt: HWND? = titleW.withUnsafeBufferPointer { titlePtr in
                 Self.className.withUnsafeBufferPointer { classPtr in
                     CreateWindowExW(
-                        0,
+                        // `WS_EX_TOOLWINDOW` for a backgrounded driven run:
+                        // no taskbar button and no Alt+Tab entry, the Windows
+                        // counterpart of taking macOS's `.accessory` policy.
+                        // A suite launching one app per test file shouldn't
+                        // leave thirty-seven buttons in the taskbar for the
+                        // length of the run.
+                        DriverBackground.isRequested ? DWORD(WS_EX_TOOLWINDOW) : 0,
                         classPtr.baseAddress,
                         titlePtr.baseAddress,
                         style,
@@ -208,8 +224,9 @@
                 // *physical* pixels. Convert to DIPs before exposing
                 // them on the cross-platform `Size` API.
                 let scale = dpiScale()
-                let w = Double(LOWORD(DWORD(bitPattern: Int32(lParam)))) / scale
-                let h = Double(HIWORD(DWORD(bitPattern: Int32(lParam)))) / scale
+                let packed = packedWords(lParam)
+                let w = Double(LOWORD(packed)) / scale
+                let h = Double(HIWORD(packed)) / scale
                 let size = Size(width: w, height: h)
                 if size != lastSize {
                     lastSize = size
@@ -218,9 +235,16 @@
                 adapter.fitTo(client: clientRect())
                 return true
             case WM_MOVE:
+                // **Signed** shorts, unlike `WM_SIZE`'s extents: a window on a
+                // monitor left of or above the primary one has negative
+                // coordinates, and reading them unsigned reported -100 as
+                // 65436. Found by parking a window off screen for a
+                // backgrounded driven run, but it is the ordinary
+                // multi-monitor case that meets it.
                 let scale = dpiScale()
-                let x = Double(LOWORD(DWORD(bitPattern: Int32(lParam)))) / scale
-                let y = Double(HIWORD(DWORD(bitPattern: Int32(lParam)))) / scale
+                let packed = packedWords(lParam)
+                let x = Double(Int16(bitPattern: LOWORD(packed))) / scale
+                let y = Double(Int16(bitPattern: HIWORD(packed))) / scale
                 let pos = Point(x: x, y: y)
                 if pos != lastPosition {
                     lastPosition = pos
@@ -300,7 +324,10 @@
         }
 
         private func showAndActivate() {
-            ShowWindow(hwnd, SW_SHOW)
+            // `SW_SHOWNOACTIVATE` for a backgrounded run: the window still has
+            // to be shown — WebView2 stops rendering a hidden one — but
+            // stealing the foreground is the thing the mode exists to avoid.
+            ShowWindow(hwnd, DriverBackground.isRequested ? SW_SHOWNOACTIVATE : SW_SHOW)
             UpdateWindow(hwnd)
         }
 
@@ -383,6 +410,14 @@
         }
 
         public func focus() {
+            // In a backgrounded run, show without raising: a page calling
+            // `window.focus` wants to be rendered, not to take the user's
+            // screen away from them mid-run.
+            guard !DriverBackground.isRequested else {
+                ShowWindow(hwnd, SW_SHOWNOACTIVATE)
+                emit(.didFocus)
+                return
+            }
             SetForegroundWindow(hwnd)
             emit(.didFocus)
         }
@@ -482,6 +517,20 @@
     //
     // The Win32 macros aren't imported into Swift. They're trivial
     // bit-twiddles, so just spell them out.
+
+    /// The 32 bits `LOWORD` / `HIWORD` unpack, taken from an `LPARAM`.
+    ///
+    /// `Int32(lParam)` **traps** here — measured: a window moved to
+    /// (-32000, -32000) packs a negative `y` into the high word, which makes
+    /// the 32-bit value 0x8300_8300, which is 2,197,817,600 as the `Int`
+    /// `LPARAM` really is, which is past `Int32.max`. The app died in
+    /// `Integers.swift: Not enough bits to represent the passed value`, inside
+    /// its own window procedure, on a plain window move. Truncation is what the
+    /// Win32 macros do and what the message means.
+    @inline(__always)
+    func packedWords(_ lParam: LPARAM) -> DWORD {
+        DWORD(bitPattern: Int32(truncatingIfNeeded: lParam))
+    }
 
     @inline(__always)
     func LOWORD(_ v: DWORD) -> UInt16 { UInt16(v & 0xFFFF) }

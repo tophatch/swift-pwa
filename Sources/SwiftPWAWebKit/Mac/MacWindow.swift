@@ -56,6 +56,12 @@
                     backing: .buffered,
                     defer: false
                 )
+                // Parking a window off screen needs AppKit's constraining
+                // switched off, or it drags a titled window straight back onto
+                // a display. Only in a backgrounded run: a window that's merely
+                // driven is still a window the user may be looking at, and it
+                // should keep every normal placement rule.
+                window.allowsOffscreenPlacement = DriverBackground.isRequested
             #else
                 let window = NSWindow(
                     contentRect: rect,
@@ -71,7 +77,14 @@
             // `config.origin` overrides centring; the origin is a bottom-left
             // frame origin, matching `position()` / `setPosition(_:)` so it
             // round-trips.
-            if let origin = config.origin {
+            if DriverBackground.isRequested {
+                // Off screen rather than merely behind everything: a covered
+                // window still costs stacking order, still flickers through
+                // Mission Control and the window list, and would do so once per
+                // test file. It is genuinely ordered in, though — `orderOut`
+                // stops WebKit servicing the page.
+                window.setFrameOrigin(NSPoint(x: DriverBackground.parkedOrigin.x, y: DriverBackground.parkedOrigin.y))
+            } else if let origin = config.origin {
                 window.setFrameOrigin(NSPoint(x: origin.x, y: origin.y))
             } else {
                 window.center()
@@ -116,7 +129,17 @@
             adapter.attachWebPolicy(policy: app.externalURLs, opener: AppleURLOpener())
             adapter.load(config.content)
             if config.fullscreen { window.toggleFullScreen(nil) }
-            if config.visibleOnLaunch { window.makeKeyAndOrderFront(nil) }
+            if config.visibleOnLaunch {
+                // `orderFrontRegardless` rather than `makeKeyAndOrderFront` in a
+                // backgrounded run: the window has to be in the window list for
+                // WebKit to keep rendering it, but making it key would pull the
+                // app in front of whatever the user is doing.
+                if DriverBackground.isRequested {
+                    window.orderFrontRegardless()
+                } else {
+                    window.makeKeyAndOrderFront(nil)
+                }
+            }
         }
 
         /// Resolve `color` against the window's current appearance and paint
@@ -166,7 +189,23 @@
             return Point(x: Double(o.x), y: Double(o.y))
         }
 
-        public func focus() { nsWindow.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) }
+        /// In a backgrounded run this orders the window in without making it
+        /// key and without activating the app.
+        ///
+        /// Not inert, because `window.focus` has a second meaning a driven page
+        /// actually depends on: it is how a page asks to be *rendered*, and
+        /// three of the adopter's test files poll it until `!document.hidden`
+        /// for exactly that reason. Ordering in satisfies that (the page reports
+        /// `visible` and rAF runs at full rate with occlusion detection off),
+        /// while raising the app would undo the whole mode — 37 times a run.
+        public func focus() {
+            guard !DriverBackground.isRequested else {
+                nsWindow.orderFrontRegardless()
+                return
+            }
+            nsWindow.makeKeyAndOrderFront(nil)
+            NSApp.activate(ignoringOtherApps: true)
+        }
         public func minimize() { nsWindow.miniaturize(nil) }
         public func maximize() { nsWindow.zoom(nil) }
         public func setFullscreen(_ on: Bool) {
@@ -181,6 +220,15 @@
         /// of which stop WebKit servicing `requestAnimationFrame`. Miniaturized
         /// windows report `.visible` in some macOS versions, so check that too.
         public func visibility() -> WindowVisibility {
+            // A backgrounded run answers the question this enum is actually for
+            // — "is WebKit still servicing this window" — rather than "is it on
+            // screen". Occlusion detection is off there, so a parked window
+            // renders at full rate and reporting the screen truth (`hidden`)
+            // would send a harness looking for a rendering bug that isn't
+            // there. Being ordered in is the line that still matters.
+            if DriverBackground.isActive {
+                return nsWindow.isVisible ? .visible : .hidden
+            }
             if nsWindow.isMiniaturized { return .hidden }
             return nsWindow.occlusionState.contains(.visible) ? .visible : .hidden
         }

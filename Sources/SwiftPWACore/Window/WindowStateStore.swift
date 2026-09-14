@@ -105,6 +105,19 @@ public final class WindowStateStore: @unchecked Sendable {
     @MainActor
     public func track(_ window: any Window, config: WindowConfig) {
         guard config.rememberState else { return }
+        // A backgrounded run is a test run, and its window geometry is the
+        // harness's, not the user's: a suite that resizes the window for a
+        // responsive check would otherwise persist that size into the app's
+        // remembered state, and the next launch by hand would open at 500×368
+        // because of a test the person had long since forgotten about
+        // (measured — it lands in `window-state.json` exactly like a resize by
+        // hand). A backgrounded run reads the remembered state; it doesn't
+        // write it.
+        //
+        // Deliberately *not* every driven run. A driven window that's on
+        // screen is still a real window at a plausible size, and a suite may
+        // legitimately be testing that `rememberState` works at all.
+        guard !DriverBackground.isRequested else { return }
         let key = config.stateKey
         // Seed size from the (already-restored) config so we don't rely on
         // reading the window's geometry before it's mapped — that yields

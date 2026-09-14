@@ -756,6 +756,19 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**A window moved to a negative coordinate used to kill the app.** `WM_MOVE`
+packs its coordinates as *signed* 16-bit words, and the handler read them
+unsigned out of an `Int32(lParam)` conversion that **trapped** for any value
+with the high bit set: a window moved to (-32000, -32000) packs to 0x8300_8300,
+which is past `Int32.max` as the `LPARAM` really is, and the app died in
+`Integers.swift: Not enough bits to represent the passed value` inside its own
+window procedure. Fixed in the same change as the driver's backgrounded mode,
+which is what found it — but the case that meets it in ordinary use is a
+**second monitor placed left of or above the primary one**, where window
+coordinates are negative. Before the fix, a window merely *reported* the wrong
+position there (-100 read back as 65436) and crashed outright once the packed
+value went negative.
+
 **HEIC decoding depends on a codec extension the machine may not have.** WebView2
 is Chromium, which has AVIF but no HEIC decoder, so an iPhone photo won't render
 in an `<img>`. The `image.*` plugin converts it using **WIC**, the platform

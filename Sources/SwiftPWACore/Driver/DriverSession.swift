@@ -123,6 +123,11 @@
                 "protocol": .number(Double(Self.protocolVersion)),
                 "backend": .string(backend),
                 "verbs": .array(verbs),
+                // Whether this app is actually running off screen. A backend
+                // that doesn't implement backgrounding ignores the env var in
+                // silence, so without this a harness asking for one would be
+                // told nothing while every launch kept stealing focus.
+                "background": .bool(DriverBackground.isActive),
                 "screenshot": probe.snapshot.map { JSONValue.bool($0) } ?? .null,
                 "input": probe.input.map(Self.describe) ?? .null,
                 "windows": .number(Double(probe.count))

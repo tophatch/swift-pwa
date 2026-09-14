@@ -86,11 +86,17 @@ ever changed.
 top-level document, `.subframe(origin:)` for content it embedded, `.unknown`
 where the backend can't tell.
 
-This matters because **`bridge.js` is injected into every frame**. An `<iframe>`
-in your page — an embedded map, a video, a widget — reaches every command you
-register, with the same arguments your own code would use. Replies go to the top
-frame, so an embedded frame can't *read* anything back, but the handler still
-runs: side effects are the exposure.
+**Embedded content can't reach your commands.** `bridge.js` is injected into the
+top frame only, so an `<iframe>` — an embedded map, a video, a widget — has no
+bridge object to call with. That is the defence, and it holds on every backend
+including the two that can't report a calling frame at all. Your own
+same-origin content still reaches the bridge through
+`window.parent.__SWIFT_PWA__`, which is the pattern to use from a frame.
+
+`ctx.frame` is then the *report* rather than the barrier: it tells a handler who
+called, for the backends that inject per-origin instead of per-frame (Android
+admits a same-origin frame), and it is what `external_urls.allow_any_scheme`
+narrows itself with.
 
 ```swift
 ctx.registry.register("notes.delete", typed: { (args: DeleteArgs, ctx) -> EmptyResult in

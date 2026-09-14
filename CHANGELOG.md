@@ -68,6 +68,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   can't tell" as "the app's own page". New
   `Scripts/verify-android-frame-identity.sh` drives it on a real device.
 
+- **Embedded content can no longer reach the app's commands: `bridge.js` is
+  injected into the top frame only** ([#204]). It went into *every* frame on
+  Apple (`forMainFrameOnly: false`) and Linux
+  (`WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES`), so a cross-origin `<iframe>` — an
+  ad, a map, a third-party widget — could invoke every command the app
+  registered, with the same arguments the app's own code would use. With no
+  opt-in plugin installed that already reaches `window.close`, `app.quit` and
+  **`events.emit`**, which forges the app's own internal bus in a way a
+  subscriber cannot distinguish from a real emit; with `FsPlugin`,
+  `ProcessPlugin` or `SecretsPlugin` installed it reaches file writes, process
+  spawning and secret storage. Replies never reach the frame, so this was
+  side effects rather than exfiltration — which is not much comfort when the
+  side effect is `fs.delete`.
+
+  **Scoping the injection rather than checking the caller, because only the
+  former works everywhere.** Both GTK backends genuinely cannot report which
+  frame sent a script message, so a check above the adapter could never have
+  stood in the way there; injection scope is enforced by the webview itself.
+  Nothing legitimate is lost: a *same-origin* frame is the same trust domain and
+  still reaches the bridge through `window.parent.__SWIFT_PWA__` — already the
+  documented pattern, already where the reply was delivered, and correctly
+  attributed to the parent — while a cross-origin frame cannot touch the
+  parent's object at all. **Migration:** an app whose own same-origin iframe
+  calls `__SWIFT_PWA__` directly changes that one reference to
+  `window.parent.__SWIFT_PWA__`.
+
+  `CommandContext.frame` is now the *report* rather than the barrier: it still
+  distinguishes a same-origin frame on Android, whose channel is scoped by
+  origin instead of by frame, and it is what `allow_any_scheme` narrows itself
+  with.
+
 ### Fixed
 
 - **Documented the limit of what `CommandContext.frame` can defend** ([#204]).

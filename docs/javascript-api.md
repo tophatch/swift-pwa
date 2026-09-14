@@ -83,12 +83,11 @@ Only the top frame takes part. `bridge.js` is injected into subframes too, and
 a subframe announcing its own epoch would read as a navigation and cancel the
 parent's subscriptions — so a subframe sends unstamped frames instead and keeps
 the behaviour it has always had here: its correlation ids share the window's id
-space, and replies are delivered to the top frame. Don't drive the bridge from
-an iframe — and on Windows you can't: WebView2 raises a frame's messages on an
-event of its own, so embedded content reaches no command there at all (it is
-told why, in the app's log). Have the top-level document call on the frame's
-behalf instead; that works everywhere, since the reply comes back to it either
-way.
+space, and replies are delivered to the top frame. You can't drive the bridge
+from an embedded frame anyway: `bridge.js` is injected into the top frame only,
+so an `<iframe>` has no `__SWIFT_PWA__` to call. Your own same-origin content
+reaches it through `window.parent.__SWIFT_PWA__`, which works on every backend
+and is where the reply arrives regardless.
 
 One limit: the teardown is triggered by the new document announcing itself, so
 a window navigated to content that runs no JavaScript at all (a PDF or an image

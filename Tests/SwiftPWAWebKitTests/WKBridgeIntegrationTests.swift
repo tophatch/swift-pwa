@@ -260,10 +260,13 @@
             #expect(wrong == "0", "a prefs payload was delivered to the denied handler \(wrong ?? "nil") times")
         }
 
-        /// `bridge.js` is injected into subframes as well as the main frame, so
-        /// a subframe minting its own epoch and announcing it would read as "the
-        /// window navigated" and cancel the *parent's* subscriptions. Only the
-        /// top frame takes part in the epoch protocol; this pins that down.
+        /// A subframe minting its own epoch and announcing it would read as "the
+        /// window navigated" and cancel the *parent's* subscriptions. Two things
+        /// stop that now and this pins both: `bridge.js` is injected into the
+        /// top frame only, so an embedded frame has no bridge to announce with,
+        /// and `BridgeRuntime` refuses a `hello` from a known subframe anyway
+        /// (covered in `BridgeNavigationTests`) for the backends that inject
+        /// per-origin rather than per-frame.
         @Test("an iframe loading does not tear down the parent document's streams")
         func subframeDoesNotCountAsANavigation() async throws {
             let app = MockAppContext()
@@ -302,7 +305,10 @@
             let inFrame = try await adapter.evaluateJavaScript(
                 "document.querySelector('iframe').contentWindow.__SWIFT_PWA__ ? 'yes' : 'no'"
             )
-            #expect(unwrapJSONString(inFrame ?? "") == "yes", "the subframe never got bridge.js")
+            #expect(
+                unwrapJSONString(inFrame ?? "") == "no",
+                "bridge.js reached a subframe: it is injected into the top frame only, so embedded content can't invoke"
+            )
 
             try app.events.emit("chan", ["n": "1"])
             try await Task.sleep(for: .milliseconds(300))
@@ -311,23 +317,17 @@
             #expect(count == "1", "the parent's subscription saw the emit \(count ?? "nil") times")
         }
 
-        /// The whole point of taking frame identity from `WKScriptMessage`
-        /// rather than from the page: an embedded frame runs the same
-        /// `bridge.js` and reaches the same handler, so nothing the *page* says
-        /// about itself can separate them. WebKit can.
+        /// Embedded content reaches no command at all: `bridge.js` is injected
+        /// into the top frame only, so an `<iframe>` has no bridge object to
+        /// call with. That is the defence — on two backends the calling frame
+        /// can't be reported at all, so a check above the adapter could never
+        /// have been the thing standing in the way.
         ///
         /// Asserted on the Swift side rather than by reading the iframe's
-        /// promise, because **a subframe's reply never reaches it**: `deliver`
-        /// evaluates into the main frame, so the correlation id belongs to a
-        /// bridge instance that never sees the answer. A subframe can therefore
-        /// *cause* a command to run but not read its result — which is exactly
-        /// why the reach worth scoping is side effects like `system.openURL`.
-        ///
-        /// A `srcdoc` iframe inherits its parent's origin, so this pins the
-        /// main/subframe split rather than a cross-origin one. That split is
-        /// what `ExternalURLPolicy` narrows the allowlist opt-out with.
-        @Test("a handler sees which frame called it")
-        func handlerSeesTheCallingFrame() async throws {
+        /// promise, because **a subframe's reply would never reach it** even if
+        /// it could call: `deliver` evaluates into the main frame.
+        @Test("embedded content reaches no command, and the page's own call is the main frame")
+        func embeddedContentCannotInvoke() async throws {
             let seen = FrameCollector()
             let app = MockAppContext()
             app.registry.register("whoami", typed: { (_: EmptyArgs, ctx) -> EmptyResult in
@@ -345,7 +345,9 @@
             bridge.start()
             defer { bridge.stop() }
 
-            let inner = "__SWIFT_PWA__.invoke('whoami');"
+            // The frame guards its own call, so a missing bridge can't be
+            // mistaken for a frame that never ran.
+            let inner = "if (window.__SWIFT_PWA__) { __SWIFT_PWA__.invoke('whoami'); }"
             let html = """
             <!doctype html><html><head><meta charset="utf-8"></head><body>
             <iframe srcdoc="<script>\(inner)</script>"></iframe>
@@ -355,14 +357,64 @@
             """
             adapter.webView.loadHTMLString(html, baseURL: nil)
             _ = try await waitForJSExpr(in: adapter, "window.__done")
-            // The subframe loads and runs its injected copy on its own schedule.
+            // The subframe loads on its own schedule; give it room to call if
+            // it can, or this passes for the wrong reason.
+            try await Task.sleep(for: .milliseconds(400))
+
+            #expect(
+                seen.all == ["main"],
+                "only the page's own call should reach a handler, but saw: \(seen.all)"
+            )
+        }
+
+        /// The limit of what frame identity can defend, measured rather than
+        /// reasoned about: a **same-origin** frame reaches its parent's realm,
+        /// and calling the parent's `__SWIFT_PWA__` posts from the parent's
+        /// frame — so the runtime sees the main frame, correctly, and the
+        /// scoping is bypassed in one line.
+        ///
+        /// That is inherent to the same-origin policy rather than a hole here:
+        /// a same-origin frame is the same trust domain and can already drive
+        /// the parent's DOM. What it means is that `ctx.frame` separates the
+        /// app's page from **cross-origin** embedded content, and must not be
+        /// used to sandbox same-origin content the app doesn't trust.
+        @Test("a same-origin frame can call through its parent and is seen as the main frame")
+        func sameOriginFrameCanCallThroughItsParent() async throws {
+            let seen = FrameCollector()
+            let app = MockAppContext()
+            app.registry.register("whoami", typed: { (_: EmptyArgs, ctx) -> EmptyResult in
+                seen.record(FrameIdentity.describe(ctx.frame))
+                return EmptyResult()
+            })
+
+            let adapter = try WKWebViewAdapter(configuration: WKWebViewConfiguration())
+            let win = MockWindow(webView: adapter)
+            app.attach(win)
+
+            let bridge = BridgeRuntime(
+                webView: adapter, registry: app.registry, windowID: win.id, app: app
+            )
+            bridge.start()
+            defer { bridge.stop() }
+
+            // `srcdoc` inherits the parent's origin, so `window.parent` is
+            // reachable. The call is made on the *parent's* bridge object.
+            let inner = "window.parent.__SWIFT_PWA__.invoke('whoami');"
+            let html = """
+            <!doctype html><html><head><meta charset="utf-8"></head><body>
+            <iframe srcdoc="<script>\(inner)</script>"></iframe>
+            <script>
+              window.__ready = 'yes';
+            </script></body></html>
+            """
+            adapter.webView.loadHTMLString(html, baseURL: nil)
+            _ = try await waitForJSExpr(in: adapter, "window.__ready")
             try await Task.sleep(for: .milliseconds(400))
 
             let frames = seen.all
-            #expect(frames.contains("main"), "the page's own call wasn't reported as the main frame: \(frames)")
             #expect(
-                frames.contains { $0.hasPrefix("subframe:") },
-                "the iframe's call wasn't distinguished from the page's: \(frames)"
+                frames == ["main"],
+                "a same-origin frame calling through its parent should be indistinguishable from the parent itself, but saw: \(frames)"
             )
         }
     }

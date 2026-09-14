@@ -5,6 +5,143 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Windows reports the calling frame, and stops embedded content reaching the
+  app's commands at all** ([#204]). `CommandContext.frame` is `.main` on
+  Windows now rather than `.unknown`, so the `external_urls.allow_any_scheme`
+  opt-out covers the app's own page there as it does on Apple.
+
+  **The measurement inverted the issue's assumption.** #204 expected the answer
+  to come from `ICoreWebView2WebMessageReceivedEventArgs::get_Source` and
+  expected it to be imprecise, since a same-origin iframe reports a URI
+  indistinguishable from its parent's. Measured on a real box, WebView2 doesn't
+  route embedded frames through that event *at all*: their `postMessage` is
+  raised on the frame's own `ICoreWebView2Frame2::WebMessageReceived`, which
+  nothing was subscribed to — so on Windows an embedded frame had never been
+  able to reach the bridge, and the top-level event only ever fires for the
+  window's own document. Which event fired is therefore the whole answer, and a
+  structural one: verified against an iframe loaded from *its parent's own
+  URL*, the case no comparison of URIs can decide.
+
+  **That silence is what changed.** WebView2 drops a message from a frame
+  nobody subscribed to without a word anywhere, so an app whose own iframe
+  called `invoke` saw it work on the other four backends and do nothing here,
+  with no way to find out why. The frames are subscribed now purely so the
+  refusal can be *explained*: one diagnostic naming the frame's document, the
+  command it tried, and the way round it (have the top-level document call on
+  the frame's behalf). Embedded content still reaches nothing — this is the
+  safest of the five backends and stays that way — but it now says so.
+  `FrameCreated` on the webview reports only first-level frames (measured: a
+  grandchild whose document had loaded and run was never announced), so each
+  frame's own `ICoreWebView2Frame7::FrameCreated` is subscribed too and the
+  refusal reaches every nesting depth.
+
+  New `Scripts/verify-windows-frame-identity.ps1` drives all of it on a real
+  box, checking the app's *diagnostics* as well as its commands — a refusal
+  nobody is told about is the failure this guards, and absence alone can't tell
+  it from a frame that never loaded.
+
+- **Android reports the calling frame too, and a cross-origin frame no longer
+  reaches the bridge behind `bridge.js`'s back** ([#204]). The inbound channel
+  moves from `addJavascriptInterface`, which reports nothing about the caller,
+  to `WebViewCompat.addWebMessageListener`, which carries `isMainFrame` and the
+  sending document's origin. `bridge.js` needed no change: the object that API
+  injects has the same `postMessage(String)` shape it already calls.
+
+  The channel also takes **origin rules**, where `addJavascriptInterface`
+  injects into every frame regardless of origin. `bridge.js` was already scoped
+  to the app's origin by `addDocumentStartJavaScript`, but `__SwiftPWA__post`
+  was not — so a cross-origin iframe could reach it directly and post a raw
+  envelope without `bridge.js` ever running in that frame. Both are scoped to
+  the same origin now.
+
+  Unlike Windows, embedded frames still *reach* the bridge on Android and are
+  reported rather than refused: they always could, and narrowing that is the
+  app's call through `ctx.frame` (or a decision to make across all five at
+  once, which this isn't). The `addJavascriptInterface` path stays as a
+  fallback for a System WebView with no `WEB_MESSAGE_LISTENER` — reporting
+  `.unknown`, which the JNI ABI carries as a genuine third state rather than
+  defaulting to "main", since an app narrowing a permission must not read "I
+  can't tell" as "the app's own page". New
+  `Scripts/verify-android-frame-identity.sh` drives it on a real device.
+
+- **Embedded content can no longer reach the app's commands: `bridge.js` is
+  injected into the top frame only** ([#204]). It went into *every* frame on
+  Apple (`forMainFrameOnly: false`) and Linux
+  (`WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES`), so a cross-origin `<iframe>` — an
+  ad, a map, a third-party widget — could invoke every command the app
+  registered, with the same arguments the app's own code would use. With no
+  opt-in plugin installed that already reaches `window.close`, `app.quit` and
+  **`events.emit`**, which forges the app's own internal bus in a way a
+  subscriber cannot distinguish from a real emit; with `FsPlugin`,
+  `ProcessPlugin` or `SecretsPlugin` installed it reaches file writes, process
+  spawning and secret storage. Replies never reach the frame, so this was
+  side effects rather than exfiltration — which is not much comfort when the
+  side effect is `fs.delete`.
+
+  **Scoping the injection rather than checking the caller, because only the
+  former works everywhere.** Both GTK backends genuinely cannot report which
+  frame sent a script message, so a check above the adapter could never have
+  stood in the way there; injection scope is enforced by the webview itself.
+  Nothing legitimate is lost: a *same-origin* frame is the same trust domain and
+  still reaches the bridge through `window.parent.__SWIFT_PWA__` — already the
+  documented pattern, already where the reply was delivered, and correctly
+  attributed to the parent — while a cross-origin frame cannot touch the
+  parent's object at all. **Migration:** an app whose own same-origin iframe
+  calls `__SWIFT_PWA__` directly changes that one reference to
+  `window.parent.__SWIFT_PWA__`.
+
+  `CommandContext.frame` is now the *report* rather than the barrier: it still
+  distinguishes a same-origin frame on Android, whose channel is scoped by
+  origin instead of by frame, and it is what `allow_any_scheme` narrows itself
+  with.
+
+### Fixed
+
+- **Documented the limit of what `CommandContext.frame` can defend** ([#204]).
+  A **same-origin** frame can call the parent's bridge object
+  (`window.parent.__SWIFT_PWA__.invoke(...)`), which posts from the parent's
+  frame — so the runtime sees `.main`, correctly, and the scoping is bypassed in
+  one line. Measured against a real `WKWebView`, not reasoned about. It is
+  inherent to the same-origin policy rather than a hole (such a frame can
+  already drive the parent's DOM), but it decides what the feature is *for*:
+  `ctx.frame` separates the app's page from **cross-origin** embedded content,
+  and must not be used to sandbox same-origin content the app doesn't trust —
+  give that its own origin first. Now stated in `docs/swift-api.md` and pinned
+  by a test, because the wrong reading of this is the one that would ship a
+  vulnerability while looking careful.
+
+- **`allowAnyScheme`'s own documentation still described the world before frame
+  identity existed** ([#204], reported by the adopter from [#203]). The property
+  said the runtime "cannot currently tell a subframe's invoke from the main
+  frame's, on any backend", twenty lines above the code that refuses
+  `.subframe` — and it reversed the real advice on the platforms where the
+  scoping already worked. It was wrong the moment #206 landed, and this release
+  would have made it wrong twice over.
+
+  Fixed as suggested: the per-backend picture lives in **one** table (in
+  `docs/javascript-api.md`) and the property points at it instead of restating
+  it, so wiring the next backend can't silently invalidate a second copy. The
+  half that doesn't change with the backend — that the flag is for apps which
+  don't host other people's content, and that it softens nothing else — stays
+  inline where it is read. The same duplicate-restatement was removed from
+  `docs/linux-setup.md`, which named Apple as the only backend that could report
+  a frame.
+
+- **An embedded frame could cancel the app's in-flight work** ([#204]). `hello`
+  is the frame that hands a window to a new document, and taking it tears down
+  everything the previous one subscribed. `bridge.js` sends it only from the
+  top frame — but that test is `window.top === window`, evaluated *inside* the
+  frame making the claim, so an embedded frame posting a forged envelope could
+  cancel every open subscription in the window. `BridgeRuntime` now refuses a
+  `hello` from a known subframe, which is the first thing `CommandContext.frame`
+  is used for beyond a policy input. Backends that can't report the frame are
+  unaffected: `.unknown` still adopts, or they would never adopt a document at
+  all.
+
 ## [0.10.6] - 2026-09-13
 
 ### Added

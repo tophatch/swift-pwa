@@ -177,14 +177,19 @@ void swiftpwa_android_set_inbound_handler(swiftpwa_android_inbound_fn handler,
     g_inbound_user = user;
 }
 
-void swiftpwa_android_dispatch_inbound(const char *json_utf8) {
+void swiftpwa_android_dispatch_inbound(const char *json_utf8,
+                                       const char *source_origin_utf8,
+                                       int is_main_frame) {
     if (g_inbound_fn) {
-        g_inbound_fn(json_utf8, g_inbound_user);
+        g_inbound_fn(json_utf8, source_origin_utf8, is_main_frame, g_inbound_user);
     }
 }
 
 // JNI entry: Kotlin's `SwiftPWABridge.nativeIngest(String json)` lands
 // here. Class name + method name are pinned by Java's name-mangling.
+//
+// The fallback channel (`addJavascriptInterface`), which reports nothing
+// about the calling frame.
 JNIEXPORT void JNICALL
 Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeIngest(JNIEnv *env,
                                                        jobject self,
@@ -193,7 +198,33 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeIngest(JNIEnv *env,
     if (!json) return;
     const char *utf = (*env)->GetStringUTFChars(env, json, NULL);
     if (!utf) return;
-    swiftpwa_android_dispatch_inbound(utf);
+    swiftpwa_android_dispatch_inbound(utf, NULL, SWIFTPWA_FRAME_UNKNOWN);
+    (*env)->ReleaseStringUTFChars(env, json, utf);
+}
+
+// JNI entry: Kotlin's
+// `SwiftPWABridge.nativeIngestFromFrame(String json, String origin, boolean isMain)`.
+// The `WebViewCompat.addWebMessageListener` channel, which does say which
+// frame called.
+JNIEXPORT void JNICALL
+Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeIngestFromFrame(JNIEnv *env,
+                                                                jobject self,
+                                                                jstring json,
+                                                                jstring source_origin,
+                                                                jboolean is_main_frame) {
+    (void)self;
+    if (!json) return;
+    const char *utf = (*env)->GetStringUTFChars(env, json, NULL);
+    if (!utf) return;
+    const char *origin = NULL;
+    if (source_origin) {
+        origin = (*env)->GetStringUTFChars(env, source_origin, NULL);
+    }
+    swiftpwa_android_dispatch_inbound(
+        utf, origin, is_main_frame ? SWIFTPWA_FRAME_MAIN : SWIFTPWA_FRAME_SUBFRAME);
+    if (origin) {
+        (*env)->ReleaseStringUTFChars(env, source_origin, origin);
+    }
     (*env)->ReleaseStringUTFChars(env, json, utf);
 }
 
@@ -715,7 +746,7 @@ void swiftpwa_android_log(const char *m) { (void)m; }
 void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn h, void *u) { (void)h; (void)u; }
 int  swiftpwa_android_dispatch_navigation(const char *u, int m) { (void)u; (void)m; return 0; }
 void swiftpwa_android_set_inbound_handler(swiftpwa_android_inbound_fn h, void *u) { (void)h; (void)u; }
-void swiftpwa_android_dispatch_inbound(const char *j) { (void)j; }
+void swiftpwa_android_dispatch_inbound(const char *j, const char *o, int m) { (void)j; (void)o; (void)m; }
 void swiftpwa_android_attach_bridge(void *b) { (void)b; }
 void swiftpwa_android_detach_bridge(void) {}
 int  swiftpwa_android_bridge_is_attached(void) { return 0; }

@@ -43,12 +43,27 @@ typedef void (*swiftpwa_w2_env_ready_cb)(
 typedef void (*swiftpwa_w2_controller_ready_cb)(
     swiftpwa_w2_controller *ctrl, swiftpwa_w2_hresult hr, void *user);
 
-// `web_message_received` fires whenever the page calls
+// `web_message_received` fires whenever a document calls
 // `window.chrome.webview.postMessage(string)`. The string is UTF-8
 // encoded JSON (we instruct bridge.js to call `postMessage` with the
-// already-stringified envelope). The pointer is valid only for the
-// duration of the callback — copy it if needed.
-typedef void (*swiftpwa_w2_message_cb)(const char *utf8_json, void *user);
+// already-stringified envelope). Both pointers are valid only for the
+// duration of the callback — copy what is needed.
+//
+// `is_main_frame` is 1 when the message came from the WebView's own
+// top-level document and 0 when it came from a frame that document
+// embeds. WebView2 routes the two to *different* events — the
+// top-level `ICoreWebView2::WebMessageReceived` and a per-frame
+// `ICoreWebView2Frame2::WebMessageReceived` reached through
+// `FrameCreated` — so the distinction is structural rather than a
+// comparison of URIs, which could not separate a same-origin iframe
+// loaded from the same URL as its parent.
+//
+// `utf8_source` is the sending document's URI (WebView2's
+// `get_Source`), or NULL if it could not be read. It is the frame's
+// *document* URI, so an `about:srcdoc` or `about:blank` frame reports
+// that rather than an origin.
+typedef void (*swiftpwa_w2_message_cb)(
+    const char *utf8_json, const char *utf8_source, int is_main_frame, void *user);
 
 // Decides one WebView2 permission request. `kind` is WebView2's own
 // COREWEBVIEW2_PERMISSION_KIND. Return 1 to let the request proceed to

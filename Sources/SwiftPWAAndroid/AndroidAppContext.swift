@@ -222,14 +222,21 @@
             runSemaphore.signal()
         }
 
-        /// Inbound JSON frame — JNI hands us the string after the
-        /// `addJavascriptInterface` callback fires on a binder
-        /// thread. Forward to the active window's adapter without
-        /// hopping to MainActor: `AsyncStream.Continuation.yield`
-        /// is documented thread-safe, and the `activeWindow`
-        /// reference is stable after `configure` returns.
-        nonisolated func routeInbound(jsonString: String) {
-            activeWindow?.adapter._ingest(jsonString: jsonString)
+        /// Inbound JSON frame — JNI hands us the string once the Kotlin
+        /// bridge's message channel fires. Forward to the active window's
+        /// adapter without hopping to MainActor: `AsyncStream.Continuation.yield`
+        /// is documented thread-safe, and the `activeWindow` reference is
+        /// stable after `configure` returns.
+        ///
+        /// The thread differs by channel — `addWebMessageListener` calls on
+        /// the UI thread, the `addJavascriptInterface` fallback on a binder
+        /// thread — which is exactly why this doesn't assume either.
+        nonisolated func routeInbound(jsonString: String, sourceOrigin: String?, frameKind: Int32) {
+            activeWindow?.adapter._ingest(
+                jsonString: jsonString,
+                sourceOrigin: sourceOrigin,
+                frameKind: frameKind
+            )
         }
     }
 #endif

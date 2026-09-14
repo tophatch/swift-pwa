@@ -116,11 +116,18 @@ public final class ExternalURLPolicy: @unchecked Sendable {
     /// app can serve.
     ///
     /// **What it costs.** The allowlist exists because `bridge.js` is injected
-    /// into subframes too, so a third-party `<iframe>` can invoke commands —
-    /// and the runtime cannot currently tell a subframe's invoke from the main
-    /// frame's, on any backend. So this really does mean *any scheme, from any
-    /// frame*: turn it on for an app that doesn't host other people's content,
-    /// and leave it off for one that does.
+    /// into subframes too, so an `<iframe>` of embedded content reaches the
+    /// same commands as the app's own code. Where the backend can report which
+    /// frame called, this flag covers the app's own page and an embedded frame
+    /// keeps the declared allowlist; where it can't, the flag keeps its broader
+    /// meaning rather than silently doing nothing. Which backends do which is a
+    /// table in `docs/javascript-api.md` under `external_urls.allow_any_scheme`
+    /// — deliberately not repeated here, because a copy of it goes stale the
+    /// next time a backend is wired, and this is the text read at the point of
+    /// use.
+    ///
+    /// The part that doesn't change with the backend: this is for an app that
+    /// doesn't host other people's content. Leave it off for one that does.
     public var allowAnyScheme: Bool {
         get {
             lock.lock()

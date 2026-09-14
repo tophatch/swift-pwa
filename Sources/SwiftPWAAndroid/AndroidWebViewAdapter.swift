@@ -107,20 +107,38 @@
             swiftpwa_android_open_devtools()
         }
 
+        /// The calling frame, as the Kotlin bridge's message channel reported
+        /// it.
+        ///
+        /// `WebViewCompat.addWebMessageListener` carries `isMainFrame` and the
+        /// sending document's origin. The `addJavascriptInterface` fallback,
+        /// used where the System WebView is too old for that API, carries
+        /// neither — which is `.unknown`, an answer rather than a stub: an app
+        /// narrowing a permission on this must not have "I can't tell" read as
+        /// "the main frame".
+        private static func callerFrame(_ sourceOrigin: String?, _ frameKind: Int32) -> CallerFrame {
+            switch frameKind {
+            case SWIFTPWA_FRAME_MAIN: return .main
+            case SWIFTPWA_FRAME_SUBFRAME:
+                guard let sourceOrigin, let url = URL(string: sourceOrigin) else {
+                    return .subframe(origin: nil)
+                }
+                return .subframe(origin: WebOrigin(url))
+            default: return .unknown
+            }
+        }
+
         /// Called from the JNI inbound trampoline (via
-        /// `AndroidAppContext.routeInbound`) on a binder thread. The
-        /// underlying `AsyncStream.Continuation` is documented thread-safe.
-        func _ingest(jsonString: String) {
+        /// `AndroidAppContext.routeInbound`). The underlying
+        /// `AsyncStream.Continuation` is documented thread-safe, which matters
+        /// here because the two channels call on different threads.
+        func _ingest(jsonString: String, sourceOrigin: String?, frameKind: Int32) {
             guard let data = jsonString.data(using: .utf8) else { return }
             do {
                 let frame = try Envelope.decode(data)
-                // `.unknown` for now: the inbound channel is
-                // `addJavascriptInterface`, which reports nothing about the
-                // calling frame. `WebViewCompat.addWebMessageListener` does
-                // (`isMainFrame` + `sourceOrigin`) and androidx.webkit is
-                // already a dependency — swapping the channel is its own
-                // change (#204).
-                continuation?.yield(InboundMessage(frame: frame))
+                continuation?.yield(
+                    InboundMessage(frame: frame, callerFrame: Self.callerFrame(sourceOrigin, frameKind))
+                )
             } catch {
                 #if DEBUG
                     print("swift-pwa: dropping malformed inbound frame: \(error)")

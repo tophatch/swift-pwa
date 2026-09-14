@@ -83,8 +83,11 @@ Only the top frame takes part. `bridge.js` is injected into subframes too, and
 a subframe announcing its own epoch would read as a navigation and cancel the
 parent's subscriptions — so a subframe sends unstamped frames instead and keeps
 the behaviour it has always had here: its correlation ids share the window's id
-space, and replies are delivered to the top frame. Don't drive the bridge from
-an iframe.
+space, and replies are delivered to the top frame. You can't drive the bridge
+from an embedded frame anyway: `bridge.js` is injected into the top frame only,
+so an `<iframe>` has no `__SWIFT_PWA__` to call. Your own same-origin content
+reaches it through `window.parent.__SWIFT_PWA__`, which works on every backend
+and is where the reply arrives regardless.
 
 One limit: the teardown is triggered by the new document announcing itself, so
 a window navigated to content that runs no JavaScript at all (a PDF or an image
@@ -468,8 +471,9 @@ trusted to describe itself either.
 | Backend | Reports the calling frame | So `allow_any_scheme` is |
 |---|---|---|
 | macOS, iOS | Yes — `WKScriptMessage.frameInfo` | scoped to the app's own page |
+| Android | Yes — `WebViewCompat.addWebMessageListener`; `.unknown` on a System WebView older than ~85 | scoped to the app's own page, or any frame on that fallback |
+| Windows | Not needed — embedded content can't reach the bridge at all there | scoped to the app's own page |
 | Linux GTK3, GTK4 | **No** — the UI process isn't told (`WebKitFrame` is web-process-extension only) | any frame |
-| Windows, Android | Not yet wired | any frame |
 
 Where it isn't reported, the flag keeps its broader meaning rather than silently
 doing nothing — an app that set it would otherwise find its links working on some

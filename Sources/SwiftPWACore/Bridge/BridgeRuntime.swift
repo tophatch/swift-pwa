@@ -143,6 +143,16 @@ public final class BridgeRuntime: @unchecked Sendable {
 
     private func handle(_ frame: InboundFrame, from callerFrame: CallerFrame) async {
         if case let .hello(epoch) = frame {
+            // Only the window's own document may claim the window. `hello`
+            // cancels everything the previous document subscribed, so a frame
+            // that could send one could cancel the app's own in-flight work by
+            // posting a forged envelope. `bridge.js` already sends it only from
+            // the top frame, but that test (`window.top === window`) runs
+            // inside the frame making the claim — which is exactly the kind of
+            // self-report `CallerFrame` exists to replace. `.unknown` is
+            // accepted because a backend that can't tell would otherwise never
+            // adopt a document at all.
+            if case .subframe = callerFrame { return }
             adoptDocument(epoch)
             return
         }

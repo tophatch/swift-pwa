@@ -57,9 +57,17 @@
             userContent = ucm
             let bridgeSource = try BridgeScript.source()
             bridgeSource.withCString { src in
+                // Top frame only. Injected into every frame, `bridge.js` let a
+                // cross-origin `<iframe>` of embedded content reach every command
+                // the app registered — and this backend cannot report which frame
+                // called, so nothing above the adapter could have refused it.
+                // Scoping the injection is the whole defence here. A same-origin
+                // frame still reaches the bridge through
+                // `window.parent.__SWIFT_PWA__`, which is the documented pattern;
+                // a cross-origin one cannot touch the parent's object at all.
                 if let script = webkit_user_script_new(
                     src,
-                    WEBKIT_USER_CONTENT_INJECT_ALL_FRAMES,
+                    WEBKIT_USER_CONTENT_INJECT_TOP_FRAME,
                     WEBKIT_USER_SCRIPT_INJECT_AT_DOCUMENT_START,
                     nil,
                     nil

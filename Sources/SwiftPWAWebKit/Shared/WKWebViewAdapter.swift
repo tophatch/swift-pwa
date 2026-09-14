@@ -44,12 +44,21 @@
             // play is rejected and stays silent). Empty set = no media type
             // requires a gesture.
             cfg.mediaTypesRequiringUserActionForPlayback = []
-            // Inject bridge.js at document start.
+            // Inject bridge.js at document start, into the top frame only.
+            //
+            // It used to go into every frame, which meant a cross-origin
+            // `<iframe>` of embedded content — an ad, a map, a widget — reached
+            // every command the app registered, with the same arguments the
+            // app's own code would use. Nothing legitimate needs that: a
+            // *same-origin* frame is the same trust domain and can still call
+            // through `window.parent.__SWIFT_PWA__` (the documented pattern,
+            // and correctly attributed to the parent), while a cross-origin
+            // frame cannot reach the parent's object at all.
             let bridge = try BridgeScript.source()
             let userScript = WKUserScript(
                 source: bridge,
                 injectionTime: .atDocumentStart,
-                forMainFrameOnly: false
+                forMainFrameOnly: true
             )
             cfg.userContentController.addUserScript(userScript)
             #if os(macOS) && SWIFT_PWA_DRIVER

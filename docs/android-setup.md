@@ -1076,6 +1076,18 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   the latter, `getUserMedia` fails `NotReadableError` ("Could not start
   audio source") *after* the user grants the permission.
 
+- **`ctx.frame` falls back to `.unknown` on a very old System WebView.** The
+  inbound bridge channel is `WebViewCompat.addWebMessageListener`, which reports
+  which frame called (`isMainFrame` plus the sending document's origin) and is
+  scoped to the app's own origin, so a cross-origin iframe never receives the
+  bridge object at all. Where `WebViewFeature.WEB_MESSAGE_LISTENER` is missing
+  (WebView older than ~85) the runtime falls back to `addJavascriptInterface`,
+  which reports nothing about the caller — `ctx.frame` is then `.unknown` there,
+  and a guard that narrows a permission on it must treat that as "I can't tell"
+  rather than "the app's own page". The fallback logs one line under the
+  `swift-pwa` tag at startup. See
+  [docs/swift-api.md](swift-api.md#which-frame-is-calling).
+
 - **`dialog.openDirectory` multi-select is desktop-only.** The
   cross-platform `multiple` flag (added in 0.7.7) is honored on macOS /
   Windows / GTK / iOS, but Android's `ACTION_OPEN_DOCUMENT_TREE` grants

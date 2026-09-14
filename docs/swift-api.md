@@ -86,11 +86,17 @@ ever changed.
 top-level document, `.subframe(origin:)` for content it embedded, `.unknown`
 where the backend can't tell.
 
-This matters because **`bridge.js` is injected into every frame**. An `<iframe>`
-in your page — an embedded map, a video, a widget — reaches every command you
-register, with the same arguments your own code would use. Replies go to the top
-frame, so an embedded frame can't *read* anything back, but the handler still
-runs: side effects are the exposure.
+**Embedded content can't reach your commands.** `bridge.js` is injected into the
+top frame only, so an `<iframe>` — an embedded map, a video, a widget — has no
+bridge object to call with. That is the defence, and it holds on every backend
+including the two that can't report a calling frame at all. Your own
+same-origin content still reaches the bridge through
+`window.parent.__SWIFT_PWA__`, which is the pattern to use from a frame.
+
+`ctx.frame` is then the *report* rather than the barrier: it tells a handler who
+called, for the backends that inject per-origin instead of per-frame (Android
+admits a same-origin frame), and it is what `external_urls.allow_any_scheme`
+narrows itself with.
 
 ```swift
 ctx.registry.register("notes.delete", typed: { (args: DeleteArgs, ctx) -> EmptyResult in
@@ -106,6 +112,39 @@ Take it from `ctx.frame` and never from the page: `bridge.js` runs *inside* the
 frame in question, so anything it reports about itself — `window.top === window`,
 `location.origin` — is written by whoever wrote that frame's content, and content
 you don't trust with a capability can't be trusted to describe itself either.
+
+What each backend can tell you differs, and the differences are measured rather
+than assumed:
+
+| Backend | `ctx.frame` |
+| --- | --- |
+| macOS / iOS | `.main` or `.subframe(origin:)`, from `WKScriptMessage.frameInfo` |
+| Windows | Always `.main` — **embedded frames don't reach your commands at all** |
+| Android | `.main` or `.subframe(origin:)`, from `WebViewCompat.addWebMessageListener` — `.unknown` on a System WebView too old for it |
+| Linux (GTK3 / GTK4) | Always `.unknown` — the WebKitGTK UI process isn't told |
+
+**Windows refuses embedded content outright.** WebView2 raises a frame's
+`postMessage` on that frame's own event rather than the window's, so a call
+from an `<iframe>` never reaches the bridge there — which makes `.main` always
+true, and makes Windows the strictest of the five. It is *reported* rather than
+dropped in silence: each refused call logs one line naming the frame's document
+and the command it tried. If an iframe of yours needs a command, have the
+top-level document call on its behalf (`window.postMessage` up, `invoke` from
+there) — which is the only pattern that works everywhere anyway, because a
+frame's reply is delivered to the top frame on every backend.
+
+**It separates cross-origin content, not untrusted content.** A **same-origin**
+frame can reach its parent's realm and call the parent's bridge object —
+`window.parent.__SWIFT_PWA__.invoke(...)` — which posts from the parent's frame,
+so the runtime correctly sees `.main` and the check is bypassed in one line.
+That is inherent to the same-origin policy rather than a gap here: a same-origin
+frame is already the same trust domain and can drive the parent's DOM directly.
+The consequence is what matters — **do not use `ctx.frame` to sandbox
+same-origin content you don't trust**, such as user-authored HTML rendered into
+an iframe on your own origin. Give that content its own origin (a different
+host, or a `sandbox` attribute without `allow-same-origin`) and then `ctx.frame`
+separates it. Verified against a real `WKWebView` in
+`WKBridgeIntegrationTests`.
 
 **`.unknown` is a real answer on some platforms**, not a "not implemented yet":
 both GTK backends can't report it (the WebKitGTK UI process isn't told which

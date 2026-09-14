@@ -472,8 +472,9 @@ trusted to describe itself either.
 | Backend | Reports the calling frame | So `allow_any_scheme` is |
 |---|---|---|
 | macOS, iOS | Yes — `WKScriptMessage.frameInfo` | scoped to the app's own page |
+| Android | Yes — `WebViewCompat.addWebMessageListener`; `.unknown` on a System WebView older than ~85 | scoped to the app's own page, or any frame on that fallback |
+| Windows | Not needed — embedded content can't reach the bridge at all there | scoped to the app's own page |
 | Linux GTK3, GTK4 | **No** — the UI process isn't told (`WebKitFrame` is web-process-extension only) | any frame |
-| Windows, Android | Not yet wired | any frame |
 
 Where it isn't reported, the flag keeps its broader meaning rather than silently
 doing nothing — an app that set it would otherwise find its links working on some

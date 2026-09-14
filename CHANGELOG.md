@@ -70,6 +70,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`allowAnyScheme`'s own documentation still described the world before frame
+  identity existed** ([#204], reported by the adopter from [#203]). The property
+  said the runtime "cannot currently tell a subframe's invoke from the main
+  frame's, on any backend", twenty lines above the code that refuses
+  `.subframe` — and it reversed the real advice on the platforms where the
+  scoping already worked. It was wrong the moment #206 landed, and this release
+  would have made it wrong twice over.
+
+  Fixed as suggested: the per-backend picture lives in **one** table (in
+  `docs/javascript-api.md`) and the property points at it instead of restating
+  it, so wiring the next backend can't silently invalidate a second copy. The
+  half that doesn't change with the backend — that the flag is for apps which
+  don't host other people's content, and that it softens nothing else — stays
+  inline where it is read. The same duplicate-restatement was removed from
+  `docs/linux-setup.md`, which named Apple as the only backend that could report
+  a frame.
+
 - **An embedded frame could cancel the app's in-flight work** ([#204]). `hello`
   is the frame that hands a window to a new document, and taking it tears down
   everything the previous one subscribed. `bridge.js` sends it only from the

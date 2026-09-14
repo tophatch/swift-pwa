@@ -72,11 +72,26 @@
             )
             gtk_window_set_resizable(windowPtr, config.resizable ? gboolean(1) : gboolean(0))
 
-            // A remembered / explicit initial position. GTK3 (X11) honours
-            // `gtk_window_move` before the window is mapped; on Wayland the
-            // compositor may ignore it. Seed `lastPosition` so the resulting
+            // Where the window opens. GTK3 (X11) honours `gtk_window_move`
+            // before the window is mapped; on Wayland the compositor may
+            // ignore it. Seed `lastPosition` either way, so the resulting
             // configure-event doesn't read as a spurious user move.
-            if let origin = config.origin {
+            if DriverBackground.isRequested {
+                // A backgrounded driven run: park the window off screen so a
+                // suite doesn't take over the machine, and don't take the
+                // focus when it maps.
+                //
+                // Off screen rather than hidden, because the two are not the
+                // same to WebKitGTK — measured on GTK3 under a real window
+                // manager: parked at (-32000, -32000) the page still runs at
+                // 83 fps and reports `visible`, while an **iconified** window
+                // drops to 0 fps and `hidden`. X11 only, which is the same
+                // limit the GTK backends' synthetic input already has.
+                gtk_window_set_focus_on_map(windowPtr, gboolean(0))
+                gtk_window_move(windowPtr, gint(DriverBackground.parkedOrigin.x), gint(DriverBackground.parkedOrigin.y))
+                lastPosition = DriverBackground.parkedOrigin
+            } else if let origin = config.origin {
+                // A remembered (`rememberState`) or explicit initial position.
                 gtk_window_move(windowPtr, gint(origin.x), gint(origin.y))
                 lastPosition = origin
             }
@@ -113,7 +128,33 @@
 
             if config.fullscreen { gtk_window_fullscreen(windowPtr) }
             fullscreenOn = config.fullscreen
-            if config.visibleOnLaunch { gtk_widget_show_all(win) }
+            if config.visibleOnLaunch {
+                gtk_widget_show_all(win)
+                // Park it again after mapping. A window manager places a
+                // window as it sees fit when it maps, and xfwm4 put a
+                // backgrounded one back at (0, 0) despite the move above —
+                // measured. The pre-map move stays because a WM that honours
+                // it avoids the window ever appearing at all; this one is what
+                // guarantees the park.
+                if DriverBackground.isRequested {
+                    gtk_window_move(
+                        windowPtr,
+                        gint(DriverBackground.parkedOrigin.x),
+                        gint(DriverBackground.parkedOrigin.y)
+                    )
+                    // A window manager clamps how far off screen a window may
+                    // go — xfwm4 stopped ours at (-1005, -773) rather than the
+                    // (-32000, -32000) asked for — so on a different screen
+                    // geometry a sliver could remain. Below everything else, it
+                    // is behind whatever the person is actually looking at.
+                    gtk_window_set_keep_below(windowPtr, gboolean(1))
+                    // Out of the taskbar and the window switcher too — the
+                    // GTK counterpart of macOS's `.accessory` policy and
+                    // Windows' `WS_EX_TOOLWINDOW`.
+                    gtk_window_set_skip_taskbar_hint(windowPtr, gboolean(1))
+                    gtk_window_set_skip_pager_hint(windowPtr, gboolean(1))
+                }
+            }
 
             // Only a pair can change with the desktop's appearance; one
             // colour never needs repainting.
@@ -283,6 +324,14 @@
         }
 
         public func focus() {
+            // A backgrounded run doesn't raise: the window is already mapped
+            // and rendering off screen, which is what a page polling
+            // `window.focus` until `!document.hidden` actually wants.
+            // `gtk_window_present` would put it back in front of the user.
+            guard !DriverBackground.isRequested else {
+                emit(.didFocus)
+                return
+            }
             gtk_window_present(window)
             emit(.didFocus)
         }

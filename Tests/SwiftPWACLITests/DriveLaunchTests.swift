@@ -78,6 +78,30 @@ struct DriveLaunchTests {
         #expect(!host.options.runsOnDevice)
         #expect(!host.options.runsOnSimulator)
     }
+
+    /// `--background` is a property of a *launch*, and the two ways to ask for
+    /// something it can't do are refused rather than accepted and ignored.
+    ///
+    /// iOS is the interesting one: a backgrounded app there is a *suspended*
+    /// app, and a verb sent to a suspended app doesn't fail — it queues in the
+    /// listen backlog and answers when the app comes forward. Accepting the
+    /// flag would turn that into a run that looks like a hang.
+    @Test("--background is refused where it can't work", .enabled(if: isMacOS))
+    func backgroundIsRefusedWhereItCannotWork() throws {
+        #expect(try DriveInfo.parse(["--background"]).options.background)
+        #expect(throws: (any Error).self) { try DriveInfo.parse(["--background", "--simulator"]) }
+        #expect(throws: (any Error).self) { try DriveInfo.parse(["--background", "--target", "ios"]) }
+        // An app that's already running was launched with (or without) the
+        // environment variable; the flag can't reach back and change that.
+        #expect(throws: (any Error).self) {
+            try DriveInfo.parse(["--background", "--attach", "51234", "--token", "deadbeef"])
+        }
+    }
+
+    @Test("a normal run asks for nothing")
+    func backgroundIsOffByDefault() throws {
+        #expect(try !(DriveInfo.parse([]).options.background))
+    }
 }
 
 #if os(macOS)

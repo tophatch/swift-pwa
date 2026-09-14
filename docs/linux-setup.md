@@ -549,6 +549,32 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**GTK4 can't run the driver's backgrounded mode.** `swift-pwa drive
+--background` (see [docs/app-driver.md](app-driver.md#running-a-suite-without-losing-the-machine----background))
+parks the app's window off screen so a test suite doesn't take over the machine.
+**GTK3 does it**: `focus-on-map` off, moved off screen, kept below, out of the
+taskbar and pager — measured under a real window manager at 122 fps with
+`document.visibilityState === "visible"` and the active window unchanged.
+**GTK4 can't**, because it dropped window positioning outright (the same reason
+`Window.setPosition` is a no-op there), and hiding the window instead is not a
+substitute: WebKitGTK stops servicing `requestAnimationFrame` for an *iconified*
+window — measured at 0 fps and `hidden`, against 83 fps for the same window
+parked at (-32000, -32000). A GTK4 app tells you so on stderr and reports
+`background: false` from `drive info`.
+
+The way to get an invisible run on GTK4 is a nested display, which also keeps
+the page rendering (measured: 84 fps under Xvfb):
+
+```bash
+xvfb-run -a swift-pwa drive shot out.png
+```
+
+One caveat on GTK3: how far off screen a window may actually go is the window
+manager's decision — xfwm4 clamped (-32000, -32000) to (-1005, -773), which was
+still entirely off a 1600×1200 screen but needn't be on every geometry. Hence
+the keep-below, so anything that does remain sits behind whatever you're
+working in.
+
 **A command handler can't tell which frame called it.** `CommandContext.frame`
 is `.unknown` on both GTK backends — the only two where it is (what each
 backend reports is tabulated in

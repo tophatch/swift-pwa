@@ -29,7 +29,12 @@
             guard !didStartConfigure else { return }
             didStartConfigure = true
             let app = NSApplication.shared
-            app.setActivationPolicy(.regular)
+            // `.accessory` for a backgrounded driven run: no Dock icon, no menu
+            // bar, and nothing that pulls the user's attention away from
+            // whatever they're doing while a suite runs. A window still shows
+            // and still renders under this policy — see `DriverBackground`.
+            app.setActivationPolicy(DriverBackground.isRequested ? .accessory : .regular)
+            if DriverBackground.isRequested { DriverBackground.markHonoured() }
             app.mainMenu = Self.makeMainMenu(for: app)
             installDevToolsAccelerator()
 
@@ -69,7 +74,14 @@
             AgentIndicator.installTray { SystemTray() }
             AppDriver.startIfRequested(context, backend: "macos")
 
-            NSApp.activate(ignoringOtherApps: true)
+            // Coming to the front is right for an app a person launched and
+            // wrong for the thirty-seventh app a test runner launched. A
+            // backgrounded run never activates — and doesn't need to: synthetic
+            // input is posted straight to the window, and a window that is
+            // never key renders at full rate all the same (measured).
+            if !DriverBackground.isRequested {
+                NSApp.activate(ignoringOtherApps: true)
+            }
         }
 
         /// Cmd+Opt+J — open WKWebView's web inspector for the focused

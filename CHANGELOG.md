@@ -9,6 +9,80 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`swift-pwa drive --background`: a driven run that stays off the screen**
+  ([#208]). A suite launches one app per test file — the reporting adopter's is
+  37 of them — and every launch came to the front and took focus, so a full run
+  was minutes during which the machine couldn't be used for anything else. The
+  driver's whole premise is that a run needn't own the machine (input goes into
+  the app's own event queue, screenshots come from the engine's own
+  compositor); the window coming forward was the last thing contradicting it.
+
+  **Hiding the window is the obvious fix and it doesn't work**, which is why
+  this needed more than a flag: an engine stops servicing
+  `requestAnimationFrame` for a window that isn't on screen, so a page that
+  draws in a rAF callback silently does nothing and neither it nor the driver
+  fails — it reads as the feature being broken. So the mode *parks a real
+  window* rather than hiding one, on each of the three backends that can:
+
+  - **macOS**: `.accessory` policy, no `NSApp.activate`, the window ordered in
+    and parked far off screen — which needs `constrainFrameRect(_:to:)`
+    overridden, because AppKit otherwise drags a titled window back to the
+    screen edge at order-front (measured: the parked frame reads back correctly
+    right up until the window is shown) — and
+    `-[WKWebView _setWindowOcclusionDetectionEnabled:]` off.
+  - **Linux GTK3**: `focus-on-map` off, moved off screen *again after mapping*
+    (a window manager places a window as it sees fit when it maps, and xfwm4
+    put a backgrounded one back at (0, 0)), kept below, out of the taskbar and
+    pager.
+  - **Windows**: created off screen with `WS_EX_TOOLWINDOW`, shown with
+    `SW_SHOWNOACTIVATE`.
+
+  **Only macOS needed private API**, which the measurements are what
+  established: WebKitGTK doesn't throttle an off-screen window at all — 83 fps
+  parked at (-32000, -32000) under a real window manager, against **0 fps and
+  `document.visibilityState === "hidden"`** once *iconified* — and neither does
+  WebView2. On macOS 26.6.2 a window parked off screen serves **0** rAF
+  callbacks per second, **0–17** covered, and **63** with occlusion detection
+  off in any of those positions. Two further macOS results shaped the design:
+  **key and active are irrelevant** (a window that never becomes key, in an app
+  that never activates, runs at full rate — so the focus theft and the frame
+  throttling read as one problem and are two), and **`orderOut` is not
+  occlusion** (0 fps even with detection off, and no SPI covers it).
+
+  Verified per backend by driving a real app: macOS 60 fps with the frontmost
+  application unchanged and the window at (-32000, -32000), `drive click` and
+  `drive type` still landing, and a screenshot of *live* content; GTK3 122 fps
+  with the active window unchanged, under a real window manager, with a
+  normally-launched app as the control; Windows 128 fps with the foreground
+  window unchanged. `window.focus` stops raising the app on all three, because
+  a page that polls it until `!document.hidden` wants rendering, not the user's
+  screen.
+
+  **GTK4 refuses rather than pretending.** It dropped window positioning
+  outright, so there is nowhere off screen to put the window; it says so on
+  stderr and points at a nested display, which is invisible *and* unthrottled
+  (measured: 84 fps under `xvfb-run`). More generally the app reports what it
+  actually did — `capabilities.background`, visible in `drive info` — and the
+  CLI repeats it on stderr, so a backend that ignores the request can't look
+  like a broken flag. iOS is refused outright: a backgrounded app there is a
+  *suspended* app, and a verb sent to one doesn't fail, it queues and answers
+  when the app comes forward.
+
+  **A backgrounded run no longer writes the app's remembered window geometry.**
+  A suite that resizes the window for a responsive check would otherwise
+  persist that size into `window-state.json` — measured, the user's app then
+  opens at 500×368 because of a test they'd long since forgotten. Deliberately
+  not every driven run: a driven window that's on screen is still a real window
+  at a plausible size, and a suite may legitimately be testing `rememberState`
+  itself.
+
+  Off by default and driver-only — `DriverBackground.isRequested` answers
+  `false` unless the driver is compiled in at all, so the environment variable
+  can't reshape a shipped app's windows. The macOS mechanism rests on private
+  API, so a missing selector degrades to a **visible** run plus a line on
+  stderr rather than an invisible one whose page never paints, and a unit test
+  pins the selector so we hear about it before an adopter does.
+
 - **Windows reports the calling frame, and stops embedded content reaching the
   app's commands at all** ([#204]). `CommandContext.frame` is `.main` on
   Windows now rather than `.unknown`, so the `external_urls.allow_any_scheme`
@@ -100,6 +174,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   with.
 
 ### Fixed
+
+- **Windows: a window moved to a negative coordinate killed the app** ([#208]).
+  `WM_MOVE` packs its coordinates as *signed* 16-bit words; the handler read
+  them unsigned, out of an `Int32(lParam)` conversion that **trapped** for any
+  packed value with the high bit set. A window moved to (-32000, -32000) packs
+  to 0x8300_8300 — past `Int32.max` as the `LPARAM` really is — and the app
+  died in `Integers.swift: Not enough bits to represent the passed value`
+  inside its own window procedure, with no line of swift-pwa's own code in the
+  trace.
+
+  Found by parking a window off screen for a backgrounded driven run, but the
+  case that meets it in ordinary use is **a second monitor placed left of or
+  above the primary one**, where window coordinates are negative: before the
+  fix a window there reported the wrong position (-100 read back as 65436) and
+  crashed outright once the packed value went negative. Verified on a real box:
+  a move to (-1200, -900) now leaves the app alive and reads back as
+  (-1200, -900).
 
 - **Documented the limit of what `CommandContext.frame` can defend** ([#204]).
   A **same-origin** frame can call the parent's bridge object
@@ -219,6 +310,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 [#203]: https://github.com/tophatch/swift-pwa/issues/203
 [#204]: https://github.com/tophatch/swift-pwa/issues/204
+[#208]: https://github.com/tophatch/swift-pwa/issues/208
 
 ## [0.10.5] - 2026-09-12
 

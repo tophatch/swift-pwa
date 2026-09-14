@@ -100,6 +100,16 @@ struct DriveOptions: ParsableArguments {
     @Flag(help: "Don't wait for document.readyState === 'complete' before running the verb.")
     var noPageWait: Bool = false
 
+    @Flag(
+        name: .long,
+        help: """
+        Launch the app off screen, without activating it. For a suite that launches one app per \
+        test file, where the default — every launch coming to the front — means the machine can't be \
+        used for the length of the run. The page keeps rendering at full rate; macOS only so far.
+        """
+    )
+    var background: Bool = false
+
     // MARK: iOS device signing
 
     //
@@ -136,6 +146,23 @@ struct DriveOptions: ParsableArguments {
     func validate() throws {
         if simulator, target != .ios, target != .host {
             throw ValidationError("--simulator is iOS-only; drop --target \(target.rawValue).")
+        }
+        // Refused rather than ignored on iOS: the platform's own answer to a
+        // backgrounded app is to suspend it, and a verb sent to a suspended app
+        // doesn't fail — it queues and answers when the app comes forward. A
+        // silently-accepted flag would turn that into a run that appears to
+        // hang.
+        if background, runsOnSimulator || runsOnDevice {
+            throw ValidationError("""
+            --background is desktop-only. iOS suspends an app that isn't frontmost, and a verb sent to a \
+            suspended app queues instead of failing — keep the app on screen for an iOS run.
+            """)
+        }
+        if background, attach != nil {
+            throw ValidationError("""
+            --background applies to a launch, and --attach talks to an app that is already running. \
+            Launch that app with SWIFT_PWA_DRIVE_BACKGROUND=1 set, or drop --attach.
+            """)
         }
         #if !os(macOS)
             if runsOnSimulator {
@@ -780,7 +807,28 @@ enum DriveSession {
         if let expression = options.wait {
             try client.wait(for: expression, timeout: options.timeout, window: options.window)
         }
+        if options.background { warnIfNotBackgrounded(client) }
         warnIfWindowHidden(client, options)
+    }
+
+    /// Say so when `--background` was asked for and the app didn't do it.
+    ///
+    /// The request travels as an environment variable, which a backend that
+    /// hasn't implemented backgrounding ignores in silence — and the symptom of
+    /// that is indistinguishable from the flag not existing: every launch keeps
+    /// coming to the front. So the app reports what it actually did
+    /// (`capabilities.background`) and this repeats it, once, rather than
+    /// leaving someone to conclude the flag is broken.
+    private static func warnIfNotBackgrounded(_ client: DriverClient) {
+        guard let capabilities = try? client.invoke("capabilities", [:]) else { return }
+        guard capabilities["background"]?.isTruthy != true else { return }
+        let backend = capabilities["backend"]?.stringValue ?? "this"
+        FileHandle.standardError.writeQuietly(Data("""
+        swift-pwa: --background had no effect — the \(backend) backend didn't take it, so this run \
+        shows the app's window like any other. macOS, GTK3 and Windows implement it; GTK4 can't (it has no \
+        window positioning, so run the whole command under a nested display instead: \
+        `xvfb-run -a swift-pwa drive …`). An app built against an earlier swift-pwa doesn't have it either.\n
+        """.utf8))
     }
 
     /// Say so when the target window isn't on screen.
@@ -890,7 +938,8 @@ struct LaunchedApp {
             cwd: cwd,
             timeout: options.timeout,
             route: options.route,
-            webRoot: webRoot
+            webRoot: webRoot,
+            background: options.background
         )
     }
 
@@ -1207,7 +1256,8 @@ struct LaunchedApp {
         cwd: URL,
         timeout: TimeInterval,
         route: String?,
-        webRoot: URL? = nil
+        webRoot: URL? = nil,
+        background: Bool = false
     ) throws -> LaunchedApp {
         let process = Process()
         process.executableURL = executable
@@ -1227,6 +1277,12 @@ struct LaunchedApp {
         // declare as a SwiftPM resource.
         if let webRoot {
             env[WebRoot.environmentVariable] = webRoot.path
+        }
+        // Off screen and never activated, so a suite can run while the machine
+        // stays usable. The app decides whether it can honour that — the
+        // `capabilities` verb reports what it actually did.
+        if background {
+            env[DriverBackground.environmentVariable] = "1"
         }
         process.environment = env
 

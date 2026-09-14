@@ -182,6 +182,24 @@ swift-pwa drive click --selector "#next" --attach 51423 --token ab12…
 
 ---
 
+## Step 6b — Run a whole suite without losing your machine
+
+One verb is over in a second. A suite is not: one app per test file, each launch coming to the front and taking your focus, and several minutes where the machine is unusable. `--background` launches the app off screen and never activates it:
+
+```bash
+swift-pwa drive eval --background "document.title"
+```
+
+For the launch-it-yourself shape above, it's an environment variable alongside the port:
+
+```bash
+SWIFT_PWA_DRIVE=0 SWIFT_PWA_DRIVE_BACKGROUND=1 ./.build/debug/MyApp &
+```
+
+The page keeps rendering at full rate while it's off screen — which is not free, and is the reason this is a mode rather than a `window.orderOut`: every engine here stops servicing `requestAnimationFrame` for a window that isn't on screen, so a *hidden* window would leave anything that draws in a rAF callback doing nothing at all, silently. macOS, Linux GTK3 and Windows do it; GTK4 can't (it has no window positioning), so run the whole command under a nested display there — `xvfb-run -a swift-pwa drive …` — which is invisible and unthrottled. `drive` tells you when a backend didn't take the flag rather than letting it look broken. See [docs/app-driver.md](../app-driver.md#running-a-suite-without-losing-the-machine----background).
+
+---
+
 ## Step 7 — In CI
 
 On Linux, run it under a virtual display. GTK3's input path works there even though the display server has no input device at all:

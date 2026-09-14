@@ -59,6 +59,22 @@
             // The agent surface's indicator: a runtime-owned status item, so a user
             // can see access is open (and close it) without the app's cooperation.
             AgentIndicator.installTray { SystemTray() }
+            // GTK4 can't honour a backgrounded run and says so rather than
+            // ignoring the request: it dropped window positioning outright
+            // (`Window.setPosition` is a documented no-op here), so there is
+            // nowhere off screen to put the window, and hiding it instead
+            // stops WebKitGTK servicing the page — measured on GTK3 under a
+            // real window manager: 0 fps and `document.visibilityState ===
+            // "hidden"` once iconified. A nested display is the way to get an
+            // invisible run here, and it works: measured at 84 fps under Xvfb.
+            if DriverBackground.isRequested {
+                FileHandle.standardError.writeQuietly(Data("""
+                swift-pwa: \(DriverBackground.environmentVariable) can't be honoured on GTK4 — it has no window \
+                positioning at all, so the window can't be parked off screen, and hiding it would stop the page \
+                rendering. Run the whole thing on a nested display instead: `xvfb-run -a swift-pwa drive …`.
+
+                """.utf8))
+            }
             AppDriver.startIfRequested(context, backend: "gtk4")
             context.runMainLoop()
             exit(context.pendingExitCode ?? 0)

@@ -408,8 +408,9 @@ display — and getting back a full, correctly rendered 1024×768 viewport.
 >
 > `drive windows` reports each window's `visibility` (`visible` / `hidden` /
 > `unknown`), and **every verb warns on stderr** when its target window isn't on
-> screen. If a run depends on rendering, bring the window to the front — or move
-> the work off rAF, which is the more robust design anyway.
+> screen. If a run depends on rendering, bring the window to the front — or use
+> [`--background`](#running-a-suite-without-losing-the-machine----background),
+> which switches the throttling off rather than working around it.
 >
 > Who can answer: **macOS** properly (`NSWindow.occlusionState`, which also
 > covers another Space and a sleeping display); **Windows** detects minimized
@@ -419,6 +420,131 @@ display — and getting back a full, correctly rendered 1024×768 viewport.
 Coordinates in `window.setSize` / `window.setPosition` are read back rather than
 echoed, because both are best-effort: macOS clamps a window to keep part of it
 on screen, and GTK4 / Wayland refuse to position a window at all.
+
+## Running a suite without losing the machine — `--background`
+
+A single `drive` verb is over in a second. A **suite** is not: one app per test
+file, thirty-seven of them, each launch coming to the front and taking focus, and
+several minutes during which the machine can't be used for anything else.
+
+`--background` launches the app **off screen and inactive**:
+
+```bash
+swift-pwa drive eval --background "document.title"
+```
+
+For an app you launch yourself, it's an environment variable like the port —
+`SWIFT_PWA_DRIVE_BACKGROUND=1` alongside `SWIFT_PWA_DRIVE=0` — and then you
+`--attach` as usual. (`--background` with `--attach` is refused: the app's
+window is placed at launch, and a flag on a later verb can't reach back and
+change it.)
+
+What changes, all of it scoped to a driver build with the variable set:
+
+- the window is **shown but parked off screen** — shown, because every engine
+  here stops rendering a window that isn't on screen *at all*, which is the
+  trap the next section is about;
+- the app doesn't take the focus: macOS takes the `.accessory` policy (no Dock
+  icon, no menu bar) and never calls `NSApp.activate`, GTK3 maps the window
+  with `focus-on-map` off, Windows shows it with `SW_SHOWNOACTIVATE`. None of
+  the three appears in the Dock, taskbar, window switcher or pager;
+- `window.focus` stops raising the app, so a page that polls it until
+  `!document.hidden` still gets what it wants — rendering — without the window
+  coming back;
+- the run doesn't write the app's remembered window geometry — a suite that
+  resizes the window for a responsive check shouldn't leave the user's app
+  opening at 500×368 forever.
+
+### Why an off-screen window still renders
+
+Hiding the window is the obvious way to do this and it doesn't work: an engine
+stops servicing `requestAnimationFrame` for a window the compositor isn't
+showing, so a page that draws in a rAF callback silently does nothing, and
+*neither* the page nor the driver fails. It is true on every backend measured —
+WebKitGTK serves **0 fps** and reports `document.visibilityState === "hidden"`
+for an iconified window (GTK3 under a real window manager), and WebKit on macOS
+does the same for a window that is merely covered.
+
+Measured on macOS 26.6.2 — frames per second in a rAF loop, with a
+`takeSnapshot` pixel check as proof the page really drew:
+
+| Window | Default | Occlusion detection off |
+| --- | --- | --- |
+| On screen, never key, app never activated | 63 | 63 |
+| Covered by another window | 0–17 | 63 |
+| Parked fully off screen | 0 | 63 |
+| `orderOut` — not in the window list at all | 0 | 0 |
+
+Three things follow. **Key and active are irrelevant** — a window that never
+becomes key, in an app that never activates, runs at full rate; the focus theft
+and the frame throttling read as one problem and are two.
+**`-[WKWebView _setWindowOcclusionDetectionEnabled:]` switches the throttling
+off**, and with it off the page reports `document.visibilityState === 'visible'`
+throughout. **The window still has to exist** — `orderOut` is a different signal
+and no SPI covers it, which is why the mode parks a window rather than hiding
+one.
+
+The flag has to be set while the page is still being serviced: setting it after a
+page has already gone hidden doesn't bring it back. The adapter does it at
+construction, which is simply the earliest point.
+
+### What it doesn't change
+
+Input and screenshots already worked this way — synthetic input goes into the
+app's own event queue and a screenshot comes from the engine's own compositor, so
+neither ever needed the window on screen. Verified in this mode on all three:
+`drive click` and `drive type` landing on macOS, and a screenshot of live content
+everywhere (macOS, GTK3, Windows), with the frontmost application never changing.
+
+GTK4's synthetic input is the exception, and for an unrelated reason: it goes
+through XTEST, which needs the window focused — so it can't be driven under
+`--background` in any case. `drive info` reports that as `input.delivery:
+displayServer`.
+
+`drive type --activate` is the exception, and deliberately so: menu key
+equivalents (⌘C / ⌘V / ⌘Z) need an *active* app, so asking for one brings the app
+forward for that keystroke. Don't pass it in a run you want to stay invisible.
+
+### Where it works
+
+Three of the four desktop backends, by three different mechanisms — and the
+measurement is what picked each one:
+
+| Backend | Mechanism | Measured off screen |
+| --- | --- | --- |
+| **macOS** | `.accessory` policy, no `NSApp.activate`, window parked off screen with `constrainFrameRect` overridden, occlusion detection off | 60 fps, `visible`, frontmost application unchanged |
+| **Linux GTK3** | `focus-on-map` off, `gtk_window_move` off screen (again *after* mapping), keep-below, skip taskbar/pager | 122 fps, `visible`, active window unchanged |
+| **Windows** | `WS_EX_TOOLWINDOW`, created off screen, `SW_SHOWNOACTIVATE` | 128 fps, `visible`, foreground window unchanged |
+| **Linux GTK4** | — refused, see below | — |
+
+**Only macOS needs the private API.** WebKitGTK doesn't throttle an off-screen
+window at all (83 fps at (-32000, -32000) under a real window manager — it is
+*iconifying* that stops it), and neither does WebView2. WebKit on macOS is the
+outlier, which is also why the problem wasn't already common knowledge.
+
+**GTK4 can't, and says so.** It dropped window positioning outright — `setPosition`
+is a documented no-op there — so there is nowhere off screen to put the window,
+and hiding it instead stops the page. Run the whole command on a nested display
+instead, which is invisible and unthrottled (measured: 84 fps under Xvfb):
+
+```bash
+xvfb-run -a swift-pwa drive shot out.png
+```
+
+`--background` asks the app what it actually did (`capabilities.background`, in
+`drive info`) and repeats it on stderr, so a backend that ignores the request
+can't look like a broken flag. iOS is refused outright: a backgrounded app there
+is a *suspended* app, and a verb sent to one doesn't fail — it queues and answers
+when the app comes forward.
+
+Two limits worth knowing. **A window manager decides how far off screen a window
+may go** — xfwm4 clamped (-32000, -32000) to (-1005, -773), which was still
+entirely off a 1600×1200 screen but needn't be on every geometry; that is why the
+GTK3 window is also kept below everything else. And the macOS mechanism rests on
+private API, so if `_setWindowOcclusionDetectionEnabled:` ever goes away the mode
+degrades to a **visible** run with a line on stderr, rather than an invisible one
+whose page never paints. A unit test pins the selector so we hear about it before
+an adopter does.
 
 ## Handing the app to an agent — `swift-pwa mcp`
 

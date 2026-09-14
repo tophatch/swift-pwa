@@ -69,12 +69,63 @@
             super.init()
             continuation = captured
             cfg.userContentController.add(self, name: BridgeScript.messageHandlerName)
+            #if os(macOS) && SWIFT_PWA_DRIVER
+                if DriverBackground.isRequested { Self.disableWindowOcclusionDetection(on: webView) }
+            #endif
             #if os(macOS)
                 if #available(macOS 13.3, *) { webView.isInspectable = true }
             #else
                 if #available(iOS 16.4, *) { webView.isInspectable = true }
             #endif
         }
+
+        #if os(macOS) && SWIFT_PWA_DRIVER
+            /// Stop WebKit throttling this view because its window isn't on
+            /// screen — the one thing that makes a backgrounded driven run
+            /// possible at all (see ``DriverBackground``).
+            ///
+            /// Measured on macOS 26.6.2: a window parked off screen or covered
+            /// by another serves **0** `requestAnimationFrame` callbacks per
+            /// second, and 63 with this off. A page that draws in a rAF
+            /// callback therefore does nothing while hidden, and doesn't fail
+            /// either — a screenshot comes back as a clean image of stale
+            /// content.
+            ///
+            /// **Timing is the trap.** The flag has to be set while the page is
+            /// still being serviced: setting it after a page has already gone
+            /// hidden doesn't bring it back (measured — 0 fps, and
+            /// `document.visibilityState` stays `hidden`), while setting it any
+            /// time before that works, including after the view is already in a
+            /// window. Construction is simply the earliest point, and the one
+            /// that can't be got wrong.
+            ///
+            /// **It is private API**, so it's called through `responds(to:)`
+            /// and a missing selector degrades to a visible run rather than a
+            /// silent one that times out every rAF-dependent test.
+            private static func disableWindowOcclusionDetection(on webView: WKWebView) {
+                let selector = NSSelectorFromString("_setWindowOcclusionDetectionEnabled:")
+                guard webView.responds(to: selector),
+                      let method = class_getInstanceMethod(type(of: webView), selector)
+                else {
+                    // Fall back to a run with a window on screen: the page
+                    // renders, the suite passes, and the person watching can
+                    // see why their machine was taken over.
+                    DriverBackground.markUnsupported()
+                    FileHandle.standardError.writeQuietly(Data("""
+                    swift-pwa: this macOS can't switch off WebKit's window occlusion detection, so a \
+                    backgrounded run would stop rendering. Showing the window instead — expect it on screen.
+
+                    """.utf8))
+                    return
+                }
+                // A `BOOL` argument can't travel through `perform(_:with:)`,
+                // which takes objects; calling the IMP directly is the only
+                // spelling that passes a false rather than a pointer.
+                typealias SetBool = @convention(c) (AnyObject, Selector, ObjCBool) -> Void
+                let implementation = unsafeBitCast(method_getImplementation(method), to: SetBool.self)
+                implementation(webView, selector, ObjCBool(false))
+            }
+        #endif
 
         /// Register a `pwa://` scheme handler against this configuration.
         /// Must be called *before* the `WKWebView` is created if you

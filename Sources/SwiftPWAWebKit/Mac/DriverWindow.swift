@@ -2,8 +2,12 @@
 
     import AppKit
 
-    /// The window used in **driver builds** on macOS. It exists to stop
-    /// driver-injected input making the system alert sound.
+    /// The window used in **driver builds** on macOS. It does two things a
+    /// plain `NSWindow` doesn't: it stops driver-injected input making the
+    /// system alert sound, and — in a backgrounded run only — it lets itself be
+    /// parked outside every display.
+    ///
+    /// ## The alert sound
     ///
     /// AppKit's rule: a `keyDown` that nobody in the responder chain handles ends
     /// at `NSResponder.noResponder(for:)`, whose default implementation
@@ -24,6 +28,23 @@
     /// it recognises. A key the *user* presses still beeps, in a debug build as in
     /// a release one.
     final class DriverWindow: NSWindow {
+        /// Whether this window may sit outside every display — set only for a
+        /// backgrounded driven run (``DriverBackground``), where the window is
+        /// parked far off screen so a suite can run without taking over the
+        /// machine.
+        ///
+        /// AppKit constrains a *titled* window's frame to a screen, keeping its
+        /// title bar reachable — which is right for a window a person owns and
+        /// is precisely what drags a parked one back into view. Overriding the
+        /// constraint is the only way to stay off screen, so it is scoped to
+        /// the one mode that asks for it rather than applied to every driver
+        /// build.
+        var allowsOffscreenPlacement = false
+
+        override func constrainFrameRect(_ frameRect: NSRect, to screen: NSScreen?) -> NSRect {
+            allowsOffscreenPlacement ? frameRect : super.constrainFrameRect(frameRect, to: screen)
+        }
+
         /// Timestamps of events the driver injected, with the uptime at which
         /// each was registered so stale entries can age out. Main-thread only —
         /// events are injected and dispatched there — hence no locking.

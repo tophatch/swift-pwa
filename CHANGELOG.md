@@ -94,23 +94,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is de-duplicated against the signal that follows it, so presenting a window
   doesn't report focus twice.
 
-  Verified on real hardware on four of the five: a Fold7 for Android, and
-  `Scripts/verify-window-focus.sh` / `verify-windows-window-focus.ps1` against a
-  logged-in desktop session on the GTK3, GTK4 and Windows boxes. **iOS is
-  compile-verified only** — it is the standard UIKit scene pair, but that is an
-  argument rather than a measurement. Each of the four asserts on
-  the window **nothing touched** — a backend that merely echoed its own
-  `focus()` call would pass otherwise — and each carries a control that must
-  succeed, because the failure mode here is an event that is simply absent.
+  Verified on real hardware on **all five**, one script per platform family: a
+  Fold7 for Android, an iPad for iOS, and a logged-in desktop session on the
+  GTK3, GTK4 and Windows boxes. Each asserts on a transition **nothing in the
+  app asked for** — a backend that merely echoed its own `focus()` call would
+  pass otherwise — and each carries a control that must succeed, because the
+  failure mode here is an event that is simply absent.
 
-  Two things cost a wrong answer first. The desktop session has to be
-  **unlocked**: under Xvfb a scaffolded GTK app maps no window at all (#222),
-  and nothing unmapped can become active, so the run passes vacuously. And on
-  Windows a new window takes focus **synchronously inside `createWindow`**, so
-  its first `WM_SETFOCUS` is already delivered before `eventStream()` can be
-  attached to the returned window — `AsyncStream` doesn't replay, so that first
-  event is unobservable to any caller. GTK doesn't race this; it maps once the
-  main loop runs.
+  Three traps, each of which gave a confident wrong answer first. A desktop
+  session has to be **unlocked**, and so does a device: under Xvfb a scaffolded
+  GTK app maps no window at all, and nothing unmapped can ever become active, so
+  the run passes vacuously; on iOS a locked device refuses to launch the app
+  while installing it happily. On **Windows** a new window takes focus
+  *synchronously inside* `createWindow`, so its first `WM_SETFOCUS` is delivered
+  before `eventStream()` can be attached to the returned window — `AsyncStream`
+  doesn't replay, so that first event is unobservable to any caller, and
+  checking for it failed against correct behaviour. GTK doesn't race this; it
+  maps once the main loop runs. And on **iOS** the app is *suspended* while
+  backgrounded, which is the very window being measured, so it records to a file
+  in its own container that `devicectl` lifts afterwards rather than answering a
+  bridge command — and the build has to be `debug`, or the driver socket the
+  first attempt relied on isn't compiled in at all.
 
 - **`navigator.audioSession` works on Android** — the W3C Audio Session API,
   filled natively where the engine doesn't ship it, rather than exposed as a

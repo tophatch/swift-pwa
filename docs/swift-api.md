@@ -462,6 +462,10 @@ Task {
 }
 ```
 
+Verified on real hardware on all five, one script per platform family
+(`Scripts/verify-window-focus.sh`, `verify-windows-window-focus.ps1`,
+`verify-ios-window-focus.sh`, `verify-android-served-mounts.sh`).
+
 Two notes. `.didFocus` is also emitted by an explicit `focus()` call, and the
 backends de-duplicate that against the real signal that follows, so presenting a
 window doesn't report focus twice. And minimize / fullscreen are still

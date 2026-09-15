@@ -94,11 +94,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is de-duplicated against the signal that follows it, so presenting a window
   doesn't report focus twice.
 
-  **Android and iOS are device-verified; the two GTK backends and Windows are
-  compile-verified only.** A probe under Xvfb can't observe a GTK focus change,
-  because a scaffolded app maps no window there (#222) and nothing unmapped can
-  become active — so a backend that emits nothing and one that works look the
-  same. Said here rather than left to look like the rest.
+  Verified on real hardware on four of the five: a Fold7 for Android, and
+  `Scripts/verify-window-focus.sh` / `verify-windows-window-focus.ps1` against a
+  logged-in desktop session on the GTK3, GTK4 and Windows boxes. **iOS is
+  compile-verified only** — it is the standard UIKit scene pair, but that is an
+  argument rather than a measurement. Each of the four asserts on
+  the window **nothing touched** — a backend that merely echoed its own
+  `focus()` call would pass otherwise — and each carries a control that must
+  succeed, because the failure mode here is an event that is simply absent.
+
+  Two things cost a wrong answer first. The desktop session has to be
+  **unlocked**: under Xvfb a scaffolded GTK app maps no window at all (#222),
+  and nothing unmapped can become active, so the run passes vacuously. And on
+  Windows a new window takes focus **synchronously inside `createWindow`**, so
+  its first `WM_SETFOCUS` is already delivered before `eventStream()` can be
+  attached to the returned window — `AsyncStream` doesn't replay, so that first
+  event is unobservable to any caller. GTK doesn't race this; it maps once the
+  main loop runs.
 
 - **`navigator.audioSession` works on Android** — the W3C Audio Session API,
   filled natively where the engine doesn't ship it, rather than exposed as a

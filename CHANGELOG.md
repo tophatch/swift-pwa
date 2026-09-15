@@ -262,12 +262,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0–1 ms. `Scripts/verify-main-actor.sh` and
   `Scripts/verify-windows-main-actor.ps1` are the repeatable form.
 
-  **Android's half is implemented and cross-compiles, but is not yet verified
-  on a device.** `Scripts/verify-android-main-actor.sh` is written and runs;
-  what stops it is unrelated to this change — Swift 6.4 makes `swiftbuild` the
-  default SwiftPM engine, whose output layout the Android bundler doesn't
-  understand, so the APK it assembles is missing libraries and dies at
-  `System.loadLibrary`. That migration is tracked separately.
+  **Android is verified too**, on a Fold7 via
+  `Scripts/verify-android-main-actor.sh`: all four probes answer in 1–3 ms,
+  where before the fix the app's own main-actor code never returned. Getting a
+  device run at all first needed the three Android build fixes below.
+
+- **`SwiftPWACore` declares the `Crypto` dependency it has always used**, which
+  is what made `build --target android` ship an APK that crashed at launch on
+  Swift 6.4 (#217).
+
+  `URLSessionNetworkClient` hashes a download with SHA-256 — CryptoKit on
+  Apple, swift-crypto's `Crypto` everywhere else — and reached it through
+  `canImport(Crypto)`. That succeeds whenever *any* target in the build graph
+  has pulled the module in, so with a backend target declaring the edge the
+  code compiled, and the classic SwiftPM build system linked the whole package
+  as one so it ran too. The edge was simply missing from `Package.swift` for
+  years, invisibly.
+
+  Swift 6.4 makes `swiftbuild` the default engine, and it builds each product's
+  link list from the **declared** edges. The app's `LinkFileList` came out with
+  six objects and no `Crypto.o`. On Android that is silent twice over: the
+  product is linked `-shared`, where undefined symbols are legal, so the build
+  is green and the failure is `UnsatisfiedLinkError: cannot locate symbol
+  "$s6Crypto0A8KitErrorON"` on the device.
+
+  **Linux and Windows had the same defect** and had simply not reached 6.4 yet;
+  so had CI, which pins 6.2 / 6.3.1 and takes whatever Xcode the macOS runner
+  image ships.
+
+  Two guards, because one bug that stays quiet for years deserves better than a
+  fix. The Android build now links with **`-Xlinker --no-undefined`**, so a
+  missing edge fails the build instead of the app — verified by removing the
+  edge again and watching `ld.lld: error: undefined symbol` name the exact
+  symbol. And `ManifestDependencyDriftTests` compares every target's imports
+  against its declared dependencies straight from the manifest, which is the
+  half that runs in CI, where there is no Android SDK and no device.
 
 - **`build --target android` stages `libc++_shared.so` from the installed NDK**,
   and refuses to build an APK without it.
@@ -280,6 +309,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   needs it, so there is no app for which skipping it is right; it now falls back
   to the NDK the cross-compile is already using, and a miss is a hard error
   naming every path it looked in.
+
+- **`build --target android` finds the matching toolchain again after the SDK
+  bundle was renamed.** It keyed off `swift-<v>-RELEASE-android-…`; from 6.4 the
+  bundle is `swift-6.4.0-RELEASE_android` — an underscore, no trailing revision,
+  and a patch component in the version. The auto-select matched nothing,
+  silently, so the cross-build ran under whatever `swift` was ambient (Xcode's,
+  which is a *different build* from the swift.org release of the same number and
+  cannot load the SDK's prebuilt modules) and failed with "module compiled with
+  Swift X cannot be imported". Both spellings are matched now, a `major.minor`
+  SDK also matches a `major.minor.patch` toolchain directory, and an Android
+  bundle whose name can't be parsed says so instead of saying nothing.
 
 - **`build --target android` uses the ambient toolchain when it already matches
   the Swift Android SDK**, instead of insisting on swiftly.

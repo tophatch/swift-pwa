@@ -135,6 +135,15 @@ struct DeployTests {
             #expect(
                 Build.swiftReleaseVersion(in: "swift-6.10-RELEASE-android-0.3", marker: "-RELEASE-android") == "6.10"
             )
+            // The bundle was renamed from 6.4: an underscore, no trailing
+            // revision, and a patch component in the version. Matching only the
+            // old spelling silently selected no toolchain at all, so the
+            // cross-build ran under Xcode's Swift and failed on module version.
+            #expect(
+                Build.swiftReleaseVersion(
+                    in: "swift-6.4.0-RELEASE_android", marker: "-RELEASE_android"
+                ) == "6.4"
+            )
         }
 
         @Test("ignores non-matching / malformed names")

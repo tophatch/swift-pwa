@@ -432,7 +432,20 @@ struct AndroidBundler {
 
                 try await Shell.run(
                     buildTool.exe,
-                    buildTool.leadingArgs + ["swift", "build", "-c", "release", "--swift-sdk", triple],
+                    buildTool.leadingArgs
+                        + ["swift", "build", "-c", "release", "--swift-sdk", triple]
+                        // The app's product is linked `-shared` (Android loads
+                        // it with `System.loadLibrary`, so it has to be a .so),
+                        // and a shared object is *allowed* to have undefined
+                        // symbols — the link succeeds and the app dies at load
+                        // with `cannot locate symbol "…"`. That is how an
+                        // undeclared `Crypto` edge in SwiftPWACore shipped a
+                        // crashing APK. Everything this .so needs is either
+                        // linked into it or staged beside it in `jniLibs/`, so
+                        // there is no legitimate undefined symbol here: make
+                        // the linker say so, at build time, in the package
+                        // whose manifest is wrong.
+                        + ["-Xlinker", "--no-undefined"],
                     cwd: projectRoot,
                     envOverrides: envOverrides
                 )

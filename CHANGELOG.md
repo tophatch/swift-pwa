@@ -124,6 +124,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outcome is already true; leave it absent when a no-op would make the page
   believe something false.**
 
+- **An app that plays audio without declaring a policy is now told so**, at
+  runtime and by `swift-pwa doctor`.
+
+  This closes the gap the audio measurements opened rather than fixed. Setting
+  `navigator.audioSession.type` is one line, but *forgetting* it is invisible
+  on the machine the app is written on — the audio plays perfectly — and shows
+  up only when an iPhone user leaves the app and the sound stops. An adopter
+  who doesn't own an iPhone can't discover that, let alone report it, which is
+  exactly the shape of gap the project's stance exists to close.
+
+  Both checks fire on a *pairing* — audio actually sounding, policy absent —
+  because either half alone is noise. At runtime, the first media element that
+  plays or `AudioContext` that reaches `running` while the type is still `auto`
+  produces one `console.warn` naming the consequence and the remedy; an
+  `<audio>` element that never plays, an `OfflineAudioContext` rendering to a
+  buffer, and a type set in the same handler that starts the sound all stay
+  silent. `doctor` applies the same pairing to the project's `web/` sources and
+  reports it as advisory — never a build failure — naming the file it matched,
+  so the one unavoidable false positive (a bundled framework that merely
+  mentions `AudioContext`) is dismissed at a glance.
+
+  The Web Audio half observes by subclassing the `AudioContext` global, since
+  nothing fires when a context starts. Verified transparent on device and on
+  macOS: `AudioContext.name`, `instanceof`, the prototype chain and a page's
+  own `extends AudioContext` all behave unchanged. Verified on both engines
+  that it fires for Web Audio and for media elements, and stays silent once a
+  type is declared — on macOS reading back WebKit's **own** `audioSession`, not
+  the fill.
+
 - **`MediaMetadata.artwork` reaches the lock screen and the notification** on
   Android, which completes the `navigator.mediaSession` fill.
 

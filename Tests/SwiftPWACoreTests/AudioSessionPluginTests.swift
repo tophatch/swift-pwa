@@ -394,6 +394,62 @@ struct NowPlayingPluginTests {
     }
 }
 
+/// The runtime warning for an app that plays audio and never declares a
+/// policy. It exists because that app works on the machine it was written on
+/// and stops when backgrounded on iOS, with nothing reporting it.
+@Suite("audio policy diagnostic")
+struct AudioPolicyDiagnosticTests {
+    private var bridge: String {
+        (try? BridgeScript.source()) ?? ""
+    }
+
+    /// Both halves of the pairing have to be present, or the warning is either
+    /// noise (fires without audio) or useless (never fires).
+    @Test("it warns only when audio is sounding and the type is still the default")
+    func firesOnThePairing() {
+        #expect(bridge.contains(#"if (type !== "auto") return;"#))
+        // Media elements: a capturing listener, since `play` doesn't bubble.
+        #expect(bridge.contains(#"document.addEventListener("play", reportAudioPolicy, true)"#))
+        // Web Audio: only once the context is actually producing sound.
+        #expect(bridge.contains(#"if (this.state === "running") reportAudioPolicy();"#))
+    }
+
+    /// A page may set the type in the same handler that starts the sound, in
+    /// either order; without the grace window the warning is a race the
+    /// developer can't do anything about.
+    @Test("a grace window keeps set-after-play from warning")
+    func gracePeriod() {
+        #expect(bridge.contains("AUDIO_POLICY_GRACE_MS"))
+        #expect(bridge.contains("}, AUDIO_POLICY_GRACE_MS);"))
+    }
+
+    /// Rendering to a buffer isn't playback, and an app that does it shouldn't
+    /// be told to declare a policy it has no use for.
+    @Test("OfflineAudioContext is left alone")
+    func offlineUntouched() {
+        // The list of globals that get observed — not the prose around it,
+        // which names OfflineAudioContext to explain the omission.
+        #expect(bridge.contains(#"for (const name of ["AudioContext", "webkitAudioContext"])"#))
+    }
+
+    /// The observation subclasses a page global, so it has to be invisible to
+    /// a page that inspects or extends it.
+    @Test("the observed AudioContext keeps its name and stays subclassable")
+    func transparentSubclass() {
+        #expect(bridge.contains("class extends Original"))
+        #expect(bridge.contains(#"Object.defineProperty(Observed, "name", { value: name })"#))
+    }
+
+    @Test("the message names every type the Swift enum offers as a remedy")
+    func namesTheRemedies() {
+        // The three a page realistically picks; a warning that says "set the
+        // type" without saying to what is a warning nobody acts on.
+        for type in [AudioSessionType.playback, .ambient, .transient] {
+            #expect(bridge.contains("'\(type.rawValue)'"), "the warning doesn't mention \(type.rawValue)")
+        }
+    }
+}
+
 /// The `mediaSession` half of the polyfill, asserted against `bridge.js`.
 @Suite("navigator.mediaSession polyfill")
 struct MediaSessionPolyfillTests {

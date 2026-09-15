@@ -337,6 +337,77 @@
         });
     }
 
+    // --- audio policy diagnostic -----------------------------------------
+    //
+    // The trap: a page that plays audio without ever setting
+    // `navigator.audioSession.type` works perfectly on the developer's machine
+    // and goes silent the moment the app is backgrounded on iOS. Nothing
+    // reports it — no console error, no rejected promise — and an adopter who
+    // doesn't own an iPhone cannot discover it at all, which is exactly the
+    // class of gap this project exists to close.
+    //
+    // It fires only when audio is *actually* sounding and the type is still
+    // the default. That pairing is what keeps it from crying wolf: a page with
+    // an unused `<audio>` element never sees it, nor does one that has already
+    // declared its policy, nor an `OfflineAudioContext` rendering silently.
+    if (IS_TOP) {
+        let audioPolicyReported = false;
+        // A page may reasonably set the type in the same handler that starts
+        // the sound, in either order; without this the warning is a race.
+        const AUDIO_POLICY_GRACE_MS = 1000;
+
+        const reportAudioPolicy = () => {
+            if (audioPolicyReported) return;
+            audioPolicyReported = true;
+            setTimeout(() => {
+                let type;
+                try {
+                    type = navigator.audioSession && navigator.audioSession.type;
+                } catch (e) {
+                    return;
+                }
+                if (type !== "auto") return;
+                console.warn(
+                    "swift-pwa: this page is playing audio with navigator.audioSession.type " +
+                    "still 'auto'. On iOS that audio stops when the app goes to the " +
+                    "background; on Android 'auto' requests no audio focus, so the user's " +
+                    "own music keeps playing over it. Set the type to what the audio is " +
+                    "for — 'playback' for something the user chose to listen to, 'ambient' " +
+                    "for game or UI sound that should mix, 'transient' to duck others. " +
+                    "See docs/javascript-api.md, 'audioSession'."
+                );
+            }, AUDIO_POLICY_GRACE_MS);
+        };
+
+        // Media elements need no patching: `play` doesn't bubble, but a
+        // capturing listener on the document still sees it on every element.
+        document.addEventListener("play", reportAudioPolicy, true);
+
+        // Web Audio has no equivalent hook — nothing fires when a context
+        // starts — so the constructor is subclassed. Subclassing rather than
+        // wrapping keeps `instanceof`, the prototype chain and a page's own
+        // `extends AudioContext` all working; the only added behaviour is the
+        // check. Keyed on the context actually *running*, since a suspended
+        // one makes no sound, and `OfflineAudioContext` is deliberately not
+        // touched — rendering to a buffer isn't playback.
+        for (const name of ["AudioContext", "webkitAudioContext"]) {
+            const Original = globalThis[name];
+            if (typeof Original !== "function") continue;
+            const Observed = class extends Original {
+                constructor(...args) {
+                    super(...args);
+                    const check = () => {
+                        if (this.state === "running") reportAudioPolicy();
+                    };
+                    check();
+                    this.addEventListener("statechange", check);
+                }
+            };
+            Object.defineProperty(Observed, "name", { value: name });
+            globalThis[name] = Observed;
+        }
+    }
+
     // --- navigator.mediaSession polyfill ---------------------------------
     //
     // Everything the OS shows for the audio you're playing: the lock-screen

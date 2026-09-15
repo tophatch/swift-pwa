@@ -636,6 +636,21 @@ happen* on desktop: a minimized GTK3, GTK4 or WebView2 window keeps its audio
 clock and its media element running. Set the type anyway, so the one line keeps
 working when the user runs your app on a phone.
 
+**You'll be told if you forget.** Forgetting is invisible on the machine you're
+developing on, and the platform where it bites is the one you may not own — so
+two things point at it, both quiet unless you're actually affected:
+
+- **At runtime**, the first time audio really starts — a media element playing,
+  or an `AudioContext` reaching the `running` state — with the type still
+  `auto`, one `console.warn` names the consequence and the line to add. A page
+  that has already set a type, has an `<audio>` element it never plays, or
+  renders through an `OfflineAudioContext` never sees it, and a type set in the
+  same handler that starts the sound counts either way round.
+- **At build time**, `swift-pwa doctor` says so when your `web/` uses audio and
+  mentions no `audioSession` anywhere. It's advisory, never a failure, and it
+  names the file it matched — so a bundled framework that merely contains the
+  word is dismissed at a glance instead of investigated.
+
 ### `navigator.mediaSession` — the lock screen, the notification, the headset button
 
 The [W3C Media Session API](https://www.w3.org/TR/mediasession/). It's what puts

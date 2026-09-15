@@ -1,4 +1,5 @@
 import ArgumentParser
+import Foundation
 @testable import SwiftPWACLISupport
 import Testing
 
@@ -30,5 +31,91 @@ struct DoctorTests {
     @Test("returns nil for an unstamped source")
     func noStamp() {
         #expect(Doctor.stampedVersion(in: "import SwiftPWA\nstruct App {}\n") == nil)
+    }
+}
+
+/// The audio-session advisory. The pairing it checks — audio present, policy
+/// absent — is the whole design: either half alone has to stay silent, or the
+/// check becomes noise a developer learns to skip past.
+@Suite("swift-pwa doctor — audio session policy")
+struct DoctorAudioPolicyTests {
+    private func project(web: [String: String]) throws -> URL {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("doctor-audio-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(
+            at: root.appendingPathComponent("web"), withIntermediateDirectories: true
+        )
+        let manifest = """
+        {"id":"com.example.a","name":"A","version":"1.0.0",
+         "web":{"directory":"web","entry":"index.html"},
+         "window":{"title":"A","width":800,"height":600,"resizable":true,"fullscreen":false}}
+        """
+        try manifest
+            .write(to: root.appendingPathComponent("pwa.json"), atomically: true, encoding: .utf8)
+        for (name, text) in web {
+            let file = root.appendingPathComponent("web").appendingPathComponent(name)
+            try FileManager.default.createDirectory(
+                at: file.deletingLastPathComponent(), withIntermediateDirectories: true
+            )
+            try text.write(to: file, atomically: true, encoding: .utf8)
+        }
+        return root
+    }
+
+    @Test("audio without a declared policy is advisory, and names its evidence")
+    func flagsUndeclared() throws {
+        let root = try project(web: ["index.html": "<audio src='/tone.mp3'></audio>"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let checks = Doctor.audioPolicy(in: root)
+        #expect(checks.count == 1)
+        #expect(checks.first?.ok == false)
+        // Advisory, never a build failure: a bundled framework that merely
+        // mentions AudioContext would otherwise wedge anyone's `doctor`.
+        #expect(checks.first?.required == false)
+        // The file is in the message so a false positive is dismissed at a
+        // glance rather than investigated.
+        #expect(checks.first?.detail.contains("index.html") == true)
+    }
+
+    @Test("a declared policy passes")
+    func declaredPasses() throws {
+        let root = try project(web: [
+            "index.html": "<audio src='/tone.mp3'></audio>",
+            "app.js": "navigator.audioSession.type = 'playback';"
+        ])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(Doctor.audioPolicy(in: root).first?.ok == true)
+    }
+
+    @Test("a page that makes no sound is not asked about audio at all")
+    func silentAppSaysNothing() throws {
+        let root = try project(web: ["index.html": "<h1>hello</h1><script>render();</script>"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(Doctor.audioPolicy(in: root).isEmpty)
+    }
+
+    /// `.play()` matches a video element, a Web Animations call and half the
+    /// game loops in existence, so it is deliberately not a signal.
+    @Test("an unrelated .play() is not mistaken for audio")
+    func playAloneIsNotAudio() throws {
+        let root = try project(web: ["index.html": "<script>spriteAnimation.play();</script>"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(Doctor.audioPolicy(in: root).isEmpty)
+    }
+
+    @Test("Web Audio counts as audio, not just media elements")
+    func webAudioCounts() throws {
+        let root = try project(web: ["game.js": "const ctx = new AudioContext();"])
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(Doctor.audioPolicy(in: root).first?.ok == false)
+    }
+
+    @Test("no project means no opinion")
+    func noProject() throws {
+        let root = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("doctor-audio-empty-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(Doctor.audioPolicy(in: root).isEmpty)
     }
 }

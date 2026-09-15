@@ -1113,10 +1113,28 @@ await __SWIFT_PWA__.invoke('ai.unload');
 (native schema-constrained decoding where available, otherwise a
 prompt-and-validate fallback), and composes with multimodal `images` /
 `audio` input + `schema`. Errors carry stable codes (`E_AI_UNAVAILABLE`,
-`E_AI_GENERATION`, `E_AI_STRUCTURED_OUTPUT`). In 0.7 the contract is in
-place but no on-device backend is wired yet, so `ai.info` reports
-`available: false` until one lands. Full reference, backend protocol, and
-roadmap: [docs/ai-plugin.md](ai-plugin.md).
+`E_AI_GENERATION`, `E_AI_STRUCTURED_OUTPUT`). `ai.info` reports
+`available: false` until a backend is installed, so check it rather than
+assuming — which of text / image / audio a build can do depends on the
+backends it was built with. Full reference, backend protocol, and roadmap:
+[docs/ai-plugin.md](ai-plugin.md).
+
+**If you play the audio you generate, declare a session type.** Generated
+speech is the case that bites hardest: the clip plays perfectly in every
+foreground test and stops the moment an iPhone user leaves the app, because
+WebKit suspends a backgrounded page's audio unless a type says otherwise.
+One line, before you play anything:
+
+```js
+navigator.audioSession.type = 'playback';
+```
+
+See [`navigator.audioSession`](#navigatoraudiosession--what-your-audio-means-to-the-device) for the
+full story, and `Examples/CritterFacts/…/web/speak.html` for a worked one —
+it also publishes the clip to the lock screen. Generating audio faster than
+real time is not a given (measured ~2.5x *slower* than real time on-device),
+so synthesize the whole clip and play it, rather than streaming into a buffer
+that will underrun.
 
 ### `ai.run` / `ai.describeInputs` — run an imported workflow at runtime
 

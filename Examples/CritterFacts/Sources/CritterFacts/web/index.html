@@ -216,6 +216,14 @@
         const $ = (id) => document.getElementById(id);
         const bridge = window.__SWIFT_PWA__;
 
+        // The Speak card plays a spoken fact, so this deck declares what its
+        // audio is for. `playback` keeps it running when the app is
+        // backgrounded — without this line the clip cuts out the moment an
+        // iPhone user leaves the app, and nothing reports it. One line, all
+        // five platforms, no branch. speak.html shows the rest of the story
+        // (lock-screen metadata, artwork, transport handlers).
+        navigator.audioSession.type = "playback";
+
         // A spread of critters (and a couple of honorary plants/fungi) with emoji.
         const CRITTERS = [
             ["Octopus", "🐙"], ["Axolotl", "🦎"], ["Pufferfish", "🐡"], ["Barn owl", "🦉"],

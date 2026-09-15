@@ -208,6 +208,28 @@ and emits a single `done` with the finished audio — which is what the shipped
 `SwiftPWAQwenTTS` does. Write the handler for both shapes (as above) and it
 works either way; don't build a player that waits for a first `chunk`.
 
+**And don't build one that streams into a buffer as it arrives**, either.
+On-device synthesis is measured at roughly **2.5x slower than real time**
+(see [docs/on-device-ai-performance.md](on-device-ai-performance.md)), so a
+player that starts on the first chunk and expects the rest to keep up
+underruns constantly. Synthesize the passage, then play it.
+
+**Declare what the audio is for before you play it.** This is the single most
+common way a working TTS app breaks on a platform its author doesn't own:
+
+```js
+navigator.audioSession.type = 'playback';
+```
+
+Without it the clip plays perfectly in every foreground test and stops the
+moment an iPhone user leaves the app — WebKit suspends a backgrounded page's
+audio unless a session type says otherwise, and nothing reports it. The runtime
+warns in the console the first time you play audio without one, and
+`swift-pwa doctor` says so too, but the line costs nothing to write up front.
+See [docs/javascript-api.md](javascript-api.md#navigatoraudiosession--what-your-audio-means-to-the-device);
+`Examples/CritterFacts/…/web/speak.html` is a worked example that also puts the
+clip on the lock screen.
+
 When `info.voiceCloning` is true, pass `referenceAudio` (inline `dataBase64` or
 on-disk `path`) + `referenceText` to clone a voice per request — see
 [the worked example](#worked-example-a-custom-on-device-audio-tts-backend) for

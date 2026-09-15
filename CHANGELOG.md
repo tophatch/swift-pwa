@@ -124,6 +124,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outcome is already true; leave it absent when a no-op would make the page
   believe something false.**
 
+- **The tutorials and samples now declare an audio policy**, so the first thing
+  an adopter copies is the version that works on a phone.
+
+  `Examples/CritterFacts`' speak-the-fact card and its dedicated `speak.html`
+  both generate and play speech, and both would have stopped backgrounded on
+  iOS as written — the sample was demonstrating the bug. The deck takes the one
+  line; `speak.html` takes the whole story, since it is what someone building a
+  read-aloud app will read: `audioSession.type`, lock-screen metadata with
+  artwork, play/pause handlers, and `playbackState` driven from the element's
+  own events so the transport row can't disagree with what is actually
+  playing. The on-device AI tutorial gains a "speaking it" step next to its
+  image one, and [`docs/ai-plugin.md`](docs/ai-plugin.md) tells a backend
+  author the same thing where they'll be reading.
+
+  Two measured anti-patterns are called out in both places, because both look
+  reasonable and neither works: don't stream synthesis into a player as it
+  arrives (on-device TTS runs ~2.5x *slower* than real time, so the buffer
+  underruns), and don't schedule audio from a timer (throttled to ~1 Hz in the
+  background — use the audio clock).
+
+  The README roadmap's **"Platform audio (capture / playback)"** item is
+  removed rather than marked done: measurement retired its premise. Every
+  engine already delivers raw 128-frame PCM into an `AudioWorklet` at 2.7–10 ms,
+  so there was no native plugin worth building — what was missing was policy,
+  and that shipped as three decisions about standard web APIs. The feature
+  matrix gains rows for `navigator.audioSession` and `navigator.mediaSession`
+  with a footnote covering all three, `setSinkId` included.
+
 - **An app that plays audio without declaring a policy is now told so**, at
   runtime and by `swift-pwa doctor`.
 

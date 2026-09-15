@@ -731,21 +731,24 @@ enum AndroidTemplates {
                     WebView.setWebContentsDebuggingEnabled(true)
                 }
 
-                // The asset loader serves any URL under
-                // `https://swift-pwa.local/<path>` from `assets/<path>`.
-                // The bundler puts the web bundle at `assets/web/`, so
-                // the Swift runtime navigates to
-                // `https://swift-pwa.local/web/<entry>` to pick it up
-                // (see SwiftPWAAndroid/AndroidWebViewAdapter.swift).
+                // The asset loader serves `https://swift-pwa.local/<path>`
+                // from the web bundle, which the bundler puts at
+                // `assets/web/` — so the handler prefixes `web/` and the
+                // bundle sits at the **origin root**, the way it does on the
+                // other four backends. That matters more than it looks: a
+                // page's root-absolute URL (`/styles/app.css`,
+                // `location.replace('/reader.html')`) resolved against the
+                // origin, so serving one directory down 404'd every one of
+                // them on Android and nowhere else.
                 // Served mounts are registered BEFORE the catch-all "/" bundle
                 // handler: WebViewAssetLoader matches handlers in registration
                 // order by path prefix, and "/" is a prefix of "/packs/…", so a
-                // "/"-first order would let the bundle's AssetsPathHandler
-                // shadow every served mount (404 from assets). Specific prefixes
-                // must come first.
+                // "/"-first order would let the bundle handler shadow every
+                // served mount (404 from assets). Specific prefixes must come
+                // first.
                 val assetLoader = WebViewAssetLoader.Builder()
                     .setDomain("swift-pwa.local")\(serveHandlerLines(serveMounts))
-                    .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
+                    .addPathHandler("/", WebBundlePathHandler(this))
                     .build()
 
                 bridge = SwiftPWABridge(this, webView, assetLoader)
@@ -917,6 +920,23 @@ enum AndroidTemplates {
             /// See `docs/android-setup.md` for the wrapping pattern that
             /// turns the user's `configure` closure into this entry point.
             private external fun swiftPwaMain()
+        }
+
+        /// Serves the web bundle at the **origin root** by prefixing `web/`
+        /// onto every path before handing it to the stock assets handler.
+        ///
+        /// `AssetsPathHandler`'s public constructor takes only a `Context`
+        /// — there is no base-path argument — which is why the bundle used
+        /// to be reachable only at `/web/…`. Delegating rather than
+        /// reimplementing keeps its MIME guessing, its `..` containment check
+        /// and its not-found shape (a response with a null stream, which the
+        /// SPA fallback tests for).
+        private class WebBundlePathHandler(context: android.content.Context) :
+            WebViewAssetLoader.PathHandler {
+            private val assets = WebViewAssetLoader.AssetsPathHandler(context)
+
+            override fun handle(path: String): android.webkit.WebResourceResponse? =
+                assets.handle("web/" + path.removePrefix("/"))
         }
         """
     }
@@ -1115,7 +1135,7 @@ enum AndroidTemplates {
                             val last = request.url.lastPathSegment ?: ""
                             if (!last.contains('.')) {
                                 val entryUrl = android.net.Uri.parse(
-                                    "https://swift-pwa.local/web/" + spaEntry
+                                    "https://swift-pwa.local/" + spaEntry
                                 )
                                 return assetLoader.shouldInterceptRequest(entryUrl)
                             }

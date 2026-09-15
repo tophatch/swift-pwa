@@ -544,7 +544,11 @@ struct AndroidBundlerUnitTests {
         // The fallback only fires for a main-frame route with no matching asset.
         #expect(on.contains("request.isForMainFrame"))
         #expect(on.contains("response?.data == null"))
-        #expect(on.contains("https://swift-pwa.local/web/"))
+        // Root, not `/web/`: the bundle handler prefixes `web/` itself so
+        // that a page's root-absolute URLs resolve on Android the way they
+        // do everywhere else.
+        #expect(on.contains("\"https://swift-pwa.local/\" + spaEntry"))
+        #expect(!on.contains("https://swift-pwa.local/web/"))
     }
 
     @Test("SwiftPWASystemPlugins maps PackageInstaller status codes to stable names")
@@ -619,7 +623,7 @@ struct AndroidBundlerUnitTests {
             ]
         )
         // Bundle handler is present.
-        #expect(activity.contains(".addPathHandler(\"/\", WebViewAssetLoader.AssetsPathHandler(this))"))
+        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this))"))
         // Each declared mount maps to an internal-storage handler under the
         // right root, prefix normalized to end with "/".
         #expect(activity.contains(
@@ -628,7 +632,7 @@ struct AndroidBundlerUnitTests {
         // Critical: served mounts must register BEFORE the catch-all "/" bundle
         // handler, or "/" shadows them (WebViewAssetLoader matches in order).
         let packsIdx = try #require(activity.range(of: ".addPathHandler(\"/packs/\""))
-        let bundleIdx = try #require(activity.range(of: ".addPathHandler(\"/\", WebViewAssetLoader.AssetsPathHandler"))
+        let bundleIdx = try #require(activity.range(of: ".addPathHandler(\"/\", WebBundlePathHandler"))
         #expect(packsIdx.lowerBound < bundleIdx.lowerBound)
         #expect(activity.contains(
             ".addPathHandler(\"/thumbs/\", WebViewAssetLoader.InternalStoragePathHandler(this, File(cacheDir, \"thumbs\").apply { mkdirs() }))"
@@ -638,6 +642,23 @@ struct AndroidBundlerUnitTests {
         ))
         // File import is pulled in for the handler construction.
         #expect(activity.contains("import java.io.File"))
+    }
+
+    /// Issue #212: Android served the bundle one directory down, at
+    /// `/web/`, so every root-absolute URL in a page — `/styles/app.css`,
+    /// `location.replace('/reader.html')` — 404'd there and nowhere else.
+    /// The handler prefixes `web/` itself now, which is the only way to
+    /// reach `assets/web/` from `/`: `AssetsPathHandler`'s public
+    /// constructor takes no base path.
+    @Test("the web bundle is served at the origin root, not under /web/")
+    func mainActivityServesBundleAtRoot() {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this))"))
+        #expect(activity.contains("private class WebBundlePathHandler"))
+        // The prefix the delegate applies is what puts the bundle at the root.
+        #expect(activity.contains("assets.handle(\"web/\" + path.removePrefix(\"/\"))"))
+        // And nothing navigates to the old location any more.
+        #expect(!activity.contains("swift-pwa.local/web/"))
     }
 
     @Test("no build.serve mounts leaves the asset loader chain unchanged")

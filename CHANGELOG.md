@@ -124,6 +124,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outcome is already true; leave it absent when a no-op would make the page
   believe something false.**
 
+### Fixed
+
+- **Android serves the web bundle at the origin root**, so a page's
+  root-absolute URLs resolve there the way they already did on the other four
+  backends (#212).
+
+  Android navigated to `https://swift-pwa.local/web/<entry>` and mapped
+  `/<path>` onto `assets/<path>`, which put the bundle one directory below the
+  origin. Every root-absolute URL a page contains therefore missed on Android
+  and nowhere else: `/styles/tokens.css`, `/js/app.js`, `import('/vendor/…')`,
+  `location.replace('/reader.html?id=…')`. The reporting adopter's app lost
+  eight resources on load and rendered as an unstyled shell, with
+  `Error opening asset path:` in logcat as the only clue.
+
+  The root cause is small and worth recording, because it looks like a
+  deliberate choice and wasn't: `AssetsPathHandler`'s public constructor takes
+  only a `Context` — there is no base-path argument — so the `web/` prefix had
+  to go somewhere, and it went into the URL. It belongs in a handler instead. A
+  `WebBundlePathHandler` now prefixes `web/` and delegates to the stock handler,
+  keeping its MIME guessing, its containment check and its not-found shape.
+
+  This is a **parity fix, not a new capability**: `docs/swift-api.md` and the
+  content-packs design doc already told adopters that an origin-relative URL
+  works unchanged on every backend, and `build.serve` mounts already did. The
+  bundle itself was the one thing that broke the rule, and relative URLs were a
+  workaround nothing else in swift-pwa asks for — with no spelling at all for a
+  `location.replace('/reader.html')` called from a nested route.
+
+  Device-verified on a Fold7: a root-absolute stylesheet, script, `fetch`,
+  dynamic `import` and `location.replace` all resolve; a missing asset still
+  404s honestly; a `build.serve` mount still serves ahead of the bundle; and
+  SPA history routing still loads the entry for `/library/shelf/42` — with that
+  entry's own root-absolute script resolving from the nested route, which is the
+  case relative URLs cannot express.
+
 [Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
 
 ## [0.10.7] - 2026-09-14

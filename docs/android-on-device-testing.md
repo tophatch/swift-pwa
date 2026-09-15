@@ -76,7 +76,7 @@ A clean launch shows three INFO lines under tag `swift-pwa`:
 ```
 swift-pwa: bridge attached
 swift-pwa: entry: swiftPwaMain enter
-swift-pwa: loadUrl: https://swift-pwa.local/web/index.html
+swift-pwa: loadUrl: https://swift-pwa.local/index.html
 ```
 
 Any `FATAL EXCEPTION: main` from `AndroidRuntime:E` is a hard

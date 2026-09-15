@@ -1,22 +1,27 @@
 # Proposal: platform audio — fill three web APIs, don't build a plugin
 
-> **Status: all three gaps are resolved** — two by building, one by deciding
-> not to. `setSinkId` is deliberately **not** filled (see gap 3): its contract
-> is per-element and anything a shell can do is per-process, so a fill would lie
-> rather than merely under-deliver.
+> **Status: shipped.** All three gaps are resolved — two by building, one by
+> deciding not to — plus the developer-facing half, which closed more than the
+> code did.
 >
-> **Status: two of the three gaps are closed.** `navigator.mediaSession` is
-> filled and device-verified on Android — the only engine that lacked it — over
-> a platform `MediaSession` plus a transport notification. `setSinkId` (absent
-> on Android and Linux) is what remains.
+> - **`navigator.audioSession`** on all five: the engine's own on Apple, a real
+>   fill over `AudioManager` focus on Android, recorded-but-inert on Linux and
+>   Windows where **the platform has nothing an embedder can drive** (see below).
+> - **`navigator.mediaSession`** filled on Android, the only engine lacking it,
+>   over a platform `MediaSession` plus a transport notification — **artwork
+>   included**, fetched by the page and sent as bytes, because an artwork URL in
+>   the app's own bundle sits on an origin no other process can resolve.
+> - **`setSinkId` deliberately not filled** (see gap 3): per-element contract,
+>   per-process mechanism, and `'setSinkId' in element` is how a page decides
+>   whether to show a device picker — so a fill would lie rather than merely
+>   under-deliver.
+> - **A runtime warning and a `doctor` check** for an app that plays audio
+>   without declaring a type, plus the tutorials and samples updated to declare
+>   one. See "Telling the developer" below.
 >
-> **Status: `navigator.audioSession` is built on all five** (see `CHANGELOG.md`
-> `[Unreleased]`) — the engine's own on Apple, a real fill over `AudioManager`
-> focus on Android, and a recorded-but-inert one on Linux and Windows, where
-> **the platform has nothing an embedder can drive** (see below). The other two
-> gaps — `mediaSession` on Android, `setSinkId` on Android and Linux — remain.
-> The rest of the document is the measurement pass it came from.
->
+> Still open: a **game tutorial** exercising `ambient` / `transient`, pending
+> input from a game author.
+
 > **Status: proposed**, after a five-platform measurement pass. The README
 > roadmap has "Platform audio (capture / playback)" at #3, described as
 > *"native microphone capture and audio playback / device routing behind a
@@ -348,22 +353,27 @@ The one line an app needs is invisible by omission: an app that never sets
 only on a backgrounded iPhone. Someone without that device cannot find it. So
 the fix is as much about surfacing it as implementing it.
 
-- **A runtime diagnostic.** The first time a page plays audio with the type
-  still `auto`, log a line naming the call and what it changes. This is the same
-  shape as the permissions diagnostic — a refusal the page cannot distinguish
-  from a normal one, so the console is the only place the cause can surface —
-  and it wants the same installable sink so it actually arrives on Android.
-- **A `doctor` check.** `swift-pwa doctor` already reports per-target
-  prerequisites; an app whose web source plays audio and never sets a session
-  type is exactly the kind of thing it can notice before the developer ships.
-  Cheap, and it reaches people who never read the console.
-- **The existing tutorials and examples.** The on-device AI / TTS tutorial and
-  the `CritterFacts` speak-the-fact demo both generate audio and both would stop
-  when backgrounded on iOS as written. They should set the type and say why.
-  Same for any audio the `HelloPWA` deck plays.
+- **A runtime diagnostic — built.** The first media element that plays, or
+  `AudioContext` that reaches `running`, with the type still `auto` produces one
+  `console.warn` naming the consequence and the remedy. Media elements need no
+  patching (`play` doesn't bubble, but a capturing listener on `document` sees
+  it); Web Audio has no equivalent hook, so the global is subclassed —
+  transparently, verified for `name`, `instanceof`, the prototype chain and a
+  page's own `extends AudioContext`. `OfflineAudioContext` is left alone:
+  rendering to a buffer isn't playback.
+- **A `doctor` check — built**, and see open question 4 for how its cry-wolf
+  problem turned out to be avoidable without a declaration mechanism.
+- **The existing tutorials and examples — done.** The on-device AI tutorial
+  gained a "speaking it" step, `docs/ai-plugin.md` tells a backend author the
+  same, and `CritterFacts` declares a type in both places it plays speech —
+  `speak.html` taking the full treatment (metadata, artwork, transport handlers,
+  `playbackState` from the element's own events). `HelloPWA` needed nothing: its
+  only `audio` is a `getUserMedia` permission demo that neither records nor
+  plays.
 - **A game tutorial** would exercise the other half of the API — `ambient` or
   `transient` rather than `playback`, so a game doesn't stop the player's music
-  — and would be the natural home for the scheduling guidance below.
+  — and would be the natural home for the scheduling guidance below. Still open,
+  pending input from a game author.
 
 The pattern guidance that goes with it: **schedule on the audio clock, never on
 a timer.** Hidden, macOS timers fall to 2 Hz and backgrounded iOS to ~1 Hz,
@@ -425,13 +435,19 @@ without running the app), and have the scaffold install a diagnostic sink.
    device inactivity, and vendor battery management varies. If it turns out a
    long session does get killed, `audioSession` on Android grows a foreground
    service — a user-visible notification and a manifest change.
-4. **What exactly should `doctor` look at?** A runtime diagnostic is
-   straightforward (the page is running; the type is readable). A build-time
-   check has to decide an app "uses audio" from its web source, which is a
-   heuristic — `new Audio(`, `AudioContext`, an `<audio>` tag — and heuristics
-   that cry wolf get ignored. Worth scoping before building: it may be better
-   for `doctor` to check only that an app which *declares* audio intent has set
-   a type, once there is a place to declare it.
+4. **What exactly should `doctor` look at? — answered, and not the way this
+   expected.** The fear was that inferring "uses audio" from web source is a
+   heuristic that cries wolf, and that the fix was a declaration mechanism to
+   check against. Neither turned out to be needed. Two things removed the
+   problem. First, the check fires on a **pairing** — audio signals present
+   *and* no mention of `audioSession` anywhere — so it is silent for every app
+   that has already dealt with this, which is the population a false positive
+   would annoy. Second, it **names the file it matched**, which converts the one
+   unavoidable false positive (a bundled framework containing the string
+   `AudioContext` for code the app never reaches) from an investigation into a
+   glance. Advisory, never a build failure. `.play()` is deliberately not a
+   signal: it matches a video element, a Web Animations call and half the game
+   loops in existence.
 
 ## Alternatives considered
 

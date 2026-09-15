@@ -40,6 +40,34 @@
             emitOpen(connectionOptions.urlContexts)
         }
 
+        /// The scene came to the foreground. Surfaced as the window's
+        /// `didFocus`, which is what the desktop backends emit when their
+        /// window becomes active — so an app that re-reads state on becoming
+        /// active writes it once and is right on every platform (#214). On iOS
+        /// this matters more than on a desktop: an app that was backgrounded
+        /// was *suspended*, so anything it was watching stopped being watched.
+        public func sceneDidBecomeActive(_ scene: UIScene) {
+            window(for: scene)?.emit(.didFocus)
+        }
+
+        /// Leaving the foreground — the moment an app re-locks, stops a
+        /// recording, or saves. `willResignActive` rather than
+        /// `didEnterBackground` so the work is queued while the process is
+        /// still scheduled, and because it also covers the states short of
+        /// backgrounding (a system alert, the app switcher).
+        public func sceneWillResignActive(_ scene: UIScene) {
+            window(for: scene)?.emit(.didBlur)
+        }
+
+        /// The `IOSWindow` showing in `scene`, if it has one attached yet:
+        /// lifecycle callbacks can arrive for a scene whose window is still
+        /// pending.
+        private func window(for scene: UIScene) -> IOSWindow? {
+            IOSAppRuntime.shared.context.windows.values
+                .compactMap { $0 as? IOSWindow }
+                .first { $0.uiWindow?.windowScene === scene }
+        }
+
         /// Warm-launch open: the app is already running and the OS hands it a
         /// document / URL to open.
         public func scene(_: UIScene, openURLContexts URLContexts: Set<UIOpenURLContext>) {

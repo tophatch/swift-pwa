@@ -664,20 +664,23 @@ remain:
   size wherever the compositor places it. Off-screen restore (a monitor
   that was present when the geometry was saved is now gone) isn't clamped
   yet on any backend.
-- **WM-driven focus / minimize / fullscreen events aren't observed.**
-  `WindowEvent.didFocus` / `.didBlur` / `.didMinimize` / `.didDeminiaturize`
-  / `.didEnterFullscreen` / `.didExitFullscreen` are only emitted when
-  the corresponding `Window.focus()` / `minimize()` / `setFullscreen()`
-  method is called programmatically. User-driven state changes (alt-tab,
-  click another window, double-click titlebar to maximize) don't reach
-  subscribers on either backend. The fix is to wire GTK3's
-  `focus-in-event` / `focus-out-event` / `window-state-event`, or
-  GTK4's `notify::is-active` / `notify::fullscreened` / `notify::minimized`,
-  the same way the resize signals are hooked. Note that *programmatic*
-  fullscreen state **is** tracked: `Window.isFullscreen()` reflects the
-  last `setFullscreen(_:)` call (and the initial `window.fullscreen`
-  config) on both backends — it just doesn't yet observe a WM/F11-driven
-  toggle.
+- **WM-driven minimize / fullscreen events aren't observed** — focus now is.
+  `WindowEvent.didMinimize` / `.didDeminiaturize` / `.didEnterFullscreen` /
+  `.didExitFullscreen` are still only emitted when the corresponding
+  `Window.minimize()` / `setFullscreen()` method is called programmatically, so
+  a user double-clicking the titlebar or hitting F11 doesn't reach subscribers
+  on either backend. The fix is to wire GTK3's `window-state-event`, or GTK4's
+  `notify::fullscreened` / `notify::minimized`, the way the resize signals are
+  hooked. Note that *programmatic* fullscreen state **is** tracked:
+  `Window.isFullscreen()` reflects the last `setFullscreen(_:)` call (and the
+  initial `window.fullscreen` config) on both backends — it just doesn't yet
+  observe a WM/F11-driven toggle.
+
+  **`.didFocus` / `.didBlur` do follow the window manager**, on both backends,
+  via `notify::is-active` — so alt-tabbing away and back reaches subscribers.
+  They are de-duplicated against an explicit `Window.focus()` call, which
+  reports focus too: presenting a window makes it active, and the signal
+  arriving right behind the call would otherwise say the same thing twice.
 - **The tray icon needs a StatusNotifierHost.** Both Linux backends
   publish the tray over the freedesktop StatusNotifierItem D-Bus protocol
   (GTK3 via `libayatana-appindicator`, GTK4 hand-rolled over GDBus). It

@@ -280,6 +280,13 @@
                 (webView as? WebView2Adapter)?.takeFocus()
                 emit(.didFocus)
                 return true
+            case WM_KILLFOCUS:
+                // The counterpart to the case above. Without it `didFocus`
+                // arrived and nothing ever said it had ended, so an app that
+                // does something on becoming active — re-reading a folder,
+                // re-locking — could never undo it (#214).
+                emit(.didBlur)
+                return true
             case WM_CLOSE:
                 emit(.willClose)
                 DestroyWindow(hwnd)

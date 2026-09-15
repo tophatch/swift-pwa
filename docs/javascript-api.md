@@ -566,6 +566,60 @@ The Swift side pushes with `ctx.emit('library:changed', payload)` — see
 over `subscribe('events.subscribe', …)` / `invoke('events.emit', …)`; the raw
 commands are available if you need them.
 
+## Filled web APIs (no `__SWIFT_PWA__` call, no plugin)
+
+Some things a native app needs are already *standard web APIs* that only some
+engines implement. Where that's true, swift-pwa fills the standard API natively
+instead of offering a swift-pwa-shaped one beside it — so you write the code
+you'd write for the web, once, and it behaves the same on all five platforms.
+The fill installs only where the engine lacks the API, and never wraps a real
+implementation.
+
+### `navigator.audioSession` — what your audio means to the device
+
+The [W3C Audio Session API](https://www.w3.org/TR/audio-session/). It decides
+whether your audio interrupts the user's music or mixes with it, whether it
+keeps playing when your app isn't in front, and — on iOS — whether your page
+keeps running at all once it's backgrounded.
+
+```js
+navigator.audioSession.type = 'playback';   // media, read-aloud, ambient sound
+navigator.audioSession.type = 'ambient';    // a game: don't stop the user's music
+```
+
+| type | what it means |
+| --- | --- |
+| `playback` | Media the user chose to hear. Interrupts other audio; keeps playing in the background. |
+| `ambient` | Sound that isn't the point — game and UI audio. Mixes with whatever is already playing. |
+| `transient` | A short sound that ducks other audio for its duration. |
+| `transient-solo` | A short sound that silences other audio for its duration. |
+| `play-and-record` | Simultaneous capture and playback — a call, live transcription. |
+| `auto` | Let the engine decide. The default. |
+
+Reading `.type` back reports what the *platform* did, which is not always what
+you asked for: an OS may coerce or refuse a type, and you want to find that out
+rather than assume. `.state` is `"active"`, `"inactive"` or `"interrupted"`
+(something else took the audio — a call — and you should pause).
+
+**Set it if you play audio at all.** An app that never does works perfectly in
+every foreground test and then stops playing the moment an iPhone user leaves
+the app, because WebKit suspends a page's `AudioContext` in the background
+unless a session type says otherwise. `UIBackgroundModes` does not fix this and
+neither does anything in `pwa.json` — this one line does.
+
+**If you generate audio as you play it** (streaming TTS, procedural music),
+schedule chunks on the audio clock rather than from a timer. Timers are
+throttled hard when a window isn't visible — measured at 2 Hz on macOS and
+~1 Hz on a backgrounded iPhone — while the `AudioWorklet` render thread and
+`AudioBufferSourceNode.start(when)` keep perfect time. Chunks of a second or
+more, scheduled ahead, ride through it.
+
+| | `navigator.audioSession` |
+| --- | --- |
+| macOS, iOS | the engine's own implementation |
+| Android | filled, over `AudioManager` audio focus |
+| Linux (GTK3/GTK4), Windows | **not yet filled** — assignment is accepted and logs a warning |
+
 ## Opt-in plugins (require `ctx.use(...)` on the Swift side)
 
 ### `dialog.*`

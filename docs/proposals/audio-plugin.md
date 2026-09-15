@@ -1,5 +1,10 @@
 # Proposal: platform audio — fill three web APIs, don't build a plugin
 
+> **Status: partly built.** `navigator.audioSession` is filled and
+> device-verified on **Android** (see `CHANGELOG.md` `[Unreleased]`); Linux and
+> Windows remain, and are the reason this isn't releasable yet. The rest of the
+> document is the measurement pass it came from.
+>
 > **Status: proposed**, after a five-platform measurement pass. The README
 > roadmap has "Platform audio (capture / playback)" at #3, described as
 > *"native microphone capture and audio playback / device routing behind a
@@ -153,6 +158,27 @@ music" / "this is transient". On Apple it exists and every type is accepted.
 Nowhere else. This is what use cases 1 and 3 need to behave correctly against
 other audio on the device, and what use case 4 needs on iOS.
 
+#### What building the Android fill settled
+
+- **Audio focus is the whole mechanism, and it is enough.** The WebView plays
+  through its own audio track whose attributes the app can't rewrite, so for a
+  while it looked like the type might be unimplementable there. It isn't: what
+  the type actually governs is whether *other* audio stops, ducks or continues,
+  and that is exactly what holding or declining focus decides. `ambient` is
+  implemented as *not requesting focus at all*.
+- **`Build.VERSION_CODES.O` splits the API.** `AudioFocusRequest` exists from
+  API 26; below that the deprecated `requestAudioFocus(listener, stream, gain)`
+  is the only route, and the scaffold's `min_sdk` is 28 — so the old path is
+  reachable only for apps that lower it, and is kept for them.
+- **Android 16 will mute background playback**, and the log says so out loud:
+  `AudioHardening background playback would be muted for <app>, level: partial`
+  appeared in `dumpsys audio` during every background excursion. It did not
+  actually mute anything at `targetSdk` 34 — the six-minute run above played
+  through — but "would be" is a warning about enforcement this app hasn't opted
+  into yet. Holding the right focus is the plausible exemption, which makes
+  this work more load-bearing over time rather than less. **Unmeasured:** what
+  happens at a higher `targetSdk`.
+
 ### 2. Transport and now-playing — `navigator.mediaSession`, missing on Android
 
 Absent from Android's embedded WebView — not inert, absent. No metadata, no
@@ -300,10 +326,13 @@ without running the app), and have the scaffold install a diagnostic sink.
 
 ## Open questions
 
-1. **Polyfill mechanics.** Filling a standard API means shipping JS that
-   defines `navigator.audioSession` where it's absent and *not* shadowing it
-   where it exists. Feature-detect and install only on the platforms measured
-   as missing; never wrap the real one.
+1. **Polyfill mechanics — settled by building it.** Feature-detect
+   (`!("audioSession" in navigator)`), define on `Navigator.prototype` where the
+   real one lives, and match WebIDL enum semantics by *measuring the engine that
+   has the API* rather than reading the spec: an unrecognised value is ignored,
+   not thrown, and a non-string is stringified first. Validating in JS rather
+   than round-tripping matters — a round trip could only answer after the
+   assignment had already returned.
 2. **Is GTK3's missing `visibilitychange` worth its own fix?** It is not an
    audio bug — audio is fine there — but a page cannot tell it has been
    minimized, which breaks the ordinary "pause when hidden" pattern and is the

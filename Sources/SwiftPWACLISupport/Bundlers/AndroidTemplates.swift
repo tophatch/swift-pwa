@@ -1487,6 +1487,9 @@ enum AndroidTemplates {
     import android.content.IntentFilter
     import android.content.pm.PackageInstaller
     import android.graphics.Bitmap
+    import android.media.AudioAttributes
+    import android.media.AudioFocusRequest
+    import android.media.AudioManager
     import android.graphics.BitmapFactory
     import android.net.Uri
     import android.os.Build
@@ -1671,6 +1674,8 @@ enum AndroidTemplates {
         fun dispatch(method: String, args: String, done: (String?, String?) -> Unit) {
             val json = JSONObject(args)
             when (method) {
+                "audio.session.set" -> done(audioSessionSet(json), null)
+                "audio.session.get" -> done(audioSessionGet(), null)
                 "clipboard.read" -> done(clipboardRead(), null)
                 "clipboard.write" -> {
                     clipboardWrite(json.optString("text", ""))
@@ -1772,6 +1777,111 @@ enum AndroidTemplates {
 
         private fun clipboardManager(): ClipboardManager =
             activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+        // -----------------------------------------------------------
+        // Audio session — the navigator.audioSession polyfill
+        // -----------------------------------------------------------
+        //
+        // The WebView plays through its own audio track, whose attributes the
+        // app doesn't get to rewrite. What the app *can* do is hold — or
+        // decline to hold — audio focus, and that decides the thing this API is
+        // actually about: whether the user's music stops, ducks, or keeps
+        // playing while this app makes sound.
+        //
+        // So `ambient` is not "mix" by another name; it is not requesting focus
+        // at all, which is what leaves other audio alone.
+
+        private var audioSessionType = "auto"
+        private var audioFocusHeld = false
+        private var audioFocusInterrupted = false
+        private var audioFocusRequest: AudioFocusRequest? = null
+
+        private fun audioManager(): AudioManager =
+            activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        private fun audioSessionSet(json: JSONObject): String {
+            val type = json.optString("type", "auto")
+            audioSessionType = type
+
+            val gain = when (type) {
+                "playback", "play-and-record" -> AudioManager.AUDIOFOCUS_GAIN
+                "transient" -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                "transient-solo" -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                else -> null   // ambient / auto: deliberately no focus request
+            }
+
+            abandonAudioFocus()
+            if (gain != null) requestAudioFocus(type, gain)
+            return audioSessionGet()
+        }
+
+        private fun requestAudioFocus(type: String, gain: Int) {
+            val usage = if (type == "play-and-record") {
+                AudioAttributes.USAGE_VOICE_COMMUNICATION
+            } else {
+                AudioAttributes.USAGE_MEDIA
+            }
+            val attributes = AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+
+            // Focus can be lost again at any time — a call, another app — and
+            // the page needs to see that as state "interrupted" rather than
+            // silently keep believing it is playing.
+            val listener = AudioManager.OnAudioFocusChangeListener { change ->
+                when (change) {
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        audioFocusHeld = true
+                        audioFocusInterrupted = false
+                    }
+                    AudioManager.AUDIOFOCUS_LOSS -> {
+                        audioFocusHeld = false
+                        audioFocusInterrupted = false
+                    }
+                    else -> {   // transient loss, with or without ducking
+                        audioFocusHeld = false
+                        audioFocusInterrupted = true
+                    }
+                }
+            }
+
+            val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(gain)
+                    .setAudioAttributes(attributes)
+                    .setOnAudioFocusChangeListener(listener)
+                    .build()
+                audioFocusRequest = request
+                audioManager().requestAudioFocus(request)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager().requestAudioFocus(listener, AudioManager.STREAM_MUSIC, gain)
+            }
+            audioFocusHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            audioFocusInterrupted = false
+        }
+
+        private fun abandonAudioFocus() {
+            val request = audioFocusRequest
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && request != null) {
+                audioManager().abandonAudioFocusRequest(request)
+            }
+            audioFocusRequest = null
+            audioFocusHeld = false
+            audioFocusInterrupted = false
+        }
+
+        private fun audioSessionGet(): String {
+            val state = when {
+                audioFocusInterrupted -> "interrupted"
+                audioFocusHeld -> "active"
+                else -> "inactive"
+            }
+            return JSONObject()
+                .put("type", audioSessionType)
+                .put("state", state)
+                .toString()
+        }
 
         private fun clipboardRead(): String {
             val cm = clipboardManager()

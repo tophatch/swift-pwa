@@ -89,6 +89,12 @@
             use(SystemPlugin(memoryProvider, urlOpener: AndroidURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
+            // Backs the `navigator.audioSession` polyfill in bridge.js, which
+            // installs itself only where the engine lacks the web API — this
+            // one included. Eager, like the plugins above: an adopter's whole
+            // requirement is the standard web line, and making them install a
+            // plugin to get a *standard API* would defeat that.
+            use(AudioSessionPlugin(SystemAudioSession()))
             // Auto-register `ClipboardPlugin` so apps don't have to —
             // every other backend's `AppContext` does the same. Apps
             // can override with their own `ctx.use(ClipboardPlugin(...))`

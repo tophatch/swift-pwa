@@ -255,6 +255,88 @@
         enumerable: false,
     });
 
+    // --- navigator.audioSession polyfill ---------------------------------
+    //
+    // The W3C Audio Session API decides what this app's audio *means* against
+    // everything else on the device: whether it ducks the user's music or mixes
+    // with it, whether it keeps playing in the background, and on iOS whether
+    // the page keeps running at all once it isn't in front.
+    //
+    // Apple's WebKit ships it. Measured on all five engines, nothing else does
+    // — not Android's WebView, not WebKitGTK 4.1 or 6.0, not WebView2. Rather
+    // than add a swift-pwa-shaped API beside the standard one (which would make
+    // every app carry a branch, and the branch would break on the platform its
+    // author can't test), fill the standard one where it's missing.
+    //
+    // Deliberately *not* installed when the engine has its own: a real
+    // implementation always wins, and this never wraps it.
+    if (IS_TOP && !("audioSession" in navigator)) {
+        // The web API is a property assignment, which can't await. So assign
+        // optimistically, send, and reconcile from the reply: `type` reads back
+        // what the page last asked for until the platform answers, then reads
+        // what the platform actually did — which differ when an OS coerces or
+        // refuses a type.
+        let requested = "auto";
+        // The platform's answer for the *latest* request, or null while one is
+        // in flight — so `type` reads back optimistically until the platform
+        // has spoken, then reads what it actually did.
+        let reported = "auto";
+        let state = "inactive";
+        let inFlight = null;
+
+        const apply = (value) => {
+            requested = value;
+            reported = null;
+            const call = invoke("__audio.session.set", { type: value })
+                .then((status) => {
+                    if (inFlight !== call) return;   // superseded by a later assignment
+                    reported = status.type;
+                    state = status.state;
+                })
+                .catch((e) => {
+                    // A backend without an implementation must not look like a
+                    // page that never set a type: say so once, loudly, rather
+                    // than leaving `type` reading back a value nothing honoured.
+                    console.warn(
+                        "swift-pwa: navigator.audioSession.type = '" + value +
+                        "' was not applied by this platform:", e && e.message ? e.message : e
+                    );
+                });
+            inFlight = call;
+        };
+
+        // WebIDL enum semantics, checked against WebKit's real implementation
+        // rather than assumed: an unrecognised value is **ignored** — no throw,
+        // no change — and a non-string is stringified first and then ignored if
+        // it isn't a member. Measured on macOS: assigning "nonsense", 42 or
+        // null after "playback" leaves `type` reading "playback" every time.
+        // Getting this wrong is the exact divergence this polyfill exists to
+        // prevent, so it is validated here rather than round-tripped.
+        const TYPES = new Set([
+            "auto", "playback", "ambient",
+            "transient", "transient-solo", "play-and-record",
+        ]);
+
+        const audioSession = {
+            get type() { return reported === null ? requested : reported; },
+            set type(value) {
+                const name = String(value);
+                if (!TYPES.has(name)) return;
+                apply(name);
+            },
+            get state() { return state; },
+        };
+
+        // On the prototype, where the real one lives, so a page that reflects
+        // over `Navigator.prototype` sees the same shape it would on Apple.
+        const target = (typeof Navigator === "function" && Navigator.prototype) || navigator;
+        Object.defineProperty(target, "audioSession", {
+            get() { return audioSession; },
+            configurable: true,   // configurable: a real implementation arriving in a
+            enumerable: true,     // future engine update should be able to replace this.
+        });
+    }
+
     // Tell the runtime this document owns the window now. First frame on the
     // channel, and it runs before the page's own scripts, so the previous
     // document's subscriptions are cancelled before this one opens any.

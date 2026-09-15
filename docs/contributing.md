@@ -98,6 +98,23 @@ stale. If you edit the canonical source, run its regenerate script:
   the optional first. (Noted here because it only reproduces on the Windows CI
   box.)
 
+### After changing `bridge.js`
+
+Two things bite in order, and both look like your change didn't take:
+
+1. **Rebuild the CLI, not just Core.** `Scripts/regenerate-bridge-js.sh` writes
+   `BridgeJSData.swift`, which the Swift backends compile in — but the **Android
+   APK gets `bridge.js` staged as an asset by the CLI**, out of the CLI binary's
+   own embedded copy. A CLI built before the regeneration stages the *old*
+   script, so an Android deploy silently runs the previous version. (Restarting
+   the app doesn't help; the asset is in the APK.)
+2. **Format with CI's pinned swiftformat.** The generator emits one enormous
+   base64 line; the committed file is the *formatted* version of that, so
+   regenerating and committing without formatting fails lint. Local swiftformat
+   is usually newer than CI's pin and wraps it differently — fetch the pinned
+   release (see the version in [`ci.yml`](../.github/workflows/ci.yml)) rather
+   than using whatever `brew` installed.
+
 ## Vendored binary tiers
 
 The on-device AI backends and ONNX Runtime ship as **checksum-pinned prebuilt

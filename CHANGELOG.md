@@ -5,6 +5,58 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`navigator.audioSession` works on Android** — the W3C Audio Session API,
+  filled natively where the engine doesn't ship it, rather than exposed as a
+  swift-pwa-shaped API beside it.
+
+  *Why this and not an `audio.*` plugin.* All five engines were measured
+  ([`docs/proposals/audio-plugin.md`](docs/proposals/audio-plugin.md)) and the
+  roadmap's premise — that native capture/playback would be lower-latency and
+  more capable than the webview's — does not hold: every engine already gives
+  raw 128-frame PCM into an `AudioWorklet` at 2.7–10 ms base latency with
+  gapless scheduling. What's genuinely missing is *policy*, and Apple's WebKit
+  already has the standard API for it. A parallel API would make every app
+  carry a branch, and the branch only breaks on the platform its author can't
+  test.
+
+  So an adopter's whole requirement is the line the web platform already
+  defines, with no manifest key, no Swift call and no plugin to install:
+
+  ```js
+  navigator.audioSession.type = 'playback';   // or 'ambient' for a game
+  ```
+
+  **The type decides real behaviour, not a label.** On Android it maps to audio
+  focus — `playback` / `play-and-record` take `AUDIOFOCUS_GAIN` (other audio
+  stops), `transient` ducks, `transient-solo` pauses others, and `ambient` /
+  `auto` deliberately request *no* focus, which is what leaves the user's own
+  music playing. Device-verified on a Fold7 down to the focus stack:
+  `requestAudioFocus() … AA=USAGE_MEDIA/CONTENT_TYPE_MUSIC req=1` on
+  `playback`, `abandonAudioFocus()` with no re-request on `ambient`.
+
+  **The polyfill matches WebKit's behaviour because it was measured against
+  it**, not read off the spec: an unrecognised value — a bad string, a number,
+  `null` — is *ignored* rather than throwing, leaving `type` on its previous
+  value, and `audioSession` is defined on `Navigator.prototype` where the real
+  one lives. The same expression run against macOS WebKit and the Android
+  polyfill now returns byte-identical results. It installs only where the API
+  is absent and never wraps a real implementation.
+
+  Reading `type` back reports what the *platform* did rather than what the page
+  asked for, so an OS that coerces or refuses a type can't leave a page
+  believing it has background audio it doesn't have.
+
+  **Still to come before release:** the same fill on Linux (both GTK backends)
+  and Windows, which also lack the API. Apple needs nothing — it has the real
+  one. `navigator.mediaSession` (absent on Android) and `setSinkId` (absent on
+  Android and Linux) are the other two gaps the measurement found.
+
+[Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
+
 ## [0.10.7] - 2026-09-14
 
 ### Added

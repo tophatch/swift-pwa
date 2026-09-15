@@ -9,7 +9,7 @@
 
 import Cocoa
 
-let names = ["play": 16, "next": 17, "previous": 18]  // NX_KEYTYPE_PLAY / _NEXT / _PREVIOUS
+let names = ["play": 16, "next": 17, "previous": 18] // NX_KEYTYPE_PLAY / _NEXT / _PREVIOUS
 let which = CommandLine.arguments.count > 1 ? CommandLine.arguments[1] : "play"
 guard let keyCode = names[which] else {
     FileHandle.standardError.write(Data("unknown key: \(which)\n".utf8))
@@ -26,7 +26,7 @@ func post(down: Bool) {
         timestamp: 0,
         windowNumber: 0,
         context: nil,
-        subtype: 8,  // NX_SUBTYPE_AUX_CONTROL_BUTTONS
+        subtype: 8, // NX_SUBTYPE_AUX_CONTROL_BUTTONS
         data1: data1,
         data2: -1
     ) else { return }

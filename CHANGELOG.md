@@ -94,6 +94,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is de-duplicated against the signal that follows it, so presenting a window
   doesn't report focus twice.
 
+  **Android and iOS are device-verified; the two GTK backends and Windows are
+  compile-verified only.** A probe under Xvfb can't observe a GTK focus change,
+  because a scaffolded app maps no window there (#222) and nothing unmapped can
+  become active — so a backend that emits nothing and one that works look the
+  same. Said here rather than left to look like the rest.
+
 - **`navigator.audioSession` works on Android** — the W3C Audio Session API,
   filled natively where the engine doesn't ship it, rather than exposed as a
   swift-pwa-shaped API beside it.

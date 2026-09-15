@@ -676,11 +676,17 @@ remain:
   initial `window.fullscreen` config) on both backends — it just doesn't yet
   observe a WM/F11-driven toggle.
 
-  **`.didFocus` / `.didBlur` do follow the window manager**, on both backends,
-  via `notify::is-active` — so alt-tabbing away and back reaches subscribers.
-  They are de-duplicated against an explicit `Window.focus()` call, which
-  reports focus too: presenting a window makes it active, and the signal
+  **`.didFocus` / `.didBlur` are wired to follow the window manager**, on both
+  backends, via `notify::is-active` — so alt-tabbing away and back should reach
+  subscribers. They are de-duplicated against an explicit `Window.focus()` call,
+  which reports focus too: presenting a window makes it active, and the signal
   arriving right behind the call would otherwise say the same thing twice.
+
+  **Compile-verified only, so far.** The signal is not observed firing on either
+  backend: a probe under Xvfb can't measure it, because a scaffolded app maps no
+  window there (#222) and nothing that isn't mapped can become active — so a
+  backend that emits nothing and one that works look identical. The Android and
+  iOS halves of the same change *are* device-verified; these two aren't.
 - **The tray icon needs a StatusNotifierHost.** Both Linux backends
   publish the tray over the freedesktop StatusNotifierItem D-Bus protocol
   (GTK3 via `libayatana-appindicator`, GTK4 hand-rolled over GDBus). It

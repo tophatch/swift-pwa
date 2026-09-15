@@ -1,5 +1,10 @@
 # Proposal: platform audio — fill three web APIs, don't build a plugin
 
+> **Status: two of the three gaps are closed.** `navigator.mediaSession` is
+> filled and device-verified on Android — the only engine that lacked it — over
+> a platform `MediaSession` plus a transport notification. `setSinkId` (absent
+> on Android and Linux) is what remains.
+>
 > **Status: `navigator.audioSession` is built on all five** (see `CHANGELOG.md`
 > `[Unreleased]`) — the engine's own on Apple, a real fill over `AudioManager`
 > focus on Android, and a recorded-but-inert one on Linux and Windows, where
@@ -222,6 +227,27 @@ control rather than checking for the property:
 
 WebKitGTK even publishes the page's metadata onto MPRIS
 (`xesam:title: "swift-pwa probe"`); WebView2 wires SMTC.
+
+#### What building the mediaSession fill settled
+
+Both bugs it turned up failed *silently*, and neither is specific to audio:
+
+- **A `Task {}` in a `@MainActor` function never runs on Android.** It inherits
+  the isolation, and Android's main thread runs a Java looper that never drains
+  libdispatch's main queue — so the task is created and never scheduled. The OS
+  delivered the action, Kotlin forwarded it, Swift yielded it, and nothing was
+  at the other end. This is the same hazard that keeps `BridgeRuntime` off the
+  MainActor (see CLAUDE.md's concurrency notes); `Task.detached` is the fix, and
+  anything else pumping an `AsyncStream` from a plugin's `register` has it too.
+- **A notification with an unusable small icon is refused, and `notify()` logs
+  the exception rather than throwing it.** An app that sets no icon in
+  `pwa.json` has an `applicationInfo.icon` that isn't a valid small icon, so the
+  call looked successful and nothing ever appeared.
+
+Both were found by bisecting with temporary logging on each side of the bridge,
+because every layer reported success. Worth remembering as a shape: when a
+capability spans Kotlin → JNI → Swift → bus → JS, "no error anywhere" is the
+expected symptom of a break, not evidence against one.
 
 ### 3. Output routing — missing on Linux and Android
 

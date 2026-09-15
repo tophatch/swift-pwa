@@ -1487,6 +1487,7 @@ enum AndroidTemplates {
     import android.content.IntentFilter
     import android.content.pm.PackageInstaller
     import android.graphics.Bitmap
+    import android.app.Notification
     import android.media.AudioAttributes
     import android.media.AudioFocusRequest
     import android.media.AudioManager
@@ -1674,6 +1675,10 @@ enum AndroidTemplates {
         fun dispatch(method: String, args: String, done: (String?, String?) -> Unit) {
             val json = JSONObject(args)
             when (method) {
+                "audio.nowPlaying.setMetadata" -> { nowPlayingSetMetadata(json); done(null, null) }
+                "audio.nowPlaying.setPlaybackState" -> { nowPlayingSetPlaybackState(json); done(null, null) }
+                "audio.nowPlaying.setActions" -> { nowPlayingSetActions(json); done(null, null) }
+                "audio.nowPlaying.setPosition" -> { nowPlayingSetPosition(json); done(null, null) }
                 "audio.session.set" -> done(audioSessionSet(json), null)
                 "audio.session.get" -> done(audioSessionGet(), null)
                 "clipboard.read" -> done(clipboardRead(), null)
@@ -1777,6 +1782,190 @@ enum AndroidTemplates {
 
         private fun clipboardManager(): ClipboardManager =
             activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+        // -----------------------------------------------------------
+        // Now playing — the navigator.mediaSession polyfill
+        // -----------------------------------------------------------
+        //
+        // Android's WebView doesn't expose navigator.mediaSession at all, so
+        // without this an app playing audio is invisible to the system: no
+        // lock-screen entry, no notification, and nothing for a headset button
+        // to talk to.
+        //
+        // Platform MediaSession + Notification.MediaStyle, deliberately: the
+        // androidx media libraries would do the same job and cost every
+        // generated project a dependency it mostly wouldn't use.
+
+        private var mediaSession: android.media.session.MediaSession? = null
+        private var nowPlayingTitle: String? = null
+        private var nowPlayingArtist: String? = null
+        private var nowPlayingAlbum: String? = null
+        private var nowPlayingState = "none"
+        private var nowPlayingActions = listOf<String>()
+        private var nowPlayingDurationMs = 0L
+        private var nowPlayingPositionMs = 0L
+        private var nowPlayingRate = 1.0f
+        private val nowPlayingNotificationId = 0x5057   // "PW"
+
+        private fun actionBit(name: String): Long = when (name) {
+            "play" -> android.media.session.PlaybackState.ACTION_PLAY
+            "pause" -> android.media.session.PlaybackState.ACTION_PAUSE
+            "stop" -> android.media.session.PlaybackState.ACTION_STOP
+            "previoustrack" -> android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS
+            "nexttrack" -> android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT
+            "seekbackward" -> android.media.session.PlaybackState.ACTION_REWIND
+            "seekforward" -> android.media.session.PlaybackState.ACTION_FAST_FORWARD
+            "seekto" -> android.media.session.PlaybackState.ACTION_SEEK_TO
+            else -> 0L
+        }
+
+        private fun sendMediaAction(action: String) {
+            bridge.nativeHostEvent(
+                JSONObject().put("channel", "audio.nowPlaying.action").put("action", action).toString()
+            )
+        }
+
+        private fun ensureMediaSession(): android.media.session.MediaSession {
+            mediaSession?.let { return it }
+            val session = android.media.session.MediaSession(activity, "swift-pwa")
+            session.setCallback(object : android.media.session.MediaSession.Callback() {
+                override fun onPlay() { sendMediaAction("play") }
+                override fun onPause() { sendMediaAction("pause") }
+                override fun onStop() { sendMediaAction("stop") }
+                override fun onSkipToNext() { sendMediaAction("nexttrack") }
+                override fun onSkipToPrevious() { sendMediaAction("previoustrack") }
+                override fun onRewind() { sendMediaAction("seekbackward") }
+                override fun onFastForward() { sendMediaAction("seekforward") }
+                override fun onSeekTo(pos: Long) { sendMediaAction("seekto") }
+            })
+            session.isActive = true
+            mediaSession = session
+            return session
+        }
+
+        private fun nowPlayingSetMetadata(json: JSONObject) {
+            val meta = json.optJSONObject("metadata")
+            if (meta == null) {
+                nowPlayingTitle = null
+                nowPlayingArtist = null
+                nowPlayingAlbum = null
+            } else {
+                nowPlayingTitle = meta.optString("title", null.toString()).takeIf { meta.has("title") && !meta.isNull("title") }
+                nowPlayingArtist = meta.optString("artist", null.toString()).takeIf { meta.has("artist") && !meta.isNull("artist") }
+                nowPlayingAlbum = meta.optString("album", null.toString()).takeIf { meta.has("album") && !meta.isNull("album") }
+            }
+            pushNowPlaying()
+        }
+
+        private fun nowPlayingSetPlaybackState(json: JSONObject) {
+            nowPlayingState = json.optString("state", "none")
+            pushNowPlaying()
+        }
+
+        private fun nowPlayingSetActions(json: JSONObject) {
+            val array = json.optJSONArray("actions")
+            val list = mutableListOf<String>()
+            if (array != null) for (i in 0 until array.length()) list.add(array.optString(i))
+            nowPlayingActions = list
+            pushNowPlaying()
+        }
+
+        private fun nowPlayingSetPosition(json: JSONObject) {
+            val pos = json.optJSONObject("position")
+            if (pos == null) {
+                nowPlayingDurationMs = 0L
+                nowPlayingPositionMs = 0L
+                nowPlayingRate = 1.0f
+            } else {
+                nowPlayingDurationMs = (pos.optDouble("duration", 0.0) * 1000).toLong()
+                nowPlayingPositionMs = (pos.optDouble("position", 0.0) * 1000).toLong()
+                nowPlayingRate = pos.optDouble("playbackRate", 1.0).toFloat()
+            }
+            pushNowPlaying()
+        }
+
+        private fun pushNowPlaying() {
+            val session = ensureMediaSession()
+
+            session.setMetadata(
+                android.media.MediaMetadata.Builder()
+                    .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, nowPlayingTitle ?: "")
+                    .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, nowPlayingArtist ?: "")
+                    .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, nowPlayingAlbum ?: "")
+                    .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, nowPlayingDurationMs)
+                    .build()
+            )
+
+            // Only the actions the page registered a handler for: the OS draws
+            // exactly these, and a button that does nothing is worse than a
+            // button that isn't there.
+            var mask = 0L
+            for (name in nowPlayingActions) mask = mask or actionBit(name)
+            val state = when (nowPlayingState) {
+                "playing" -> android.media.session.PlaybackState.STATE_PLAYING
+                "paused" -> android.media.session.PlaybackState.STATE_PAUSED
+                else -> android.media.session.PlaybackState.STATE_NONE
+            }
+            session.setPlaybackState(
+                android.media.session.PlaybackState.Builder()
+                    .setActions(mask)
+                    .setState(state, nowPlayingPositionMs, nowPlayingRate)
+                    .build()
+            )
+
+            // Activation has to track the state on *every* push, not just at
+            // creation. A page typically calls setActionHandler before it sets
+            // playbackState, which pushes once while the state is still "none";
+            // deactivating there and never reactivating leaves the session
+            // inert, and an inactive session is not offered media buttons at
+            // all — the symptom is a lock-screen row that appears and does
+            // nothing.
+            session.isActive = nowPlayingState != "none"
+
+            if (nowPlayingState == "none") {
+                cancelNowPlayingNotification()
+            } else {
+                showNowPlayingNotification(session)
+            }
+        }
+
+        private fun showNowPlayingNotification(session: android.media.session.MediaSession) {
+            ensureNotificationChannel()
+            if (!notificationsAuthorized()) return
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(activity, notificationChannelId)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(activity)
+            }
+            // The small icon is load-bearing and fails *silently*: a notification
+            // whose icon isn't a valid drawable is refused with
+            // IllegalArgumentException("no valid small icon") — which the RPC
+            // layer logs and swallows, so `notify()` looks like it worked and
+            // nothing ever appears. An app that sets no icon in pwa.json has an
+            // applicationInfo.icon that is not usable here, so fall back to a
+            // platform drawable rather than posting nothing.
+            fun build(icon: Int): Notification = builder
+                .setContentTitle(nowPlayingTitle ?: activity.applicationInfo.loadLabel(activity.packageManager))
+                .setContentText(nowPlayingArtist ?: "")
+                .setSmallIcon(icon)
+                .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken))
+                .setOngoing(nowPlayingState == "playing")
+                .build()
+
+            val manager = activity.getSystemService(android.app.NotificationManager::class.java) ?: return
+            val appIcon = activity.applicationInfo.icon
+            try {
+                manager.notify(nowPlayingNotificationId, build(appIcon))
+            } catch (e: IllegalArgumentException) {
+                manager.notify(nowPlayingNotificationId, build(android.R.drawable.ic_media_play))
+            }
+        }
+
+        private fun cancelNowPlayingNotification() {
+            activity.getSystemService(android.app.NotificationManager::class.java)
+                ?.cancel(nowPlayingNotificationId)
+        }
 
         // -----------------------------------------------------------
         // Audio session — the navigator.audioSession polyfill

@@ -95,6 +95,11 @@
             // requirement is the standard web line, and making them install a
             // plugin to get a *standard API* would defeat that.
             use(AudioSessionPlugin(SystemAudioSession()))
+            // Backs the `navigator.mediaSession` polyfill — the only engine of
+            // the five that doesn't expose the web API, so the only one that
+            // needs this. Without it an app playing audio is invisible to the
+            // system: no lock-screen controls, no notification.
+            use(NowPlayingPlugin(SystemNowPlaying()))
             // Auto-register `ClipboardPlugin` so apps don't have to —
             // every other backend's `AppContext` does the same. Apps
             // can override with their own `ctx.use(ClipboardPlugin(...))`

@@ -218,3 +218,174 @@ struct RecordingAudioSessionTests {
         }
     }
 }
+
+/// The `__audio.nowPlaying.*` commands behind the `navigator.mediaSession`
+/// polyfill.
+@Suite("NowPlayingPlugin")
+@MainActor
+struct NowPlayingPluginTests {
+    final class MockNowPlaying: NowPlaying, @unchecked Sendable {
+        private let lock = NSLock()
+        private var _metadata: NowPlayingMetadata?
+        private var _state: NowPlayingPlaybackState = .none
+        private var _actions: [NowPlayingAction] = []
+        private var _position: NowPlayingPosition?
+        let continuation: AsyncStream<NowPlayingAction>.Continuation
+        private let stream: AsyncStream<NowPlayingAction>
+
+        init() { (stream, continuation) = AsyncStream<NowPlayingAction>.makeStream() }
+
+        var metadata: NowPlayingMetadata? {
+            lock.withLock { _metadata }
+        }
+        var state: NowPlayingPlaybackState {
+            lock.withLock { _state }
+        }
+        var publishedActions: [NowPlayingAction] {
+            lock.withLock { _actions }
+        }
+        var position: NowPlayingPosition? {
+            lock.withLock { _position }
+        }
+
+        func setMetadata(_ metadata: NowPlayingMetadata?) async throws {
+            lock.withLock { _metadata = metadata }
+        }
+
+        func setPlaybackState(_ state: NowPlayingPlaybackState) async throws {
+            lock.withLock { _state = state }
+        }
+
+        func setSupportedActions(_ actions: [NowPlayingAction]) async throws {
+            lock.withLock { _actions = actions }
+        }
+
+        func setPosition(_ position: NowPlayingPosition?) async throws {
+            lock.withLock { _position = position }
+        }
+
+        func actions() -> AsyncStream<NowPlayingAction> { stream }
+    }
+
+    private func makeApp() -> (MockAppContext, MockNowPlaying) {
+        let app = MockAppContext()
+        let nowPlaying = MockNowPlaying()
+        app.use(NowPlayingPlugin(nowPlaying))
+        return (app, nowPlaying)
+    }
+
+    private func dispatch(
+        _ app: MockAppContext,
+        _ command: String,
+        _ json: String = "{}"
+    ) async -> InvocationResult {
+        let inv = Invocation(id: 1, command: command, payload: Data(json.utf8))
+        let ctx = CommandContext(invocation: inv, caller: .agent, appContext: app)
+        return await app.registry.dispatch(ctx)
+    }
+
+    @Test("metadata reaches the platform")
+    func metadata() async {
+        let (app, nowPlaying) = makeApp()
+        let json = #"{"metadata":{"title":"Chapter 1","artist":"A Book","album":"Vol 1"}}"#
+        guard case .ok = await dispatch(app, "__audio.nowPlaying.setMetadata", json) else {
+            Issue.record("expected ok"); return
+        }
+        #expect(nowPlaying.metadata?.title == "Chapter 1")
+        #expect(nowPlaying.metadata?.artist == "A Book")
+    }
+
+    @Test("clearing metadata is distinct from never setting it")
+    func clearMetadata() async {
+        let (app, nowPlaying) = makeApp()
+        _ = await dispatch(app, "__audio.nowPlaying.setMetadata", #"{"metadata":{"title":"x"}}"#)
+        _ = await dispatch(app, "__audio.nowPlaying.setMetadata", #"{"metadata":null}"#)
+        #expect(nowPlaying.metadata == nil)
+    }
+
+    @Test("an unknown playback state is refused")
+    func unknownState() async {
+        let (app, nowPlaying) = makeApp()
+        guard case let .failure(error) = await dispatch(
+            app, "__audio.nowPlaying.setPlaybackState", #"{"state":"humming"}"#
+        ) else {
+            Issue.record("expected a failure"); return
+        }
+        #expect(error.code == BridgeError.decode)
+        #expect(nowPlaying.state == .none)
+    }
+
+    @Test("only actions the page handles are published")
+    func actionsArePublished() async {
+        let (app, nowPlaying) = makeApp()
+        // `skipad` is a real W3C action with no place in a transport row: it is
+        // dropped rather than failing the call, so a page registering one
+        // doesn't lose the handlers registered alongside it.
+        let json = #"{"actions":["play","pause","skipad","nexttrack"]}"#
+        guard case .ok = await dispatch(app, "__audio.nowPlaying.setActions", json) else {
+            Issue.record("expected ok"); return
+        }
+        #expect(nowPlaying.publishedActions == [.play, .pause, .nextTrack])
+    }
+
+    @Test("an OS-triggered action is forwarded to the page")
+    func actionsReachTheBus() async throws {
+        let (app, nowPlaying) = makeApp()
+        // The pump is detached from the MainActor deliberately (Android's main
+        // thread never drains libdispatch's main queue); this asserts it runs
+        // and reaches the bus at all.
+        final class Received: @unchecked Sendable {
+            private let lock = NSLock()
+            private var values: [String] = []
+            func append(_ value: String) { lock.withLock { values.append(value) } }
+            var all: [String] {
+                lock.withLock { values }
+            }
+        }
+        let received = Received()
+        let subscription = app.events.subscribe(NowPlayingPlugin.actionChannel) { payload in
+            if let event = try? JSONDecoder().decode(NowPlayingActionEvent.self, from: payload) {
+                received.append(event.action)
+            }
+        }
+        defer { subscription.cancel() }
+
+        nowPlaying.continuation.yield(.pause)
+        // The pump hops through a detached task, so give it a moment.
+        for _ in 0 ..< 50 where received.all.isEmpty {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        #expect(received.all == ["pause"])
+    }
+}
+
+/// The `mediaSession` half of the polyfill, asserted against `bridge.js`.
+@Suite("navigator.mediaSession polyfill")
+struct MediaSessionPolyfillTests {
+    private var bridge: String {
+        (try? BridgeScript.source()) ?? ""
+    }
+
+    @Test("it installs only where the engine lacks the API")
+    func onlyWhenAbsent() {
+        #expect(bridge.contains(#"!("mediaSession" in navigator)"#))
+    }
+
+    @Test("MediaMetadata is defined too, since it's missing wherever mediaSession is")
+    func definesMediaMetadata() {
+        #expect(bridge.contains("globalThis.MediaMetadata = class MediaMetadata"))
+    }
+
+    @Test("the action channel agrees with the plugin's")
+    func channelAgrees() {
+        // Two string literals, two languages, two files.
+        #expect(bridge.contains(#"on("\#(NowPlayingPlugin.actionChannel)""#))
+    }
+
+    @Test("every playback state the Swift enum knows is in the JS set")
+    func statesAgree() {
+        for state in NowPlayingPlaybackState.allCases {
+            #expect(bridge.contains("\"\(state.rawValue)\""), "bridge.js is missing \(state.rawValue)")
+        }
+    }
+}

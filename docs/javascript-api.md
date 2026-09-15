@@ -636,6 +636,45 @@ happen* on desktop: a minimized GTK3, GTK4 or WebView2 window keeps its audio
 clock and its media element running. Set the type anyway, so the one line keeps
 working when the user runs your app on a phone.
 
+### `navigator.mediaSession` — the lock screen, the notification, the headset button
+
+The [W3C Media Session API](https://www.w3.org/TR/mediasession/). It's what puts
+your app in the system's media controls, and what makes a headset button or a
+keyboard's play key do the right thing.
+
+```js
+navigator.mediaSession.metadata = new MediaMetadata({
+  title: 'Chapter 4', artist: 'The Book', album: 'Part One',
+});
+navigator.mediaSession.playbackState = 'playing';
+navigator.mediaSession.setActionHandler('pause', () => audio.pause());
+navigator.mediaSession.setActionHandler('nexttrack', () => next());
+```
+
+Only the actions you register a handler for are offered by the OS — a transport
+button that does nothing is worse than one that isn't there.
+
+**Register a `pause` handler if you play anything long.** Without one, a user
+who hits pause on their headphones has no way to stop your audio short of
+leaving the app.
+
+| | `navigator.mediaSession` |
+| --- | --- |
+| macOS, iOS, Linux (GTK3/GTK4), Windows | the engine's own — reaching the OS media keys, the lock screen, and MPRIS / SMTC respectively |
+| Android | filled, over a platform `MediaSession` + a transport notification |
+
+Android is the only engine of the five whose WebView doesn't expose the API at
+all; without the fill, an Android app playing audio is invisible to the system.
+
+Two Android notes:
+
+- **The notification needs the notification permission.** Media controls appear
+  once `POST_NOTIFICATIONS` is granted (Android 13+ asks at runtime); request it
+  with the [`notifications.*`](#notifications) plugin. The `MediaSession` itself
+  — and therefore media *keys* — works without it.
+- **Artwork isn't published yet.** `MediaMetadata.artwork` round-trips in JS so
+  your code reads back what it set, but the OS shows title and artist only.
+
 ## Opt-in plugins (require `ctx.use(...)` on the Swift side)
 
 ### `dialog.*`

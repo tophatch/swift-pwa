@@ -65,9 +65,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `Navigator.prototype`, invalid values ignored, `type` and `state` reading back
   the same way.
 
-  **Still to come:** `navigator.mediaSession` (absent on Android) and
-  `setSinkId` (absent on Android and Linux) — the other two gaps the
-  measurement found.
+- **`navigator.mediaSession` works on Android** — the W3C Media Session API,
+  filled over a platform `MediaSession` plus a transport notification. Android
+  is the only one of the five engines whose WebView doesn't expose it at all,
+  so without this an Android app playing audio is invisible to the system: no
+  lock-screen controls, no notification, and nothing for a headset button to
+  talk to. The other four already route the web API to the OS (verified by
+  driving the real control: a media key on macOS and Windows, the lock screen on
+  iOS, MPRIS over D-Bus on both GTK backends), so the fill installs on Android
+  alone.
+
+  A page writes the standard API — `metadata`, `playbackState`,
+  `setActionHandler`, `setPositionState` — and `MediaMetadata` is defined too,
+  since it's missing wherever `mediaSession` is. Only the actions a page
+  registers a handler for are published to the OS, because a transport button
+  that does nothing is worse than one that isn't there.
+
+  Device-verified on a Fold7: `dumpsys media_session` shows the app as the
+  system's media button session (`active=true`, `state=PLAYING`, `actions=311`,
+  metadata published), a real `KEYCODE_MEDIA_PAUSE` and `KEYCODE_MEDIA_NEXT`
+  each reach the page's handler, and the lock-screen controls appear and work.
+
+  **Two bugs this found, both of which failed silently** and neither of which a
+  unit test would have caught. The action pump was started with a plain `Task`
+  inside a `@MainActor` function, so it inherited that isolation — and Android's
+  main thread runs a Java looper that never drains libdispatch's main queue, so
+  the task was created and never scheduled: the OS delivered the action, Kotlin
+  forwarded it, Swift yielded it, and nothing was at the other end (the same
+  hazard that keeps `BridgeRuntime` off the MainActor). And the notification was
+  refused with `IllegalArgumentException: Invalid notification (no valid small
+  icon)` for an app that sets no icon — which `notify()` *logs* rather than
+  throws, so it looked like it had worked.
+
+  Not yet: artwork (`MediaMetadata.artwork` round-trips in JS but isn't shown by
+  the OS), and the notification needs `POST_NOTIFICATIONS` granted — media keys
+  work without it.
+
+  **Still to come:** `setSinkId` (absent on Android and Linux), the last of the
+  three gaps the measurement found.
 
 [Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
 

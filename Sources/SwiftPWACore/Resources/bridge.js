@@ -337,6 +337,114 @@
         });
     }
 
+    // --- navigator.mediaSession polyfill ---------------------------------
+    //
+    // Everything the OS shows for the audio you're playing: the lock-screen
+    // entry, the media notification, what the headset button does.
+    //
+    // Four of the five engines already route this to the OS — verified by
+    // driving the real control, not by checking for the property: a hardware
+    // media key on macOS and Windows, the lock screen on iOS, an MPRIS Pause
+    // over D-Bus on both GTK backends. Android's WebView doesn't expose the API
+    // at all, so an Android app playing audio is invisible to the system.
+    if (IS_TOP && !("mediaSession" in navigator)) {
+        // MediaMetadata is missing wherever mediaSession is, so the constructor
+        // a page calls has to exist too.
+        if (typeof globalThis.MediaMetadata !== "function") {
+            globalThis.MediaMetadata = class MediaMetadata {
+                constructor(init) {
+                    init = init || {};
+                    this.title = init.title === undefined ? "" : String(init.title);
+                    this.artist = init.artist === undefined ? "" : String(init.artist);
+                    this.album = init.album === undefined ? "" : String(init.album);
+                    // Kept so a page can read back what it set; artwork is not
+                    // yet published to the OS (see docs/javascript-api.md).
+                    this.artwork = init.artwork === undefined ? [] : init.artwork;
+                }
+            };
+        }
+
+        const STATES = new Set(["none", "paused", "playing"]);
+        const handlers = new Map();   // action -> callback
+        let metadata = null;
+        let playbackState = "none";
+
+        const publishActions = () => {
+            invoke("__audio.nowPlaying.setActions", { actions: [...handlers.keys()] })
+                .catch(() => {});
+        };
+
+        // The user pressed something on the lock screen, a headset, or a media
+        // key. The runtime pushes it here; dispatch to whatever the page
+        // registered. Subscribed once, up front, because the user can press
+        // pause before the page has set anything.
+        on("__audio.action", (payload) => {
+            const handler = handlers.get(payload && payload.action);
+            if (!handler) return;
+            try {
+                handler({ action: payload.action });
+            } catch (e) {
+                console.error("swift-pwa: a mediaSession action handler threw", e);
+            }
+        });
+
+        const mediaSession = {
+            get metadata() { return metadata; },
+            set metadata(value) {
+                metadata = value || null;
+                invoke("__audio.nowPlaying.setMetadata", {
+                    metadata: metadata && {
+                        title: metadata.title || null,
+                        artist: metadata.artist || null,
+                        album: metadata.album || null,
+                    },
+                }).catch(() => {});
+            },
+
+            get playbackState() { return playbackState; },
+            set playbackState(value) {
+                const name = String(value);
+                // WebIDL enum semantics, as with audioSession: an unrecognised
+                // value is ignored rather than throwing.
+                if (!STATES.has(name)) return;
+                playbackState = name;
+                invoke("__audio.nowPlaying.setPlaybackState", { state: name }).catch(() => {});
+            },
+
+            setActionHandler(action, handler) {
+                const name = String(action);
+                if (handler === null || handler === undefined) handlers.delete(name);
+                else handlers.set(name, handler);
+                publishActions();
+            },
+
+            setPositionState(state) {
+                if (!state) {
+                    invoke("__audio.nowPlaying.setPosition", { position: null }).catch(() => {});
+                    return;
+                }
+                const duration = Number(state.duration);
+                const position = Number(state.position === undefined ? 0 : state.position);
+                const rate = Number(state.playbackRate === undefined ? 1 : state.playbackRate);
+                // The spec throws for these, and a page relying on that to
+                // validate its own numbers should get the same answer here.
+                if (!(duration >= 0)) throw new TypeError("duration must be >= 0");
+                if (!(position >= 0) || position > duration) {
+                    throw new TypeError("position must be between 0 and duration");
+                }
+                invoke("__audio.nowPlaying.setPosition", {
+                    position: { duration, position, playbackRate: rate },
+                }).catch(() => {});
+            },
+        };
+
+        Object.defineProperty(Navigator.prototype, "mediaSession", {
+            get() { return mediaSession; },
+            configurable: true,
+            enumerable: true,
+        });
+    }
+
     // Tell the runtime this document owns the window now. First frame on the
     // channel, and it runs before the page's own scripts, so the previous
     // document's subscriptions are cancelled before this one opens any.

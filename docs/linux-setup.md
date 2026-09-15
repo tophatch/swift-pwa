@@ -664,20 +664,29 @@ remain:
   size wherever the compositor places it. Off-screen restore (a monitor
   that was present when the geometry was saved is now gone) isn't clamped
   yet on any backend.
-- **WM-driven focus / minimize / fullscreen events aren't observed.**
-  `WindowEvent.didFocus` / `.didBlur` / `.didMinimize` / `.didDeminiaturize`
-  / `.didEnterFullscreen` / `.didExitFullscreen` are only emitted when
-  the corresponding `Window.focus()` / `minimize()` / `setFullscreen()`
-  method is called programmatically. User-driven state changes (alt-tab,
-  click another window, double-click titlebar to maximize) don't reach
-  subscribers on either backend. The fix is to wire GTK3's
-  `focus-in-event` / `focus-out-event` / `window-state-event`, or
-  GTK4's `notify::is-active` / `notify::fullscreened` / `notify::minimized`,
-  the same way the resize signals are hooked. Note that *programmatic*
-  fullscreen state **is** tracked: `Window.isFullscreen()` reflects the
-  last `setFullscreen(_:)` call (and the initial `window.fullscreen`
-  config) on both backends — it just doesn't yet observe a WM/F11-driven
-  toggle.
+- **WM-driven minimize / fullscreen events aren't observed** — focus now is.
+  `WindowEvent.didMinimize` / `.didDeminiaturize` / `.didEnterFullscreen` /
+  `.didExitFullscreen` are still only emitted when the corresponding
+  `Window.minimize()` / `setFullscreen()` method is called programmatically, so
+  a user double-clicking the titlebar or hitting F11 doesn't reach subscribers
+  on either backend. The fix is to wire GTK3's `window-state-event`, or GTK4's
+  `notify::fullscreened` / `notify::minimized`, the way the resize signals are
+  hooked. Note that *programmatic* fullscreen state **is** tracked:
+  `Window.isFullscreen()` reflects the last `setFullscreen(_:)` call (and the
+  initial `window.fullscreen` config) on both backends — it just doesn't yet
+  observe a WM/F11-driven toggle.
+
+  **`.didFocus` / `.didBlur` are wired to follow the window manager**, on both
+  backends, via `notify::is-active` — so alt-tabbing away and back should reach
+  subscribers. They are de-duplicated against an explicit `Window.focus()` call,
+  which reports focus too: presenting a window makes it active, and the signal
+  arriving right behind the call would otherwise say the same thing twice.
+
+  **Compile-verified only, so far.** The signal is not observed firing on either
+  backend: a probe under Xvfb can't measure it, because a scaffolded app maps no
+  window there (#222) and nothing that isn't mapped can become active — so a
+  backend that emits nothing and one that works look identical. The Android and
+  iOS halves of the same change *are* device-verified; these two aren't.
 - **The tray icon needs a StatusNotifierHost.** Both Linux backends
   publish the tray over the freedesktop StatusNotifierItem D-Bus protocol
   (GTK3 via `libayatana-appindicator`, GTK4 hand-rolled over GDBus). It
@@ -777,16 +786,28 @@ If the output is empty, your dev package install is broken. Reinstall.
 
 ## Threading model on Linux
 
-Worth knowing if you read the source: Swift's `MainActor` executor on
-Linux is libdispatch's main queue, which neither `gtk_main()` (GTK3)
-nor a bare `g_main_loop_run` (GTK4) pumps. That means
-`await MainActor.run { … }` from a cooperative-pool task hangs forever
-once the GTK loop is running. swift-pwa works around this with a
-[`MainThread.run`](../Sources/SwiftPWACore/MainThread.swift) abstraction
-whose hook both GTK runtimes point at `g_idle_add`. If you write your
-own commands that need to touch GTK from a non-main thread, use
-`MainThread.run` rather than `MainActor.run` and you'll avoid the
-deadlock.
+Swift's `MainActor` executor on Linux is libdispatch's main queue, and
+neither `gtk_main()` (GTK3) nor a bare `g_main_loop_run` (GTK4) drains
+it. Through v0.10.7 that meant `await MainActor.run { … }` from a
+cooperative-pool task — or a method on your own `@MainActor` class —
+**hung forever** once the GTK loop was running, with no error and
+nothing on stderr (#216).
+
+Both GTK runtimes now watch libdispatch's main-queue handle on the
+default `GMainContext` and drain it when it signals, which is the same
+integration CoreFoundation performs. So your own `@MainActor` code
+works, and so does `DispatchQueue.main.async`. Nothing to opt into.
+
+swift-pwa's own UI work still routes through
+[`MainThread.run`](../Sources/SwiftPWACore/MainThread.swift), whose hook
+both GTK runtimes point at `g_idle_add` — it is one hop rather than two
+and it keeps working in contexts where nothing is draining the main
+queue (a headless `agent.expose` catalog dump, a unit test). Either is
+correct in your own commands now; prefer `MainThread.run` when the work
+must touch GTK.
+
+`Scripts/verify-main-actor.sh` drives a scaffolded app through all four
+shapes on a real box; run it after touching the GTK run loop.
 
 ### `swift test` occasionally hangs at exit on Linux
 

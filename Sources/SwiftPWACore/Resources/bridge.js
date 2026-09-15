@@ -255,6 +255,353 @@
         enumerable: false,
     });
 
+    // --- navigator.audioSession polyfill ---------------------------------
+    //
+    // The W3C Audio Session API decides what this app's audio *means* against
+    // everything else on the device: whether it ducks the user's music or mixes
+    // with it, whether it keeps playing in the background, and on iOS whether
+    // the page keeps running at all once it isn't in front.
+    //
+    // Apple's WebKit ships it. Measured on all five engines, nothing else does
+    // — not Android's WebView, not WebKitGTK 4.1 or 6.0, not WebView2. Rather
+    // than add a swift-pwa-shaped API beside the standard one (which would make
+    // every app carry a branch, and the branch would break on the platform its
+    // author can't test), fill the standard one where it's missing.
+    //
+    // Deliberately *not* installed when the engine has its own: a real
+    // implementation always wins, and this never wraps it.
+    if (IS_TOP && !("audioSession" in navigator)) {
+        // The web API is a property assignment, which can't await. So assign
+        // optimistically, send, and reconcile from the reply: `type` reads back
+        // what the page last asked for until the platform answers, then reads
+        // what the platform actually did — which differ when an OS coerces or
+        // refuses a type.
+        let requested = "auto";
+        // The platform's answer for the *latest* request, or null while one is
+        // in flight — so `type` reads back optimistically until the platform
+        // has spoken, then reads what it actually did.
+        let reported = "auto";
+        let state = "inactive";
+        let inFlight = null;
+
+        const apply = (value) => {
+            requested = value;
+            reported = null;
+            const call = invoke("__audio.session.set", { type: value })
+                .then((status) => {
+                    if (inFlight !== call) return;   // superseded by a later assignment
+                    reported = status.type;
+                    state = status.state;
+                })
+                .catch((e) => {
+                    // A backend without an implementation must not look like a
+                    // page that never set a type: say so once, loudly, rather
+                    // than leaving `type` reading back a value nothing honoured.
+                    console.warn(
+                        "swift-pwa: navigator.audioSession.type = '" + value +
+                        "' was not applied by this platform:", e && e.message ? e.message : e
+                    );
+                });
+            inFlight = call;
+        };
+
+        // WebIDL enum semantics, checked against WebKit's real implementation
+        // rather than assumed: an unrecognised value is **ignored** — no throw,
+        // no change — and a non-string is stringified first and then ignored if
+        // it isn't a member. Measured on macOS: assigning "nonsense", 42 or
+        // null after "playback" leaves `type` reading "playback" every time.
+        // Getting this wrong is the exact divergence this polyfill exists to
+        // prevent, so it is validated here rather than round-tripped.
+        const TYPES = new Set([
+            "auto", "playback", "ambient",
+            "transient", "transient-solo", "play-and-record",
+        ]);
+
+        const audioSession = {
+            get type() { return reported === null ? requested : reported; },
+            set type(value) {
+                const name = String(value);
+                if (!TYPES.has(name)) return;
+                apply(name);
+            },
+            get state() { return state; },
+        };
+
+        // On the prototype, where the real one lives, so a page that reflects
+        // over `Navigator.prototype` sees the same shape it would on Apple.
+        const target = (typeof Navigator === "function" && Navigator.prototype) || navigator;
+        Object.defineProperty(target, "audioSession", {
+            get() { return audioSession; },
+            configurable: true,   // configurable: a real implementation arriving in a
+            enumerable: true,     // future engine update should be able to replace this.
+        });
+    }
+
+    // --- audio policy diagnostic -----------------------------------------
+    //
+    // The trap: a page that plays audio without ever setting
+    // `navigator.audioSession.type` works perfectly on the developer's machine
+    // and goes silent the moment the app is backgrounded on iOS. Nothing
+    // reports it — no console error, no rejected promise — and an adopter who
+    // doesn't own an iPhone cannot discover it at all, which is exactly the
+    // class of gap this project exists to close.
+    //
+    // It fires only when audio is *actually* sounding and the type is still
+    // the default. That pairing is what keeps it from crying wolf: a page with
+    // an unused `<audio>` element never sees it, nor does one that has already
+    // declared its policy, nor an `OfflineAudioContext` rendering silently.
+    if (IS_TOP) {
+        let audioPolicyReported = false;
+        // A page may reasonably set the type in the same handler that starts
+        // the sound, in either order; without this the warning is a race.
+        const AUDIO_POLICY_GRACE_MS = 1000;
+
+        const reportAudioPolicy = () => {
+            if (audioPolicyReported) return;
+            audioPolicyReported = true;
+            setTimeout(() => {
+                let type;
+                try {
+                    type = navigator.audioSession && navigator.audioSession.type;
+                } catch (e) {
+                    return;
+                }
+                if (type !== "auto") return;
+                console.warn(
+                    "swift-pwa: this page is playing audio with navigator.audioSession.type " +
+                    "still 'auto'. On iOS that audio stops when the app goes to the " +
+                    "background; on Android 'auto' requests no audio focus, so the user's " +
+                    "own music keeps playing over it. Set the type to what the audio is " +
+                    "for — 'playback' for something the user chose to listen to, 'ambient' " +
+                    "for game or UI sound that should mix, 'transient' to duck others. " +
+                    "See docs/javascript-api.md, 'audioSession'."
+                );
+            }, AUDIO_POLICY_GRACE_MS);
+        };
+
+        // Media elements need no patching: `play` doesn't bubble, but a
+        // capturing listener on the document still sees it on every element.
+        document.addEventListener("play", reportAudioPolicy, true);
+
+        // Web Audio has no equivalent hook — nothing fires when a context
+        // starts — so the constructor is subclassed. Subclassing rather than
+        // wrapping keeps `instanceof`, the prototype chain and a page's own
+        // `extends AudioContext` all working; the only added behaviour is the
+        // check. Keyed on the context actually *running*, since a suspended
+        // one makes no sound, and `OfflineAudioContext` is deliberately not
+        // touched — rendering to a buffer isn't playback.
+        for (const name of ["AudioContext", "webkitAudioContext"]) {
+            const Original = globalThis[name];
+            if (typeof Original !== "function") continue;
+            const Observed = class extends Original {
+                constructor(...args) {
+                    super(...args);
+                    const check = () => {
+                        if (this.state === "running") reportAudioPolicy();
+                    };
+                    check();
+                    this.addEventListener("statechange", check);
+                }
+            };
+            Object.defineProperty(Observed, "name", { value: name });
+            globalThis[name] = Observed;
+        }
+    }
+
+    // --- navigator.mediaSession polyfill ---------------------------------
+    //
+    // Everything the OS shows for the audio you're playing: the lock-screen
+    // entry, the media notification, what the headset button does.
+    //
+    // Four of the five engines already route this to the OS — verified by
+    // driving the real control, not by checking for the property: a hardware
+    // media key on macOS and Windows, the lock screen on iOS, an MPRIS Pause
+    // over D-Bus on both GTK backends. Android's WebView doesn't expose the API
+    // at all, so an Android app playing audio is invisible to the system.
+    if (IS_TOP && !("mediaSession" in navigator)) {
+        // MediaMetadata is missing wherever mediaSession is, so the constructor
+        // a page calls has to exist too.
+        if (typeof globalThis.MediaMetadata !== "function") {
+            globalThis.MediaMetadata = class MediaMetadata {
+                constructor(init) {
+                    init = init || {};
+                    this.title = init.title === undefined ? "" : String(init.title);
+                    this.artist = init.artist === undefined ? "" : String(init.artist);
+                    this.album = init.album === undefined ? "" : String(init.album);
+                    this.artwork = init.artwork === undefined ? [] : init.artwork;
+                }
+            };
+        }
+
+        const STATES = new Set(["none", "paused", "playing"]);
+        const handlers = new Map();   // action -> callback
+        let metadata = null;
+        let playbackState = "none";
+
+        // Roughly what a lock screen draws cover art at on a high-density
+        // phone. Picking by size rather than taking artwork[0] matters: a page
+        // that offers 96px and 512px versions gets the sharp one, and a page
+        // that offers a 2048px master doesn't push 4 MB through the bridge for
+        // a thumbnail.
+        const ARTWORK_TARGET_PX = 512;
+        // A ceiling rather than a resize, because re-encoding the page's own
+        // artwork would be a surprise. Over this it's skipped with a warning —
+        // the track still shows, just without the image.
+        const ARTWORK_MAX_BYTES = 4 * 1024 * 1024;
+        // Bumped on every assignment, so a slow fetch for the previous track
+        // can't land its cover on the current one.
+        let metadataGeneration = 0;
+
+        // `sizes` is a space-separated list ("96x96 128x128") or "any"; 0 means
+        // "no usable size given", not "zero pixels".
+        const artworkMaxDimension = (sizes) => {
+            let max = 0;
+            for (const token of String(sizes === undefined ? "" : sizes).split(/\s+/)) {
+                const parsed = /^(\d+)x(\d+)$/i.exec(token);
+                if (parsed) max = Math.max(max, Number(parsed[1]), Number(parsed[2]));
+            }
+            return max;
+        };
+
+        // Smallest entry that still covers the target; an entry with no usable
+        // size ("any", an SVG) is preferred over one known to be too small,
+        // since upscaling a thumbnail looks worse than whatever "any" turns
+        // out to be.
+        const pickArtwork = (list) => {
+            let best = null;
+            let bestScore = Infinity;
+            for (const entry of Array.isArray(list) ? list : []) {
+                if (!entry || !entry.src) continue;
+                const max = artworkMaxDimension(entry.sizes);
+                const score = max === 0
+                    ? 1e4
+                    : max >= ARTWORK_TARGET_PX ? max - ARTWORK_TARGET_PX
+                        : 1e5 + (ARTWORK_TARGET_PX - max);
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = entry;
+                }
+            }
+            return best;
+        };
+
+        // Fetched here, in the document, because that is the only place the
+        // page's own artwork URL means anything — a bundle asset sits on a
+        // virtual origin, and a `blob:` handle exists nowhere else at all.
+        const readArtwork = async (entry) => {
+            const response = await fetch(entry.src);
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const blob = await response.blob();
+            if (blob.size > ARTWORK_MAX_BYTES) {
+                throw new Error(blob.size + " bytes exceeds the " + ARTWORK_MAX_BYTES + "-byte limit");
+            }
+            const dataURL = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result));
+                reader.onerror = () => reject(reader.error || new Error("unreadable"));
+                reader.readAsDataURL(blob);
+            });
+            return {
+                data: dataURL.slice(dataURL.indexOf(",") + 1),
+                mimeType: blob.type || null,
+            };
+        };
+
+        const publishActions = () => {
+            invoke("__audio.nowPlaying.setActions", { actions: [...handlers.keys()] })
+                .catch(() => {});
+        };
+
+        // The user pressed something on the lock screen, a headset, or a media
+        // key. The runtime pushes it here; dispatch to whatever the page
+        // registered. Subscribed once, up front, because the user can press
+        // pause before the page has set anything.
+        on("__audio.action", (payload) => {
+            const handler = handlers.get(payload && payload.action);
+            if (!handler) return;
+            try {
+                handler({ action: payload.action });
+            } catch (e) {
+                console.error("swift-pwa: a mediaSession action handler threw", e);
+            }
+        });
+
+        const mediaSession = {
+            get metadata() { return metadata; },
+            set metadata(value) {
+                metadata = value || null;
+                const generation = ++metadataGeneration;
+                const published = metadata && {
+                    title: metadata.title || null,
+                    artist: metadata.artist || null,
+                    album: metadata.album || null,
+                };
+                invoke("__audio.nowPlaying.setMetadata", { metadata: published }).catch(() => {});
+
+                // Artwork follows the text rather than gating it, so the track
+                // appears on the lock screen straight away and gains its image
+                // when the bytes arrive. A page that sets metadata from a
+                // network response would otherwise show nothing until the
+                // image downloaded.
+                const chosen = metadata && pickArtwork(metadata.artwork);
+                if (!chosen) return;
+                readArtwork(chosen).then((artwork) => {
+                    if (generation !== metadataGeneration) return;
+                    invoke("__audio.nowPlaying.setMetadata", {
+                        metadata: { ...published, artwork },
+                    }).catch(() => {});
+                }, (error) => {
+                    // Warned rather than swallowed: the track still shows, so
+                    // the only symptom is a missing image, and a page author
+                    // needs to be told which URL didn't load.
+                    console.warn("swift-pwa: mediaSession artwork could not be loaded", chosen.src, error);
+                });
+            },
+
+            get playbackState() { return playbackState; },
+            set playbackState(value) {
+                const name = String(value);
+                // WebIDL enum semantics, as with audioSession: an unrecognised
+                // value is ignored rather than throwing.
+                if (!STATES.has(name)) return;
+                playbackState = name;
+                invoke("__audio.nowPlaying.setPlaybackState", { state: name }).catch(() => {});
+            },
+
+            setActionHandler(action, handler) {
+                const name = String(action);
+                if (handler === null || handler === undefined) handlers.delete(name);
+                else handlers.set(name, handler);
+                publishActions();
+            },
+
+            setPositionState(state) {
+                if (!state) {
+                    invoke("__audio.nowPlaying.setPosition", { position: null }).catch(() => {});
+                    return;
+                }
+                const duration = Number(state.duration);
+                const position = Number(state.position === undefined ? 0 : state.position);
+                const rate = Number(state.playbackRate === undefined ? 1 : state.playbackRate);
+                // The spec throws for these, and a page relying on that to
+                // validate its own numbers should get the same answer here.
+                if (!(duration >= 0)) throw new TypeError("duration must be >= 0");
+                if (!(position >= 0) || position > duration) {
+                    throw new TypeError("position must be between 0 and duration");
+                }
+                invoke("__audio.nowPlaying.setPosition", {
+                    position: { duration, position, playbackRate: rate },
+                }).catch(() => {});
+            },
+        };
+
+        Object.defineProperty(Navigator.prototype, "mediaSession", {
+            get() { return mediaSession; },
+            configurable: true,
+            enumerable: true,
+        });
+    }
+
     // Tell the runtime this document owns the window now. First frame on the
     // channel, and it runs before the page's own scripts, so the previous
     // document's subscriptions are cancelled before this one opens any.

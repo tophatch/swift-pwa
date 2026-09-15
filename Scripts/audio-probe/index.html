@@ -1,0 +1,592 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>swift-pwa audio-gap probe</title>
+<!--
+  The page Scripts/measure-audio-gaps.sh drives.
+
+  This is a *measurement* page, not a feature test. The README roadmap proposes
+  a native audio plugin on the premise that the webview's own audio stack is
+  too weak; that premise has never been checked against the four engines this
+  project ships on. So every check here answers one question — can a page do
+  this thing, in this engine, from the app's own origin — and the answers decide
+  what an `audio.*` plugin would have to contain.
+
+  Two rules it is written around:
+
+  1. **Presence is not behaviour.** `navigator.mediaSession` exists in engines
+     that route nothing to it, and `setSinkId` can exist and reject every id.
+     Where a call can be made, the probe makes it and records what came back,
+     rather than recording `typeof`.
+
+  2. **Silence must be distinguishable from a stopped clock.** The
+     keeps-running checks compare the *audio* clock against the wall clock over
+     the same interval, because an AudioContext that has been suspended still
+     answers `currentTime` — it just stops advancing. Reading one clock alone
+     cannot tell those apart.
+-->
+<style>
+  html, body { margin: 0; font: 13px/1.5 ui-monospace, monospace; padding: 12px; }
+  pre { white-space: pre-wrap; }
+</style>
+
+<h1 style="font: 600 15px system-ui">audio gap probe</h1>
+<button id="unlock" style="font: 600 20px system-ui; padding: 18px 28px; margin-bottom: 12px">
+  Tap to start audio
+</button>
+<pre id="out">run swift-pwa drive eval "__audio.snapshot()"</pre>
+
+<script>
+const out = document.getElementById('out');
+
+// `resume()` is raced rather than awaited: on iOS, before a gesture, the
+// promise simply never settles, so awaiting it hangs the whole check and looks
+// like a crash instead of a policy.
+function resumeSoon(c) {
+  return Promise.race([
+    c.resume().then(() => 'resumed').catch((e) => 'threw: ' + e.name),
+    new Promise((r) => setTimeout(() => r('never settled'), 1500)),
+  ]);
+}
+const show = (v) => { out.textContent = JSON.stringify(v, null, 2); return v; };
+
+// A silent graph. Everything that needs "is audio actually running" hangs off
+// this one context: an oscillator through a zero gain, so the checks can run on
+// a machine someone is sitting at without making noise.
+let ctx = null, osc = null;
+function audio() {
+  if (ctx) return ctx;
+  ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const gain = ctx.createGain();
+  gain.gain.value = 0;
+  osc = ctx.createOscillator();
+  osc.frequency.value = 440;
+  osc.connect(gain).connect(ctx.destination);
+  osc.start();
+  return ctx;
+}
+
+// A worklet counting its own callbacks, on the silent graph. This is the check
+// that separates *the audio thread* from *the JS thread*: a page whose timers
+// are throttled can still be fed by a worklet, because a worklet runs on the
+// engine's render thread and is pulled by the device rather than by a timer.
+// Without it, a throttled `setInterval` is indistinguishable from audio dying.
+let workletBlocks = null;
+async function installWorklet() {
+  if (workletBlocks) return workletBlocks;
+  const c = audio();
+  const source = 'registerProcessor("counter", class extends AudioWorkletProcessor {' +
+    'constructor(){super();this.n=0;this.port.onmessage=()=>{this.port.postMessage(this.n);};}' +
+    'process(){this.n++;return true;}' +
+    '});';
+  const url = URL.createObjectURL(new Blob([source], { type: 'application/javascript' }));
+  await c.audioWorklet.addModule(url);
+  const node = new AudioWorkletNode(c, 'counter');
+  node.connect(c.destination);
+  workletBlocks = {
+    node,
+    read: () => new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), 1500);
+      node.port.onmessage = (e) => { clearTimeout(t); resolve(e.data); };
+      node.port.postMessage('read');
+    }),
+  };
+  return workletBlocks;
+}
+
+const __audio = {
+  // --- What the engine says it has -------------------------------------
+  surface() {
+    const media = document.createElement('audio');
+    const mr = window.MediaRecorder;
+    const c = audio();
+    return {
+      // Output routing: can a page choose *which* speaker it plays out of?
+      setSinkId: typeof media.setSinkId === 'function',
+      selectAudioOutput: typeof navigator.mediaDevices?.selectAudioOutput === 'function',
+      sinkId: 'sinkId' in media ? media.sinkId : null,
+
+      // Transport surface: lock screen / media keys / headset buttons.
+      mediaSession: !!navigator.mediaSession,
+      mediaSessionMetadata: typeof window.MediaMetadata === 'function',
+      setPositionState: typeof navigator.mediaSession?.setPositionState === 'function',
+
+      // Capture and encode.
+      getUserMedia: typeof navigator.mediaDevices?.getUserMedia === 'function',
+      mediaRecorder: typeof mr === 'function',
+      recorderTypes: mr ? [
+        'audio/webm;codecs=opus', 'audio/webm', 'audio/mp4', 'audio/mp4;codecs=mp4a.40.2',
+        'audio/ogg;codecs=opus', 'audio/wav',
+      ].filter((t) => mr.isTypeSupported && mr.isTypeSupported(t)) : [],
+
+      // Raw PCM path. An app that wants frames rather than a container file
+      // has to go through a worklet; a ScriptProcessor fallback is deprecated
+      // everywhere and runs on the main thread.
+      audioWorklet: !!c.audioWorklet,
+      scriptProcessor: typeof c.createScriptProcessor === 'function',
+
+      // Latency and rate, as the engine reports them.
+      sampleRate: c.sampleRate,
+      baseLatency: c.baseLatency ?? null,
+      outputLatency: c.outputLatency ?? null,
+
+      // Autoplay: is a context running before any user gesture? (v0.9.0 fixed
+      // first-party media autoplay; this says whether WebAudio got it too.)
+      stateAtStart: c.state,
+    };
+  },
+
+  // --- Does the transport surface actually accept anything? -------------
+  async mediaSessionLive() {
+    if (!navigator.mediaSession) return { available: false };
+    const result = { available: true, metadata: null, handlers: {}, positionState: null };
+    try {
+      navigator.mediaSession.metadata = new MediaMetadata({
+        title: 'probe', artist: 'swift-pwa', album: 'audio gap',
+      });
+      result.metadata = navigator.mediaSession.metadata?.title ?? 'set-but-unreadable';
+    } catch (e) { result.metadata = 'threw: ' + e.name; }
+    for (const action of ['play', 'pause', 'stop', 'seekto', 'previoustrack', 'nexttrack']) {
+      try { navigator.mediaSession.setActionHandler(action, () => {}); result.handlers[action] = 'accepted'; }
+      catch (e) { result.handlers[action] = e.name; }
+    }
+    try {
+      navigator.mediaSession.setPositionState({ duration: 100, position: 5, playbackRate: 1 });
+      result.positionState = 'accepted';
+    } catch (e) { result.positionState = e.name; }
+    try { navigator.mediaSession.playbackState = 'playing'; result.playbackState = navigator.mediaSession.playbackState; }
+    catch (e) { result.playbackState = 'threw: ' + e.name; }
+    return result;
+  },
+
+  // --- Which devices can the page even see? -----------------------------
+  // Pre-grant, a privacy-preserving engine reports devices with empty labels;
+  // an engine that reports *nothing* has no device picker to offer at all.
+  async devices() {
+    if (!navigator.mediaDevices?.enumerateDevices) return { available: false };
+    const list = await navigator.mediaDevices.enumerateDevices();
+    const byKind = {};
+    for (const d of list) {
+      byKind[d.kind] = byKind[d.kind] || { count: 0, labelled: 0, withDeviceId: 0 };
+      byKind[d.kind].count++;
+      if (d.label) byKind[d.kind].labelled++;
+      if (d.deviceId) byKind[d.kind].withDeviceId++;
+    }
+    return { available: true, total: list.length, byKind };
+  },
+
+  // --- Can output be pointed at a specific device? ----------------------
+  async routing() {
+    const media = document.createElement('audio');
+    if (typeof media.setSinkId !== 'function') return { setSinkId: false };
+    const outputs = (await navigator.mediaDevices.enumerateDevices())
+      .filter((d) => d.kind === 'audiooutput');
+    const target = outputs.find((d) => d.deviceId && d.deviceId !== 'default') || outputs[0];
+    if (!target) return { setSinkId: true, outputs: 0, result: 'no output device to try' };
+    try { await media.setSinkId(target.deviceId); return { setSinkId: true, outputs: outputs.length, result: 'accepted' }; }
+    catch (e) { return { setSinkId: true, outputs: outputs.length, result: e.name + ': ' + e.message }; }
+  },
+
+  // --- Does anything keep running when the window isn't on screen? ------
+  // The question a read-aloud app lives or dies on. Three clocks over the same
+  // interval: wall time (Date), the audio clock (ctx.currentTime), and a timer
+  // chain. A throttled timer with a healthy audio clock is a *different*
+  // problem from a suspended context, and both are invisible from one clock.
+  async clocks(ms) {
+    const c = audio();
+    if (c.state === 'suspended') await resumeSoon(c);
+    let ticks = 0;
+    const timer = setInterval(() => { ticks++; }, 20);
+    let rafs = 0;
+    const pump = () => { rafs++; requestAnimationFrame(pump); };
+    requestAnimationFrame(pump);
+
+    let w = null;
+    try { w = await installWorklet(); } catch (e) { w = null; }
+    const blocks0 = w ? await w.read() : null;
+
+    const wall0 = Date.now(), audio0 = c.currentTime;
+    await new Promise((r) => setTimeout(r, ms));
+    const wallMs = Date.now() - wall0, audioMs = (c.currentTime - audio0) * 1000;
+    clearInterval(timer);
+    const blocks1 = w ? await w.read() : null;
+
+    return {
+      state: c.state,
+      wallMs,
+      audioMs: Math.round(audioMs),
+      // 1.0 means the audio clock kept pace with the wall clock.
+      audioRatio: wallMs ? +(audioMs / wallMs).toFixed(3) : null,
+      // ~50/s if setInterval(20) is unthrottled.
+      timerHz: wallMs ? +((ticks / wallMs) * 1000).toFixed(1) : null,
+      // ~375/s at 48 kHz (128-frame blocks) if the render thread is alive.
+      workletHz: (blocks0 != null && blocks1 != null && wallMs)
+        ? +(((blocks1 - blocks0) / wallMs) * 1000).toFixed(1) : null,
+      rafHz: wallMs ? +((rafs / wallMs) * 1000).toFixed(1) : null,
+      visibility: document.visibilityState,
+      hidden: document.hidden,
+    };
+  },
+
+  // --- Do the OS's transport controls reach the page? --------------------
+  // `setActionHandler` accepting a handler says nothing about whether anything
+  // ever calls it. This plays a real media element (only a media element makes
+  // an app a Now Playing client on macOS), then Scripts/audio-probe/press-media-key.swift
+  // posts a real hardware play key and the page reports what happened.
+  //
+  // Two outcomes are recorded, because they answer different questions: a
+  // handler hit means the page can *implement* transport controls; the element
+  // pausing on its own means the key reached WebKit even if the page's handler
+  // never ran. Only the second can prove the instrument fired at all.
+  async transport() {
+    if (!this._transport) {
+      const hits = [];
+      const media = document.createElement('audio');
+      media.loop = false;
+      media.volume = 0.02;
+      // 3 s of a quiet 220 Hz tone as a WAV data URI — generated rather than
+      // shipped, so the probe stays a single file.
+      const rate = 8000, secs = 120, n = rate * secs;
+      const bytes = new Uint8Array(44 + n * 2);
+      const view = new DataView(bytes.buffer);
+      const ascii = (off, s) => { for (let i = 0; i < s.length; i++) view.setUint8(off + i, s.charCodeAt(i)); };
+      ascii(0, 'RIFF'); view.setUint32(4, 36 + n * 2, true); ascii(8, 'WAVEfmt ');
+      view.setUint32(16, 16, true); view.setUint16(20, 1, true); view.setUint16(22, 1, true);
+      view.setUint32(24, rate, true); view.setUint32(28, rate * 2, true);
+      view.setUint16(32, 2, true); view.setUint16(34, 16, true);
+      ascii(36, 'data'); view.setUint32(40, n * 2, true);
+      for (let i = 0; i < n; i++) view.setInt16(44 + i * 2, Math.sin((i / rate) * 220 * 2 * Math.PI) * 8000, true);
+      let binary = '';
+      for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      media.src = 'data:audio/wav;base64,' + btoa(binary);
+      document.body.appendChild(media);
+      for (const action of ['play', 'pause', 'nexttrack', 'previoustrack']) {
+        try { navigator.mediaSession.setActionHandler(action, () => hits.push({ action, at: Date.now() })); } catch {}
+      }
+      try {
+        navigator.mediaSession.metadata = new MediaMetadata({ title: 'swift-pwa probe', artist: 'audio gap' });
+      } catch {}
+      this._transport = { media, hits };
+    }
+    const t = this._transport;
+    try { await t.media.play(); } catch (e) { return { playing: false, error: e.name + ': ' + e.message }; }
+    try { navigator.mediaSession.playbackState = 'playing'; } catch {}
+    t.hits.length = 0;
+    return { playing: !t.media.paused, currentTime: t.media.currentTime, hits: t.hits.length };
+  },
+
+  transportHits() {
+    const t = this._transport;
+    if (!t) return { started: false };
+    return {
+      started: true,
+      hits: t.hits,
+      // If this flipped, the key reached WebKit even when no handler ran —
+      // which is what separates "the OS doesn't route to us" from "the key
+      // never left the posting process".
+      paused: t.media.paused,
+      currentTime: +t.media.currentTime.toFixed(2),
+      playbackState: navigator.mediaSession?.playbackState ?? null,
+    };
+  },
+
+  // --- Does work scheduled on the audio clock still land? ----------------
+  // The workaround a page would reach for once it discovers throttled timers:
+  // schedule ahead, sample-accurately, and let the engine fire it. If this
+  // holds while hidden, a page can drive gapless playback without native help
+  // — which is most of what a playback plugin would have been for.
+  async scheduleAhead(leadMs) {
+    const c = audio();
+    if (c.state === 'suspended') await resumeSoon(c);
+    const buffer = c.createBuffer(1, Math.round(c.sampleRate * 0.05), c.sampleRate);
+    const node = c.createBufferSource();
+    node.buffer = buffer;
+    const gain = c.createGain();
+    gain.gain.value = 0;
+    node.connect(gain).connect(c.destination);
+    const at = c.currentTime + leadMs / 1000;
+    const wall0 = Date.now();
+    node.start(at);
+    const fired = await new Promise((resolve) => {
+      const t = setTimeout(() => resolve(null), leadMs + 4000);
+      node.onended = () => { clearTimeout(t); resolve(Date.now() - wall0); };
+    });
+    return {
+      leadMs,
+      // The node's own onended is a JS callback, so a null here means the
+      // *notification* was dropped or deferred, not necessarily the audio.
+      endedAfterMs: fired,
+      audioClockAdvanced: +((c.currentTime - (at - leadMs / 1000)) * 1000).toFixed(0),
+      visibility: document.visibilityState,
+    };
+  },
+
+  // --- Did audio survive being sent to the background? -------------------
+  // The measurement that decides the iOS story, and it has to record itself:
+  // a backgrounded iOS app is a *suspended* app, so nothing the page schedules
+  // — a timer, a message, a fetch — runs to observe anything. The audio clock
+  // is the exception. `ctx.currentTime` advances only while the context is
+  // actually rendering, so comparing it against the wall clock across a
+  // background excursion says what happened while nobody was watching.
+  //
+  // Usage: `watchStart()`, background the app by hand, return, `watchRead()`.
+  watchStart() {
+    const c = audio();
+    // A real media element as well as the WebAudio graph: the two are governed
+    // separately on Apple platforms, and an app doing read-aloud may use either.
+    // The element is long and non-looping precisely so its own `currentTime`
+    // measures elapsed playback — a looping clip wraps and loses the count.
+    const media = this._transport?.media ?? null;
+    if (this._watchTimer) clearInterval(this._watchTimer);
+    this._watchTicks = 0;
+    // The *gap* between ticks, not just how many were missed. A total of
+    // "n ticks short" is the same number whether JS was frozen solid for 15 s
+    // or ran throttled at 2 Hz throughout — and those are completely different
+    // answers for anything that has to hand over a chunk on time.
+    this._watchMaxGap = 0;
+    this._watchLastTick = Date.now();
+    this._watchTimer = setInterval(() => {
+      const now = Date.now();
+      const gap = now - this._watchLastTick;
+      if (gap > this._watchMaxGap) this._watchMaxGap = gap;
+      this._watchLastTick = now;
+      this._watchTicks++;
+    }, 50);
+    this._watchMediaEvents = 0;
+    // What the page was *told* during the excursion. Without this, "JS kept
+    // running while minimized" is indistinguishable from "the window manager
+    // minimized it and the engine never marked the page hidden", and only the
+    // first is a statement about throttling.
+    this._watchVisibility = [document.visibilityState];
+    if (this._onVisibility) document.removeEventListener('visibilitychange', this._onVisibility);
+    this._onVisibility = () => { this._watchVisibility.push(document.visibilityState); };
+    document.addEventListener('visibilitychange', this._onVisibility);
+    if (media) {
+      media.removeEventListener('timeupdate', this._onTimeUpdate ?? (() => {}));
+      this._onTimeUpdate = () => { this._watchMediaEvents++; };
+      media.addEventListener('timeupdate', this._onTimeUpdate);
+    }
+    this._watch = {
+      wall: Date.now(),
+      audio: c.currentTime,
+      state: c.state,
+      media: media ? media.currentTime : null,
+      mediaPaused: media ? media.paused : null,
+    };
+    return { started: true, state: c.state, mediaAt: this._watch.media };
+  },
+
+  watchRead() {
+    if (!this._watch) return { started: false };
+    const c = audio();
+    const wallMs = Date.now() - this._watch.wall;
+    const audioMs = (c.currentTime - this._watch.audio) * 1000;
+    const media = this._transport?.media ?? null;
+    const mediaMs = (media && this._watch.media != null)
+      ? (media.currentTime - this._watch.media) * 1000 : null;
+    return {
+      wallMs,
+      audioMs: Math.round(audioMs),
+      // The number that names the outcome directly: how long the render thread
+      // was stopped. It needs no knowledge of how long the excursion was.
+      audioLostMs: Math.round(wallMs - audioMs),
+      mediaMs: mediaMs == null ? null : Math.round(mediaMs),
+      mediaLostMs: mediaMs == null ? null : Math.round(wallMs - mediaMs),
+      mediaPausedNow: media ? media.paused : null,
+      // ~20/s if JS ran throughout. Far below that means the app was frozen for
+      // part of the excursion even though audio kept coming out — which is the
+      // difference between "playback survives" and "a generated stream
+      // survives", and no amount of media-clock evidence separates the two.
+      jsTicks: this._watchTicks,
+      jsTicksExpected: Math.round(wallMs / 50),
+      // ~50 ms = never interrupted. ~500 ms = throttled but alive (a chunk can
+      // still be handed over). Seconds = frozen.
+      jsMaxGapMs: this._watchMaxGap,
+      visibilitySeen: this._watchVisibility,
+      mediaEvents: this._watchMediaEvents,
+      // ~1.0 = audio ran throughout. ~0 = the context was suspended for the
+      // whole excursion. In between = it was stopped partway, which is what a
+      // grace period before suspension looks like.
+      ratio: wallMs ? +(audioMs / wallMs).toFixed(3) : null,
+      stateBefore: this._watch.state,
+      stateNow: c.state,
+      visibility: document.visibilityState,
+    };
+  },
+
+  // --- Is the audio *session* reachable from the page at all? ------------
+  // The W3C Audio Session API is the standards-track answer to exactly the
+  // policy this proposal is about — playback vs transient vs ambient, which
+  // decides mixing, ducking and (on Apple) whether the engine treats the page
+  // as a playback app. Worth knowing before proposing a native equivalent:
+  // a plugin that duplicates a shipping web API is the wrong shape.
+  audioSession() {
+    const s = navigator.audioSession;
+    if (!s) return { available: false };
+    const out = { available: true, type: s.type ?? null, state: s.state ?? null, accepted: {} };
+    for (const type of ['playback', 'transient', 'transient-solo', 'ambient', 'play-and-record', 'auto']) {
+      try { s.type = type; out.accepted[type] = s.type === type ? 'set' : ('ignored (stayed ' + s.type + ')'); }
+      catch (e) { out.accepted[type] = 'threw: ' + e.name; }
+    }
+    try { s.type = 'playback'; out.finalType = s.type; } catch { out.finalType = null; }
+    return out;
+  },
+
+  // --- Is there a media-element route for generated audio? ---------------
+  // Asked because WebAudio is suspended in the background on iOS while media
+  // elements are not: if a generated stream can be fed to an element, the gap
+  // closes with no native code. MSE is the only way to feed one without JS in
+  // the loop for every chunk.
+  mediaSourceSupport() {
+    const types = [
+      'audio/mp4; codecs="mp4a.40.2"',
+      'audio/webm; codecs="opus"',
+      'audio/mpeg',
+    ];
+    const probe = (Klass) => {
+      if (typeof Klass !== 'function') return null;
+      const out = {};
+      for (const t of types) {
+        try { out[t] = !!Klass.isTypeSupported(t); } catch (e) { out[t] = 'threw: ' + e.name; }
+      }
+      return out;
+    };
+    return {
+      MediaSource: typeof MediaSource === 'function',
+      mediaSourceTypes: probe(window.MediaSource),
+      // Apple's own answer for this on iOS, where plain MSE was long absent.
+      ManagedMediaSource: typeof window.ManagedMediaSource === 'function',
+      managedTypes: probe(window.ManagedMediaSource),
+      srcObjectOnAudio: 'srcObject' in document.createElement('audio'),
+      mediaStreamDestination: typeof (window.AudioContext || {}).prototype?.createMediaStreamDestination === 'function',
+    };
+  },
+
+  // --- Can a page play a *stream* of generated chunks gaplessly? ---------
+  // This is the `ai.*` audio-output shape, not a hypothetical: a TTS backend
+  // hands the page one buffer at a time and the page has to join them with no
+  // seam. Scheduling each chunk at the previous one's end on the audio clock
+  // is the technique; this measures whether the engine actually honours it,
+  // because a single dropped or late chunk is audible as a click.
+  async chunkStream(count, chunkMs) {
+    const c = audio();
+    if (c.state === 'suspended') await resumeSoon(c);
+    const frames = Math.round((c.sampleRate * chunkMs) / 1000);
+    const gain = c.createGain();
+    gain.gain.value = 0;
+    gain.connect(c.destination);
+
+    // Every chunk is built and scheduled up front against one running cursor —
+    // the same thing a streaming consumer does as buffers arrive, minus the
+    // arrival jitter, so a seam here is the engine's and not the producer's.
+    const start = c.currentTime + 0.1;
+    let cursor = start;
+    const ends = [];
+    for (let i = 0; i < count; i++) {
+      const buffer = c.createBuffer(1, frames, c.sampleRate);
+      const data = buffer.getChannelData(0);
+      for (let s = 0; s < frames; s++) data[s] = Math.sin((s / c.sampleRate) * 220 * 2 * Math.PI) * 0.05;
+      const node = c.createBufferSource();
+      node.buffer = buffer;
+      node.connect(gain);
+      node.start(cursor);
+      const scheduled = cursor;
+      node.onended = () => ends.push({ i, scheduled, actual: c.currentTime });
+      cursor += frames / c.sampleRate;
+    }
+
+    const totalMs = (cursor - start) * 1000;
+    await new Promise((r) => setTimeout(r, totalMs + 800));
+    ends.sort((a, b) => a.i - b.i);
+    // The seam that matters: how late each chunk's end was noticed relative to
+    // where it was scheduled. A growing lag means the graph is drifting.
+    const lags = ends.map((e) => +((e.actual - (e.scheduled + frames / c.sampleRate)) * 1000).toFixed(1));
+    return {
+      count, chunkMs, frames, totalMs: Math.round(totalMs),
+      delivered: ends.length,
+      maxLagMs: lags.length ? Math.max(...lags) : null,
+      lastLagMs: lags.length ? lags[lags.length - 1] : null,
+      visibility: document.visibilityState,
+      state: c.state,
+    };
+  },
+
+  // --- Capture, once a grant exists --------------------------------------
+  // Separated because it raises the OS prompt; the checks above must be
+  // readable on a machine where nobody is there to answer it.
+  async capture(constraints) {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: constraints ?? { echoCancellation: false, noiseSuppression: false, autoGainControl: false, sampleRate: 48000, channelCount: 1 },
+      });
+      const track = stream.getAudioTracks()[0];
+      const settings = track.getSettings ? track.getSettings() : {};
+      const caps = track.getCapabilities ? track.getCapabilities() : {};
+      const labelled = !!track.label;
+      // What a *raw frames* consumer would get: run the live stream through a
+      // worklet and count real callbacks, so "AudioWorklet exists" isn't
+      // mistaken for "AudioWorklet receives microphone audio".
+      let worklet = 'not attempted';
+      try {
+        const c = audio();
+        const src = 'registerProcessor("probe", class extends AudioWorkletProcessor {' +
+          'constructor(){super();this.n=0;}' +
+          'process(inputs){const i=inputs[0];if(i&&i[0]){this.n++;if(this.n%50===0)this.port.postMessage({blocks:this.n,len:i[0].length});}return true;}' +
+          '});';
+        const url = URL.createObjectURL(new Blob([src], { type: 'application/javascript' }));
+        await c.audioWorklet.addModule(url);
+        const node = new AudioWorkletNode(c, 'probe');
+        c.createMediaStreamSource(stream).connect(node);
+        worklet = await new Promise((resolve) => {
+          const t = setTimeout(() => resolve('no blocks in 2s'), 2000);
+          node.port.onmessage = (e) => { clearTimeout(t); resolve(e.data); };
+        });
+      } catch (e) { worklet = 'threw: ' + e.name + ': ' + e.message; }
+      stream.getTracks().forEach((t) => t.stop());
+      return { granted: true, labelled, settings, capabilities: caps, worklet };
+    } catch (e) {
+      return { granted: false, error: e.name + ': ' + e.message };
+    }
+  },
+
+  async snapshot() {
+    return show({
+      ua: navigator.userAgent,
+      origin: location.origin,
+      surface: this.surface(),
+      mediaSession: await this.mediaSessionLive(),
+      devices: await this.devices(),
+      routing: await this.routing(),
+    });
+  },
+};
+
+// --- Fire-and-poll --------------------------------------------------------
+// `drive eval` hands the string to the engine's plain evaluate-JavaScript call,
+// which does not await a Promise — an async check evaluated directly answers
+// `null` and looks like a missing capability. So a check is *started* by one
+// eval and *collected* by a later one.
+__audio.results = {};
+__audio.go = function (name, ...args) {
+  __audio.results[name] = { status: 'pending' };
+  Promise.resolve()
+    .then(() => __audio[name](...args))
+    .then((value) => { __audio.results[name] = { status: 'done', value }; show(__audio.results); })
+    .catch((e) => { __audio.results[name] = { status: 'threw', value: String(e) }; });
+  return 'started';
+};
+__audio.get = function (name) { return JSON.stringify(__audio.results[name] ?? { status: 'unstarted' }); };
+
+document.getElementById('unlock').addEventListener('click', async () => {
+  const c = audio();
+  const outcome = await resumeSoon(c);
+  // A media element unlocked in the same gesture, because WebAudio and media
+  // elements are gated separately on Apple platforms.
+  let media = 'no element yet';
+  try { await __audio.transport(); media = 'playing'; } catch (e) { media = String(e); }
+  __audio.unlocked = { outcome, state: c.state, media };
+  show(__audio.unlocked);
+});
+
+window.__audio = __audio;
+__audio.snapshot();
+</script>

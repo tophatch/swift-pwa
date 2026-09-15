@@ -133,6 +133,30 @@
         let downloaded = false;   // model weights fetched this session
         let model = null;         // the TTS model entry from ai.info
 
+        // Speech the user asked for is `playback`: it keeps playing when the app
+        // goes to the background, and it stops whatever else the device was
+        // playing. Without this line the clip plays perfectly in every
+        // foreground test and cuts out the moment an iPhone user leaves the app.
+        // One line, every platform, no branch — see docs/javascript-api.md.
+        navigator.audioSession.type = "playback";
+
+        // Publish the clip to the lock screen, the notification and the headset
+        // button. `setPositionState` is what draws the scrubber, so it's fed on
+        // `loadedmetadata` and as the clip plays.
+        function publishNowPlaying(text) {
+            navigator.mediaSession.metadata = new MediaMetadata({
+                title: text.length > 60 ? text.slice(0, 57) + "…" : text,
+                artist: "CritterFacts",
+                album: $("voice").selectedOptions[0].textContent,
+                artwork: [{ src: "assets/speak-cover.png", sizes: "512x512", type: "image/png" }],
+            });
+            // Only the two a spoken clip can honour. Offering `nexttrack` here
+            // would draw a button that does nothing, which is worse than no
+            // button at all.
+            navigator.mediaSession.setActionHandler("play", () => $("player").play());
+            navigator.mediaSession.setActionHandler("pause", () => $("player").pause());
+        }
+
         function showSpinner(text, sub = "") {
             $("overlay").hidden = false; $("spinner").hidden = false;
             $("bar").hidden = true; $("status").textContent = text; $("sub").textContent = sub;
@@ -194,6 +218,7 @@
                 $("icon").textContent = "🔊";
                 $("caption").textContent = `Spoken in ${secs}s${audio.durationMs ? ` · ${(audio.durationMs / 1000).toFixed(1)}s of audio` : ""}.`;
                 hideOverlay();
+                publishNowPlaying(text);
                 player.play().catch(() => {}); // autoplay may be blocked; the controls still work
 
                 // Free the resident ~2.5 GB pipeline now the clip is ready — on a
@@ -211,6 +236,26 @@
             e.preventDefault();
             const t = $("prompt").value.trim();
             if (t) speak(t);
+        });
+
+        // Keep the lock screen honest. The element is the source of truth —
+        // the user can pause from the OS *or* from the page, and either way
+        // these events fire, so the transport row never disagrees with what is
+        // actually happening.
+        $("player").addEventListener("play", () => { navigator.mediaSession.playbackState = "playing"; });
+        $("player").addEventListener("pause", () => { navigator.mediaSession.playbackState = "paused"; });
+        $("player").addEventListener("ended", () => {
+            // "none" clears the entry rather than leaving a finished clip
+            // parked on the lock screen for the rest of the session.
+            navigator.mediaSession.playbackState = "none";
+            navigator.mediaSession.metadata = null;
+        });
+        $("player").addEventListener("timeupdate", () => {
+            const el = $("player");
+            if (!isFinite(el.duration)) return;
+            navigator.mediaSession.setPositionState({
+                duration: el.duration, position: el.currentTime, playbackRate: el.playbackRate,
+            });
         });
 
         // Populate the voice picker + read the model's availability (download size).

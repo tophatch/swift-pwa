@@ -23,7 +23,7 @@ struct Doctor: AsyncParsableCommand {
     var target: BuildTarget?
 
     /// One prerequisite check and its outcome.
-    private struct Check {
+    struct Check {
         let name: String
         let ok: Bool
         let detail: String
@@ -38,6 +38,7 @@ struct Doctor: AsyncParsableCommand {
         // Project-level: flag a generated native shell that lags the CLI,
         // regardless of which target we're checking. No-op outside a project.
         checks += Self.scaffoldFreshness()
+        checks += Self.audioPolicy()
 
         print("swift-pwa doctor — target: \(target.rawValue)\n")
         for check in checks {
@@ -252,6 +253,93 @@ struct Doctor: AsyncParsableCommand {
             }
         }
         return checks
+    }
+
+    /// Advisory: an app that plays audio and never names an audio session
+    /// policy.
+    ///
+    /// That app works on the machine it was written on and stops the moment it
+    /// is backgrounded on iOS, which the runtime also warns about — but only on
+    /// a device that is already playing, and the adopters this catches are the
+    /// ones who don't own the platform where it bites. So it is checked here
+    /// too, where a developer can read it before shipping.
+    ///
+    /// **Advisory, never a failure**, and it names its evidence. The
+    /// unavoidable false positive is a bundled framework that mentions
+    /// `AudioContext` for code the app never reaches; printing the file it
+    /// matched turns that from noise into something dismissed at a glance,
+    /// which a bare "you might have an audio problem" never could.
+    private static func audioPolicy() -> [Check] {
+        audioPolicy(in: URL(fileURLWithPath: FileManager.default.currentDirectoryPath))
+    }
+
+    /// Split from the caller so a test can point it at a project it built,
+    /// rather than at whatever directory the test runner happens to be in.
+    static func audioPolicy(in root: URL) -> [Check] {
+        guard let manifest = try? PWAManifest.load(from: root.appendingPathComponent("pwa.json")) else {
+            return []
+        }
+        let webRoot = root.appendingPathComponent(manifest.web.directory)
+        guard let sources = webSources(under: webRoot) else { return [] }
+
+        // Deliberately narrow. `.play()` would match a video element, a WAAPI
+        // animation and half the game loops on earth; these are the spellings
+        // that only mean "this app makes sound".
+        let audioSignals = ["AudioContext", "new Audio(", "<audio", "<video"]
+        var evidence: (file: String, signal: String)?
+        var declaresPolicy = false
+
+        for (path, text) in sources {
+            if text.contains("audioSession") { declaresPolicy = true }
+            if evidence == nil, let signal = audioSignals.first(where: text.contains) {
+                evidence = (path, signal)
+            }
+            if declaresPolicy, evidence != nil { break }
+        }
+
+        guard let found = evidence else { return [] }
+        if declaresPolicy {
+            return [Check(
+                name: "Audio session policy", ok: true,
+                detail: "the page sets navigator.audioSession.type", required: false, fix: nil
+            )]
+        }
+        return [Check(
+            name: "Audio session policy", ok: false,
+            detail: "\(manifest.web.directory)/\(found.file) uses \(found.signal), "
+                + "but nothing in the page sets navigator.audioSession.type",
+            required: false,
+            fix: "Audio with the default 'auto' policy stops when the app is backgrounded on iOS, and "
+                + "requests no audio focus on Android, so the user's own music plays over it. Set "
+                + "`navigator.audioSession.type` — 'playback' for something the user chose to listen to, "
+                + "'ambient' for game or UI sound that should mix. See docs/javascript-api.md."
+        )]
+    }
+
+    /// Text files under the web root, as `(relative path, contents)`. Bounded
+    /// so `doctor` stays instant on a project whose `web/` is a build output:
+    /// a huge file is read for its head only, since a bundler puts nothing
+    /// meaningful past the first megabyte that isn't also in it.
+    private static func webSources(under root: URL) -> [(String, String)]? {
+        let fm = FileManager.default
+        var isDirectory: ObjCBool = false
+        guard fm.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {
+            return nil
+        }
+        let extensions: Set = ["html", "htm", "js", "mjs", "cjs", "jsx", "ts", "tsx", "svelte", "vue"]
+        guard let walker = fm.enumerator(at: root, includingPropertiesForKeys: nil) else { return nil }
+
+        var out: [(String, String)] = []
+        for case let url as URL in walker {
+            guard extensions.contains(url.pathExtension.lowercased()) else { continue }
+            guard let text = try? String(contentsOf: url, encoding: .utf8) else { continue }
+            let relative = url.path.hasPrefix(root.path + "/")
+                ? String(url.path.dropFirst(root.path.count + 1))
+                : url.lastPathComponent
+            out.append((relative, text.count > 1_000_000 ? String(text.prefix(1_000_000)) : text))
+            if out.count >= 2000 { break }
+        }
+        return out.isEmpty ? nil : out.sorted { $0.0 < $1.0 }
     }
 
     /// Extract the version from a `// swift-pwa-generated: vX.Y.Z` stamp,

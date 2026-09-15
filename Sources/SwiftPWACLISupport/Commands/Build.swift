@@ -289,6 +289,7 @@ struct Build: AsyncParsableCommand {
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
         try Self.validateLastWindowClosed(manifest: pwa)
         try Self.validateExternalURLs(manifest: pwa)
+        try Self.validateAndroidPermissions(manifest: pwa)
         try await Self.validatePermissions(
             manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
         )
@@ -719,16 +720,24 @@ struct Build: AsyncParsableCommand {
     /// - **Android** — no per-arch work happens here, because Android
     ///   cross-compiles multiple ABIs in one build and each needs its own
     ///   `libonnxruntime.so` on `LIBRARY_PATH` for that ABI's link step
-    ///   alone. `AndroidBundler.stageJniLibs` reads this same
-    ///   `manifest.ai?.localOnnxRuntime` flag directly and resolves +
-    ///   stages the `.so` per ABI via `OnnxRuntimeAndroidArtifact` inside
-    ///   its cross-compile loop.
+    ///   alone. `AndroidBundler.stageJniLibs` asks ``OnnxRuntimeTier`` the
+    ///   same question directly and resolves + stages the `.so` per ABI via
+    ///   `OnnxRuntimeAndroidArtifact` inside its cross-compile loop.
     static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         // `ai.onnx_gpu` (desktop GPU execution providers — DirectML on Windows,
         // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md)
-        // implies the ONNX Runtime tier, so either flag enables it.
+        // implies the ONNX Runtime tier, so either flag enables it — and so
+        // does depending on one of the tier's products, which is what actually
+        // makes the linker need the library. See ``OnnxRuntimeTier``.
         let onnxGpu = manifest.ai?.onnxGpu == true
-        guard manifest.ai?.localOnnxRuntime == true || onnxGpu else { return }
+        guard let reason = OnnxRuntimeTier.reason(manifest: manifest, projectRoot: projectRoot) else { return }
+        if case let .packageDependency(product) = reason {
+            print("""
+            swift-pwa: Package.swift depends on \(product), which links the on-device ONNX Runtime — \
+            enabling that tier for this build (the same thing pwa.json's ai.local_onnx_runtime does). \
+            Without it the link fails on a missing onnxruntime library, which names no fix.
+            """)
+        }
         switch target {
         case .macos, .ios:
             #if !os(Windows)
@@ -860,6 +869,33 @@ struct Build: AsyncParsableCommand {
     /// digits / `+` `-` `.`) because the two ways to get it wrong both end in
     /// silence: `"https://example.com"` in the list declares nothing useful,
     /// and a scheme with a stray space never matches a URL.
+    /// `android.permissions` entries are emitted into `AndroidManifest.xml`
+    /// verbatim, so a malformed one is either an `aapt` failure thousands of
+    /// lines into a cross-compile, or — worse — a permission the app believes
+    /// it declared and doesn't have. Check the grammar before anything is
+    /// built.
+    ///
+    /// Deliberately **not** an allowlist of known Android permissions: OEMs
+    /// define their own (`com.samsung.android.permission.…`), new platform
+    /// releases add more, and a list here would go stale and start refusing
+    /// valid declarations. The shape is what can be checked honestly.
+    static func validateAndroidPermissions(manifest: PWAManifest) throws {
+        for permission in manifest.android?.permissions ?? [] {
+            let malformed = permission.isEmpty
+                || permission.contains(where: \.isWhitespace)
+                || permission.contains(where: { "<>&\"'".contains($0) })
+                || !permission.contains(".")
+            guard !malformed else {
+                throw ValidationError(
+                    "pwa.json: android.permissions contains \"\(permission)\", which isn't an "
+                        + "Android permission name. Give the fully-qualified name as Android "
+                        + "spells it — \"android.permission.MANAGE_EXTERNAL_STORAGE\", not "
+                        + "\"MANAGE_EXTERNAL_STORAGE\"."
+                )
+            }
+        }
+    }
+
     static func validateExternalURLs(manifest: PWAManifest) throws {
         if let raw = manifest.externalUrls?.offOriginNavigation,
            OffOriginNavigation(rawValue: raw) == nil
@@ -1134,10 +1170,28 @@ struct Build: AsyncParsableCommand {
             guard let entries = try? FileManager.default.contentsOfDirectory(
                 at: sdksDir, includingPropertiesForKeys: nil
             ) else { return nil }
+            // Two spellings, because the bundle was renamed: through 6.2 it
+            // was `swift-6.2-RELEASE-android-0.1.artifactbundle`, from 6.4 it
+            // is `swift-6.4.0-RELEASE_android.artifactbundle`. Matching only
+            // the old one meant no toolchain was selected at all, silently,
+            // and the cross-build ran under Xcode's Swift and failed with
+            // "module compiled with Swift X cannot be imported".
+            let markers = ["-RELEASE-android", "-RELEASE_android"]
+            var sawAndroidBundle = false
             for entry in entries.sorted(by: { $0.lastPathComponent > $1.lastPathComponent }) {
-                if let v = swiftReleaseVersion(in: entry.lastPathComponent, marker: "-RELEASE-android") {
-                    return v
+                let name = entry.lastPathComponent
+                guard name.contains("android") else { continue }
+                sawAndroidBundle = true
+                for marker in markers {
+                    if let v = swiftReleaseVersion(in: name, marker: marker) { return v }
                 }
+            }
+            if sawAndroidBundle {
+                print(
+                    "swift-pwa: note — an Android SDK bundle is installed but its name doesn't carry a "
+                        + "Swift version this understands, so no matching toolchain was selected. "
+                        + "Set TOOLCHAINS by hand — see docs/android-setup.md."
+                )
             }
             return nil
         }
@@ -1155,9 +1209,14 @@ struct Build: AsyncParsableCommand {
             guard let entries = try? FileManager.default.contentsOfDirectory(
                 at: dir, includingPropertiesForKeys: nil
             ) else { return nil }
+            // `version` is `major.minor`; the directory may carry a patch
+            // component (`swift-6.4.0-RELEASE.xctoolchain` for a 6.4 SDK), so
+            // match on either. A prefix test against `swift-6.4-RELEASE` alone
+            // found nothing for the toolchain that was actually installed.
             let candidates = entries.filter {
-                $0.pathExtension == "xctoolchain"
-                    && $0.lastPathComponent.hasPrefix("swift-\(version)-RELEASE")
+                guard $0.pathExtension == "xctoolchain" else { return false }
+                let name = $0.lastPathComponent
+                return name.hasPrefix("swift-\(version)-RELEASE") || name.hasPrefix("swift-\(version).")
             }
             // Exact `swift-<v>-RELEASE.xctoolchain` first, then anything else.
             // Rank exact=0/other=1 so the comparator is a real strict-weak

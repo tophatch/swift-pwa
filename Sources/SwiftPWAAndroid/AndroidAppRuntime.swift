@@ -106,6 +106,22 @@
                 OpenURL.emit(payload.urls, on: context.events)
             }
 
+            // The Activity's foreground state, pushed from `onResume` /
+            // `onPause`, becomes the window's `didFocus` / `didBlur` — the
+            // events the desktop backends already emit, so Swift written
+            // against them is correct here too (#214). Subscribed before
+            // `configure`, because the Activity is already resumed by the time
+            // the runtime thread starts and the first push can beat it.
+            AndroidHostEventRouter.subscribe(channel: "window.lifecycle") { data in
+                struct Payload: Decodable { let state: String }
+                guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
+                switch payload.state {
+                case "resumed": context.activeWindow?.emit(.didFocus)
+                case "paused": context.activeWindow?.emit(.didBlur)
+                default: break
+                }
+            }
+
             // Core's diagnostics default to stderr, which Android discards.
             // Installed first so nothing emitted during setup is lost.
             RuntimeDiagnostics.installSink { message in
@@ -115,10 +131,22 @@
                 swiftPWALog(message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message)
             }
 
+            // After the sink, so a failure to install the watch reaches logcat
+            // rather than the discarded stderr — the whole point of the change
+            // is that this failure mode is otherwise invisible. Before
+            // `configure`, so the app's own main-actor work is already served
+            // by the time its first command can run.
+            attachMainQueueToLooper()
+
             // Also before `configure`: the WebView is already live by the time
             // this thread starts, so a page that asks for the camera on load
             // must find someone listening.
             AndroidWebPermissions.install(policy: context.permissions)
+
+            // Same reasoning again, and more sharply: `configure` is exactly
+            // where an app calls `ctx.serveDirectory`, and the page it then
+            // opens requests from that mount immediately.
+            AndroidServedDirectories.install(provider: context.assetProvider)
 
             // Same reasoning: the WebView can be asked to navigate before
             // `configure` returns, and an unanswered navigation takes the
@@ -185,6 +213,39 @@
                 let box = Unmanaged.passRetained(MainBox(body)).toOpaque()
                 swiftpwa_android_post_main(box)
             }
+        }
+
+        /// Let an app's own `@MainActor` code run: watch libdispatch's
+        /// main-queue eventfd from the UI thread's `Looper`.
+        ///
+        /// ``installMainThreadHook()`` covers *swift-pwa's* UI work. This
+        /// covers the app's, which swift-pwa never sees: off Apple,
+        /// `MainActor` is backed by libdispatch's main queue, the UI thread
+        /// belongs to the JVM's `Looper` and drains nothing, so an adopting
+        /// app's `await MainActor.run { … }` never returns — silently (#216).
+        ///
+        /// The watch has to be installed *on* the UI thread, because
+        /// `ALooper_forThread` returns the caller's loop, and `run` executes
+        /// on the worker thread the Activity spawned. So it rides the same
+        /// `Handler` hop `MainThread.run` uses, posted after the runner is
+        /// registered above.
+        private func attachMainQueueToLooper() {
+            guard let fd = PlatformMainQueue.handle else {
+                RuntimeDiagnostics.emit(
+                    "swift-pwa: libdispatch has no main-queue handle; the app's own "
+                        + "@MainActor code will not run (see docs/android-setup.md)."
+                )
+                return
+            }
+            let box = Unmanaged.passRetained(MainBox {
+                if swiftpwa_android_watch_main_queue(fd, { PlatformMainQueue.drain() }) != 1 {
+                    RuntimeDiagnostics.emit(
+                        "swift-pwa: could not watch libdispatch's main queue on the UI "
+                            + "thread's Looper; the app's own @MainActor code will not run."
+                    )
+                }
+            }).toOpaque()
+            swiftpwa_android_post_main(box)
         }
     }
 

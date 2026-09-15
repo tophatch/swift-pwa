@@ -65,7 +65,7 @@ That's the whole native side. `ctx.dataDirectory()` is a per-app, writable, pers
 
 ### Android needs one extra line in `pwa.json`
 
-On Android the web-asset server is built before any Swift runs, so a startup mount has to be **declared** in `pwa.json` as well (the desktop `serveDirectory` call above still applies everywhere):
+On Android the web-asset server is built before any Swift runs, so a mount that has to answer a request the page makes *before `configure()` returns* — which a pack folder mounted at launch does — is **declared** in `pwa.json` as well (the `serveDirectory` call above still applies everywhere, and is what mounts a folder chosen later, or one outside the app's own storage):
 
 ```json
 "build": {

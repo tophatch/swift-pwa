@@ -263,6 +263,24 @@ let package = Package(
         .target(
             name: "SwiftPWACore",
             dependencies: [
+                // `URLSessionNetworkClient` hashes a download with SHA-256:
+                // CryptoKit on Apple (no dependency), swift-crypto's `Crypto`
+                // everywhere else. Core reaches it through `canImport(Crypto)`,
+                // which succeeds whenever *any* target in the build graph has
+                // pulled the module in — so for years this edge was missing and
+                // the build worked anyway, because a backend target declared it
+                // and the whole package linked as one. Swift 6.4's `swiftbuild`
+                // engine builds the link list from declared edges instead, and
+                // an undeclared one means Core's objects go in while
+                // swift-crypto's don't: the app links clean (an Android `.so`
+                // is linked `-shared`, where undefined symbols are legal) and
+                // then dies at load with `cannot locate symbol
+                // "$s6Crypto0A8KitErrorON"`. Declared here, where it's used.
+                .product(
+                    name: "Crypto",
+                    package: "swift-crypto",
+                    condition: .when(platforms: [.linux, .windows, .android])
+                ),
                 // libsecret (Secret Service) shim for LinuxSecretStore — the
                 // secrets.* plugin's Linux backing. Linux-only; on other
                 // platforms the edge is absent so the C targets aren't built.

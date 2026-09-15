@@ -81,10 +81,14 @@ public extension AppContext {
     /// bundle root `/`; remounting the same prefix replaces it. Safe to call
     /// before or after `createWindow` — handlers read the mount table live.
     ///
-    /// On Android the asset loader is built at Activity-init (before `configure`
-    /// runs), so mounts that must exist at startup are declared in `pwa.json`'s
-    /// `build.serve` instead; a runtime `serveDirectory` for an undeclared
-    /// prefix is a desktop capability. See the content-packs design doc.
+    /// Android's asset loader is built at Activity-init, before `configure`
+    /// runs, so a mount that must exist before the first page load is still
+    /// declared in `pwa.json`'s `build.serve`. A runtime call works there too
+    /// (#213) — the backend asks this router for every request the WebView
+    /// makes — with one platform limit: a `Range` request is served from the
+    /// requested offset to the end of the file under a **200**, because the
+    /// WebView rejects a `206` from an intercepted response outright. See the
+    /// content-packs design doc.
     func serveDirectory(_ directory: URL, at prefix: String) {
         assetProvider.mount(directory, at: prefix, writable: true)
     }

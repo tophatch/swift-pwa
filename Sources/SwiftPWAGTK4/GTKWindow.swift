@@ -44,6 +44,15 @@
         /// during a drag.
         private var lastSize: Size = .zero
 
+        /// Last reported active state, so `.didFocus` / `.didBlur` are emitted
+        /// on a *change*. Both the window manager's `notify::is-active` and an
+        /// explicit ``focus()`` report through here, and the two overlap:
+        /// presenting a window makes it active, so the signal would otherwise
+        /// arrive right behind the call and say the same thing twice.
+        /// Starts false — a window isn't active until it is mapped and the WM
+        /// gives it focus.
+        private var lastActive = false
+
         /// Tracked programmatic fullscreen state. GTK's native surface
         /// flips async after the WM grants fullscreen, so we mirror the
         /// requested state (matching `Win32Window` / `AndroidWindow`) to
@@ -123,6 +132,7 @@
 
             lastSize = config.size
             connectSizeNotify()
+            connectActiveNotify()
             connectCloseRequest()
             swiftpwa_window_install_quit_shortcut(windowPtr, quitShortcutCallback, nil)
             // Pass `self` as the DevTools shortcut's user_data so the
@@ -186,6 +196,39 @@
         /// runs the same teardown as a programmatic `close()`. Returning
         /// FALSE from the trampoline lets GTK's default handler destroy
         /// the window.
+        /// Connect `notify::is-active` so the window manager's own focus
+        /// changes surface as `WindowEvent.didFocus` / `.didBlur`. Previously
+        /// the only source of either was an explicit ``focus()`` call, so an
+        /// app couldn't tell the user had switched away from it (#214) — which
+        /// is when a lock re-engages or watched state is re-read. The GTK3
+        /// backend is wired to the same property.
+        private func connectActiveNotify() {
+            let box = Unmanaged.passRetained(GTKWindowBox(self)).toOpaque()
+            "notify::is-active".withCString { name in
+                _ = g_signal_connect_data(
+                    UnsafeMutableRawPointer(widget),
+                    name,
+                    unsafeBitCast(notifyActiveTrampoline, to: GCallback.self),
+                    box,
+                    gtkWindowBoxDestroy,
+                    GConnectFlags(rawValue: 0)
+                )
+            }
+        }
+
+        /// Called from the `notify::is-active` trampoline on the GTK main
+        /// thread.
+        func handleActiveNotify() {
+            emitActive(gtk_window_is_active(window) != 0)
+        }
+
+        /// Emit `.didFocus` / `.didBlur` for a *change* in active state.
+        private func emitActive(_ active: Bool) {
+            guard active != lastActive else { return }
+            lastActive = active
+            emit(active ? .didFocus : .didBlur)
+        }
+
         private func connectCloseRequest() {
             let box = Unmanaged.passRetained(GTKWindowBox(self)).toOpaque()
             "close-request".withCString { name in
@@ -277,7 +320,7 @@
 
         public func focus() {
             gtk_window_present(window)
-            emit(.didFocus)
+            emitActive(true)
         }
         public func minimize() {
             gtk_window_minimize(window)
@@ -336,6 +379,23 @@
             guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
             let box = Unmanaged<GTKWindowBox>.fromOpaque(opaque).takeUnretainedValue()
             box.window?.handleSizeNotify()
+        }
+    }
+
+    /// `@convention(c)` trampoline for `notify::is-active`. Same GObject
+    /// notify signature as `notifySizeTrampoline`; the window re-reads the
+    /// current value itself.
+    let notifyActiveTrampoline: @convention(c) (
+        gpointer?,
+        gpointer?,
+        gpointer?
+    ) -> Void = { _, _, userData in
+        guard let userData else { return }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let box = Unmanaged<GTKWindowBox>.fromOpaque(opaque).takeUnretainedValue()
+            box.window?.handleActiveNotify()
         }
     }
 

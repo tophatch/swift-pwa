@@ -120,19 +120,77 @@
             if DriverBackground.isRequested { DriverBackground.markHonoured() }
             AppDriver.startIfRequested(context, backend: "windows")
 
-            var msg = MSG()
-            // Swift's WinSDK overlay imports `GetMessageW` as
-            // returning `Bool` rather than the C `BOOL` (Int32). We
-            // lose the distinction between the WM_QUIT (returns 0)
-            // and error (returns -1) cases, but for our purposes
-            // both terminate the loop.
-            while GetMessageW(&msg, nil, 0, 0) {
-                TranslateMessage(&msg)
-                DispatchMessageW(&msg)
-            }
+            runMessageLoop()
 
             OleUninitialize()
             exit(context.pendingExitCode ?? 0)
+        }
+
+        // MARK: - Message pump
+
+        /// The Win32 pump, extended to service libdispatch's main queue.
+        ///
+        /// `GetMessageW` on its own waits for *messages*, which is why an
+        /// adopting app's own `@MainActor` code never ran (#216): off Apple,
+        /// `MainActor` is backed by libdispatch's main queue, and nothing on
+        /// this thread drained it — the `await` simply never returned.
+        /// `MsgWaitForMultipleObjectsEx` waits on that queue's handle *and*
+        /// on input, so one thread services both. It is the same integration
+        /// CoreFoundation's run loop performs on Windows.
+        ///
+        /// The handle is an auto-reset event, so returning from the wait
+        /// acknowledges the wakeup; there is no equivalent of the Linux
+        /// eventfd's read.
+        private func runMessageLoop() {
+            var msg = MSG()
+            guard var handles: [HANDLE?] = PlatformMainQueue.handle.map({ [$0] }) else {
+                RuntimeDiagnostics.emit(
+                    "swift-pwa: libdispatch has no main-queue handle; the app's own "
+                        + "@MainActor code will not run (see docs/windows-setup.md)."
+                )
+                // Swift's WinSDK overlay imports `GetMessageW` as returning
+                // `Bool` rather than the C `BOOL` (Int32). We lose the
+                // distinction between the WM_QUIT (returns 0) and error
+                // (returns -1) cases, but for our purposes both terminate
+                // the loop.
+                while GetMessageW(&msg, nil, 0, 0) {
+                    TranslateMessage(&msg)
+                    DispatchMessageW(&msg)
+                }
+                return
+            }
+
+            while true {
+                let signalled = handles.withUnsafeMutableBufferPointer { buffer in
+                    // MWMO_INPUTAVAILABLE so a message already sitting in the
+                    // queue — one a previous PeekMessageW marked as seen —
+                    // still wakes the wait instead of being slept through.
+                    MsgWaitForMultipleObjectsEx(
+                        DWORD(buffer.count),
+                        buffer.baseAddress,
+                        INFINITE,
+                        DWORD(QS_ALLINPUT),
+                        DWORD(MWMO_INPUTAVAILABLE)
+                    )
+                }
+                if signalled == WAIT_OBJECT_0 {
+                    PlatformMainQueue.drain()
+                    continue
+                }
+                if signalled == WAIT_FAILED {
+                    RuntimeDiagnostics.emit(
+                        "swift-pwa: message wait failed (\(GetLastError())); exiting the loop."
+                    )
+                    return
+                }
+                var quitting = false
+                while PeekMessageW(&msg, nil, 0, 0, UINT(PM_REMOVE)) {
+                    if msg.message == UINT(WM_QUIT) { quitting = true; break }
+                    TranslateMessage(&msg)
+                    DispatchMessageW(&msg)
+                }
+                if quitting { return }
+            }
         }
 
         // MARK: - WebView2 environment bootstrap

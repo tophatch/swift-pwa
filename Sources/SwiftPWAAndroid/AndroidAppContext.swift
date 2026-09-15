@@ -26,13 +26,13 @@
         public static let shared = AndroidAppContext()
 
         public let registry = CommandRegistry()
-        // Satisfies the `AppContext` requirement, but the Android backend
-        // serves the bundle and any mounts through the Kotlin
-        // `WebViewAssetLoader` (built at Activity-init), *not* this router.
-        // A runtime `serveDirectory` here is a no-op for serving; mounts that
-        // must exist at startup are declared in `pwa.json`'s `build.serve` and
-        // wired into the generated Kotlin by the bundler. See the
-        // content-packs design doc.
+        // The bundle is served by the Kotlin `WebViewAssetLoader`, built at
+        // Activity-init before any Swift runs — so no `/` root is ever
+        // installed here and this router holds *only* what
+        // `ctx.serveDirectory` mounted. `AndroidServedDirectories` answers the
+        // WebView's resource requests from it, which is what makes a runtime
+        // mount work at all (#213); `pwa.json`'s `build.serve` is still the way
+        // to declare a mount that must exist before `configure` runs.
         public let assetProvider = AssetProvider(scheme: "https", host: "swift-pwa.local")
         public let events = EventBus()
         public let permissions = PermissionPolicy()
@@ -89,6 +89,17 @@
             use(SystemPlugin(memoryProvider, urlOpener: AndroidURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
+            // Backs the `navigator.audioSession` polyfill in bridge.js, which
+            // installs itself only where the engine lacks the web API — this
+            // one included. Eager, like the plugins above: an adopter's whole
+            // requirement is the standard web line, and making them install a
+            // plugin to get a *standard API* would defeat that.
+            use(AudioSessionPlugin(SystemAudioSession()))
+            // Backs the `navigator.mediaSession` polyfill — the only engine of
+            // the five that doesn't expose the web API, so the only one that
+            // needs this. Without it an app playing audio is invisible to the
+            // system: no lock-screen controls, no notification.
+            use(NowPlayingPlugin(SystemNowPlaying()))
             // Auto-register `ClipboardPlugin` so apps don't have to —
             // every other backend's `AppContext` does the same. Apps
             // can override with their own `ctx.use(ClipboardPlugin(...))`

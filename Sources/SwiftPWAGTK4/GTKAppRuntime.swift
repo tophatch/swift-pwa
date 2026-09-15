@@ -34,6 +34,7 @@
             HeadlessDescribe.dumpIfRequested(configure)
             swiftpwa_gtk_init()
             installMainThreadHook()
+            attachMainQueueToGTKLoop()
             let context = GTKAppContext.shared
             context.installMainLoop()
             do {
@@ -94,6 +95,32 @@
             let box = Unmanaged.passRetained(GTKMainThreadJob(body)).toOpaque()
             g_idle_add(gtkMainThreadTrampoline, box)
         }
+    }
+
+    /// Let an app's own `@MainActor` code run: watch libdispatch's main-queue
+    /// handle from the GTK main loop and drain it when it signals.
+    ///
+    /// ``installMainThreadHook()`` above covers *swift-pwa's* UI work. This
+    /// covers the app's, which swift-pwa never sees: off Apple, `MainActor` is
+    /// backed by libdispatch's main queue, `gtk_main()` drains nothing, and an
+    /// adopting app's `await MainActor.run { … }` therefore never returns —
+    /// silently (#216). The watch is on the default `GMainContext`, the one
+    /// `gtk_main()` iterates, so a modal `gtk_dialog_run` keeps servicing it too.
+    ///
+    /// Attaching costs nothing while the app has no main-actor work: the
+    /// handle only becomes readable once something is enqueued.
+    func attachMainQueueToGTKLoop() {
+        guard let fd = PlatformMainQueue.handle else {
+            RuntimeDiagnostics.emit(
+                "swift-pwa: libdispatch has no main-queue handle; the app's own "
+                    + "@MainActor code will not run (see docs/linux-setup.md)."
+            )
+            return
+        }
+        g_unix_fd_add(fd, G_IO_IN, { _, _, _ in
+            PlatformMainQueue.drain()
+            return gboolean(1) // G_SOURCE_CONTINUE
+        }, nil)
     }
 
     /// Test-only: initialize GTK without entering the GMainLoop, so

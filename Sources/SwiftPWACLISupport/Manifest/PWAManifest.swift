@@ -630,6 +630,32 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// appliances / dev servers (e.g. a local ComfyUI). See
         /// ``NetworkSection``.
         public var network: NetworkSection?
+        /// Android permission names emitted **verbatim** as extra
+        /// `<uses-permission>` entries in the generated manifest.
+        ///
+        /// The top-level `permissions` block declares capabilities the *web
+        /// platform* has a name for — camera, microphone, geolocation — and
+        /// each maps onto whatever the platform calls it. This is the other
+        /// half: a permission that exists only on Android, which that mapping
+        /// therefore can't reach. `MANAGE_EXTERNAL_STORAGE` is the case that
+        /// prompted it — an app that reads folders the user points it at, by
+        /// path, needs All-files access and had no way to ask for it (#214).
+        /// Editing the generated `AndroidManifest.xml` doesn't survive: the
+        /// next `swift-pwa build` regenerates the file.
+        ///
+        /// Emitted as given, after the built-in and web-derived entries, with
+        /// duplicates dropped. Declaring a permission grants nothing on its own
+        /// — a *dangerous* or *special* permission still needs its runtime
+        /// request (for All-files access, the
+        /// `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` hand-off to
+        /// Settings). Some permissions carry store-policy consequences, which
+        /// is the app's call to make and not a reason the manifest can't
+        /// express them.
+        ///
+        /// ```json
+        /// "android": { "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"] }
+        /// ```
+        public var permissions: [String]?
         public init(
             packageId: String? = nil,
             minSdk: Int? = nil,
@@ -638,7 +664,8 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             versionCode: Int? = nil,
             signing: AndroidSigningSection? = nil,
             documentTypes: [DocumentType]? = nil,
-            network: NetworkSection? = nil
+            network: NetworkSection? = nil,
+            permissions: [String]? = nil
         ) {
             self.packageId = packageId
             self.minSdk = minSdk
@@ -648,6 +675,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.signing = signing
             self.documentTypes = documentTypes
             self.network = network
+            self.permissions = permissions
         }
 
         /// One `android.document_types` entry: a set of MIME types the app

@@ -98,6 +98,23 @@ stale. If you edit the canonical source, run its regenerate script:
   the optional first. (Noted here because it only reproduces on the Windows CI
   box.)
 
+### After changing `bridge.js`
+
+Two things bite in order, and both look like your change didn't take:
+
+1. **Rebuild the CLI, not just Core.** `Scripts/regenerate-bridge-js.sh` writes
+   `BridgeJSData.swift`, which the Swift backends compile in — but the **Android
+   APK gets `bridge.js` staged as an asset by the CLI**, out of the CLI binary's
+   own embedded copy. A CLI built before the regeneration stages the *old*
+   script, so an Android deploy silently runs the previous version. (Restarting
+   the app doesn't help; the asset is in the APK.)
+2. **Format with CI's pinned swiftformat.** The generator emits one enormous
+   base64 line; the committed file is the *formatted* version of that, so
+   regenerating and committing without formatting fails lint. Local swiftformat
+   is usually newer than CI's pin and wraps it differently — fetch the pinned
+   release (see the version in [`ci.yml`](../.github/workflows/ci.yml)) rather
+   than using whatever `brew` installed.
+
 ## Vendored binary tiers
 
 The on-device AI backends and ONNX Runtime ship as **checksum-pinned prebuilt
@@ -114,6 +131,12 @@ runtime/CLI never link a system copy — see the per-platform setup docs
 These are enforced by review (and mostly by CI). Full rationale in
 [`CLAUDE.md`](../CLAUDE.md):
 
+- **Every feature works everywhere, with minimal developer requirement.** An
+  adopting app should get a capability on every platform it targets without
+  per-platform code — ideally without writing anything beyond the standard web
+  API. Adopters rarely own all five platforms, so a capability that works on
+  three is a gap they can't report. Prefer making an existing web API work
+  everywhere over adding a parallel one beside it.
 - **Cross-platform parity is the default.** A feature that lands on one backend
   ships the equivalent on the others in the same change, adapted to each
   platform's norms. If parity isn't feasible, document the gap in the relevant
@@ -126,8 +149,12 @@ These are enforced by review (and mostly by CI). Full rationale in
   items move to the CHANGELOG.
 - **Strict concurrency (Swift 6 tools).** Don't add
   `enableUpcomingFeature("StrictConcurrency")` — under Swift 6 on Linux it's an
-  error, not a warning. Use `MainThread.run` (not `await MainActor.run`) on any
-  path that may run under `gtk_main` on Linux.
+  error, not a warning. Inside swift-pwa, prefer `MainThread.run` over
+  `await MainActor.run` on any path that may run under `gtk_main`, a Win32
+  pump or Android's `Looper` — it is one hop rather than two, and it still
+  delivers where nothing drains libdispatch's main queue (a headless
+  `agent.expose` catalog dump, a unit test). `MainActor` itself does work in
+  an app now; see `PlatformMainQueue`.
 - **Merge commits, titled `Merge: <summary>`.** PRs merge (not squash) with that
   subject convention.
 

@@ -38,6 +38,15 @@
         private var lastSize: Size = .zero
         private var lastPosition: Point = .zero
 
+        /// Last reported active state, so `.didFocus` / `.didBlur` are emitted
+        /// on a *change*. Both the window manager's `notify::is-active` and an
+        /// explicit ``focus()`` report through here, and the two overlap:
+        /// presenting a window makes it active, so the signal would otherwise
+        /// arrive right behind the call and say the same thing twice.
+        /// Starts false — a window isn't active until it is mapped and the WM
+        /// gives it focus.
+        private var lastActive = false
+
         /// Tracked programmatic fullscreen state. GTK's native surface
         /// flips async after the WM grants fullscreen, so we mirror the
         /// requested state (matching `Win32Window` / `AndroidWindow`) to
@@ -163,6 +172,7 @@
             lastSize = config.size
             connectConfigureSignal()
             connectDeleteEvent()
+            connectActiveSignal()
             connectQuitAccelerator(on: windowPtr)
         }
 
@@ -209,6 +219,45 @@
                 lastPosition = position
                 emit(.didMove(position))
             }
+        }
+
+        /// Hook `notify::is-active` so the window manager's own focus changes
+        /// surface as `WindowEvent.didFocus` / `.didBlur`. Previously the only
+        /// source of either was an explicit ``focus()`` call, so an app
+        /// couldn't tell that the user had switched away from it (#214) —
+        /// which is when a lock re-engages or watched state is re-read.
+        ///
+        /// `notify::is-active` rather than `focus-in-event`/`focus-out-event`:
+        /// it is one signal instead of two, it is the same property GTK4
+        /// exposes (so both backends are wired identically), and it tracks
+        /// *window* activation rather than which widget inside holds the
+        /// keyboard, which is what the WebView taking focus would otherwise
+        /// look like.
+        private func connectActiveSignal() {
+            let box = Unmanaged.passRetained(GTKWindowBox(self)).toOpaque()
+            "notify::is-active".withCString { name in
+                _ = g_signal_connect_data(
+                    UnsafeMutableRawPointer(widget),
+                    name,
+                    unsafeBitCast(isActiveNotifyTrampoline, to: GCallback.self),
+                    box,
+                    gtkWindowBoxDestroy,
+                    GConnectFlags(rawValue: 0)
+                )
+            }
+        }
+
+        /// Called from the `notify::is-active` trampoline on the GTK main
+        /// thread.
+        func handleActiveChanged() {
+            emitActive(gtk_window_is_active(window) != 0)
+        }
+
+        /// Emit `.didFocus` / `.didBlur` for a *change* in active state.
+        private func emitActive(_ active: Bool) {
+            guard active != lastActive else { return }
+            lastActive = active
+            emit(active ? .didFocus : .didBlur)
         }
 
         /// Hook `delete-event` so a user-driven [X] / Alt+F4 / WM-close
@@ -329,11 +378,11 @@
             // `window.focus` until `!document.hidden` actually wants.
             // `gtk_window_present` would put it back in front of the user.
             guard !DriverBackground.isRequested else {
-                emit(.didFocus)
+                emitActive(true)
                 return
             }
             gtk_window_present(window)
-            emit(.didFocus)
+            emitActive(true)
         }
         public func minimize() {
             gtk_window_iconify(window)
@@ -395,6 +444,23 @@
             box.window?.handleConfigure(size: size, position: position)
         }
         return gboolean(0)
+    }
+
+    /// `@convention(c)` trampoline for `notify::is-active`. A property notify
+    /// hands back the object and the `GParamSpec`; we need neither, since the
+    /// window reads the current value itself.
+    let isActiveNotifyTrampoline: @convention(c) (
+        UnsafeMutableRawPointer?,
+        UnsafeMutableRawPointer?,
+        gpointer?
+    ) -> Void = { _, _, userData in
+        guard let userData else { return }
+        let userDataRaw = UInt(bitPattern: userData)
+        MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+            let box = Unmanaged<GTKWindowBox>.fromOpaque(opaque).takeUnretainedValue()
+            box.window?.handleActiveChanged()
+        }
     }
 
     /// `@convention(c)` GClosureNotify that releases the heap-boxed

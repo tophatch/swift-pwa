@@ -51,13 +51,12 @@
         /// Map a `WindowContent` to the URL string the Kotlin
         /// `WebViewAssetLoader` understands.
         ///
-        /// - `.bundled` resolves to `https://swift-pwa.local/web/<entry>`.
+        /// - `.bundled` resolves to `https://swift-pwa.local/<entry>`.
         ///   The Kotlin bridge maps `https://swift-pwa.local/<path>`
-        ///   onto `assets/<path>` (same shape as WebView2's
-        ///   `SetVirtualHostNameToFolderMapping`); the `web/` URL
-        ///   prefix picks up the bundler's `assets/web/` subdir,
-        ///   since `AssetsPathHandler`'s public constructor takes
-        ///   only `Context` (no base-path argument). The `directory`
+        ///   onto `assets/web/<path>` (same shape as WebView2's
+        ///   `SetVirtualHostNameToFolderMapping`), so the bundle sits at
+        ///   the origin root like it does on the other four backends and
+        ///   a page's root-absolute URLs resolve. The `directory`
         ///   URL is informational on Android — the build-time bundle
         ///   has already copied its contents into the APK.
         /// - `.remote` is passed through unchanged.
@@ -71,7 +70,7 @@
                 // `SWIFT_PWA_INITIAL_ROUTE` can send the first window somewhere
                 // other than the entry; the entry itself stays the SPA-fallback
                 // document.
-                "https://swift-pwa.local/web/\(InitialRoute.take(declared: entry))"
+                "https://swift-pwa.local/\(InitialRoute.take(declared: entry))"
             case let .remote(url):
                 url.absoluteString
             }

@@ -181,6 +181,32 @@ const { images } = await bridge.invoke("ai.generateImage", {
 imgEl.src = "data:" + images[0].mimeType + ";base64," + images[0].dataBase64;
 ```
 
+**Speaking it** is the same shape, with one extra line that isn't obvious and
+costs an app dearly when it's missing:
+
+```js
+// Say what the audio is FOR, before you play any. Do this once, at startup.
+navigator.audioSession.type = "playback";
+
+const { audio } = await bridge.invoke("ai.generateAudio", { prompt: text, voice: "ryan" });
+player.src = "data:" + audio.mimeType + ";base64," + audio.dataBase64;
+player.play();
+```
+
+Without that line the clip plays perfectly on your machine and **stops the
+moment an iPhone user leaves the app** — WebKit suspends a backgrounded page's
+audio unless a session type says otherwise, and nothing reports it as an error.
+It's a standard web API, so there is no swift-pwa-specific branch: the same line
+is right on all five platforms. (`swift-pwa doctor` and a console warning will
+both tell you if you forget, but it's cheaper to write.)
+
+Two things not to do, both measured: don't stream synthesis into a player as it
+arrives — on-device TTS runs about **2.5x slower than real time**, so the buffer
+underruns — and don't schedule audio from `setTimeout`, which is throttled to
+~1 Hz in the background; use the audio clock. `Examples/CritterFacts`'s
+[`speak.html`](../../Examples/CritterFacts/Sources/CritterFacts/web/speak.html)
+is the worked version, including lock-screen controls and artwork.
+
 That's the packaged path, start to finish.
 
 ---

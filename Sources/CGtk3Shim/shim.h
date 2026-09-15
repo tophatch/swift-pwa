@@ -3,6 +3,9 @@
 
 #include <gtk/gtk.h>
 #include <gio/gio.h>
+// `g_unix_fd_add`, used to watch libdispatch's main-queue eventfd from
+// the GTK main loop so an app's own `@MainActor` code runs (#216).
+#include <glib-unix.h>
 
 /// Extract the geometry from a `configure-event` `GdkEvent`. We accept
 /// `gpointer` because Swift's clang importer treats `GdkEvent` (a

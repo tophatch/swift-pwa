@@ -566,6 +566,173 @@ The Swift side pushes with `ctx.emit('library:changed', payload)` — see
 over `subscribe('events.subscribe', …)` / `invoke('events.emit', …)`; the raw
 commands are available if you need them.
 
+## Filled web APIs (no `__SWIFT_PWA__` call, no plugin)
+
+Some things a native app needs are already *standard web APIs* that only some
+engines implement. Where that's true, swift-pwa fills the standard API natively
+instead of offering a swift-pwa-shaped one beside it — so you write the code
+you'd write for the web, once, and it behaves the same on all five platforms.
+The fill installs only where the engine lacks the API, and never wraps a real
+implementation.
+
+### `navigator.audioSession` — what your audio means to the device
+
+The [W3C Audio Session API](https://www.w3.org/TR/audio-session/). It decides
+whether your audio interrupts the user's music or mixes with it, whether it
+keeps playing when your app isn't in front, and — on iOS — whether your page
+keeps running at all once it's backgrounded.
+
+```js
+navigator.audioSession.type = 'playback';   // media, read-aloud, ambient sound
+navigator.audioSession.type = 'ambient';    // a game: don't stop the user's music
+```
+
+| type | what it means |
+| --- | --- |
+| `playback` | Media the user chose to hear. Interrupts other audio; keeps playing in the background. |
+| `ambient` | Sound that isn't the point — game and UI audio. Mixes with whatever is already playing. |
+| `transient` | A short sound that ducks other audio for its duration. |
+| `transient-solo` | A short sound that silences other audio for its duration. |
+| `play-and-record` | Simultaneous capture and playback — a call, live transcription. |
+| `auto` | Let the engine decide. The default. |
+
+Reading `.type` back reports what the *platform* did, which is not always what
+you asked for: an OS may coerce or refuse a type, and you want to find that out
+rather than assume. `.state` is `"active"`, `"inactive"` or `"interrupted"`
+(something else took the audio — a call — and you should pause).
+
+**Set it if you play audio at all.** An app that never does works perfectly in
+every foreground test and then stops playing the moment an iPhone user leaves
+the app, because WebKit suspends a page's `AudioContext` in the background
+unless a session type says otherwise. `UIBackgroundModes` does not fix this and
+neither does anything in `pwa.json` — this one line does.
+
+**If you generate audio as you play it** (streaming TTS, procedural music),
+schedule chunks on the audio clock rather than from a timer. Timers are
+throttled hard when a window isn't visible — measured at 2 Hz on macOS and
+~1 Hz on a backgrounded iPhone — while the `AudioWorklet` render thread and
+`AudioBufferSourceNode.start(when)` keep perfect time. Chunks of a second or
+more, scheduled ahead, ride through it.
+
+**Where it changes what the OS does.** The API is the same on all five — set
+it once, never branch — but what the platform does with it is not:
+
+| | `navigator.audioSession` | effect |
+| --- | --- | --- |
+| macOS, iOS | the engine's own implementation | full — including the background behaviour above |
+| Android | filled, over `AudioManager` audio focus | full — `playback` stops other audio, `ambient` leaves it playing |
+| Linux (GTK3/GTK4), Windows | filled, recorded and reported | **none** — see below |
+
+On Linux and Windows the type is recorded and reads back, but drives nothing,
+because there is nothing for an app to drive: the playing stream belongs to the
+*webview's own process* (`WebKitWebProcess`, `msedgewebview2.exe`), and both
+platforms set audio policy per-stream by whoever created the stream. Android is
+the exception that makes the fill possible there — its audio focus is per-app,
+so the shell can hold focus on the webview's behalf.
+
+That costs you less than it sounds. The problems the type exists to solve —
+audio stopping in the background, the page being frozen — are measured *not to
+happen* on desktop: a minimized GTK3, GTK4 or WebView2 window keeps its audio
+clock and its media element running. Set the type anyway, so the one line keeps
+working when the user runs your app on a phone.
+
+**You'll be told if you forget.** Forgetting is invisible on the machine you're
+developing on, and the platform where it bites is the one you may not own — so
+two things point at it, both quiet unless you're actually affected:
+
+- **At runtime**, the first time audio really starts — a media element playing,
+  or an `AudioContext` reaching the `running` state — with the type still
+  `auto`, one `console.warn` names the consequence and the line to add. A page
+  that has already set a type, has an `<audio>` element it never plays, or
+  renders through an `OfflineAudioContext` never sees it, and a type set in the
+  same handler that starts the sound counts either way round.
+- **At build time**, `swift-pwa doctor` says so when your `web/` uses audio and
+  mentions no `audioSession` anywhere. It's advisory, never a failure, and it
+  names the file it matched — so a bundled framework that merely contains the
+  word is dismissed at a glance instead of investigated.
+
+### `navigator.mediaSession` — the lock screen, the notification, the headset button
+
+The [W3C Media Session API](https://www.w3.org/TR/mediasession/). It's what puts
+your app in the system's media controls, and what makes a headset button or a
+keyboard's play key do the right thing.
+
+```js
+navigator.mediaSession.metadata = new MediaMetadata({
+  title: 'Chapter 4', artist: 'The Book', album: 'Part One',
+  artwork: [{ src: '/covers/book.png', sizes: '512x512', type: 'image/png' }],
+});
+navigator.mediaSession.playbackState = 'playing';
+navigator.mediaSession.setActionHandler('pause', () => audio.pause());
+navigator.mediaSession.setActionHandler('nexttrack', () => next());
+```
+
+Only the actions you register a handler for are offered by the OS — a transport
+button that does nothing is worse than one that isn't there.
+
+**Register a `pause` handler if you play anything long.** Without one, a user
+who hits pause on their headphones has no way to stop your audio short of
+leaving the app.
+
+| | `navigator.mediaSession` |
+| --- | --- |
+| macOS, iOS, Linux (GTK3/GTK4), Windows | the engine's own — reaching the OS media keys, the lock screen, and MPRIS / SMTC respectively |
+| Android | filled, over a platform `MediaSession` + a transport notification |
+
+Android is the only engine of the five whose WebView doesn't expose the API at
+all; without the fill, an Android app playing audio is invisible to the system.
+
+Two Android notes:
+
+- **The notification needs the notification permission.** Media controls appear
+  once `POST_NOTIFICATIONS` is granted (Android 13+ asks at runtime); request it
+  with the [`notifications.*`](#notifications) plugin. The `MediaSession` itself
+  — and therefore media *keys* — works without it.
+- **Artwork is fetched by the page, not by the OS.** `MediaMetadata.artwork`
+  works — the cover appears on the lock screen and in the notification — but the
+  fill reads the image *in your document* and sends the bytes, rather than
+  handing the platform your URL. That is why it works at all: an artwork `src`
+  in your own bundle sits on a virtual origin no other process on the device can
+  resolve, and a `blob:` handle exists nowhere but that document. It also means
+  any URL your page can fetch is fair game, including `blob:` and `data:`.
+
+  Two consequences worth knowing. The fill picks the entry closest to **512 px**
+  rather than the first or the largest, so offering several `sizes` gets you the
+  sharp one without pushing a print-resolution master through the bridge; and
+  artwork over **4 MB** is skipped with a `console.warn`, leaving the track
+  showing without its image. The text is published immediately and the image
+  follows when it loads, so a cover that has to be downloaded never delays the
+  controls appearing.
+
+### `setSinkId` — choosing an output device, and where it isn't offered
+
+`HTMLMediaElement.setSinkId()` routes one element's audio to a chosen output.
+
+| | |
+| --- | --- |
+| macOS, iOS, Windows | supported by the engine — after a media permission grant, `enumerateDevices()` lists outputs with real ids and `setSinkId` accepts them |
+| Linux (GTK3/GTK4), Android | **absent, and deliberately not filled** |
+
+Feature-detect it and hide your device picker when it's missing:
+
+```js
+if ('setSinkId' in audioEl) { /* offer the user an output picker */ }
+```
+
+**Why it isn't filled** where the engine lacks it, when `audioSession` and
+`mediaSession` are: `setSinkId` is per-*element*, so a page may legitimately
+send one element to the speakers and another to a headset. Anything the native
+shell can do is per-*process* — it would route all of the webview's audio or
+none — so a fill couldn't honour the contract, and would fail silently when a
+page used two elements. Since `'setSinkId' in element` is how you decide whether
+to show a picker at all, a fill would make apps offer a control that lies.
+Absent is the honest answer.
+
+**Note on measuring this yourself:** device labels and ids are gated behind a
+media permission grant on every engine. Call `enumerateDevices()` before
+`getUserMedia` has been granted and every platform reports zero outputs — which
+looks like a finding and isn't.
+
 ## Opt-in plugins (require `ctx.use(...)` on the Swift side)
 
 ### `dialog.*`
@@ -946,10 +1113,28 @@ await __SWIFT_PWA__.invoke('ai.unload');
 (native schema-constrained decoding where available, otherwise a
 prompt-and-validate fallback), and composes with multimodal `images` /
 `audio` input + `schema`. Errors carry stable codes (`E_AI_UNAVAILABLE`,
-`E_AI_GENERATION`, `E_AI_STRUCTURED_OUTPUT`). In 0.7 the contract is in
-place but no on-device backend is wired yet, so `ai.info` reports
-`available: false` until one lands. Full reference, backend protocol, and
-roadmap: [docs/ai-plugin.md](ai-plugin.md).
+`E_AI_GENERATION`, `E_AI_STRUCTURED_OUTPUT`). `ai.info` reports
+`available: false` until a backend is installed, so check it rather than
+assuming — which of text / image / audio a build can do depends on the
+backends it was built with. Full reference, backend protocol, and roadmap:
+[docs/ai-plugin.md](ai-plugin.md).
+
+**If you play the audio you generate, declare a session type.** Generated
+speech is the case that bites hardest: the clip plays perfectly in every
+foreground test and stops the moment an iPhone user leaves the app, because
+WebKit suspends a backgrounded page's audio unless a type says otherwise.
+One line, before you play anything:
+
+```js
+navigator.audioSession.type = 'playback';
+```
+
+See [`navigator.audioSession`](#navigatoraudiosession--what-your-audio-means-to-the-device) for the
+full story, and `Examples/CritterFacts/…/web/speak.html` for a worked one —
+it also publishes the clip to the lock screen. Generating audio faster than
+real time is not a given (measured ~2.5x *slower* than real time on-device),
+so synthesize the whole clip and play it, rather than streaming into a buffer
+that will underrun.
 
 ### `ai.run` / `ai.describeInputs` — run an imported workflow at runtime
 

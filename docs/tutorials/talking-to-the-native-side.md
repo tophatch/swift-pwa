@@ -184,7 +184,7 @@ Any other error you throw is wrapped as `E_HANDLER` automatically, so nothing cr
 
 ## One caveat, for when your handler touches the window
 
-The examples above just compute and return a value, which is the common case and needs nothing special. But the moment a handler needs to touch the **window or other UI** (resize it, read its state), remember: **handlers run off the main/UI thread.** Hop onto the UI thread with `MainThread.run { … }` for that work — *not* `await MainActor.run { … }`, which can hang on Linux/Windows event loops:
+The examples above just compute and return a value, which is the common case and needs nothing special. But the moment a handler needs to touch the **window or other UI** (resize it, read its state), remember: **handlers run off the main/UI thread.** Hop onto the UI thread with `MainThread.run { … }` for that work:
 
 ```swift
 ctx.registry.register("app.grow", typed: { (_: EmptyArgs, ctx) -> Bool in
@@ -194,6 +194,8 @@ ctx.registry.register("app.grow", typed: { (_: EmptyArgs, ctx) -> Bool in
     return true
 })
 ```
+
+Your own `@MainActor` types work too — `await MainActor.run { … }`, a method on a `@MainActor final class`, `DispatchQueue.main.async`. (Through v0.10.7 those hung forever on Windows, Linux and Android, silently, because nothing on those platforms drained libdispatch's main queue; every backend drains it now.) `MainThread.run` is still the one to reach for when the work touches a *window*: it is one hop rather than two and it is what the backends themselves use.
 
 You'll only reach for this once you're driving windows directly; a plain "compute and return" command (like everything in Parts 2–4) doesn't need it. If you're bundling several related commands to reuse across apps, graduate them into a `Plugin` — see the [Swift API reference](../swift-api.md).
 

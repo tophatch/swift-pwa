@@ -34,31 +34,46 @@ The cross-compile path verified against this repo's `Examples/HelloPWA`:
 
 | Component                            | Pinned version             | Install                                                                                                |
 |--------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------|
-| Swift toolchain                      | **6.2.0 exactly**          | `brew install swiftly && swiftly init && swiftly install 6.2.0` — must match the SDK exactly (see §2)  |
-| Swift Android SDK                    | swift-6.2-RELEASE-android-0.1 | `swift sdk install <bundle-url> --checksum <sha>` (URL + checksum from <https://github.com/swift-android-sdk/swift-android-sdk/releases/tag/6.2>) |
+| Swift toolchain                      | **exactly the SDK's release** | `brew install swiftly && swiftly init && swiftly install <version>` — must match the SDK exactly (see §2) |
+| Swift Android SDK                    | e.g. swift-6.4.0-RELEASE_android | `swift sdk install <bundle-url> --checksum <sha>` — take both from the "Swift SDK for Android" download link on <https://www.swift.org/install/macos/> (the path is not guessable from `releases.json`) |
 | Android NDK                          | **r27d**                   | <https://dl.google.com/android/repository/android-ndk-r27d-darwin.zip> (or the linux/windows variant)  |
-| Setup script                         | (run once)                 | `ANDROID_NDK_HOME=~/android-ndk-r27d ~/Library/org.swift.swiftpm/swift-sdks/swift-6.2-RELEASE-android-0.1.artifactbundle/swift-android/scripts/setup-android-sdk.sh` |
+| Setup script                         | (run once, older SDKs)     | `ANDROID_NDK_HOME=~/android-ndk-r27d ~/Library/org.swift.swiftpm/swift-sdks/<bundle>.artifactbundle/swift-android/scripts/setup-android-sdk.sh` |
 | JDK 17 *(for `assembleDebug`)*       | any 17.x                   | `brew install openjdk@17` — no `JAVA_HOME` export needed, see [§Toolchain discovery](#toolchain-discovery) |
 | Android SDK *(for `assembleDebug`)*  | latest                     | Android Studio, or the command-line tools. Found automatically in the standard location; else set `ANDROID_HOME` |
 | Android SDK Platform-Tools (`adb`)   | latest                     | Bundled with Android Studio, or `sdkmanager "platform-tools"`                                          |
 | Gradle wrapper                       | **8.10.2 (vendored)**      | Shipped inside the generated scaffold (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`); no separate install needed. AGP 8.5 + Kotlin 2.0 dependencies are resolved on first wrapper run. |
 
-> **Why `swift install 6.2.0` and not just `6.2`.** The SDK bundle's
-> Swift modules were built with Swift 6.2 (i.e. 6.2.0). Swift's
-> `.swiftmodule` format isn't ABI-stable across patch versions yet, so
-> a 6.2.4 compiler refuses to import 6.2.0 modules with `module
-> compiled with Swift 6.2 cannot be imported by the Swift 6.2.4
-> compiler`. `swiftly install 6.2` resolves to the latest patch (which
-> at time of writing is 6.2.4); use `6.2.0` explicitly.
+> **Install the exact patch version, not the `major.minor`.** Swift's
+> `.swiftmodule` format isn't ABI-stable across patch versions, so a 6.2.4
+> compiler refuses to import the SDK's 6.2.0 modules with `module compiled
+> with Swift 6.2 cannot be imported by the Swift 6.2.4 compiler`. `swiftly
+> install 6.2` resolves to the latest patch; name the SDK's own version.
+
+> **On a Mac, the toolchain also has to satisfy Xcode's SDK.** From Xcode 27
+> (Swift 6.4), the macOS SDK passes `-target-arch-variant`, which earlier
+> compilers reject — measured on 6.2 and 6.3.3, both of which then fail to
+> compile *any* `Package.swift` with the misleading `cannot find 'Data' in
+> scope`. So the Android SDK has to be one whose release matches the host
+> Xcode's Swift, and that toolchain installed alongside it. Two traps getting
+> there: `swiftly install 6.4.0` fails on a URL it builds wrong for `x.y.0`
+> releases (install the `.pkg` from download.swift.org directly —
+> `installer -pkg … -target CurrentUserHomeDirectory`, no sudo), and **Xcode's
+> own Swift is a different build from the swift.org release of the same
+> number**, so it cannot load the SDK's prebuilt modules. Use the swift.org
+> toolchain, via `TOOLCHAINS=<its bundle id>`.
 
 The bundler smooths over the toolchain-selection part of that pin:
 
 > **The bundler selects the matching toolchain for you.** You don't need to
-> wrap `swift-pwa build --cross-compile-android` in `swiftly run +6.2.0` — when
-> swiftly is installed, the bundler parses the SDK's version and runs the inner
-> `swift build --swift-sdk` under `swiftly run +<major.minor>` itself, which
-> overrides any repo `.swift-version` (this repo pins `6.0`, which would
-> otherwise mispin the Android build). If a requested ABI can't be built, the
+> wrap `swift-pwa build --cross-compile-android` in `swiftly run +<version>` —
+> the bundler parses the SDK's version and, when the ambient `swift` isn't
+> already that release, runs the inner `swift build --swift-sdk` under
+> `swiftly run +<major.minor>` itself, which overrides any repo
+> `.swift-version` (this repo pins `6.0`, which would otherwise mispin the
+> Android build). When the ambient toolchain *does* match — the normal case on
+> a Mac, where the matching release may be one swiftly cannot serve — it is
+> used directly, because `swiftly run` refuses outright for a toolchain it
+> doesn't have rather than falling back. If a requested ABI can't be built, the
 > command now **fails with a non-zero exit** rather than emitting a scaffold
 > with empty `jniLibs/` — a hollow APK would crash at launch with
 > `UnsatisfiedLinkError`. If you see `'stddef.h' file not found` during the
@@ -256,7 +271,7 @@ manually (note: pass the triple as `--swift-sdk <triple>`, not as
 `--triple` — see §1's API 28 footnote for why):
 
 ```bash
-swiftly run +6.2.0 swift build -c release --swift-sdk aarch64-unknown-linux-android28
+swiftly run +<sdk-version> swift build -c release --swift-sdk aarch64-unknown-linux-android28
 mkdir -p build/android/MyApp-android/app/src/main/jniLibs/arm64-v8a
 cp .build/aarch64-unknown-linux-android28/release/MyApp \
    build/android/MyApp-android/app/src/main/jniLibs/arm64-v8a/libMyApp.so
@@ -286,7 +301,7 @@ Then `./gradlew assembleDebug` produces `app/build/outputs/apk/debug/app-debug.a
 **B. Cross-compile + stage in one step** (requires Swift Android SDK installed; the bundler preflights `swift sdk list` and bails with a clean diagnostic if none is installed):
 
 ```bash
-swiftly run +6.2.0 swift run --package-path /path/to/swift-pwa swift-pwa \
+swift run --package-path /path/to/swift-pwa swift-pwa \
     build --target android --cross-compile-android --android-abis arm64-v8a,x86_64
 ```
 
@@ -295,16 +310,17 @@ requested ABI (clamping API to ≥28 to match the SDK's
 `targetTriples` map), then copies the resulting Swift binary into
 `app/src/main/jniLibs/<abi>/libMyApp.so` (renaming from SwiftPM's
 default `MyApp` output name to the JNI loader's `lib*.so`
-convention). Failures per ABI are reported but don't abort the
-bundle — the scaffold still emits so you can fix the toolchain and
-re-stage by hand.
+convention). An ABI that fails to build is a **hard error**: an APK without a
+Swift `.so` installs fine and then crashes at launch with
+`UnsatisfiedLinkError`, so it is not something to warn about and continue past.
 
-> **Wrap with `swiftly run +6.2.0`.** The CLI itself shells out to
-> bare `swift build`, picking up whatever's on PATH. If your default
-> toolchain is not 6.2.0, run the whole thing under `swiftly run
-> +6.2.0` so the inner build sees the matching compiler. Cross-compile
-> against a 6.2 SDK with a 6.3 compiler fails with a `module compiled
-> with Swift 6.2 cannot be imported by the Swift 6.3 compiler` error.
+The link also runs with `-Xlinker --no-undefined`. An Android product is linked
+`-shared`, and a shared object is *allowed* to have undefined symbols — so a
+dependency missing from the link produces a green build and an app that dies at
+load with `cannot locate symbol "…"`. That is exactly how a `Crypto` edge
+missing from `SwiftPWACore`'s manifest shipped a crashing APK under Swift 6.4's
+`swiftbuild` engine, which builds link lists from declared edges. The flag turns
+it into a link error naming the symbol.
 
 One more automatic safeguard runs on the way in:
 
@@ -520,6 +536,64 @@ expressible, so list the concrete host(s). Omitting the key leaves the manifest
 unchanged. This governs both the `net.*` plugin and any remote `AIBackend`
 talking to a plain-http endpoint. See [net-plugin.md](net-plugin.md).
 
+### Declaring an Android permission (`android.permissions`)
+
+`permissions.web` in `pwa.json` declares capabilities the *web platform* has a
+name for — camera, microphone, geolocation — and the bundler maps each onto
+whatever Android calls it. A permission with no web counterpart can't come
+through that door. **All-files access** is the case that prompted this: an app
+that reads folders the user points it at, by path, as ordinary `FileManager`
+roots, needs `MANAGE_EXTERNAL_STORAGE`, and the only way to get it used to be
+hand-editing the generated `AndroidManifest.xml` — which the next
+`swift-pwa build` overwrites.
+
+```json
+"android": {
+  "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"]
+}
+```
+
+Each entry is emitted verbatim as a `<uses-permission>` element, after the
+built-in and web-derived ones, with duplicates dropped — so naming something
+swift-pwa already declares is a no-op. Give the fully-qualified name Android
+uses (`android.permission.X`, or an OEM's own
+`com.samsung.android.permission.X`); a bare `MANAGE_EXTERNAL_STORAGE` is
+refused at build time, before anything is compiled. There is deliberately **no
+allowlist** of known permissions: OEMs define their own and new platform
+releases add more, so a list here would go stale and start refusing valid
+declarations.
+
+Declaring grants nothing. A *dangerous* permission still needs its runtime
+request, and a *special* one like All-files access needs the
+`ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` hand-off to Settings — the
+declaration is only what makes that request possible. Some permissions carry
+store-policy consequences (Play restricts All-files access to apps whose core
+function needs it); that is the app's call to make, and not a reason the
+manifest can't express it.
+
+### The Activity lifecycle reaches Swift
+
+`onResume` and `onPause` surface as the window's `WindowEvent.didFocus` /
+`.didBlur` — the same events the desktop backends emit when their window gains
+or loses focus, so Swift written against them is correct on every platform:
+
+```swift
+Task {
+    for await event in window.eventStream() {
+        switch event {
+        case .didFocus: await library.rescanFolders()   // no recursive watch here
+        case .didBlur: lock.engage()
+        default: break
+        }
+    }
+}
+```
+
+`.didBlur` is pushed *before* `super.onPause()`, so a handler is queued while
+the process is still scheduled. A spawned secondary Activity doesn't report —
+it doesn't own the runtime, and its lifecycle would otherwise read as the
+primary's. JS sees the same events through `window.events`.
+
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important
@@ -534,6 +608,21 @@ ways. These shape the public API surface and what to expect:
 - **`MainThread.run` hops through `Handler(Looper.getMainLooper()).post`.**
   Same shape as Windows' message-only dispatcher window and GTK's
   `g_idle_add` — defined in `AndroidAppRuntime.installMainThreadHook`.
+- **Your own `@MainActor` code works.** `MainActor` here is backed by
+  libdispatch's main queue, and nothing drained it: the UI thread
+  belongs to the JVM's `Looper`. So a command handler that touched a
+  `@MainActor` class simply never returned — no error, no timeout, and
+  Android discards stderr, so not even a diagnostic (#216). The runtime
+  now adds libdispatch's main-queue eventfd to the UI thread's native
+  `ALooper`, which `Looper.loop()` already polls, and drains it when it
+  signals; `DispatchQueue.main.async` works for the same reason. The
+  `@_cdecl` entry point in your app still has to call
+  `AndroidAppRuntime().run(configure)` directly rather than through
+  `SwiftPWA.runtime()`, because it runs on the *worker* thread the
+  Activity spawned and the protocol's `@MainActor` witness would want a
+  hop before the watch exists. `Scripts/verify-android-main-actor.sh`
+  is the device check for all of this; it passes on a Fold7, with
+  every probe answering in 1-3 ms.
 - **Multi-window via Activity-per-window.** The first
   `context.createWindow(...)` call binds to the foreground Activity
   the JNI runtime entry-point already owns. Subsequent calls
@@ -881,8 +970,9 @@ prompt-and-validate fallback for now (`structuredOutput: false`).
 
 ## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime + `MobileSAMBackend`
 
-**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, gated behind
-`ai.local_onnx_runtime: true` in `pwa.json` — `swift-pwa build` sets
+**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, behind the ONNX
+Runtime tier — depending on the product is enough, and `ai.local_onnx_runtime:
+true` in `pwa.json` is the explicit form; either way `swift-pwa build` sets
 `SWIFT_PWA_ONNXRUNTIME=1` for you) exists on Android**, verified against real
 MobileSAM weights — see
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
@@ -971,10 +1061,11 @@ sha1-verifies it (against Maven's own published sidecar) and vendors:
   [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) already
   describes for Linux's llama.cpp build (no `unsafeFlags`).
 
-Cross-compiling anything against the installed Android Swift SDK on this
-toolchain **requires the matching Swift 6.2 host toolchain**, not Xcode's
-newer default, or you'll hit "module compiled with Swift 6.2 cannot be
-imported by the Swift 6.3.x compiler" errors.
+Cross-compiling anything against the installed Android Swift SDK **requires
+the host toolchain of the SDK's own Swift release** — and specifically the
+swift.org build of it, since Xcode's Swift of the same version number is a
+different build and can't load the SDK's prebuilt modules. A mismatch is
+"module compiled with Swift X cannot be imported by the Swift Y compiler".
 
 `swift-pwa build --cross-compile-android` (and `swift-pwa deploy --target
 android`) **selects it for you** on a macOS host: it reads the Swift release
@@ -1076,6 +1167,21 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   the latter, `getUserMedia` fails `NotReadableError` ("Could not start
   audio source") *after* the user grants the permission.
 
+- **A served file answers a `Range` request with a `200`, not a `206`.** A
+  `206 Partial Content` returned from `WebViewClient.shouldInterceptRequest` is
+  rejected by the WebView *before the page sees it* — the fetch fails with
+  `TypeError: Failed to fetch` and nothing is logged anywhere, by us or by
+  Chromium. Measured on a Fold7 against a correct 206 (right `Content-Range`,
+  right body, bounded stream). What Chromium does instead is range the stream
+  itself: given a plain `200` it seeks to the requested start offset and serves
+  **to the end of the file**, reporting `200` with no `Content-Range`. So
+  seeking works — which is what a `<video>` scrub and a range-fetching reader
+  need — but the end of the range is not honoured and no `Accept-Ranges: bytes`
+  is advertised, deliberately: claiming it would tell a client a `206` is
+  coming when none ever is, and a client that checks (pdf.js does) would pick
+  the range path and be wrong about what it got. `build.serve` mounts have
+  always behaved this way; runtime `ctx.serveDirectory` mounts now match them.
+
 - **`ctx.frame` falls back to `.unknown` on a very old System WebView.** The
   inbound bridge channel is `WebViewCompat.addWebMessageListener`, which reports
   which frame called (`isMainFrame` plus the sending document's origin) and is
@@ -1166,15 +1272,15 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   platform: `#if os(Android) AndroidArchiveExtractor() #else
   ZIPExtractor() #endif` (see `Examples/HelloPWA`). For **serving**,
   the `WebViewAssetLoader` is built at `Activity.onCreate` — *before*
-  any Swift `configure()` runs — so a mount that must exist at startup
-  has to be declared in `pwa.json`'s `build.serve`
-  (`{ "mount": "/packs", "from": "data/packs" }`, rooted at the
+  any Swift `configure()` runs — so a mount that must answer a request the
+  page makes before `configure()` returns has to be declared in `pwa.json`'s
+  `build.serve` (`{ "mount": "/packs", "from": "data/packs" }`, rooted at the
   app's `filesDir` / `cacheDir`); the bundler wires each into the
   generated Activity as an `addPathHandler`. A runtime
-  `ctx.serveDirectory(_:at:)` for an *undeclared* prefix is a desktop
-  capability and won't take effect on Android. The
-  `fs.extractZipProgress` / `fs.createZipProgress` streams emit a single
-  terminal progress tick on Android (the unary JNI RPC has no per-entry
+  `ctx.serveDirectory(_:at:)` works for any other prefix, from any root the
+  app can read — see the Range note below for the one way it differs from
+  desktop. The `fs.extractZipProgress` / `fs.createZipProgress` streams emit a
+  single terminal progress tick on Android (the unary JNI RPC has no per-entry
   channel), then `done`.
 
 ## 8. Troubleshooting

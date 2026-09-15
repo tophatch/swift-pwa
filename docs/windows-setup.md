@@ -614,6 +614,19 @@ A few load-bearing details:
   executor is backed by libdispatch's main queue, which `GetMessageW`
   doesn't pump. `MainThread.run` posts `WM_APP+1` carrying a heap-boxed
   closure to the dispatcher window; its WndProc unboxes and fires.
+- **The pump waits on libdispatch's main queue as well as on messages.**
+  That hook covers swift-pwa's own UI work; it never covered *your*
+  `@MainActor` code, which through v0.10.7 was enqueued onto the main
+  queue and never ran — a bridge command that touched a `@MainActor`
+  class simply never returned, with no error and nothing on stderr
+  (#216). The loop is now `MsgWaitForMultipleObjectsEx` over
+  libdispatch's main-queue handle plus `QS_ALLINPUT`, draining the queue
+  when the handle signals, which is the same integration CoreFoundation
+  performs on Windows. Your own `@MainActor` code works, and so does
+  `DispatchQueue.main.async`. A modal loop you enter yourself (a Win32
+  dialog's own pump) still won't drain it.
+  `Scripts/verify-windows-main-actor.ps1` checks this end to end; run it
+  after touching the message pump.
 - **`pwa://`-style content uses a virtual host, not a custom scheme.**
   WebView2 enforces same-origin checks on custom schemes that would
   break ESM imports and `fetch`, so bundled content lives on

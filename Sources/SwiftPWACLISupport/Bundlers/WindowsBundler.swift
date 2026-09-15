@@ -289,10 +289,10 @@ struct WindowsBundler {
             libDir = try await OnnxRuntimeWindowsDirectMLArtifact.ensureLibDir(projectRoot: projectRoot)
             dlls = ["onnxruntime.dll", "onnxruntime_providers_shared.dll", "DirectML.dll"]
             reason = "ai.onnx_gpu"
-        } else if manifest.ai?.localOnnxRuntime == true {
+        } else if OnnxRuntimeTier.isEnabled(manifest: manifest, projectRoot: projectRoot) {
             libDir = try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
             dlls = ["onnxruntime.dll"]
-            reason = "ai.local_onnx_runtime"
+            reason = "on-device ONNX Runtime tier"
         } else {
             return
         }

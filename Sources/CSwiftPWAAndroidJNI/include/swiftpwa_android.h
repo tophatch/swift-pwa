@@ -226,6 +226,24 @@ void swiftpwa_android_post_main(void *box);
 void swiftpwa_android_run_main_box(void *box);
 
 // ---------------------------------------------------------------------
+// libdispatch's main queue, watched by Android's UI-thread Looper.
+//
+// `MainThread.run` above covers swift-pwa's own UI work. This covers the
+// *app's*: off Apple, `MainActor` is backed by libdispatch's main queue,
+// nothing drains it here (the UI thread belongs to the JVM's Looper), and an
+// adopting app's `await MainActor.run { ... }` therefore never returns (#216).
+// The Java main loop polls the thread's native `ALooper`, so an fd added to it
+// is serviced by `Looper.loop()` itself.
+// ---------------------------------------------------------------------
+
+typedef void (*swiftpwa_android_drain_fn)(void);
+
+// Watch `fd` for readability on the *calling thread's* `ALooper` and invoke
+// `drain` whenever it signals. Must be called on the Android UI thread, since
+// `ALooper_forThread` returns the caller's loop. Returns 1 if installed.
+int swiftpwa_android_watch_main_queue(int fd, swiftpwa_android_drain_fn drain);
+
+// ---------------------------------------------------------------------
 // Navigation policy.
 // ---------------------------------------------------------------------
 
@@ -252,6 +270,32 @@ void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn hand
 // installed it answers ALLOW, so an app that never configured a policy keeps
 // the behaviour it had.
 int swiftpwa_android_dispatch_navigation(const char *uri, int is_main_frame);
+
+// ---------------------------------------------------------------------
+// Served directories (`ctx.serveDirectory`).
+// ---------------------------------------------------------------------
+
+// Set by Swift; called **synchronously** from
+// `WebViewClient.shouldInterceptRequest`, which has to answer with a response
+// (or nothing) before the load proceeds. Same reasoning as the navigation
+// handler above: Core's `AssetProvider.resolve` is a lock-guarded path lookup,
+// so it can be answered inline.
+//
+// Unlike every other handler here it runs on a WebView **worker** thread, not
+// the UI thread — which is what makes it safe to stat a file from.
+//
+// Returns a `malloc`'d JSON object `{"path":…,"mime":…,"size":…}` describing
+// the file to serve, or NULL when the request falls under no mount (the usual
+// answer — the app's own bundle is served by the `WebViewAssetLoader`, not
+// through here). **The caller frees it.**
+typedef char *(*swiftpwa_android_mount_resolve_fn)(const char *url, void *user);
+
+void swiftpwa_android_set_mount_resolver(swiftpwa_android_mount_resolve_fn handler,
+                                         void *user);
+
+// Called from JNI. NULL with no resolver installed, so an app that mounts
+// nothing behaves exactly as before.
+char *swiftpwa_android_dispatch_mount_resolve(const char *url);
 
 // ---------------------------------------------------------------------
 // Lifecycle.

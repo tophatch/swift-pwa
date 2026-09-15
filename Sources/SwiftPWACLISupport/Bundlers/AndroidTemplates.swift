@@ -232,6 +232,7 @@ enum AndroidTemplates {
         urlSchemes: [String] = [],
         networkConfigStaged: Bool = false,
         webPermissions: [String] = [],
+        extraPermissions: [String] = [],
         minSdk: Int = 28
     ) -> String {
         // `permissions` in pwa.json → `uses-permission`. Emitted only for what
@@ -261,6 +262,24 @@ enum AndroidTemplates {
                 + "\n         ctx.permissions, and Android still prompts the user. -->"
             let lines = androidPermissions.map { "\n    " + $0.xml }.joined()
             webPermissionBlock = comment + lines
+        }
+        // `android.permissions` in pwa.json → the same element, emitted
+        // verbatim. These are permissions the web platform has no name for, so
+        // the mapping above can't reach them; the app names the Android string
+        // itself. Last, and de-duplicated against everything already emitted —
+        // both the built-ins below and the web-derived block above — so listing
+        // one that swift-pwa already declares is a no-op rather than a doubled
+        // element.
+        var extraPermissionBlock = ""
+        let alreadyDeclared = Set(androidPermissions.map(\.name)).union(builtInPermissionNames)
+        var seen = Set<String>()
+        let extras = extraPermissions.filter { !alreadyDeclared.contains($0) && seen.insert($0).inserted }
+        if !extras.isEmpty {
+            let comment = "\n    <!-- android.permissions in pwa.json, emitted verbatim. A dangerous"
+                + "\n         or special permission still needs its runtime request; declaring"
+                + "\n         it here only makes that request possible. -->"
+            let lines = extras.map { "\n    <uses-permission android:name=\"\($0)\"/>" }.joined()
+            extraPermissionBlock = comment + lines
         }
         // When the project ships an icon, reference the launcher mipmap the
         // bundler drops into res/mipmap/. aapt/Gradle handle density scaling
@@ -308,7 +327,9 @@ enum AndroidTemplates {
                  system installer surfaces a dialog routing the user there
                  if it's off. Apps that don't ship updater.installAndRelaunch
                  may delete this line, but the plugin won't work without it. -->
-            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\(webPermissionBlock)
+            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\(webPermissionBlock)\(
+                extraPermissionBlock
+            )
 
             <application
                 android:label="\(label)"\(iconAttr)
@@ -356,6 +377,18 @@ enum AndroidTemplates {
     /// One `<uses-permission>` line. Most need nothing but a name; Bluetooth
     /// needs both of the other two attributes, which is why this isn't a
     /// `[String]`.
+    /// The `uses-permission` entries the generated manifest always carries.
+    /// Kept beside the template that emits them so an `android.permissions`
+    /// entry naming one is dropped rather than doubled — and so the two lists
+    /// can't drift apart silently.
+    static let builtInPermissionNames: Set<String> = [
+        "android.permission.INTERNET",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+    ]
+
     struct AndroidUsesPermission: Equatable {
         var name: String
         /// `android:usesPermissionFlags`, e.g. `neverForLocation`.
@@ -731,21 +764,24 @@ enum AndroidTemplates {
                     WebView.setWebContentsDebuggingEnabled(true)
                 }
 
-                // The asset loader serves any URL under
-                // `https://swift-pwa.local/<path>` from `assets/<path>`.
-                // The bundler puts the web bundle at `assets/web/`, so
-                // the Swift runtime navigates to
-                // `https://swift-pwa.local/web/<entry>` to pick it up
-                // (see SwiftPWAAndroid/AndroidWebViewAdapter.swift).
+                // The asset loader serves `https://swift-pwa.local/<path>`
+                // from the web bundle, which the bundler puts at
+                // `assets/web/` — so the handler prefixes `web/` and the
+                // bundle sits at the **origin root**, the way it does on the
+                // other four backends. That matters more than it looks: a
+                // page's root-absolute URL (`/styles/app.css`,
+                // `location.replace('/reader.html')`) resolved against the
+                // origin, so serving one directory down 404'd every one of
+                // them on Android and nowhere else.
                 // Served mounts are registered BEFORE the catch-all "/" bundle
                 // handler: WebViewAssetLoader matches handlers in registration
                 // order by path prefix, and "/" is a prefix of "/packs/…", so a
-                // "/"-first order would let the bundle's AssetsPathHandler
-                // shadow every served mount (404 from assets). Specific prefixes
-                // must come first.
+                // "/"-first order would let the bundle handler shadow every
+                // served mount (404 from assets). Specific prefixes must come
+                // first.
                 val assetLoader = WebViewAssetLoader.Builder()
                     .setDomain("swift-pwa.local")\(serveHandlerLines(serveMounts))
-                    .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this))
+                    .addPathHandler("/", WebBundlePathHandler(this))
                     .build()
 
                 bridge = SwiftPWABridge(this, webView, assetLoader)
@@ -815,6 +851,29 @@ enum AndroidTemplates {
                 // would leave the primary Activity's outbound JNI
                 // calls hitting a null bridge ref (silent no-op).
                 bridge.attach()
+                pushLifecycle("resumed")
+            }
+
+            override fun onPause() {
+                // Before `super`, so an app that re-locks on being backgrounded
+                // has its handler queued while this process is still scheduled.
+                pushLifecycle("paused")
+                super.onPause()
+            }
+
+            /// Surface the Activity's foreground state to Swift, where it
+            /// becomes `WindowEvent.didFocus` / `.didBlur` — the same events
+            /// the desktop backends emit when their window gains or loses
+            /// focus. Android had no equivalent at all: an app that re-walks
+            /// its folders on becoming active (there is no recursive directory
+            /// watch to lean on) or re-locks on being backgrounded had nothing
+            /// to hang that on (#214).
+            ///
+            /// Secondary (spawned) windows don't own the runtime, so they skip
+            /// — their lifecycle would otherwise be reported as the primary's.
+            private fun pushLifecycle(state: String) {
+                if (isSecondary || !hasBridge) return
+                push(JSONObject().put("channel", "window.lifecycle").put("state", state))
             }
 
             override fun onDestroy() {
@@ -918,6 +977,23 @@ enum AndroidTemplates {
             /// turns the user's `configure` closure into this entry point.
             private external fun swiftPwaMain()
         }
+
+        /// Serves the web bundle at the **origin root** by prefixing `web/`
+        /// onto every path before handing it to the stock assets handler.
+        ///
+        /// `AssetsPathHandler`'s public constructor takes only a `Context`
+        /// — there is no base-path argument — which is why the bundle used
+        /// to be reachable only at `/web/…`. Delegating rather than
+        /// reimplementing keeps its MIME guessing, its `..` containment check
+        /// and its not-found shape (a response with a null stream, which the
+        /// SPA fallback tests for).
+        private class WebBundlePathHandler(context: android.content.Context) :
+            WebViewAssetLoader.PathHandler {
+            private val assets = WebViewAssetLoader.AssetsPathHandler(context)
+
+            override fun handle(path: String): android.webkit.WebResourceResponse? =
+                assets.handle("web/" + path.removePrefix("/"))
+        }
         """
     }
 
@@ -998,6 +1074,9 @@ enum AndroidTemplates {
         import android.content.Intent
         import androidx.appcompat.app.AppCompatActivity
         import androidx.core.view.WindowCompat
+        import java.io.File
+        import java.io.FileInputStream
+        import org.json.JSONObject
         import androidx.core.view.WindowInsetsCompat
         import androidx.core.view.WindowInsetsControllerCompat
         import androidx.webkit.WebViewAssetLoader
@@ -1104,6 +1183,13 @@ enum AndroidTemplates {
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
+                        // A directory the app mounted at runtime with
+                        // `ctx.serveDirectory` wins over the bundle, matching
+                        // every other backend (longest-prefix, mounts before
+                        // the `/` root). Swift owns the table and answers here;
+                        // null means "not mine", which is every request in an
+                        // app that mounts nothing.
+                        servedMountResponse(request)?.let { return it }
                         val response = assetLoader.shouldInterceptRequest(request.url)
                         // SPA history-routing fallback: a main-frame navigation to a
                         // client-side route with no file under assets/web/ (the loader
@@ -1115,7 +1201,7 @@ enum AndroidTemplates {
                             val last = request.url.lastPathSegment ?: ""
                             if (!last.contains('.')) {
                                 val entryUrl = android.net.Uri.parse(
-                                    "https://swift-pwa.local/web/" + spaEntry
+                                    "https://swift-pwa.local/" + spaEntry
                                 )
                                 return assetLoader.shouldInterceptRequest(entryUrl)
                             }
@@ -1380,6 +1466,62 @@ enum AndroidTemplates {
             // JNI
             // -------------------------------------------------------------
 
+            // -------------------------------------------------------------
+            // Served directories (`ctx.serveDirectory`)
+            // -------------------------------------------------------------
+
+            /// Serve a file from a directory the Swift side mounted at
+            /// runtime, or null if this request falls under no mount.
+            ///
+            /// **A plain 200 with the whole stream, deliberately.** The obvious
+            /// implementation parses the `Range` header and answers 206, and
+            /// that is measured to fail: a 206 returned from
+            /// `shouldInterceptRequest` is rejected by the WebView before it
+            /// ever reaches the page, as `TypeError: Failed to fetch` with no
+            /// diagnostic anywhere. What actually happens is that Chromium
+            /// handles the range itself — given a 200 and a stream it skips to
+            /// the requested offset — so a `<video>` seeks and a range-fetching
+            /// reader gets its bytes. It reports that to the page as a **200
+            /// with no `Content-Range`**, serving from the offset to the end of
+            /// the file rather than to the end of the range.
+            ///
+            /// Hence no `Accept-Ranges: bytes` either. Advertising it would tell
+            /// a client that a 206 is coming, and none ever is; a client that
+            /// checks (pdf.js does) would pick the range path over the
+            /// whole-file one and be wrong about what it got. This is exactly
+            /// what `InternalStoragePathHandler` does for a `build.serve` mount,
+            /// so both kinds of mount behave alike.
+            private fun servedMountResponse(request: WebResourceRequest): WebResourceResponse? {
+                // A mount is read-only; anything else belongs to `fs.*`.
+                if (!request.method.equals("GET", ignoreCase = true)) return null
+                val json = try {
+                    nativeResolveMount(request.url.toString())
+                } catch (t: Throwable) {
+                    android.util.Log.e("swift-pwa", "resolving a served mount failed: ${t.message}", t)
+                    null
+                } ?: return null
+                return try {
+                    val resolved = JSONObject(json)
+                    // `WebResourceResponse` wants the type and the charset
+                    // apart, and Core's MIME table spells them together
+                    // ("text/css; charset=utf-8"). Passing the whole string as
+                    // the type makes the WebView refuse the resource.
+                    val mime = resolved.getString("mime")
+                    val semicolon = mime.indexOf(';')
+                    val type = if (semicolon < 0) mime else mime.substring(0, semicolon).trim()
+                    val charset = if (semicolon < 0) null else {
+                        mime.substring(semicolon + 1).trim().removePrefix("charset=").ifEmpty { null }
+                    }
+                    WebResourceResponse(type, charset, FileInputStream(File(resolved.getString("path"))))
+                } catch (t: Throwable) {
+                    // The file was there when Swift stat'd it and isn't now, or
+                    // can't be opened. A response with a null stream is the
+                    // shape the WebView reads as "not found".
+                    android.util.Log.e("swift-pwa", "serving ${request.url} failed: ${t.message}", t)
+                    WebResourceResponse(null, null, null)
+                }
+            }
+
             private external fun nativeAttach(self: SwiftPWABridge)
             private external fun nativeDetach()
             private external fun nativeIngest(json: String)
@@ -1414,6 +1556,14 @@ enum AndroidTemplates {
             /// answer before the load proceeds. Returns one of the NAV_*
             /// constants below, mirroring Core's `NavigationDisposition`.
             private external fun nativeDecideNavigation(url: String, isMainFrame: Boolean): Int
+
+            /// Synchronous for the same reason: `shouldInterceptRequest` has to
+            /// return the response. Called on a WebView worker thread, not the
+            /// UI thread. Returns a JSON object describing the file to serve
+            /// (`path` / `mime` / `size`), or null when the URL falls under no
+            /// `ctx.serveDirectory` mount — which is every request in an app
+            /// that has none.
+            private external fun nativeResolveMount(url: String): String?
 
             /// Hand a URL to whichever app claims it — the browser for
             /// http(s), a mail client for mailto, an app's own scheme. Shared
@@ -1487,6 +1637,10 @@ enum AndroidTemplates {
     import android.content.IntentFilter
     import android.content.pm.PackageInstaller
     import android.graphics.Bitmap
+    import android.app.Notification
+    import android.media.AudioAttributes
+    import android.media.AudioFocusRequest
+    import android.media.AudioManager
     import android.graphics.BitmapFactory
     import android.net.Uri
     import android.os.Build
@@ -1671,6 +1825,12 @@ enum AndroidTemplates {
         fun dispatch(method: String, args: String, done: (String?, String?) -> Unit) {
             val json = JSONObject(args)
             when (method) {
+                "audio.nowPlaying.setMetadata" -> { nowPlayingSetMetadata(json); done(null, null) }
+                "audio.nowPlaying.setPlaybackState" -> { nowPlayingSetPlaybackState(json); done(null, null) }
+                "audio.nowPlaying.setActions" -> { nowPlayingSetActions(json); done(null, null) }
+                "audio.nowPlaying.setPosition" -> { nowPlayingSetPosition(json); done(null, null) }
+                "audio.session.set" -> done(audioSessionSet(json), null)
+                "audio.session.get" -> done(audioSessionGet(), null)
                 "clipboard.read" -> done(clipboardRead(), null)
                 "clipboard.write" -> {
                     clipboardWrite(json.optString("text", ""))
@@ -1772,6 +1932,329 @@ enum AndroidTemplates {
 
         private fun clipboardManager(): ClipboardManager =
             activity.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+
+        // -----------------------------------------------------------
+        // Now playing — the navigator.mediaSession polyfill
+        // -----------------------------------------------------------
+        //
+        // Android's WebView doesn't expose navigator.mediaSession at all, so
+        // without this an app playing audio is invisible to the system: no
+        // lock-screen entry, no notification, and nothing for a headset button
+        // to talk to.
+        //
+        // Platform MediaSession + Notification.MediaStyle, deliberately: the
+        // androidx media libraries would do the same job and cost every
+        // generated project a dependency it mostly wouldn't use.
+
+        private var mediaSession: android.media.session.MediaSession? = null
+        private var nowPlayingTitle: String? = null
+        private var nowPlayingArtist: String? = null
+        private var nowPlayingAlbum: String? = null
+        private var nowPlayingArtwork: android.graphics.Bitmap? = null
+        private var nowPlayingState = "none"
+        private var nowPlayingActions = listOf<String>()
+        private var nowPlayingDurationMs = 0L
+        private var nowPlayingPositionMs = 0L
+        private var nowPlayingRate = 1.0f
+        private val nowPlayingNotificationId = 0x5057   // "PW"
+
+        private fun actionBit(name: String): Long = when (name) {
+            "play" -> android.media.session.PlaybackState.ACTION_PLAY
+            "pause" -> android.media.session.PlaybackState.ACTION_PAUSE
+            "stop" -> android.media.session.PlaybackState.ACTION_STOP
+            "previoustrack" -> android.media.session.PlaybackState.ACTION_SKIP_TO_PREVIOUS
+            "nexttrack" -> android.media.session.PlaybackState.ACTION_SKIP_TO_NEXT
+            "seekbackward" -> android.media.session.PlaybackState.ACTION_REWIND
+            "seekforward" -> android.media.session.PlaybackState.ACTION_FAST_FORWARD
+            "seekto" -> android.media.session.PlaybackState.ACTION_SEEK_TO
+            else -> 0L
+        }
+
+        private fun sendMediaAction(action: String) {
+            bridge.nativeHostEvent(
+                JSONObject().put("channel", "audio.nowPlaying.action").put("action", action).toString()
+            )
+        }
+
+        private fun ensureMediaSession(): android.media.session.MediaSession {
+            mediaSession?.let { return it }
+            val session = android.media.session.MediaSession(activity, "swift-pwa")
+            session.setCallback(object : android.media.session.MediaSession.Callback() {
+                override fun onPlay() { sendMediaAction("play") }
+                override fun onPause() { sendMediaAction("pause") }
+                override fun onStop() { sendMediaAction("stop") }
+                override fun onSkipToNext() { sendMediaAction("nexttrack") }
+                override fun onSkipToPrevious() { sendMediaAction("previoustrack") }
+                override fun onRewind() { sendMediaAction("seekbackward") }
+                override fun onFastForward() { sendMediaAction("seekforward") }
+                override fun onSeekTo(pos: Long) { sendMediaAction("seekto") }
+            })
+            session.isActive = true
+            mediaSession = session
+            return session
+        }
+
+        private fun nowPlayingSetMetadata(json: JSONObject) {
+            val meta = json.optJSONObject("metadata")
+            if (meta == null) {
+                nowPlayingTitle = null
+                nowPlayingArtist = null
+                nowPlayingAlbum = null
+                nowPlayingArtwork = null
+            } else {
+                nowPlayingTitle = meta.optString("title", null.toString()).takeIf { meta.has("title") && !meta.isNull("title") }
+                nowPlayingArtist = meta.optString("artist", null.toString()).takeIf { meta.has("artist") && !meta.isNull("artist") }
+                nowPlayingAlbum = meta.optString("album", null.toString()).takeIf { meta.has("album") && !meta.isNull("album") }
+                // Absent means *clear*, not "leave what's there". The polyfill
+                // publishes a new track's text first and its image in a second
+                // call, so the first call has no artwork by construction —
+                // carrying the old bitmap over would put the previous track's
+                // cover next to the new track's title until the fetch landed,
+                // and keep it forever for a track that has none. A brief
+                // coverless moment is the honest rendering.
+                nowPlayingArtwork = decodeArtwork(meta.optJSONObject("artwork"))
+            }
+            pushNowPlaying()
+        }
+
+        private fun nowPlayingSetPlaybackState(json: JSONObject) {
+            nowPlayingState = json.optString("state", "none")
+            pushNowPlaying()
+        }
+
+        private fun nowPlayingSetActions(json: JSONObject) {
+            val array = json.optJSONArray("actions")
+            val list = mutableListOf<String>()
+            if (array != null) for (i in 0 until array.length()) list.add(array.optString(i))
+            nowPlayingActions = list
+            pushNowPlaying()
+        }
+
+        private fun nowPlayingSetPosition(json: JSONObject) {
+            val pos = json.optJSONObject("position")
+            if (pos == null) {
+                nowPlayingDurationMs = 0L
+                nowPlayingPositionMs = 0L
+                nowPlayingRate = 1.0f
+            } else {
+                nowPlayingDurationMs = (pos.optDouble("duration", 0.0) * 1000).toLong()
+                nowPlayingPositionMs = (pos.optDouble("position", 0.0) * 1000).toLong()
+                nowPlayingRate = pos.optDouble("playbackRate", 1.0).toFloat()
+            }
+            pushNowPlaying()
+        }
+
+        /// Base64 bytes from the page's own `fetch` — see `NowPlayingArtwork`
+        /// for why the URL can't travel instead. Decoding is best-effort: a
+        /// corrupt or unsupported image costs the cover art, never the
+        /// notification.
+        private fun decodeArtwork(json: JSONObject?): android.graphics.Bitmap? {
+            val encoded = json?.optString("data").orEmpty()
+            if (encoded.isEmpty()) return null
+            return try {
+                val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size).also {
+                    if (it == null) {
+                        android.util.Log.w("swift-pwa", "mediaSession artwork could not be decoded")
+                    }
+                }
+            } catch (t: Throwable) {
+                android.util.Log.w("swift-pwa", "mediaSession artwork could not be decoded: ${t.message}")
+                null
+            }
+        }
+
+        private fun pushNowPlaying() {
+            val session = ensureMediaSession()
+
+            session.setMetadata(
+                android.media.MediaMetadata.Builder()
+                    .putString(android.media.MediaMetadata.METADATA_KEY_TITLE, nowPlayingTitle ?: "")
+                    .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, nowPlayingArtist ?: "")
+                    .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, nowPlayingAlbum ?: "")
+                    .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, nowPlayingDurationMs)
+                    // ALBUM_ART is what the lock screen and Now Playing draw;
+                    // the notification's large icon is set separately below.
+                    .putBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART, nowPlayingArtwork)
+                    .build()
+            )
+
+            // Only the actions the page registered a handler for: the OS draws
+            // exactly these, and a button that does nothing is worse than a
+            // button that isn't there.
+            var mask = 0L
+            for (name in nowPlayingActions) mask = mask or actionBit(name)
+            val state = when (nowPlayingState) {
+                "playing" -> android.media.session.PlaybackState.STATE_PLAYING
+                "paused" -> android.media.session.PlaybackState.STATE_PAUSED
+                else -> android.media.session.PlaybackState.STATE_NONE
+            }
+            session.setPlaybackState(
+                android.media.session.PlaybackState.Builder()
+                    .setActions(mask)
+                    .setState(state, nowPlayingPositionMs, nowPlayingRate)
+                    .build()
+            )
+
+            // Activation has to track the state on *every* push, not just at
+            // creation. A page typically calls setActionHandler before it sets
+            // playbackState, which pushes once while the state is still "none";
+            // deactivating there and never reactivating leaves the session
+            // inert, and an inactive session is not offered media buttons at
+            // all — the symptom is a lock-screen row that appears and does
+            // nothing.
+            session.isActive = nowPlayingState != "none"
+
+            if (nowPlayingState == "none") {
+                cancelNowPlayingNotification()
+            } else {
+                showNowPlayingNotification(session)
+            }
+        }
+
+        private fun showNowPlayingNotification(session: android.media.session.MediaSession) {
+            ensureNotificationChannel()
+            if (!notificationsAuthorized()) return
+            val builder = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                Notification.Builder(activity, notificationChannelId)
+            } else {
+                @Suppress("DEPRECATION")
+                Notification.Builder(activity)
+            }
+            // The small icon is load-bearing and fails *silently*: a notification
+            // whose icon isn't a valid drawable is refused with
+            // IllegalArgumentException("no valid small icon") — which the RPC
+            // layer logs and swallows, so `notify()` looks like it worked and
+            // nothing ever appears. An app that sets no icon in pwa.json has an
+            // applicationInfo.icon that is not usable here, so fall back to a
+            // platform drawable rather than posting nothing.
+            fun build(icon: Int): Notification = builder
+                .setContentTitle(nowPlayingTitle ?: activity.applicationInfo.loadLabel(activity.packageManager))
+                .setContentText(nowPlayingArtist ?: "")
+                .setSmallIcon(icon)
+                .setLargeIcon(nowPlayingArtwork)
+                .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken))
+                .setOngoing(nowPlayingState == "playing")
+                .build()
+
+            val manager = activity.getSystemService(android.app.NotificationManager::class.java) ?: return
+            val appIcon = activity.applicationInfo.icon
+            try {
+                manager.notify(nowPlayingNotificationId, build(appIcon))
+            } catch (e: IllegalArgumentException) {
+                manager.notify(nowPlayingNotificationId, build(android.R.drawable.ic_media_play))
+            }
+        }
+
+        private fun cancelNowPlayingNotification() {
+            activity.getSystemService(android.app.NotificationManager::class.java)
+                ?.cancel(nowPlayingNotificationId)
+        }
+
+        // -----------------------------------------------------------
+        // Audio session — the navigator.audioSession polyfill
+        // -----------------------------------------------------------
+        //
+        // The WebView plays through its own audio track, whose attributes the
+        // app doesn't get to rewrite. What the app *can* do is hold — or
+        // decline to hold — audio focus, and that decides the thing this API is
+        // actually about: whether the user's music stops, ducks, or keeps
+        // playing while this app makes sound.
+        //
+        // So `ambient` is not "mix" by another name; it is not requesting focus
+        // at all, which is what leaves other audio alone.
+
+        private var audioSessionType = "auto"
+        private var audioFocusHeld = false
+        private var audioFocusInterrupted = false
+        private var audioFocusRequest: AudioFocusRequest? = null
+
+        private fun audioManager(): AudioManager =
+            activity.getSystemService(Context.AUDIO_SERVICE) as AudioManager
+
+        private fun audioSessionSet(json: JSONObject): String {
+            val type = json.optString("type", "auto")
+            audioSessionType = type
+
+            val gain = when (type) {
+                "playback", "play-and-record" -> AudioManager.AUDIOFOCUS_GAIN
+                "transient" -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT_MAY_DUCK
+                "transient-solo" -> AudioManager.AUDIOFOCUS_GAIN_TRANSIENT
+                else -> null   // ambient / auto: deliberately no focus request
+            }
+
+            abandonAudioFocus()
+            if (gain != null) requestAudioFocus(type, gain)
+            return audioSessionGet()
+        }
+
+        private fun requestAudioFocus(type: String, gain: Int) {
+            val usage = if (type == "play-and-record") {
+                AudioAttributes.USAGE_VOICE_COMMUNICATION
+            } else {
+                AudioAttributes.USAGE_MEDIA
+            }
+            val attributes = AudioAttributes.Builder()
+                .setUsage(usage)
+                .setContentType(AudioAttributes.CONTENT_TYPE_MUSIC)
+                .build()
+
+            // Focus can be lost again at any time — a call, another app — and
+            // the page needs to see that as state "interrupted" rather than
+            // silently keep believing it is playing.
+            val listener = AudioManager.OnAudioFocusChangeListener { change ->
+                when (change) {
+                    AudioManager.AUDIOFOCUS_GAIN -> {
+                        audioFocusHeld = true
+                        audioFocusInterrupted = false
+                    }
+                    AudioManager.AUDIOFOCUS_LOSS -> {
+                        audioFocusHeld = false
+                        audioFocusInterrupted = false
+                    }
+                    else -> {   // transient loss, with or without ducking
+                        audioFocusHeld = false
+                        audioFocusInterrupted = true
+                    }
+                }
+            }
+
+            val granted = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                val request = AudioFocusRequest.Builder(gain)
+                    .setAudioAttributes(attributes)
+                    .setOnAudioFocusChangeListener(listener)
+                    .build()
+                audioFocusRequest = request
+                audioManager().requestAudioFocus(request)
+            } else {
+                @Suppress("DEPRECATION")
+                audioManager().requestAudioFocus(listener, AudioManager.STREAM_MUSIC, gain)
+            }
+            audioFocusHeld = granted == AudioManager.AUDIOFOCUS_REQUEST_GRANTED
+            audioFocusInterrupted = false
+        }
+
+        private fun abandonAudioFocus() {
+            val request = audioFocusRequest
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && request != null) {
+                audioManager().abandonAudioFocusRequest(request)
+            }
+            audioFocusRequest = null
+            audioFocusHeld = false
+            audioFocusInterrupted = false
+        }
+
+        private fun audioSessionGet(): String {
+            val state = when {
+                audioFocusInterrupted -> "interrupted"
+                audioFocusHeld -> "active"
+                else -> "inactive"
+            }
+            return JSONObject()
+                .put("type", audioSessionType)
+                .put("state", state)
+                .toString()
+        }
 
         private fun clipboardRead(): String {
             val cm = clipboardManager()

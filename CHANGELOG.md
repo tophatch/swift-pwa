@@ -5,6 +5,512 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ctx.serveDirectory(_:at:)` works on Android** — a directory the app mounts
+  at *runtime*, from any root it can read, served on the bundle origin (#213).
+
+  It was documented as a desktop capability and was a silent no-op there. The
+  `WebViewAssetLoader` is built in `Activity.onCreate`, before any Swift runs,
+  so the only mounts that could exist were `pwa.json`'s build-time
+  `build.serve` entries, rooted inside app storage. That covers a content pack
+  the app downloads into its own directory and nothing else: an app whose roots
+  are folders the *user* points it at — a reader's library, wherever the books
+  already live — could not serve one file to its own page. Copying them into
+  app storage is a different product, and `fs.readBinary` is a base64 copy of
+  every file (a 300 MB PDF becomes a 400 MB string) that defeats range-based
+  loading anyway.
+
+  **Kotlin deliberately keeps no mount table.** The obvious design — Swift
+  pushes each mount over the RPC, Kotlin holds a prefix→root map — needs a sync
+  protocol and can go stale between a `serveDirectory` call and the request that
+  follows it. Instead `shouldInterceptRequest` asks Swift synchronously, the way
+  `shouldOverrideUrlLoading` already did, so **Core's `AssetProvider` is the one
+  mount table for all five backends**: same longest-prefix match, same per-mount
+  traversal guard, same MIME table, and `unserveDirectory` takes effect on the
+  next request with nothing to keep in sync. It costs a JNI upcall into a
+  lock-guarded path lookup, on a WebView worker thread rather than the UI
+  thread, and answers nil for everything outside a mount — which on Android is
+  the entire app bundle, since that provider is never given a `/` root.
+
+  **One platform limit, measured rather than assumed: a `Range` request is
+  answered `200`, not `206`.** A `206` returned from `shouldInterceptRequest` is
+  rejected by the WebView *before the page sees it* — `TypeError: Failed to
+  fetch`, with nothing logged by us or by Chromium, against a correct 206
+  carrying the right `Content-Range` and a bounded stream. What Chromium does
+  instead is range the stream itself: given a `200` it seeks to the requested
+  start offset and serves to the end of the file. So a `<video>` scrub and a
+  range-fetching reader both work; the end of the range is ignored. No
+  `Accept-Ranges: bytes` is advertised, deliberately — promising a 206 that
+  never arrives would send a client that checks (pdf.js does) down the range
+  path to be wrong about what it got. `build.serve` mounts have always behaved
+  this way; runtime mounts now match them. Device-verified on a Fold7 via
+  `Scripts/verify-android-served-mounts.sh`.
+
+- **`android.permissions` in `pwa.json`** — Android permission names emitted
+  verbatim as `<uses-permission>` entries (#214).
+
+  `permissions.web` declares capabilities the *web platform* has a name for and
+  maps each onto whatever Android calls it, so a permission with no web
+  counterpart had no door at all. All-files access is the case that prompted it:
+  an app reading folders the user points it at, by path, needs
+  `MANAGE_EXTERNAL_STORAGE`, and the only way to get it was editing the
+  generated `AndroidManifest.xml` — which the next build overwrites.
+
+  ```json
+  "android": { "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"] }
+  ```
+
+  Emitted after the built-in and web-derived entries, duplicates dropped.
+  Validated for *shape* at build time (a bare `MANAGE_EXTERNAL_STORAGE` is
+  refused, naming the fully-qualified form) but deliberately **not** against an
+  allowlist of known permissions: OEMs define their own and new platform
+  releases add more, so a list would go stale and start refusing valid
+  declarations. Declaring still grants nothing — a dangerous or special
+  permission needs its runtime request, which is what the declaration makes
+  possible. Some carry store-policy consequences; that is the app's call, not a
+  reason the manifest can't express them.
+
+- **`WindowEvent.didFocus` / `.didBlur` now mean the same thing on all five
+  backends** — this window became, or stopped being, the one the user is
+  working in (#214).
+
+  Only macOS reported both from a real OS signal. Windows emitted `didFocus`
+  from `WM_SETFOCUS` and had no `WM_KILLFOCUS` counterpart, so an app could
+  learn it had become active and never that it had stopped. Both GTK backends
+  emitted either one *only* from an explicit `focus()` call, which is the app
+  talking to itself. iOS did the same. Android surfaced nothing at all.
+
+  Now: `notify::is-active` on GTK3 and GTK4, `WM_KILLFOCUS` on Windows,
+  `Activity.onResume` / `onPause` on Android, and scene did-become-active /
+  will-resign-active on iOS. The two mobile backends matter most here — an app
+  that was backgrounded there was *suspended*, so anything it was watching
+  stopped being watched — and they are why an app re-reading state on becoming
+  active, or re-engaging a lock on leaving, can now be written once in Swift and
+  be right everywhere. `.didBlur` is pushed before `super.onPause()` so the
+  handler is queued while the process is still scheduled. An explicit `focus()`
+  is de-duplicated against the signal that follows it, so presenting a window
+  doesn't report focus twice.
+
+  Verified on real hardware on **all five**, one script per platform family: a
+  Fold7 for Android, an iPad for iOS, and a logged-in desktop session on the
+  GTK3, GTK4 and Windows boxes. Each asserts on a transition **nothing in the
+  app asked for** — a backend that merely echoed its own `focus()` call would
+  pass otherwise — and each carries a control that must succeed, because the
+  failure mode here is an event that is simply absent.
+
+  Three traps, each of which gave a confident wrong answer first. A desktop
+  session has to be **unlocked**, and so does a device: under Xvfb a scaffolded
+  GTK app maps no window at all, and nothing unmapped can ever become active, so
+  the run passes vacuously; on iOS a locked device refuses to launch the app
+  while installing it happily. On **Windows** a new window takes focus
+  *synchronously inside* `createWindow`, so its first `WM_SETFOCUS` is delivered
+  before `eventStream()` can be attached to the returned window — `AsyncStream`
+  doesn't replay, so that first event is unobservable to any caller, and
+  checking for it failed against correct behaviour. GTK doesn't race this; it
+  maps once the main loop runs. And on **iOS** the app is *suspended* while
+  backgrounded, which is the very window being measured, so it records to a file
+  in its own container that `devicectl` lifts afterwards rather than answering a
+  bridge command — and the build has to be `debug`, or the driver socket the
+  first attempt relied on isn't compiled in at all.
+
+- **`navigator.audioSession` works on Android** — the W3C Audio Session API,
+  filled natively where the engine doesn't ship it, rather than exposed as a
+  swift-pwa-shaped API beside it.
+
+  *Why this and not an `audio.*` plugin.* All five engines were measured
+  ([`docs/proposals/audio-plugin.md`](docs/proposals/audio-plugin.md)) and the
+  roadmap's premise — that native capture/playback would be lower-latency and
+  more capable than the webview's — does not hold: every engine already gives
+  raw 128-frame PCM into an `AudioWorklet` at 2.7–10 ms base latency with
+  gapless scheduling. What's genuinely missing is *policy*, and Apple's WebKit
+  already has the standard API for it. A parallel API would make every app
+  carry a branch, and the branch only breaks on the platform its author can't
+  test.
+
+  So an adopter's whole requirement is the line the web platform already
+  defines, with no manifest key, no Swift call and no plugin to install:
+
+  ```js
+  navigator.audioSession.type = 'playback';   // or 'ambient' for a game
+  ```
+
+  **The type decides real behaviour, not a label.** On Android it maps to audio
+  focus — `playback` / `play-and-record` take `AUDIOFOCUS_GAIN` (other audio
+  stops), `transient` ducks, `transient-solo` pauses others, and `ambient` /
+  `auto` deliberately request *no* focus, which is what leaves the user's own
+  music playing. Device-verified on a Fold7 down to the focus stack:
+  `requestAudioFocus() … AA=USAGE_MEDIA/CONTENT_TYPE_MUSIC req=1` on
+  `playback`, `abandonAudioFocus()` with no re-request on `ambient`.
+
+  **The polyfill matches WebKit's behaviour because it was measured against
+  it**, not read off the spec: an unrecognised value — a bad string, a number,
+  `null` — is *ignored* rather than throwing, leaving `type` on its previous
+  value, and `audioSession` is defined on `Navigator.prototype` where the real
+  one lives. The same expression run against macOS WebKit and the Android
+  polyfill now returns byte-identical results. It installs only where the API
+  is absent and never wraps a real implementation.
+
+  Reading `type` back reports what the *platform* did rather than what the page
+  asked for, so an OS that coerces or refuses a type can't leave a page
+  believing it has background audio it doesn't have.
+
+  **On Linux and Windows the fill records the type and drives nothing**, and
+  that is a platform limit rather than an omission: the playing stream belongs
+  to the *webview's own process* (`WebKitWebProcess`, `msedgewebview2.exe`) and
+  both platforms set audio policy per-stream, by the stream's creator — so the
+  shell has nothing to set. Android is the exception that makes a real fill
+  possible there, because its focus is per-app. Measured rather than assumed,
+  including that a stock GNOME/PipeWire session loads no role-ducking module at
+  all, so the one knob that *is* settable is inert anyway. It costs little:
+  desktop audio was measured to keep playing when the window is minimized, so
+  the behaviour the type buys on a phone is already true there.
+
+  The page-visible API is identical on all five, verified on each: present on
+  `Navigator.prototype`, invalid values ignored, `type` and `state` reading back
+  the same way.
+
+- **`navigator.mediaSession` works on Android** — the W3C Media Session API,
+  filled over a platform `MediaSession` plus a transport notification. Android
+  is the only one of the five engines whose WebView doesn't expose it at all,
+  so without this an Android app playing audio is invisible to the system: no
+  lock-screen controls, no notification, and nothing for a headset button to
+  talk to. The other four already route the web API to the OS (verified by
+  driving the real control: a media key on macOS and Windows, the lock screen on
+  iOS, MPRIS over D-Bus on both GTK backends), so the fill installs on Android
+  alone.
+
+  A page writes the standard API — `metadata`, `playbackState`,
+  `setActionHandler`, `setPositionState` — and `MediaMetadata` is defined too,
+  since it's missing wherever `mediaSession` is. Only the actions a page
+  registers a handler for are published to the OS, because a transport button
+  that does nothing is worse than one that isn't there.
+
+  Device-verified on a Fold7: `dumpsys media_session` shows the app as the
+  system's media button session (`active=true`, `state=PLAYING`, `actions=311`,
+  metadata published), a real `KEYCODE_MEDIA_PAUSE` and `KEYCODE_MEDIA_NEXT`
+  each reach the page's handler, and the lock-screen controls appear and work.
+
+  **Two bugs this found, both of which failed silently** and neither of which a
+  unit test would have caught. The action pump was started with a plain `Task`
+  inside a `@MainActor` function, so it inherited that isolation — and Android's
+  main thread runs a Java looper that never drains libdispatch's main queue, so
+  the task was created and never scheduled: the OS delivered the action, Kotlin
+  forwarded it, Swift yielded it, and nothing was at the other end (the same
+  hazard that keeps `BridgeRuntime` off the MainActor). And the notification was
+  refused with `IllegalArgumentException: Invalid notification (no valid small
+  icon)` for an app that sets no icon — which `notify()` *logs* rather than
+  throws, so it looked like it had worked.
+
+  Not yet: artwork (`MediaMetadata.artwork` round-trips in JS but isn't shown by
+  the OS), and the notification needs `POST_NOTIFICATIONS` granted — media keys
+  work without it.
+
+- **`setSinkId` is deliberately not filled**, which completes the audio work by
+  deciding against it rather than building it. It's absent from WebKitGTK and
+  Android's WebView, and an earlier draft treated that as our gap to close.
+
+  It isn't, and the reason is the API's shape: `setSinkId` is a method on an
+  `HTMLMediaElement`, so a page may route one element to the speakers and
+  another to a headset. Everything a shell can reach is per-*process* — on Linux
+  PipeWire can move a stream between sinks, but the node is the whole
+  `WebKitWebProcess`; on Android there is no route-another-process's-media API
+  at all. Two elements with different sinks can't both be honoured, and the
+  failure would be silent.
+
+  Unlike `audioSession`, an inert fill would be actively harmful here. A
+  recorded-but-inert session type costs nothing, because what it buys on a phone
+  is already true on desktop; a recorded-but-inert `setSinkId` would tell a page
+  its audio had been routed when it hadn't — and `'setSinkId' in element` is
+  exactly how a page decides whether to show a device picker. Absent, an app
+  hides a picker it can't honour; filled, it shows one that lies.
+
+  The line between the two cases: **fill a web API when a no-op is harmless and
+  the outcome is already true; leave it absent when a no-op would make the page
+  believe something false.**
+
+- **The tutorials and samples now declare an audio policy**, so the first thing
+  an adopter copies is the version that works on a phone.
+
+  `Examples/CritterFacts`' speak-the-fact card and its dedicated `speak.html`
+  both generate and play speech, and both would have stopped backgrounded on
+  iOS as written — the sample was demonstrating the bug. The deck takes the one
+  line; `speak.html` takes the whole story, since it is what someone building a
+  read-aloud app will read: `audioSession.type`, lock-screen metadata with
+  artwork, play/pause handlers, and `playbackState` driven from the element's
+  own events so the transport row can't disagree with what is actually
+  playing. The on-device AI tutorial gains a "speaking it" step next to its
+  image one, and [`docs/ai-plugin.md`](docs/ai-plugin.md) tells a backend
+  author the same thing where they'll be reading.
+
+  Two measured anti-patterns are called out in both places, because both look
+  reasonable and neither works: don't stream synthesis into a player as it
+  arrives (on-device TTS runs ~2.5x *slower* than real time, so the buffer
+  underruns), and don't schedule audio from a timer (throttled to ~1 Hz in the
+  background — use the audio clock).
+
+  The README roadmap's **"Platform audio (capture / playback)"** item is
+  removed rather than marked done: measurement retired its premise. Every
+  engine already delivers raw 128-frame PCM into an `AudioWorklet` at 2.7–10 ms,
+  so there was no native plugin worth building — what was missing was policy,
+  and that shipped as three decisions about standard web APIs. The feature
+  matrix gains rows for `navigator.audioSession` and `navigator.mediaSession`
+  with a footnote covering all three, `setSinkId` included.
+
+- **An app that plays audio without declaring a policy is now told so**, at
+  runtime and by `swift-pwa doctor`.
+
+  This closes the gap the audio measurements opened rather than fixed. Setting
+  `navigator.audioSession.type` is one line, but *forgetting* it is invisible
+  on the machine the app is written on — the audio plays perfectly — and shows
+  up only when an iPhone user leaves the app and the sound stops. An adopter
+  who doesn't own an iPhone can't discover that, let alone report it, which is
+  exactly the shape of gap the project's stance exists to close.
+
+  Both checks fire on a *pairing* — audio actually sounding, policy absent —
+  because either half alone is noise. At runtime, the first media element that
+  plays or `AudioContext` that reaches `running` while the type is still `auto`
+  produces one `console.warn` naming the consequence and the remedy; an
+  `<audio>` element that never plays, an `OfflineAudioContext` rendering to a
+  buffer, and a type set in the same handler that starts the sound all stay
+  silent. `doctor` applies the same pairing to the project's `web/` sources and
+  reports it as advisory — never a build failure — naming the file it matched,
+  so the one unavoidable false positive (a bundled framework that merely
+  mentions `AudioContext`) is dismissed at a glance.
+
+  The Web Audio half observes by subclassing the `AudioContext` global, since
+  nothing fires when a context starts. Verified transparent on device and on
+  macOS: `AudioContext.name`, `instanceof`, the prototype chain and a page's
+  own `extends AudioContext` all behave unchanged. Verified on both engines
+  that it fires for Web Audio and for media elements, and stays silent once a
+  type is declared — on macOS reading back WebKit's **own** `audioSession`, not
+  the fill.
+
+- **`MediaMetadata.artwork` reaches the lock screen and the notification** on
+  Android, which completes the `navigator.mediaSession` fill.
+
+  The design decision worth recording is that **the page fetches its own
+  artwork and the bytes cross the bridge**, rather than the URL crossing and
+  the platform fetching. Handing Android a `src` would fail on the most common
+  case by far — cover art in the app's own bundle, which lives on a virtual
+  origin no other process on the device can resolve — and fail silently, since
+  a decode that finds nothing looks the same as a track with no art. Fetching
+  in the document also makes `blob:` and `data:` artwork work for free.
+
+  Two behaviours follow from that choice and are documented rather than
+  implied: the fill picks the artwork entry closest to **512 px** instead of
+  the first or the largest, so a page offering several `sizes` gets a sharp
+  cover without pushing a print-resolution master through the bridge; and art
+  over **4 MB** is skipped with a `console.warn` rather than resized, because
+  re-encoding a page's own image is a surprise. Metadata text publishes
+  immediately and the image follows, so downloading a cover never delays the
+  controls.
+
+  Device-verified on a Fold7 against the real controls: a page offering a 96 px
+  and a 512 px cover gets the 512 px one drawn in the media notification;
+  switching to a track with no artwork clears it rather than leaving the
+  previous cover under the new title; an artwork URL that 404s leaves the track
+  showing with a warning; and the notification's own pause button still reaches
+  the page's handler.
+
+### Fixed
+
+- **An app that depends on an ONNX-tier product builds without also setting
+  `ai.local_onnx_runtime`** (#215). The two used to be independent: the package
+  graph decided whether the runtime was *linked*, and `pwa.json` decided whether
+  the library was *staged* — so an app whose `Package.swift` named
+  `SwiftPWAQwenTTS` and whose manifest had no `ai` section failed at the link
+  step with an error that names no fix:
+
+  ```
+  ld.lld: error: unable to find library -lonnxruntime          # Android
+  lld-link: error: could not open 'onnxruntime.lib': ...       # Windows
+  ```
+
+  Both measured on real hardware. The package graph is the authority now:
+  depending on `SwiftPWAONNX`, `SwiftPWASegmentation`, `SwiftPWAImageEdit`,
+  `SwiftPWAStableDiffusion` or `SwiftPWAQwenTTS` brings the tier, and
+  `swift-pwa build` says so in one line. `ai.local_onnx_runtime` stays as the
+  explicit opt-in for an app that reaches the runtime some other way; it is no
+  longer something an adopter can forget.
+
+- **The Android ONNX Runtime links again under Swift 6.4.** Found while fixing
+  the above, and independent of it: the vendored `libonnxruntime.so` was handed
+  to the cross-compile on `LIBRARY_PATH`, and **Swift 6.4's `swiftbuild` engine
+  does not pass that variable through to the link task**. The same build that
+  fails `unable to find library -lonnxruntime` with the variable set succeeds
+  with `-Xlinker -L<dir>`, which is what the bundler passes now — still a build
+  flag rather than `unsafeFlags` in a manifest, which is what the env var was
+  avoiding. The desktop tiers (Linux `LIBRARY_PATH`, Windows `LIB`) use the same
+  mechanism and will need the same fix when those hosts move to 6.4; CI pins 6.2
+  and 6.3.1 there today.
+
+- **An app's own `@MainActor` code runs on Windows, Linux and Android.** It
+  never had, on any of the three, and the failure was silent: no error, no
+  timeout, nothing on stderr — the `await` simply never returned (#216).
+
+  Off Apple, `MainActor` is backed by libdispatch's main queue, and that queue
+  is drained by exactly one thing: `dispatch_main()`. `gtk_main()`,
+  `GetMessageW` and Android's `Looper` each own the main thread instead and
+  drain nothing. swift-pwa's own code routes around this with `MainThread.run`
+  and always has — the comment explaining why sits at the top of
+  `WindowsAppRuntime.swift` — but an **app's** code has no such routing, and
+  nothing at runtime said so. The reporting adopter had one `@MainActor` class
+  reached by three bridge commands; on Windows all three hung forever while
+  every nonisolated command on the same registry answered in milliseconds. The
+  app's gallery sat at "0 items" with no console error.
+
+  This is the shape an app written on macOS first will *have*: main-actor
+  isolation is what Swift's concurrency model steers you toward for state that
+  outlives a page navigation. So the fix is to make it work, not to document a
+  rule.
+
+  Each backend now waits on libdispatch's main-queue handle alongside its own
+  events and drains it when it signals — GTK3/GTK4 via `g_unix_fd_add` on the
+  default `GMainContext`, Windows by replacing `GetMessageW` with
+  `MsgWaitForMultipleObjectsEx` over the handle plus `QS_ALLINPUT`, Android by
+  adding the eventfd to the UI thread's native `ALooper`, which `Looper.loop()`
+  already polls. It is the same integration CoreFoundation performs on Linux
+  and Windows, and it fixes `DispatchQueue.main.async` for the same single
+  reason.
+
+  **The mechanism the issue proposed does not work, and that was measured
+  rather than assumed.** `swift_task_enqueueMainExecutor_hook` is exported by
+  every Linux toolchain this project supports (6.0.3, 6.2.0, 6.3.1) and a C
+  shim writes it successfully — the global reads back non-null — and it is
+  **never called**, on any of the three. A main-executor hook also could not
+  have fixed `DispatchQueue.main.async`, which an app is just as likely to use.
+
+  **The trap, for anyone touching this again:** on Linux and Android the handle
+  is a *level-triggered* eventfd, so a watch that only drains the queue spins —
+  2,900,705 loop iterations and 100% CPU in 2 s, measured. It has to be `read`
+  first, *before* draining, so work enqueued mid-drain re-signals instead of
+  being lost. Windows' handle is an auto-reset event and has no such failure
+  mode.
+
+  Verified by driving a scaffolded app — not an Example, which carries
+  fallbacks the scaffold never emits — through four commands: a `@MainActor`
+  class method, `MainActor.run`, `DispatchQueue.main.async`, and a nonisolated
+  control that must answer either way. Run in **both** directions on GTK3,
+  GTK4 and Windows: with the fix disabled the control answers in 2–3 ms and
+  the other three never reply at all; with it in place all four answer in
+  0–1 ms. `Scripts/verify-main-actor.sh` and
+  `Scripts/verify-windows-main-actor.ps1` are the repeatable form.
+
+  **Android is verified too**, on a Fold7 via
+  `Scripts/verify-android-main-actor.sh`: all four probes answer in 1–3 ms,
+  where before the fix the app's own main-actor code never returned. Getting a
+  device run at all first needed the three Android build fixes below.
+
+- **`SwiftPWACore` declares the `Crypto` dependency it has always used**, which
+  is what made `build --target android` ship an APK that crashed at launch on
+  Swift 6.4 (#217).
+
+  `URLSessionNetworkClient` hashes a download with SHA-256 — CryptoKit on
+  Apple, swift-crypto's `Crypto` everywhere else — and reached it through
+  `canImport(Crypto)`. That succeeds whenever *any* target in the build graph
+  has pulled the module in, so with a backend target declaring the edge the
+  code compiled, and the classic SwiftPM build system linked the whole package
+  as one so it ran too. The edge was simply missing from `Package.swift` for
+  years, invisibly.
+
+  Swift 6.4 makes `swiftbuild` the default engine, and it builds each product's
+  link list from the **declared** edges. The app's `LinkFileList` came out with
+  six objects and no `Crypto.o`. On Android that is silent twice over: the
+  product is linked `-shared`, where undefined symbols are legal, so the build
+  is green and the failure is `UnsatisfiedLinkError: cannot locate symbol
+  "$s6Crypto0A8KitErrorON"` on the device.
+
+  **Linux and Windows had the same defect** and had simply not reached 6.4 yet;
+  so had CI, which pins 6.2 / 6.3.1 and takes whatever Xcode the macOS runner
+  image ships.
+
+  Two guards, because one bug that stays quiet for years deserves better than a
+  fix. The Android build now links with **`-Xlinker --no-undefined`**, so a
+  missing edge fails the build instead of the app — verified by removing the
+  edge again and watching `ld.lld: error: undefined symbol` name the exact
+  symbol. And `ManifestDependencyDriftTests` compares every target's imports
+  against its declared dependencies straight from the manifest, which is the
+  half that runs in CI, where there is no Android SDK and no device.
+
+- **`build --target android` stages `libc++_shared.so` from the installed NDK**,
+  and refuses to build an APK without it.
+
+  Swift Android SDKs through 6.2 vendored an `ndk-sysroot/` inside the artifact
+  bundle, and that is where the bundler took it from. The 6.4 bundle doesn't
+  ship one — so the copy was silently skipped, the APK built and installed
+  perfectly, and the app died at `System.loadLibrary` with `UnsatisfiedLinkError:
+  dlopen failed: library "libc++_shared.so" not found`. Every Swift runtime `.so`
+  needs it, so there is no app for which skipping it is right; it now falls back
+  to the NDK the cross-compile is already using, and a miss is a hard error
+  naming every path it looked in.
+
+- **`build --target android` finds the matching toolchain again after the SDK
+  bundle was renamed.** It keyed off `swift-<v>-RELEASE-android-…`; from 6.4 the
+  bundle is `swift-6.4.0-RELEASE_android` — an underscore, no trailing revision,
+  and a patch component in the version. The auto-select matched nothing,
+  silently, so the cross-build ran under whatever `swift` was ambient (Xcode's,
+  which is a *different build* from the swift.org release of the same number and
+  cannot load the SDK's prebuilt modules) and failed with "module compiled with
+  Swift X cannot be imported". Both spellings are matched now, a `major.minor`
+  SDK also matches a `major.minor.patch` toolchain directory, and an Android
+  bundle whose name can't be parsed says so instead of saying nothing.
+
+- **`build --target android` uses the ambient toolchain when it already matches
+  the Swift Android SDK**, instead of insisting on swiftly.
+
+  The cross-compile has to run under the SDK's exact Swift release, and a repo
+  `.swift-version` can pin a different one, so it wrapped the inner build in
+  `swiftly run +<major.minor>`. That assumed swiftly could serve any release
+  the SDK named. It can't: when the matching toolchain is one swiftly doesn't
+  manage, `swiftly run` refuses outright — "the selected toolchain didn't match
+  any of the installed toolchains" — rather than falling back, and the build
+  fails with "could not produce a native library for the requested ABI". This
+  is the ordinary case right after an Xcode release, when Xcode's Swift is
+  ahead of everything swiftly has.
+
+  `swift --version` already reflects any `.swift-version` pinning, since that
+  is what swiftly's shim acts on — so reading it says which toolchain the build
+  would really use, and when that already matches the SDK there is nothing to
+  override.
+
+- **Android serves the web bundle at the origin root**, so a page's
+  root-absolute URLs resolve there the way they already did on the other four
+  backends (#212).
+
+  Android navigated to `https://swift-pwa.local/web/<entry>` and mapped
+  `/<path>` onto `assets/<path>`, which put the bundle one directory below the
+  origin. Every root-absolute URL a page contains therefore missed on Android
+  and nowhere else: `/styles/tokens.css`, `/js/app.js`, `import('/vendor/…')`,
+  `location.replace('/reader.html?id=…')`. The reporting adopter's app lost
+  eight resources on load and rendered as an unstyled shell, with
+  `Error opening asset path:` in logcat as the only clue.
+
+  The root cause is small and worth recording, because it looks like a
+  deliberate choice and wasn't: `AssetsPathHandler`'s public constructor takes
+  only a `Context` — there is no base-path argument — so the `web/` prefix had
+  to go somewhere, and it went into the URL. It belongs in a handler instead. A
+  `WebBundlePathHandler` now prefixes `web/` and delegates to the stock handler,
+  keeping its MIME guessing, its containment check and its not-found shape.
+
+  This is a **parity fix, not a new capability**: `docs/swift-api.md` and the
+  content-packs design doc already told adopters that an origin-relative URL
+  works unchanged on every backend, and `build.serve` mounts already did. The
+  bundle itself was the one thing that broke the rule, and relative URLs were a
+  workaround nothing else in swift-pwa asks for — with no spelling at all for a
+  `location.replace('/reader.html')` called from a nested route.
+
+  Device-verified on a Fold7: a root-absolute stylesheet, script, `fetch`,
+  dynamic `import` and `location.replace` all resolve; a missing asset still
+  404s honestly; a `build.serve` mount still serves ahead of the bundle; and
+  SPA history routing still loads the entry for `/library/shelf/42` — with that
+  entry's own root-absolute script resolving from the nested route, which is the
+  case relative URLs cannot express.
+
+[Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
+
 ## [0.10.7] - 2026-09-14
 
 ### Added

@@ -295,6 +295,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An app that depends on an ONNX-tier product builds without also setting
+  `ai.local_onnx_runtime`** (#215). The two used to be independent: the package
+  graph decided whether the runtime was *linked*, and `pwa.json` decided whether
+  the library was *staged* — so an app whose `Package.swift` named
+  `SwiftPWAQwenTTS` and whose manifest had no `ai` section failed at the link
+  step with an error that names no fix:
+
+  ```
+  ld.lld: error: unable to find library -lonnxruntime          # Android
+  lld-link: error: could not open 'onnxruntime.lib': ...       # Windows
+  ```
+
+  Both measured on real hardware. The package graph is the authority now:
+  depending on `SwiftPWAONNX`, `SwiftPWASegmentation`, `SwiftPWAImageEdit`,
+  `SwiftPWAStableDiffusion` or `SwiftPWAQwenTTS` brings the tier, and
+  `swift-pwa build` says so in one line. `ai.local_onnx_runtime` stays as the
+  explicit opt-in for an app that reaches the runtime some other way; it is no
+  longer something an adopter can forget.
+
+- **The Android ONNX Runtime links again under Swift 6.4.** Found while fixing
+  the above, and independent of it: the vendored `libonnxruntime.so` was handed
+  to the cross-compile on `LIBRARY_PATH`, and **Swift 6.4's `swiftbuild` engine
+  does not pass that variable through to the link task**. The same build that
+  fails `unable to find library -lonnxruntime` with the variable set succeeds
+  with `-Xlinker -L<dir>`, which is what the bundler passes now — still a build
+  flag rather than `unsafeFlags` in a manifest, which is what the env var was
+  avoiding. The desktop tiers (Linux `LIBRARY_PATH`, Windows `LIB`) use the same
+  mechanism and will need the same fix when those hosts move to 6.4; CI pins 6.2
+  and 6.3.1 there today.
+
 - **An app's own `@MainActor` code runs on Windows, Linux and Android.** It
   never had, on any of the three, and the failure was silent: no error, no
   timeout, nothing on stderr — the `await` simply never returned (#216).

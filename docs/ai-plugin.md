@@ -272,10 +272,11 @@ the backend side.
 > A page that wants to start playing sooner has to cut the text up and pipeline
 > the calls itself.
 >
-> **Opt in** with `ai.local_onnx_runtime: true` in `pwa.json` — and if you build
-> the package any way other than `swift-pwa build`, set `SWIFT_PWA_ONNXRUNTIME=1`
-> yourself, or the product isn't in the graph at all. See [Opting in to the ONNX
-> Runtime tier](#opting-in-to-the-onnx-runtime-tier).
+> **Depending on `SwiftPWAQwenTTS` is the opt-in** — `swift-pwa build` reads
+> your `Package.swift` and brings the ONNX Runtime tier with it. But if you
+> build the package any way other than `swift-pwa build`, set
+> `SWIFT_PWA_ONNXRUNTIME=1` yourself, or the product isn't in the graph at all.
+> See [Opting in to the ONNX Runtime tier](#opting-in-to-the-onnx-runtime-tier).
 >
 > **Speed.** Expect a real-time factor around **2.5** on an M-series Mac — i.e.
 > six seconds of speech takes ~15 seconds to synthesize — so this is
@@ -639,11 +640,29 @@ nobody who isn't using them should pay for. They appear when
 `SWIFT_PWA_ONNXRUNTIME` is set in the environment *as SwiftPM resolves the
 manifest*.
 
-`ai.local_onnx_runtime: true` in `pwa.json` is how you ask for that:
-`swift-pwa build` reads it and sets `SWIFT_PWA_ONNXRUNTIME=1` for the child
-`swift build` (and stages the native library into the bundle). **Any other way
-of building the package — plain `swift build`, `swift test`, `swift-pwa dev`,
-opening it in Xcode — doesn't go through the CLI, so you set it yourself:**
+**You usually don't have to ask for it.** `swift-pwa build` reads your
+`Package.swift`, and an app that depends on any of `SwiftPWAONNX`,
+`SwiftPWASegmentation`, `SwiftPWAImageEdit`, `SwiftPWAStableDiffusion` or
+`SwiftPWAQwenTTS` gets the tier: the linker is going to need the library
+whatever `pwa.json` says, so the build says so in one line and sets
+`SWIFT_PWA_ONNXRUNTIME=1` for the child `swift build` itself. `ai.local_onnx_runtime: true`
+in `pwa.json` is the explicit form, and still the way to ask for the tier when
+the graph can't show it.
+
+That is a fix, not a convenience (#215). The two used to be independent: an app
+whose `Package.swift` named `SwiftPWAQwenTTS` linked the runtime, and the
+bundler staged the library only if `pwa.json` said so — so the build failed at
+the *link* step with an error that names no fix, measured on both Android and
+Windows:
+
+```
+ld.lld: error: unable to find library -lonnxruntime
+lld-link: error: could not open 'onnxruntime.lib': no such file or directory
+```
+
+**Any other way of building the package — plain `swift build`, `swift test`,
+`swift-pwa dev`, opening it in Xcode — doesn't go through the CLI, so you set it
+yourself:**
 
 ```bash
 SWIFT_PWA_ONNXRUNTIME=1 swift build

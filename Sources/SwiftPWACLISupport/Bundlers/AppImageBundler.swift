@@ -141,13 +141,13 @@ struct AppImageBundler {
                 args += ["--library", libDir.appendingPathComponent(lib).path]
             }
             print("swift-pwa: bundling ONNX Runtime CUDA libs into the AppImage (ai.onnx_gpu)")
-        } else if manifest.ai?.localOnnxRuntime == true {
+        } else if OnnxRuntimeTier.isEnabled(manifest: manifest, projectRoot: projectRoot) {
             let libDir = try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
             // Deploy the SONAME'd file (`libonnxruntime.so.1`) — that's the
             // name the binary's NEEDED entry references, so linuxdeploy must
             // land it under exactly that filename in the AppDir's usr/lib.
             args += ["--library", libDir.appendingPathComponent("libonnxruntime.so.1").path]
-            print("swift-pwa: bundling libonnxruntime.so.1 into the AppImage (ai.local_onnx_runtime)")
+            print("swift-pwa: bundling libonnxruntime.so.1 into the AppImage (on-device ONNX Runtime tier)")
         }
         args += ["--output", "appimage"]
         // `linuxdeploy` and its plugins are themselves AppImages, and by default

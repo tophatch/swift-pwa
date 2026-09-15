@@ -174,6 +174,7 @@ struct AndroidBundler {
             urlSchemes: URLSchemeSupport.declared(manifest),
             networkConfigStaged: networkSecurityConfig != nil,
             webPermissions: manifest.permissions?.allDeclarations?.names ?? [],
+            extraPermissions: manifest.android?.permissions ?? [],
             minSdk: minSdk
         ).write(
             to: main.appendingPathComponent("AndroidManifest.xml"),
@@ -415,19 +416,26 @@ struct AndroidBundler {
                     projectRoot: projectRoot, triple: triple, toolchain: toolchainIdentity
                 )
 
-                // `ai.local_onnx_runtime` needs `libonnxruntime.so` on
-                // `LIBRARY_PATH` *for this ABI's* link step — resolved here
-                // (not in `Build.applyLocalOnnxRuntimeGate`) because each ABI
-                // in this loop needs a different `.so`, and setting a single
-                // process-wide env var up front can't vary per iteration.
-                // Reused below to stage the same `.so` into `jniLibs/<abi>/`.
-                var envOverrides: [String: String]?
+                // The ONNX Runtime tier needs `libonnxruntime.so` on the
+                // linker's search path *for this ABI's* link step — resolved
+                // here (not in `Build.applyLocalOnnxRuntimeGate`) because each
+                // ABI in this loop needs a different `.so`. Reused below to
+                // stage the same `.so` into `jniLibs/<abi>/`.
+                //
+                // Passed as `-Xlinker -L`, not on `LIBRARY_PATH`. The env var is
+                // what this used, and Swift 6.4's `swiftbuild` engine does not
+                // pass it through to the link task — measured: the same build
+                // that fails `ld.lld: error: unable to find library
+                // -lonnxruntime` with `LIBRARY_PATH` set succeeds with the flag.
+                // A build *flag* rather than `unsafeFlags` in the manifest, so
+                // dependency resolution is still unpoisoned, which was the
+                // original reason for the env var.
+                var linkerSearchArgs: [String] = []
                 var onnxLibDir: URL?
-                if manifest.ai?.localOnnxRuntime == true {
+                if OnnxRuntimeTier.isEnabled(manifest: manifest, projectRoot: projectRoot) {
                     let libDir = try await OnnxRuntimeAndroidArtifact.ensureLibDir(projectRoot: projectRoot, abi: abi)
                     onnxLibDir = libDir
-                    let existing = ProcessInfo.processInfo.environment["LIBRARY_PATH"]
-                    envOverrides = ["LIBRARY_PATH": existing.map { "\(libDir.path):\($0)" } ?? libDir.path]
+                    linkerSearchArgs = ["-Xlinker", "-L\(libDir.path)"]
                 }
 
                 try await Shell.run(
@@ -445,9 +453,9 @@ struct AndroidBundler {
                         // there is no legitimate undefined symbol here: make
                         // the linker say so, at build time, in the package
                         // whose manifest is wrong.
-                        + ["-Xlinker", "--no-undefined"],
-                    cwd: projectRoot,
-                    envOverrides: envOverrides
+                        + ["-Xlinker", "--no-undefined"]
+                        + linkerSearchArgs,
+                    cwd: projectRoot
                 )
                 // SwiftPM's executable target names its output `<Name>`
                 // (no `lib` prefix, no `.so` suffix) even when the
@@ -495,12 +503,11 @@ struct AndroidBundler {
                 try await stageSwiftRuntime(
                     into: abiDir, abi: abi, sdkBundleId: sdk, appSO: stagedAppSO
                 )
-                // `ai.local_onnx_runtime`: stage the same `libonnxruntime.so`
-                // that just satisfied the link step above alongside the app's
-                // `.so`, or the APK crashes at launch with
-                // `UnsatisfiedLinkError: libonnxruntime.so not found` — this
-                // is the vendored native lib `SwiftPWASegmentation` calls the
-                // ONNX Runtime C API through directly (no JNI glue).
+                // Stage the same `libonnxruntime.so` that just satisfied the
+                // link step above alongside the app's `.so`, or the APK crashes
+                // at launch with `UnsatisfiedLinkError: libonnxruntime.so not
+                // found` — this is the vendored native lib the ONNX-tier
+                // backends call the C API through directly (no JNI glue).
                 if let onnxLibDir {
                     let src = onnxLibDir.appendingPathComponent("libonnxruntime.so")
                     let dst = abiDir.appendingPathComponent("libonnxruntime.so")

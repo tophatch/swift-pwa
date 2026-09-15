@@ -720,16 +720,24 @@ struct Build: AsyncParsableCommand {
     /// - **Android** — no per-arch work happens here, because Android
     ///   cross-compiles multiple ABIs in one build and each needs its own
     ///   `libonnxruntime.so` on `LIBRARY_PATH` for that ABI's link step
-    ///   alone. `AndroidBundler.stageJniLibs` reads this same
-    ///   `manifest.ai?.localOnnxRuntime` flag directly and resolves +
-    ///   stages the `.so` per ABI via `OnnxRuntimeAndroidArtifact` inside
-    ///   its cross-compile loop.
+    ///   alone. `AndroidBundler.stageJniLibs` asks ``OnnxRuntimeTier`` the
+    ///   same question directly and resolves + stages the `.so` per ABI via
+    ///   `OnnxRuntimeAndroidArtifact` inside its cross-compile loop.
     static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
         // `ai.onnx_gpu` (desktop GPU execution providers — DirectML on Windows,
         // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md)
-        // implies the ONNX Runtime tier, so either flag enables it.
+        // implies the ONNX Runtime tier, so either flag enables it — and so
+        // does depending on one of the tier's products, which is what actually
+        // makes the linker need the library. See ``OnnxRuntimeTier``.
         let onnxGpu = manifest.ai?.onnxGpu == true
-        guard manifest.ai?.localOnnxRuntime == true || onnxGpu else { return }
+        guard let reason = OnnxRuntimeTier.reason(manifest: manifest, projectRoot: projectRoot) else { return }
+        if case let .packageDependency(product) = reason {
+            print("""
+            swift-pwa: Package.swift depends on \(product), which links the on-device ONNX Runtime — \
+            enabling that tier for this build (the same thing pwa.json's ai.local_onnx_runtime does). \
+            Without it the link fails on a missing onnxruntime library, which names no fix.
+            """)
+        }
         switch target {
         case .macos, .ios:
             #if !os(Windows)

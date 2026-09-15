@@ -560,7 +560,7 @@ Only **unary** commands whose arguments are a struct (or nothing) can be tools;
 
 ## Concurrency model
 
-Two non-obvious points worth pinning:
+Three non-obvious points worth pinning:
 
 1. **`CommandRegistry` is a class with `NSLock`-guarded state, not an
    actor.** Registration is *synchronous* on purpose so user
@@ -571,12 +571,18 @@ Two non-obvious points worth pinning:
    for hopping to the platform UI thread internally via
    `MainThread.run`, which routes through a per-backend dispatch hook
    installed at startup (`DispatchQueue.main` on Apple, `g_idle_add`
-   on GTK, a hidden `HWND_MESSAGE` window on Windows). Use this rather
-   than `await MainActor.run` in any code path that may execute under
-   `gtk_main()` or a Win32 message pump — the libdispatch main queue
-   isn't drained by either, and a `Task { @MainActor in ... }` will
-   never fire.
+   on GTK, a hidden `HWND_MESSAGE` window on Windows, a `Handler` post
+   on Android).
+3. **Your own `@MainActor` code works on every platform.** Off Apple,
+   `MainActor` is backed by libdispatch's main queue, and `gtk_main()`,
+   `GetMessageW` and Android's `Looper` each own the main thread and
+   drain nothing — so through v0.10.7 a command handler that touched a
+   `@MainActor` class never returned, with no error and nothing on
+   stderr (#216). Every backend now waits on libdispatch's main-queue
+   handle alongside its own events and drains it when it signals
+   (`PlatformMainQueue`), which also fixes `DispatchQueue.main.async`.
 
-These are the same tripwires `Examples/HelloPWA` is built against; if
-you find yourself fighting a "the call hangs" symptom, the answer is
-almost always to route through `MainThread.run`.
+Prefer `MainThread.run` for work that touches a *window*: it is one hop
+rather than two, and it still delivers in the contexts where nothing is
+draining the main queue — a headless `agent.expose` catalog dump, a unit
+test. These are the same tripwires `Examples/HelloPWA` is built against.

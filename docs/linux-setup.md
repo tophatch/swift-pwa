@@ -777,16 +777,28 @@ If the output is empty, your dev package install is broken. Reinstall.
 
 ## Threading model on Linux
 
-Worth knowing if you read the source: Swift's `MainActor` executor on
-Linux is libdispatch's main queue, which neither `gtk_main()` (GTK3)
-nor a bare `g_main_loop_run` (GTK4) pumps. That means
-`await MainActor.run { … }` from a cooperative-pool task hangs forever
-once the GTK loop is running. swift-pwa works around this with a
-[`MainThread.run`](../Sources/SwiftPWACore/MainThread.swift) abstraction
-whose hook both GTK runtimes point at `g_idle_add`. If you write your
-own commands that need to touch GTK from a non-main thread, use
-`MainThread.run` rather than `MainActor.run` and you'll avoid the
-deadlock.
+Swift's `MainActor` executor on Linux is libdispatch's main queue, and
+neither `gtk_main()` (GTK3) nor a bare `g_main_loop_run` (GTK4) drains
+it. Through v0.10.7 that meant `await MainActor.run { … }` from a
+cooperative-pool task — or a method on your own `@MainActor` class —
+**hung forever** once the GTK loop was running, with no error and
+nothing on stderr (#216).
+
+Both GTK runtimes now watch libdispatch's main-queue handle on the
+default `GMainContext` and drain it when it signals, which is the same
+integration CoreFoundation performs. So your own `@MainActor` code
+works, and so does `DispatchQueue.main.async`. Nothing to opt into.
+
+swift-pwa's own UI work still routes through
+[`MainThread.run`](../Sources/SwiftPWACore/MainThread.swift), whose hook
+both GTK runtimes point at `g_idle_add` — it is one hop rather than two
+and it keeps working in contexts where nothing is draining the main
+queue (a headless `agent.expose` catalog dump, a unit test). Either is
+correct in your own commands now; prefer `MainThread.run` when the work
+must touch GTK.
+
+`Scripts/verify-main-actor.sh` drives a scaffolded app through all four
+shapes on a real box; run it after touching the GTK run loop.
 
 ### `swift test` occasionally hangs at exit on Linux
 

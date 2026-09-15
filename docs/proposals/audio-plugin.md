@@ -242,13 +242,18 @@ WebKitGTK even publishes the page's metadata onto MPRIS
 
 Both bugs it turned up failed *silently*, and neither is specific to audio:
 
-- **A `Task {}` in a `@MainActor` function never runs on Android.** It inherits
-  the isolation, and Android's main thread runs a Java looper that never drains
-  libdispatch's main queue — so the task is created and never scheduled. The OS
+- **A `Task {}` in a `@MainActor` function never ran on Android.** It inherits
+  the isolation, and Android's main thread runs a Java looper that never drained
+  libdispatch's main queue — so the task was created and never scheduled. The OS
   delivered the action, Kotlin forwarded it, Swift yielded it, and nothing was
-  at the other end. This is the same hazard that keeps `BridgeRuntime` off the
-  MainActor (see CLAUDE.md's concurrency notes); `Task.detached` is the fix, and
-  anything else pumping an `AsyncStream` from a plugin's `register` has it too.
+  at the other end. `Task.detached` was the fix here, and anything else pumping
+  an `AsyncStream` from a plugin's `register` had it too.
+
+  This turned out to be **one instance of #216**, which an adopter hit from the
+  other direction on Windows: the whole main actor was unreachable off Apple,
+  not just from a plugin. Every backend now drains libdispatch's main queue from
+  its own event loop (`PlatformMainQueue`), so the hazard is gone — but the
+  `Task.detached` spellings are left in place, since they were never wrong.
 - **A notification with an unusable small icon is refused, and `notify()` logs
   the exception rather than throwing it.** An app that sets no icon in
   `pwa.json` has an `applicationInfo.icon` that isn't a valid small icon, so the

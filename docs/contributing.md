@@ -149,8 +149,12 @@ These are enforced by review (and mostly by CI). Full rationale in
   items move to the CHANGELOG.
 - **Strict concurrency (Swift 6 tools).** Don't add
   `enableUpcomingFeature("StrictConcurrency")` — under Swift 6 on Linux it's an
-  error, not a warning. Use `MainThread.run` (not `await MainActor.run`) on any
-  path that may run under `gtk_main` on Linux.
+  error, not a warning. Inside swift-pwa, prefer `MainThread.run` over
+  `await MainActor.run` on any path that may run under `gtk_main`, a Win32
+  pump or Android's `Looper` — it is one hop rather than two, and it still
+  delivers where nothing drains libdispatch's main queue (a headless
+  `agent.expose` catalog dump, a unit test). `MainActor` itself does work in
+  an app now; see `PlatformMainQueue`.
 - **Merge commits, titled `Merge: <summary>`.** PRs merge (not squash) with that
   subject convention.
 

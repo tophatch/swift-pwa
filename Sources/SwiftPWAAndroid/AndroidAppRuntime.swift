@@ -115,6 +115,13 @@
                 swiftPWALog(message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message)
             }
 
+            // After the sink, so a failure to install the watch reaches logcat
+            // rather than the discarded stderr — the whole point of the change
+            // is that this failure mode is otherwise invisible. Before
+            // `configure`, so the app's own main-actor work is already served
+            // by the time its first command can run.
+            attachMainQueueToLooper()
+
             // Also before `configure`: the WebView is already live by the time
             // this thread starts, so a page that asks for the camera on load
             // must find someone listening.
@@ -185,6 +192,39 @@
                 let box = Unmanaged.passRetained(MainBox(body)).toOpaque()
                 swiftpwa_android_post_main(box)
             }
+        }
+
+        /// Let an app's own `@MainActor` code run: watch libdispatch's
+        /// main-queue eventfd from the UI thread's `Looper`.
+        ///
+        /// ``installMainThreadHook()`` covers *swift-pwa's* UI work. This
+        /// covers the app's, which swift-pwa never sees: off Apple,
+        /// `MainActor` is backed by libdispatch's main queue, the UI thread
+        /// belongs to the JVM's `Looper` and drains nothing, so an adopting
+        /// app's `await MainActor.run { … }` never returns — silently (#216).
+        ///
+        /// The watch has to be installed *on* the UI thread, because
+        /// `ALooper_forThread` returns the caller's loop, and `run` executes
+        /// on the worker thread the Activity spawned. So it rides the same
+        /// `Handler` hop `MainThread.run` uses, posted after the runner is
+        /// registered above.
+        private func attachMainQueueToLooper() {
+            guard let fd = PlatformMainQueue.handle else {
+                RuntimeDiagnostics.emit(
+                    "swift-pwa: libdispatch has no main-queue handle; the app's own "
+                        + "@MainActor code will not run (see docs/android-setup.md)."
+                )
+                return
+            }
+            let box = Unmanaged.passRetained(MainBox {
+                if swiftpwa_android_watch_main_queue(fd, { PlatformMainQueue.drain() }) != 1 {
+                    RuntimeDiagnostics.emit(
+                        "swift-pwa: could not watch libdispatch's main queue on the UI "
+                            + "thread's Looper; the app's own @MainActor code will not run."
+                    )
+                }
+            }).toOpaque()
+            swiftpwa_android_post_main(box)
         }
     }
 

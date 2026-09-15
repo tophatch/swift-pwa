@@ -226,6 +226,24 @@ void swiftpwa_android_post_main(void *box);
 void swiftpwa_android_run_main_box(void *box);
 
 // ---------------------------------------------------------------------
+// libdispatch's main queue, watched by Android's UI-thread Looper.
+//
+// `MainThread.run` above covers swift-pwa's own UI work. This covers the
+// *app's*: off Apple, `MainActor` is backed by libdispatch's main queue,
+// nothing drains it here (the UI thread belongs to the JVM's Looper), and an
+// adopting app's `await MainActor.run { ... }` therefore never returns (#216).
+// The Java main loop polls the thread's native `ALooper`, so an fd added to it
+// is serviced by `Looper.loop()` itself.
+// ---------------------------------------------------------------------
+
+typedef void (*swiftpwa_android_drain_fn)(void);
+
+// Watch `fd` for readability on the *calling thread's* `ALooper` and invoke
+// `drain` whenever it signals. Must be called on the Android UI thread, since
+// `ALooper_forThread` returns the caller's loop. Returns 1 if installed.
+int swiftpwa_android_watch_main_queue(int fd, swiftpwa_android_drain_fn drain);
+
+// ---------------------------------------------------------------------
 // Navigation policy.
 // ---------------------------------------------------------------------
 

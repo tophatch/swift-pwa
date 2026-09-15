@@ -534,6 +534,22 @@ ways. These shape the public API surface and what to expect:
 - **`MainThread.run` hops through `Handler(Looper.getMainLooper()).post`.**
   Same shape as Windows' message-only dispatcher window and GTK's
   `g_idle_add` — defined in `AndroidAppRuntime.installMainThreadHook`.
+- **Your own `@MainActor` code works.** `MainActor` here is backed by
+  libdispatch's main queue, and nothing drained it: the UI thread
+  belongs to the JVM's `Looper`. So a command handler that touched a
+  `@MainActor` class simply never returned — no error, no timeout, and
+  Android discards stderr, so not even a diagnostic (#216). The runtime
+  now adds libdispatch's main-queue eventfd to the UI thread's native
+  `ALooper`, which `Looper.loop()` already polls, and drains it when it
+  signals; `DispatchQueue.main.async` works for the same reason. The
+  `@_cdecl` entry point in your app still has to call
+  `AndroidAppRuntime().run(configure)` directly rather than through
+  `SwiftPWA.runtime()`, because it runs on the *worker* thread the
+  Activity spawned and the protocol's `@MainActor` witness would want a
+  hop before the watch exists. `Scripts/verify-android-main-actor.sh`
+  is the device check for all of this; it has not yet been run green,
+  because the APK build itself is blocked on the Swift 6.4 SwiftPM
+  build-engine change.
 - **Multi-window via Activity-per-window.** The first
   `context.createWindow(...)` call binds to the foreground Activity
   the JNI runtime entry-point already owns. Subsequent calls

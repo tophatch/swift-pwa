@@ -210,6 +210,65 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An app's own `@MainActor` code runs on Windows, Linux and Android.** It
+  never had, on any of the three, and the failure was silent: no error, no
+  timeout, nothing on stderr — the `await` simply never returned (#216).
+
+  Off Apple, `MainActor` is backed by libdispatch's main queue, and that queue
+  is drained by exactly one thing: `dispatch_main()`. `gtk_main()`,
+  `GetMessageW` and Android's `Looper` each own the main thread instead and
+  drain nothing. swift-pwa's own code routes around this with `MainThread.run`
+  and always has — the comment explaining why sits at the top of
+  `WindowsAppRuntime.swift` — but an **app's** code has no such routing, and
+  nothing at runtime said so. The reporting adopter had one `@MainActor` class
+  reached by three bridge commands; on Windows all three hung forever while
+  every nonisolated command on the same registry answered in milliseconds. The
+  app's gallery sat at "0 items" with no console error.
+
+  This is the shape an app written on macOS first will *have*: main-actor
+  isolation is what Swift's concurrency model steers you toward for state that
+  outlives a page navigation. So the fix is to make it work, not to document a
+  rule.
+
+  Each backend now waits on libdispatch's main-queue handle alongside its own
+  events and drains it when it signals — GTK3/GTK4 via `g_unix_fd_add` on the
+  default `GMainContext`, Windows by replacing `GetMessageW` with
+  `MsgWaitForMultipleObjectsEx` over the handle plus `QS_ALLINPUT`, Android by
+  adding the eventfd to the UI thread's native `ALooper`, which `Looper.loop()`
+  already polls. It is the same integration CoreFoundation performs on Linux
+  and Windows, and it fixes `DispatchQueue.main.async` for the same single
+  reason.
+
+  **The mechanism the issue proposed does not work, and that was measured
+  rather than assumed.** `swift_task_enqueueMainExecutor_hook` is exported by
+  every Linux toolchain this project supports (6.0.3, 6.2.0, 6.3.1) and a C
+  shim writes it successfully — the global reads back non-null — and it is
+  **never called**, on any of the three. A main-executor hook also could not
+  have fixed `DispatchQueue.main.async`, which an app is just as likely to use.
+
+  **The trap, for anyone touching this again:** on Linux and Android the handle
+  is a *level-triggered* eventfd, so a watch that only drains the queue spins —
+  2,900,705 loop iterations and 100% CPU in 2 s, measured. It has to be `read`
+  first, *before* draining, so work enqueued mid-drain re-signals instead of
+  being lost. Windows' handle is an auto-reset event and has no such failure
+  mode.
+
+  Verified by driving a scaffolded app — not an Example, which carries
+  fallbacks the scaffold never emits — through four commands: a `@MainActor`
+  class method, `MainActor.run`, `DispatchQueue.main.async`, and a nonisolated
+  control that must answer either way. Run in **both** directions on GTK3,
+  GTK4 and Windows: with the fix disabled the control answers in 2–3 ms and
+  the other three never reply at all; with it in place all four answer in
+  0–1 ms. `Scripts/verify-main-actor.sh` and
+  `Scripts/verify-windows-main-actor.ps1` are the repeatable form.
+
+  **Android's half is implemented and cross-compiles, but is not yet verified
+  on a device.** `Scripts/verify-android-main-actor.sh` is written and runs;
+  what stops it is unrelated to this change — Swift 6.4 makes `swiftbuild` the
+  default SwiftPM engine, whose output layout the Android bundler doesn't
+  understand, so the APK it assembles is missing libraries and dies at
+  `System.loadLibrary`. That migration is tracked separately.
+
 - **Android serves the web bundle at the origin root**, so a page's
   root-absolute URLs resolve there the way they already did on the other four
   backends (#212).

@@ -33,6 +33,8 @@
 
 #include <jni.h>
 #include <android/log.h>
+// `ALooper_addFd`: the UI thread's native loop, which `Looper.loop()` polls.
+#include <android/looper.h>
 #include <pthread.h>
 
 #define LOG_TAG "swift-pwa"
@@ -671,6 +673,31 @@ void swiftpwa_android_run_main_box(void *box) {
     if (g_main_fn) g_main_fn(box);
 }
 
+// ---------------------------------------------------------------------
+// libdispatch main queue -> the UI thread's Looper
+// ---------------------------------------------------------------------
+
+static swiftpwa_android_drain_fn g_drain_fn = NULL;
+
+static int main_queue_ready(int fd, int events, void *data) {
+    (void)fd;
+    (void)events;
+    (void)data;
+    // The Swift side reads the eventfd before draining: epoll here is
+    // level-triggered, so a watch that only drained would re-fire forever.
+    if (g_drain_fn) g_drain_fn();
+    return 1; // keep the watch
+}
+
+int swiftpwa_android_watch_main_queue(int fd, swiftpwa_android_drain_fn drain) {
+    if (fd < 0 || !drain) return 0;
+    ALooper *looper = ALooper_forThread();
+    if (!looper) return 0;
+    g_drain_fn = drain;
+    // ident is ignored when a callback is supplied.
+    return ALooper_addFd(looper, fd, 0, ALOOPER_EVENT_INPUT, main_queue_ready, NULL) == 1;
+}
+
 // JNI entry: Kotlin's `Runnable.run()` JNI-calls into here.
 JNIEXPORT void JNICALL
 Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeRunMain(JNIEnv *env,
@@ -767,6 +794,10 @@ void swiftpwa_android_rpc(const char *m, const char *a, swiftpwa_android_rpc_don
 void swiftpwa_android_set_main_runner(swiftpwa_android_main_fn r) { (void)r; }
 void swiftpwa_android_post_main(void *b) { (void)b; }
 void swiftpwa_android_run_main_box(void *b) { (void)b; }
+int  swiftpwa_android_watch_main_queue(int f, swiftpwa_android_drain_fn d) {
+    (void)f; (void)d;
+    return 0;
+}
 void swiftpwa_android_set_quit_handler(swiftpwa_android_quit_fn h, void *u) { (void)h; (void)u; }
 void swiftpwa_android_dispatch_quit(int c) { (void)c; }
 void swiftpwa_android_set_host_event_handler(swiftpwa_android_host_event_fn h, void *u) {

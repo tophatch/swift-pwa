@@ -101,8 +101,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the OS), and the notification needs `POST_NOTIFICATIONS` granted — media keys
   work without it.
 
-  **Still to come:** `setSinkId` (absent on Android and Linux), the last of the
-  three gaps the measurement found.
+- **`setSinkId` is deliberately not filled**, which completes the audio work by
+  deciding against it rather than building it. It's absent from WebKitGTK and
+  Android's WebView, and an earlier draft treated that as our gap to close.
+
+  It isn't, and the reason is the API's shape: `setSinkId` is a method on an
+  `HTMLMediaElement`, so a page may route one element to the speakers and
+  another to a headset. Everything a shell can reach is per-*process* — on Linux
+  PipeWire can move a stream between sinks, but the node is the whole
+  `WebKitWebProcess`; on Android there is no route-another-process's-media API
+  at all. Two elements with different sinks can't both be honoured, and the
+  failure would be silent.
+
+  Unlike `audioSession`, an inert fill would be actively harmful here. A
+  recorded-but-inert session type costs nothing, because what it buys on a phone
+  is already true on desktop; a recorded-but-inert `setSinkId` would tell a page
+  its audio had been routed when it hadn't — and `'setSinkId' in element` is
+  exactly how a page decides whether to show a device picker. Absent, an app
+  hides a picker it can't honour; filled, it shows one that lies.
+
+  The line between the two cases: **fill a web API when a no-op is harmless and
+  the outcome is already true; leave it absent when a no-op would make the page
+  believe something false.**
 
 [Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
 

@@ -1,5 +1,10 @@
 # Proposal: platform audio — fill three web APIs, don't build a plugin
 
+> **Status: all three gaps are resolved** — two by building, one by deciding
+> not to. `setSinkId` is deliberately **not** filled (see gap 3): its contract
+> is per-element and anything a shell can do is per-process, so a fill would lie
+> rather than merely under-deliver.
+>
 > **Status: two of the three gaps are closed.** `navigator.mediaSession` is
 > filled and device-verified on Android — the only engine that lacked it — over
 > a platform `MediaSession` plus a transport notification. `setSinkId` (absent
@@ -256,10 +261,36 @@ must be measured **after** one. Measured before, every platform reports zero
 outputs and the uniform answer looks like a finding — an earlier draft of this
 document said exactly that, and it was wrong.
 
-`setSinkId` is simply absent from WebKitGTK and Android's WebView. Both
-platforms have the stack underneath (PipeWire/PulseAudio sinks;
-`AudioManager` / `setCommunicationDevice`) — "we haven't", not "the platform
-can't".
+`setSinkId` is simply absent from WebKitGTK and Android's WebView.
+
+**Decision: don't fill this one** — which reverses this section's first draft,
+where it read as "we haven't, not the platform can't". The reason is in the
+API's shape rather than in either platform:
+
+**`setSinkId` is per-element.** It is a method on an `HTMLMediaElement` (and on
+an `AudioContext`), so a page may legitimately route one element to the speakers
+and another to a headset. Everything a *shell* can reach is per-process: on
+Linux, PipeWire can move a stream between sinks — that is what `pavucontrol`
+does — but the node is the whole `WebKitWebProcess`; and on Android there is no
+route-another-process's-media API at all (`setCommunicationDevice` is
+communication-only, and `AudioTrack.setPreferredDevice` belongs to whoever
+created the track, i.e. the WebView). The contract is therefore
+unrepresentable: two elements with different sinks cannot both be honoured, and
+the failure would be silent.
+
+**And unlike `audioSession`, an inert fill here would be actively harmful.** A
+recorded-but-inert session type costs nothing, because the behaviour it buys on
+a phone is already true on desktop. A recorded-but-inert `setSinkId` would tell
+a page its audio had been routed when it had not — and `'setSinkId' in element`
+is precisely how a page decides whether to offer the user a device picker. Left
+absent, an app hides a picker it cannot honour; filled, it shows one that lies.
+
+**So absence is the honest interface here, and that is the line between the two
+cases:** fill a web API when a no-op is harmless and the outcome is already
+true; leave it absent when a no-op would make the page believe something false.
+
+Linux would additionally need PipeWire client integration, or shelling out to
+`wpctl` — a dependency, for an API still implemented incorrectly.
 
 ## What to build
 

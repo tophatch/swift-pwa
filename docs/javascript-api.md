@@ -675,6 +675,35 @@ Two Android notes:
 - **Artwork isn't published yet.** `MediaMetadata.artwork` round-trips in JS so
   your code reads back what it set, but the OS shows title and artist only.
 
+### `setSinkId` — choosing an output device, and where it isn't offered
+
+`HTMLMediaElement.setSinkId()` routes one element's audio to a chosen output.
+
+| | |
+| --- | --- |
+| macOS, iOS, Windows | supported by the engine — after a media permission grant, `enumerateDevices()` lists outputs with real ids and `setSinkId` accepts them |
+| Linux (GTK3/GTK4), Android | **absent, and deliberately not filled** |
+
+Feature-detect it and hide your device picker when it's missing:
+
+```js
+if ('setSinkId' in audioEl) { /* offer the user an output picker */ }
+```
+
+**Why it isn't filled** where the engine lacks it, when `audioSession` and
+`mediaSession` are: `setSinkId` is per-*element*, so a page may legitimately
+send one element to the speakers and another to a headset. Anything the native
+shell can do is per-*process* — it would route all of the webview's audio or
+none — so a fill couldn't honour the contract, and would fail silently when a
+page used two elements. Since `'setSinkId' in element` is how you decide whether
+to show a picker at all, a fill would make apps offer a control that lies.
+Absent is the honest answer.
+
+**Note on measuring this yourself:** device labels and ids are gated behind a
+media permission grant on every engine. Call `enumerateDevices()` before
+`getUserMedia` has been granted and every platform reports zero outputs — which
+looks like a finding and isn't.
+
 ## Opt-in plugins (require `ctx.use(...)` on the Swift side)
 
 ### `dialog.*`

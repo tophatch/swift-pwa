@@ -1,9 +1,11 @@
 # Proposal: platform audio — fill three web APIs, don't build a plugin
 
-> **Status: partly built.** `navigator.audioSession` is filled and
-> device-verified on **Android** (see `CHANGELOG.md` `[Unreleased]`); Linux and
-> Windows remain, and are the reason this isn't releasable yet. The rest of the
-> document is the measurement pass it came from.
+> **Status: `navigator.audioSession` is built on all five** (see `CHANGELOG.md`
+> `[Unreleased]`) — the engine's own on Apple, a real fill over `AudioManager`
+> focus on Android, and a recorded-but-inert one on Linux and Windows, where
+> **the platform has nothing an embedder can drive** (see below). The other two
+> gaps — `mediaSession` on Android, `setSinkId` on Android and Linux — remain.
+> The rest of the document is the measurement pass it came from.
 >
 > **Status: proposed**, after a five-platform measurement pass. The README
 > roadmap has "Platform audio (capture / playback)" at #3, described as
@@ -157,6 +159,29 @@ The standards-track way to say "this is playback" / "this is a game, duck the
 music" / "this is transient". On Apple it exists and every type is accepted.
 Nowhere else. This is what use cases 1 and 3 need to behave correctly against
 other audio on the device, and what use case 4 needs on iOS.
+
+#### What building it settled
+
+**Desktop has no audio session to drive, and that is a platform fact.** The
+proposal assumed Linux would map to PipeWire/PulseAudio stream roles and
+Windows to "the Windows session APIs". Measured, both are unreachable from the
+shell:
+
+- The playing stream belongs to the **webview's own process** —
+  `application.process.binary: WebKitWebProcess` in `pw-dump` on Linux, three
+  `msedgewebview2.exe` processes on Windows — and both platforms set audio
+  policy *per stream, by its creator*. There is no app-level focus to take.
+- WebKit already tags its Linux stream `media.role: Music`, and a stock
+  GNOME/PipeWire session loads **no** role-ducking or role-cork module, so the
+  role is inert regardless of who sets it.
+- Android is the exception, and the reason the fill works there at all: its
+  focus is per-**uid**, so the shell can hold it on the webview's behalf.
+
+The cost is small, which is why a uniform API is still the right answer: the
+behaviours the type buys — background continuation, not being frozen — were
+measured to be *already true* on desktop. So Linux and Windows get the same API
+with a documented null effect, rather than a feature-detect an adopter has to
+write.
 
 #### What building the Android fill settled
 

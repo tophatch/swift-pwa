@@ -26,6 +26,12 @@
             use(SystemPlugin(urlOpener: GTKURLOpener()))
             use(AppPlugin())
             use(EventsPlugin())
+            // Backs the `navigator.audioSession` polyfill. Records the type and
+            // reports it; it drives no platform mechanism, because this one has
+            // none an embedder can reach — the playing stream belongs to the
+            // webview's own process, and session policy here is set per stream
+            // by its creator. See `RecordingAudioSession` for the measurements.
+            use(AudioSessionPlugin(RecordingAudioSession()))
             use(ClipboardPlugin(SystemClipboard()))
         }
 

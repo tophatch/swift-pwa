@@ -50,10 +50,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   asked for, so an OS that coerces or refuses a type can't leave a page
   believing it has background audio it doesn't have.
 
-  **Still to come before release:** the same fill on Linux (both GTK backends)
-  and Windows, which also lack the API. Apple needs nothing — it has the real
-  one. `navigator.mediaSession` (absent on Android) and `setSinkId` (absent on
-  Android and Linux) are the other two gaps the measurement found.
+  **On Linux and Windows the fill records the type and drives nothing**, and
+  that is a platform limit rather than an omission: the playing stream belongs
+  to the *webview's own process* (`WebKitWebProcess`, `msedgewebview2.exe`) and
+  both platforms set audio policy per-stream, by the stream's creator — so the
+  shell has nothing to set. Android is the exception that makes a real fill
+  possible there, because its focus is per-app. Measured rather than assumed,
+  including that a stock GNOME/PipeWire session loads no role-ducking module at
+  all, so the one knob that *is* settable is inert anyway. It costs little:
+  desktop audio was measured to keep playing when the window is minimized, so
+  the behaviour the type buys on a phone is already true there.
+
+  The page-visible API is identical on all five, verified on each: present on
+  `Navigator.prototype`, invalid values ignored, `type` and `state` reading back
+  the same way.
+
+  **Still to come:** `navigator.mediaSession` (absent on Android) and
+  `setSinkId` (absent on Android and Linux) — the other two gaps the
+  measurement found.
 
 [Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
 

@@ -614,11 +614,27 @@ throttled hard when a window isn't visible — measured at 2 Hz on macOS and
 `AudioBufferSourceNode.start(when)` keep perfect time. Chunks of a second or
 more, scheduled ahead, ride through it.
 
-| | `navigator.audioSession` |
-| --- | --- |
-| macOS, iOS | the engine's own implementation |
-| Android | filled, over `AudioManager` audio focus |
-| Linux (GTK3/GTK4), Windows | **not yet filled** — assignment is accepted and logs a warning |
+**Where it changes what the OS does.** The API is the same on all five — set
+it once, never branch — but what the platform does with it is not:
+
+| | `navigator.audioSession` | effect |
+| --- | --- | --- |
+| macOS, iOS | the engine's own implementation | full — including the background behaviour above |
+| Android | filled, over `AudioManager` audio focus | full — `playback` stops other audio, `ambient` leaves it playing |
+| Linux (GTK3/GTK4), Windows | filled, recorded and reported | **none** — see below |
+
+On Linux and Windows the type is recorded and reads back, but drives nothing,
+because there is nothing for an app to drive: the playing stream belongs to the
+*webview's own process* (`WebKitWebProcess`, `msedgewebview2.exe`), and both
+platforms set audio policy per-stream by whoever created the stream. Android is
+the exception that makes the fill possible there — its audio focus is per-app,
+so the shell can hold focus on the webview's behalf.
+
+That costs you less than it sounds. The problems the type exists to solve —
+audio stopping in the background, the page being frozen — are measured *not to
+happen* on desktop: a minimized GTK3, GTK4 or WebView2 window keeps its audio
+clock and its media element running. Set the type anyway, so the one line keeps
+working when the user runs your app on a phone.
 
 ## Opt-in plugins (require `ctx.use(...)` on the Swift side)
 

@@ -176,3 +176,45 @@ struct AudioSessionPolyfillTests {
         #expect(bridge.contains(#"invoke("__audio.session.set""#))
     }
 }
+
+/// The desktop session: uniform API, no platform mechanism.
+///
+/// These pin the *honesty* of that choice. The temptation on a platform with
+/// nothing to drive is to report whatever sounds healthiest; an app that acts
+/// on `state` would then pause for an interruption that can never arrive, or
+/// trust a `playback` that bought it nothing.
+@Suite("RecordingAudioSession")
+struct RecordingAudioSessionTests {
+    @Test("it records and reports the type it was given")
+    func recordsType() async throws {
+        let session = RecordingAudioSession()
+        #expect(try await session.currentType() == .auto)
+        try await session.setType(.playback)
+        #expect(try await session.currentType() == .playback)
+    }
+
+    @Test("state mirrors the platforms that do have a session concept")
+    func stateMatchesAndroidMapping() async throws {
+        let session = RecordingAudioSession()
+        for type in [AudioSessionType.playback, .playAndRecord, .transient, .transientSolo] {
+            try await session.setType(type)
+            #expect(try await session.state() == .active, "\(type.rawValue) should read active")
+        }
+        // `ambient` and `auto` hold no focus on Android, so they must not claim
+        // to be active here either — a page reading `state` should see the same
+        // answer on every platform.
+        for type in [AudioSessionType.ambient, .auto] {
+            try await session.setType(type)
+            #expect(try await session.state() == .inactive, "\(type.rawValue) should read inactive")
+        }
+    }
+
+    @Test("it never reports interrupted, because nothing here interrupts")
+    func neverInterrupted() async throws {
+        let session = RecordingAudioSession()
+        for type in AudioSessionType.allCases {
+            try await session.setType(type)
+            #expect(try await session.state() != .interrupted)
+        }
+    }
+}

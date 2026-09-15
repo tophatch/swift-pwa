@@ -396,7 +396,7 @@ struct AndroidBundler {
         // wrong toolchain for a plain `swift build`, so when swiftly is present
         // and the SDK's version is parseable we wrap the build in
         // `swiftly run +<major.minor>`, which overrides `.swift-version`.
-        let buildTool = Self.androidBuildTool(sdkBundleID: sdk)
+        let buildTool = await Self.androidBuildTool(sdkBundleID: sdk)
         // Resolved once for the whole loop: what the cached modules under
         // `.build/<triple>` were compiled against (see
         // `cleanStaleCrossCompileCacheIfNeeded`).
@@ -536,11 +536,32 @@ struct AndroidBundler {
     /// selected toolchain for child processes — so a plain `env swiftly` from
     /// inside a `swift run`-launched CLI wouldn't find it. Falls back to the
     /// ambient `swift` when swiftly or the SDK version can't be resolved.
-    static func androidBuildTool(sdkBundleID: String) -> (exe: String, leadingArgs: [String]) {
+    static func androidBuildTool(sdkBundleID: String) async -> (exe: String, leadingArgs: [String]) {
         let ambient = (exe: "/usr/bin/env", leadingArgs: [String]())
         guard let version = swiftVersion(fromSDKBundleID: sdkBundleID) else {
             print(
                 "note: could not parse a Swift version from SDK '\(sdkBundleID)'; cross-compiling with the ambient `swift`"
+            )
+            return ambient
+        }
+        // If the ambient `swift` is already the matching release there is
+        // nothing to override, and going through swiftly would *break* the
+        // build whenever swiftly has no such toolchain — it fails with "the
+        // selected toolchain didn't match any of the installed toolchains"
+        // rather than falling back. `swift --version` here already reflects
+        // any `.swift-version` pinning, since that pin is what swiftly's shim
+        // acts on, so this reads the toolchain the build would really use.
+        //
+        // major.minor is as far as this can see. Two *different builds* of the
+        // same release both report "6.4" — Xcode's Swift and the swift.org
+        // release of the same number are not the same compiler — and the
+        // SDK's prebuilt `.swiftmodule`s only load in the one that produced
+        // them. That mismatch surfaces at the inner build as "compiled module
+        // was created by a different version of the compiler", which the
+        // error this function's caller prints already points at.
+        if let ambientVersion = await ambientSwiftVersion(), ambientVersion == version {
+            print(
+                "cross-compiling with the ambient `swift` (already Swift \(version), matching the Android SDK)"
             )
             return ambient
         }
@@ -554,6 +575,29 @@ struct AndroidBundler {
             "cross-compiling under `swiftly run +\(version)` to match the Swift \(version) Android SDK (overrides any repo .swift-version)"
         )
         return (swiftly, ["run", "+\(version)"])
+    }
+
+    /// The `major.minor` of whatever `swift` resolves to here, or nil if it
+    /// can't be run or parsed.
+    static func ambientSwiftVersion() async -> String? {
+        guard let output = try? await Shell.capture(
+            "/usr/bin/env", ["swift", "--version"], timeout: 30, discardStderr: true
+        ) else {
+            return nil
+        }
+        return swiftVersion(fromVersionOutput: output)
+    }
+
+    /// Parse `major.minor` out of `swift --version`. Both spellings the
+    /// toolchains print are covered, since the substring searched for is
+    /// common to them: "Apple Swift version 6.4 (…)" on macOS and
+    /// "Swift version 6.3.1 (…)" everywhere else.
+    static func swiftVersion(fromVersionOutput output: String) -> String? {
+        guard let range = output.range(of: #"Swift version [0-9]+\.[0-9]+"#, options: .regularExpression)
+        else {
+            return nil
+        }
+        return String(output[range].dropFirst("Swift version ".count))
     }
 
     /// Absolute path to the `swiftly` binary, resolved without relying on
@@ -785,9 +829,8 @@ struct AndroidBundler {
         let (sdkArchDir, ndkTripleDir) = sdkArchDirs(abi: abi)
         let runtimeDir = bundleRoot
             .appendingPathComponent("swift-resources/usr/lib/swift-\(sdkArchDir)/android")
-        let ndkLibDir = bundleRoot
-            .appendingPathComponent("ndk-sysroot/usr/lib/\(ndkTripleDir)")
-        let cxxSharedSrc = ndkLibDir.appendingPathComponent("libc++_shared.so")
+        let ndkLibDir = Self.ndkLibDir(bundleRoot: bundleRoot, ndkTripleDir: ndkTripleDir)
+        let cxxSharedSrc = ndkLibDir?.appendingPathComponent("libc++_shared.so")
 
         let allRuntimeLibs = (try? FileManager.default.contentsOfDirectory(atPath: runtimeDir.path)) ?? []
         let availableRuntime = Set(allRuntimeLibs.filter { $0.hasSuffix(".so") })
@@ -798,7 +841,7 @@ struct AndroidBundler {
                 toStage = try await prunedRuntimeSet(
                     appSO: appSO,
                     runtimeDir: runtimeDir,
-                    ndkLibDir: ndkLibDir,
+                    ndkLibDir: ndkLibDir ?? bundleRoot,
                     available: availableRuntime
                 )
                 print(
@@ -832,9 +875,14 @@ struct AndroidBundler {
         // Always copy regardless of prune mode — it's universally
         // needed and not in the runtime dir we just walked.
         let cxxSharedDst = abiDir.appendingPathComponent("libc++_shared.so")
-        if FileManager.default.fileExists(atPath: cxxSharedSrc.path),
-           !FileManager.default.fileExists(atPath: cxxSharedDst.path)
-        {
+        if !FileManager.default.fileExists(atPath: cxxSharedDst.path) {
+            guard let cxxSharedSrc, FileManager.default.fileExists(atPath: cxxSharedSrc.path) else {
+                throw AndroidBundlerError.cxxSharedMissing(
+                    abi: abi,
+                    searched: Self.ndkLibDirCandidates(bundleRoot: bundleRoot, ndkTripleDir: ndkTripleDir)
+                        .map { $0.appendingPathComponent("libc++_shared.so").path }
+                )
+            }
             try FileManager.default.copyItem(at: cxxSharedSrc, to: cxxSharedDst)
             copied += 1
         }
@@ -842,6 +890,31 @@ struct AndroidBundler {
         if copied > 0 {
             print("staged \(copied) runtime .so files into jniLibs/\(abi)/")
         }
+    }
+
+    /// Where `libc++_shared.so` and friends live, in preference order.
+    ///
+    /// Swift Android SDKs through 6.2 vendored an `ndk-sysroot/` inside the
+    /// artifact bundle; 6.4's does not, which is how an APK started shipping
+    /// without `libc++_shared.so` and crashing at `System.loadLibrary`. The
+    /// installed NDK — the same one the cross-compile is already using — is
+    /// the fallback.
+    static func ndkLibDirCandidates(bundleRoot: URL, ndkTripleDir: String) -> [URL] {
+        var candidates = [bundleRoot.appendingPathComponent("ndk-sysroot/usr/lib/\(ndkTripleDir)")]
+        if let ndk = AndroidToolchain.ndk()?.path {
+            let root = URL(fileURLWithPath: ndk).appendingPathComponent("toolchains/llvm/prebuilt")
+            let hosts = (try? FileManager.default.contentsOfDirectory(atPath: root.path)) ?? []
+            candidates += hosts.sorted().map {
+                root.appendingPathComponent("\($0)/sysroot/usr/lib/\(ndkTripleDir)")
+            }
+        }
+        return candidates
+    }
+
+    /// The first candidate that exists, or nil.
+    static func ndkLibDir(bundleRoot: URL, ndkTripleDir: String) -> URL? {
+        ndkLibDirCandidates(bundleRoot: bundleRoot, ndkTripleDir: ndkTripleDir)
+            .first { FileManager.default.fileExists(atPath: $0.path) }
     }
 
     /// Walk `appSO`'s `DT_NEEDED` entries transitively, returning the
@@ -1221,6 +1294,7 @@ enum AndroidBundlerError: Error, CustomStringConvertible {
     case signingMissingAlias
     case signingUnknownStoreType(String)
     case crossCompileFailed([String])
+    case cxxSharedMissing(abi: String, searched: [String])
 
     var description: String {
         switch self {
@@ -1232,6 +1306,17 @@ enum AndroidBundlerError: Error, CustomStringConvertible {
             """
         case let .signingUnknownStoreType(t):
             "swift-pwa: pwa.json's android.signing.store_type='\(t)' is not recognized; expected 'jks' or 'pkcs12'."
+        case let .cxxSharedMissing(abi, searched):
+            """
+            swift-pwa: \(abi): libc++_shared.so not found. Every Swift runtime .so needs it, \
+            and an APK without it builds and installs fine, then dies at launch with \
+            `UnsatisfiedLinkError: dlopen failed: library "libc++_shared.so" not found` — \
+            which reads as a broken app rather than a missing file, so this is a hard error.
+            Searched:
+            \(searched.map { "  - " + $0 }.joined(separator: "\n"))
+            Swift Android SDKs from 6.4 no longer vendor an `ndk-sysroot/`, so it comes from \
+            the installed NDK. Set ANDROID_NDK_ROOT, or install one under $ANDROID_HOME/ndk/.
+            """
         case let .crossCompileFailed(failures):
             """
             swift-pwa: --cross-compile-android could not produce a native library for \

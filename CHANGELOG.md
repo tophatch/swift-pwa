@@ -269,6 +269,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   understand, so the APK it assembles is missing libraries and dies at
   `System.loadLibrary`. That migration is tracked separately.
 
+- **`build --target android` stages `libc++_shared.so` from the installed NDK**,
+  and refuses to build an APK without it.
+
+  Swift Android SDKs through 6.2 vendored an `ndk-sysroot/` inside the artifact
+  bundle, and that is where the bundler took it from. The 6.4 bundle doesn't
+  ship one — so the copy was silently skipped, the APK built and installed
+  perfectly, and the app died at `System.loadLibrary` with `UnsatisfiedLinkError:
+  dlopen failed: library "libc++_shared.so" not found`. Every Swift runtime `.so`
+  needs it, so there is no app for which skipping it is right; it now falls back
+  to the NDK the cross-compile is already using, and a miss is a hard error
+  naming every path it looked in.
+
+- **`build --target android` uses the ambient toolchain when it already matches
+  the Swift Android SDK**, instead of insisting on swiftly.
+
+  The cross-compile has to run under the SDK's exact Swift release, and a repo
+  `.swift-version` can pin a different one, so it wrapped the inner build in
+  `swiftly run +<major.minor>`. That assumed swiftly could serve any release
+  the SDK named. It can't: when the matching toolchain is one swiftly doesn't
+  manage, `swiftly run` refuses outright — "the selected toolchain didn't match
+  any of the installed toolchains" — rather than falling back, and the build
+  fails with "could not produce a native library for the requested ABI". This
+  is the ordinary case right after an Xcode release, when Xcode's Swift is
+  ahead of everything swiftly has.
+
+  `swift --version` already reflects any `.swift-version` pinning, since that
+  is what swiftly's shim acts on — so reading it says which toolchain the build
+  would really use, and when that already matches the SDK there is nothing to
+  override.
+
 - **Android serves the web bundle at the origin root**, so a page's
   root-absolute URLs resolve there the way they already did on the other four
   backends (#212).

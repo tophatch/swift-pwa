@@ -220,6 +220,24 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "android-sdk-no-version") == nil)
     }
 
+    @Test("swiftVersion(fromVersionOutput:) reads both spellings `swift --version` prints")
+    func ambientSwiftVersionParse() {
+        // When the ambient toolchain already matches the Android SDK the
+        // cross-compile uses it directly, because swiftly refuses outright for
+        // a release it has no toolchain for rather than falling back.
+        #expect(
+            AndroidBundler.swiftVersion(fromVersionOutput: "Apple Swift version 6.4 (swift-6.4-RELEASE)\nTarget: arm64")
+                == "6.4"
+        )
+        #expect(
+            AndroidBundler.swiftVersion(fromVersionOutput: "Swift version 6.3.1 (swift-6.3.1-RELEASE)\nTarget: x86_64")
+                == "6.3"
+        )
+        // A `swift --version` that didn't run, or a wrapper's banner.
+        #expect(AndroidBundler.swiftVersion(fromVersionOutput: "") == nil)
+        #expect(AndroidBundler.swiftVersion(fromVersionOutput: "command not found: swift") == nil)
+    }
+
     @Test("swiftly lookup: env vars first, then ~/.swiftly — swiftly 1.x's own default home")
     func swiftlyLookupOrder() throws {
         let withEnv = AndroidBundler.swiftlyCandidates(

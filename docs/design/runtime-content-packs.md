@@ -231,10 +231,11 @@ desktop backends read at `configure()` as a convenience:
 }
 ```
 
-`ctx.serveDirectory(_:at:)` remains the imperative escape hatch (desktop, or mounting a
-path outside the data/cache roots). On Android only the `pwa.json`-declared mounts are
-guaranteed at startup; a later `serveDirectory` call for an undeclared prefix is a
-desktop-only capability (documented as such).
+`ctx.serveDirectory(_:at:)` remains the imperative escape hatch, and mounting a path
+outside the data/cache roots is what it is for. On Android only the `pwa.json`-declared
+mounts are guaranteed to answer a request the page makes *before `configure()` returns*;
+a later `serveDirectory` call for an undeclared prefix was originally shipped as a
+desktop-only capability, and no longer is — see the Android row below (#213).
 
 ### Core refactor: `AssetProvider` value → shared multi-mount class
 
@@ -276,7 +277,32 @@ bytes`) is what makes large `.webm` seek instead of fully buffer. It also improv
 | **Apple** | 200, full read | Parse `Range` from `urlSchemeTask.request`; open with `FileHandle`, seek, emit `206` + `Content-Range`, stream in chunks via repeated `didReceive(_:)`. Honors `stop` for cancellation. **Feasible.** |
 | **GTK3/GTK4** | 200, memory stream | Hand WebKit a **seekable `GFileInputStream`** (`g_file_read`) instead of a memory stream, and emit a 206 response with `Content-Range` when a range is requested. **Risk:** range behavior over `webkit_uri_scheme_request_finish` is WebKitGTK-version-sensitive — **prototype large-video seek on GTK3 (4.1) and GTK4 (6.0) early**; this is the single most uncertain piece of the whole feature. |
 | **Windows** | native range, single host→folder | `SetVirtualHostNameToFolderMapping` maps a whole host, not a subpath, so a same-origin `/packs` can't be a second mapping. Use the existing **`WebResourceRequested` interception** for `https://swift-pwa.local/packs/*`, served from the router with range implemented in the C++ shim respond path (`swiftpwa_w2_resource_respond`). Bundle keeps its native host mapping. **Medium Windows work.** |
-| **Android** | native range | `InternalStoragePathHandler` rooted at `filesDir`, registered via `addPathHandler(<prefix>, …)` in the generated Kotlin — gives range for free. The asset loader is built at Activity-init, so the **app-chosen prefix(es) are declared in `pwa.json`** (`build.serve` — see below) and the bundler wires them into the template. (Desktop reads the same `serve` config at `configure()` time, or the app calls `ctx.serveDirectory` directly.) **Template change.** |
+| **Android** | partial range (see below) | `InternalStoragePathHandler` rooted at `filesDir`, registered via `addPathHandler(<prefix>, …)` in the generated Kotlin. The asset loader is built at Activity-init, so a **startup** mount is declared in `pwa.json` (`build.serve` — see below) and the bundler wires it into the template. (Desktop reads the same `serve` config at `configure()` time, or the app calls `ctx.serveDirectory` directly.) **Template change.** |
+
+#### What the Android implementation actually cost (#213, measured)
+
+Two things this table got wrong, found by running it on a device.
+
+**"Native range" is only half true.** A `206 Partial Content` returned from
+`WebViewClient.shouldInterceptRequest` is rejected by the WebView before the page
+sees it — `TypeError: Failed to fetch`, nothing logged by us or by Chromium, against
+a correct 206 with the right `Content-Range` and a bounded stream. What Chromium
+does instead is range the stream itself: given a plain `200` it seeks to the start
+offset and serves **to the end of the file**, reporting `200` with no
+`Content-Range`. Seeking works, the end of the range is ignored, and
+`Accept-Ranges: bytes` is deliberately *not* advertised — claiming it would promise
+a 206 that never comes, and a client that branches on it (pdf.js) would take the
+worse path.
+
+**Kotlin should not own a mount table.** The obvious design — Swift pushes
+`serveDirectory` calls over the RPC, Kotlin keeps a prefix→root map — needs a sync
+protocol and can go stale between a mount and the request that follows it. Instead
+`shouldInterceptRequest` asks Swift synchronously, the way `shouldOverrideUrlLoading`
+already did, and Core's `AssetProvider` stays the single mount table for all five
+backends: same longest-prefix match, same traversal guard, same MIME table. It runs
+on a WebView worker thread against a lock-guarded path lookup, and answers nil for
+everything outside a mount — which on Android is the whole app bundle, since no `/`
+root is ever installed in that provider.
 
 ### Why not a `WindowContent` option instead
 

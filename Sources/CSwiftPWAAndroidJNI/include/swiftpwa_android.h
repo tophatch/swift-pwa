@@ -272,6 +272,32 @@ void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn hand
 int swiftpwa_android_dispatch_navigation(const char *uri, int is_main_frame);
 
 // ---------------------------------------------------------------------
+// Served directories (`ctx.serveDirectory`).
+// ---------------------------------------------------------------------
+
+// Set by Swift; called **synchronously** from
+// `WebViewClient.shouldInterceptRequest`, which has to answer with a response
+// (or nothing) before the load proceeds. Same reasoning as the navigation
+// handler above: Core's `AssetProvider.resolve` is a lock-guarded path lookup,
+// so it can be answered inline.
+//
+// Unlike every other handler here it runs on a WebView **worker** thread, not
+// the UI thread — which is what makes it safe to stat a file from.
+//
+// Returns a `malloc`'d JSON object `{"path":…,"mime":…,"size":…}` describing
+// the file to serve, or NULL when the request falls under no mount (the usual
+// answer — the app's own bundle is served by the `WebViewAssetLoader`, not
+// through here). **The caller frees it.**
+typedef char *(*swiftpwa_android_mount_resolve_fn)(const char *url, void *user);
+
+void swiftpwa_android_set_mount_resolver(swiftpwa_android_mount_resolve_fn handler,
+                                         void *user);
+
+// Called from JNI. NULL with no resolver installed, so an app that mounts
+// nothing behaves exactly as before.
+char *swiftpwa_android_dispatch_mount_resolve(const char *url);
+
+// ---------------------------------------------------------------------
 // Lifecycle.
 // ---------------------------------------------------------------------
 

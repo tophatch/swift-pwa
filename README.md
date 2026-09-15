@@ -211,7 +211,7 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 "macos": { "info_plist": { "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true } } }
 ```
 
-**Optional `build.serve`** — serve extra directories on the bundle origin under an app-chosen path prefix, so page JS references runtime-imported content (a downloaded "content pack" of images / video) with an origin-relative URL — `videoEl.src = "/packs/<id>/clip.webm"` — that works unchanged on every backend, streamed with HTTP range requests. On desktop the equivalent is `ctx.serveDirectory(_:at:)` at `configure()` time; Android needs the mount declared here (its asset loader is built before any Swift runs). See [docs/swift-api.md](docs/swift-api.md#serving-extra-directories-content-packs).
+**Optional `build.serve`** — serve extra directories on the bundle origin under an app-chosen path prefix, so page JS references runtime-imported content (a downloaded "content pack" of images / video) with an origin-relative URL — `videoEl.src = "/packs/<id>/clip.webm"` — that works unchanged on every backend, streamed with HTTP range requests. `ctx.serveDirectory(_:at:)` is the imperative equivalent, on all five — including a folder the *user* points the app at, wherever it already lives — and Android needs a mount declared here only when it must answer a request made before `configure()` returns (its asset loader is built before any Swift runs). See [docs/swift-api.md](docs/swift-api.md#serving-extra-directories-content-packs).
 
 ```json
 "build": { "serve": [ { "mount": "/packs", "from": "data/packs" } ] }

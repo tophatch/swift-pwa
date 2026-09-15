@@ -289,6 +289,7 @@ struct Build: AsyncParsableCommand {
         try Self.checkWebBundle(manifest: pwa, projectRoot: cwd, prebuildRan: prebuildRan)
         try Self.validateLastWindowClosed(manifest: pwa)
         try Self.validateExternalURLs(manifest: pwa)
+        try Self.validateAndroidPermissions(manifest: pwa)
         try await Self.validatePermissions(
             manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
         )
@@ -860,6 +861,33 @@ struct Build: AsyncParsableCommand {
     /// digits / `+` `-` `.`) because the two ways to get it wrong both end in
     /// silence: `"https://example.com"` in the list declares nothing useful,
     /// and a scheme with a stray space never matches a URL.
+    /// `android.permissions` entries are emitted into `AndroidManifest.xml`
+    /// verbatim, so a malformed one is either an `aapt` failure thousands of
+    /// lines into a cross-compile, or — worse — a permission the app believes
+    /// it declared and doesn't have. Check the grammar before anything is
+    /// built.
+    ///
+    /// Deliberately **not** an allowlist of known Android permissions: OEMs
+    /// define their own (`com.samsung.android.permission.…`), new platform
+    /// releases add more, and a list here would go stale and start refusing
+    /// valid declarations. The shape is what can be checked honestly.
+    static func validateAndroidPermissions(manifest: PWAManifest) throws {
+        for permission in manifest.android?.permissions ?? [] {
+            let malformed = permission.isEmpty
+                || permission.contains(where: \.isWhitespace)
+                || permission.contains(where: { "<>&\"'".contains($0) })
+                || !permission.contains(".")
+            guard !malformed else {
+                throw ValidationError(
+                    "pwa.json: android.permissions contains \"\(permission)\", which isn't an "
+                        + "Android permission name. Give the fully-qualified name as Android "
+                        + "spells it — \"android.permission.MANAGE_EXTERNAL_STORAGE\", not "
+                        + "\"MANAGE_EXTERNAL_STORAGE\"."
+                )
+            }
+        }
+    }
+
     static func validateExternalURLs(manifest: PWAManifest) throws {
         if let raw = manifest.externalUrls?.offOriginNavigation,
            OffOriginNavigation(rawValue: raw) == nil

@@ -110,6 +110,14 @@
             eventStreamSource
         }
 
+        /// Publish a window event. `AsyncStream.Continuation.yield` is
+        /// documented thread-safe, which matters here: the Activity's
+        /// lifecycle events arrive on the JVM main thread, not the runtime
+        /// thread this window was created on.
+        nonisolated func emit(_ event: WindowEvent) {
+            eventContinuation.yield(event)
+        }
+
         public func setTitle(_ title: String) {
             currentTitle = title
             // Update the Activity's title via JNI so the action bar /

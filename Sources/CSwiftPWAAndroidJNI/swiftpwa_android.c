@@ -74,6 +74,8 @@ static void *g_inbound_user = NULL;
 static swiftpwa_android_quit_fn g_quit_fn = NULL;
 static swiftpwa_android_navigation_fn g_navigation_fn = NULL;
 static void *g_navigation_user = NULL;
+static swiftpwa_android_mount_resolve_fn g_mount_resolve_fn = NULL;
+static void *g_mount_resolve_user = NULL;
 static void *g_quit_user = NULL;
 
 // Main-thread runner registered by Swift.
@@ -740,6 +742,41 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeDecideNavigation(JNIEnv *env,
 }
 
 // ---------------------------------------------------------------------
+// Served directories
+// ---------------------------------------------------------------------
+
+void swiftpwa_android_set_mount_resolver(swiftpwa_android_mount_resolve_fn handler,
+                                         void *user) {
+    g_mount_resolve_fn = handler;
+    g_mount_resolve_user = user;
+}
+
+char *swiftpwa_android_dispatch_mount_resolve(const char *url) {
+    if (!g_mount_resolve_fn || !url) return NULL;
+    return g_mount_resolve_fn(url, g_mount_resolve_user);
+}
+
+// JNI entry: `WebViewClient.shouldInterceptRequest` asks, on a WebView worker
+// thread, whether this URL falls under a directory the app mounted at runtime.
+// Synchronous for the same reason `nativeDecideNavigation` is — the answer has
+// to be in hand before the method returns.
+JNIEXPORT jstring JNICALL
+Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeResolveMount(JNIEnv *env,
+                                                             jobject self,
+                                                             jstring url) {
+    (void)self;
+    if (!url) return NULL;
+    const char *chars = (*env)->GetStringUTFChars(env, url, NULL);
+    if (!chars) return NULL;
+    char *json = swiftpwa_android_dispatch_mount_resolve(chars);
+    (*env)->ReleaseStringUTFChars(env, url, chars);
+    if (!json) return NULL;
+    jstring result = (*env)->NewStringUTF(env, json);
+    free(json);
+    return result;
+}
+
+// ---------------------------------------------------------------------
 // Lifecycle
 // ---------------------------------------------------------------------
 
@@ -772,6 +809,8 @@ Java_dev_swiftpwa_runtime_SwiftPWABridge_nativeQuit(JNIEnv *env,
 void swiftpwa_android_log(const char *m) { (void)m; }
 void swiftpwa_android_set_navigation_handler(swiftpwa_android_navigation_fn h, void *u) { (void)h; (void)u; }
 int  swiftpwa_android_dispatch_navigation(const char *u, int m) { (void)u; (void)m; return 0; }
+void swiftpwa_android_set_mount_resolver(swiftpwa_android_mount_resolve_fn h, void *u) { (void)h; (void)u; }
+char *swiftpwa_android_dispatch_mount_resolve(const char *u) { (void)u; return NULL; }
 void swiftpwa_android_set_inbound_handler(swiftpwa_android_inbound_fn h, void *u) { (void)h; (void)u; }
 void swiftpwa_android_dispatch_inbound(const char *j, const char *o, int m) { (void)j; (void)o; (void)m; }
 void swiftpwa_android_attach_bridge(void *b) { (void)b; }

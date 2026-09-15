@@ -106,6 +106,22 @@
                 OpenURL.emit(payload.urls, on: context.events)
             }
 
+            // The Activity's foreground state, pushed from `onResume` /
+            // `onPause`, becomes the window's `didFocus` / `didBlur` — the
+            // events the desktop backends already emit, so Swift written
+            // against them is correct here too (#214). Subscribed before
+            // `configure`, because the Activity is already resumed by the time
+            // the runtime thread starts and the first push can beat it.
+            AndroidHostEventRouter.subscribe(channel: "window.lifecycle") { data in
+                struct Payload: Decodable { let state: String }
+                guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
+                switch payload.state {
+                case "resumed": context.activeWindow?.emit(.didFocus)
+                case "paused": context.activeWindow?.emit(.didBlur)
+                default: break
+                }
+            }
+
             // Core's diagnostics default to stderr, which Android discards.
             // Installed first so nothing emitted during setup is lost.
             RuntimeDiagnostics.installSink { message in
@@ -126,6 +142,11 @@
             // this thread starts, so a page that asks for the camera on load
             // must find someone listening.
             AndroidWebPermissions.install(policy: context.permissions)
+
+            // Same reasoning again, and more sharply: `configure` is exactly
+            // where an app calls `ctx.serveDirectory`, and the page it then
+            // opens requests from that mount immediately.
+            AndroidServedDirectories.install(provider: context.assetProvider)
 
             // Same reasoning: the WebView can be asked to navigate before
             // `configure` returns, and an unanswered navigation takes the

@@ -536,6 +536,64 @@ expressible, so list the concrete host(s). Omitting the key leaves the manifest
 unchanged. This governs both the `net.*` plugin and any remote `AIBackend`
 talking to a plain-http endpoint. See [net-plugin.md](net-plugin.md).
 
+### Declaring an Android permission (`android.permissions`)
+
+`permissions.web` in `pwa.json` declares capabilities the *web platform* has a
+name for — camera, microphone, geolocation — and the bundler maps each onto
+whatever Android calls it. A permission with no web counterpart can't come
+through that door. **All-files access** is the case that prompted this: an app
+that reads folders the user points it at, by path, as ordinary `FileManager`
+roots, needs `MANAGE_EXTERNAL_STORAGE`, and the only way to get it used to be
+hand-editing the generated `AndroidManifest.xml` — which the next
+`swift-pwa build` overwrites.
+
+```json
+"android": {
+  "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"]
+}
+```
+
+Each entry is emitted verbatim as a `<uses-permission>` element, after the
+built-in and web-derived ones, with duplicates dropped — so naming something
+swift-pwa already declares is a no-op. Give the fully-qualified name Android
+uses (`android.permission.X`, or an OEM's own
+`com.samsung.android.permission.X`); a bare `MANAGE_EXTERNAL_STORAGE` is
+refused at build time, before anything is compiled. There is deliberately **no
+allowlist** of known permissions: OEMs define their own and new platform
+releases add more, so a list here would go stale and start refusing valid
+declarations.
+
+Declaring grants nothing. A *dangerous* permission still needs its runtime
+request, and a *special* one like All-files access needs the
+`ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` hand-off to Settings — the
+declaration is only what makes that request possible. Some permissions carry
+store-policy consequences (Play restricts All-files access to apps whose core
+function needs it); that is the app's call to make, and not a reason the
+manifest can't express it.
+
+### The Activity lifecycle reaches Swift
+
+`onResume` and `onPause` surface as the window's `WindowEvent.didFocus` /
+`.didBlur` — the same events the desktop backends emit when their window gains
+or loses focus, so Swift written against them is correct on every platform:
+
+```swift
+Task {
+    for await event in window.eventStream() {
+        switch event {
+        case .didFocus: await library.rescanFolders()   // no recursive watch here
+        case .didBlur: lock.engage()
+        default: break
+        }
+    }
+}
+```
+
+`.didBlur` is pushed *before* `super.onPause()`, so a handler is queued while
+the process is still scheduled. A spawned secondary Activity doesn't report —
+it doesn't own the runtime, and its lifecycle would otherwise read as the
+primary's. JS sees the same events through `window.events`.
+
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important
@@ -912,8 +970,9 @@ prompt-and-validate fallback for now (`structuredOutput: false`).
 
 ## 9.1. On-device segmentation (`ai.vision.*`) — ONNX Runtime + `MobileSAMBackend`
 
-**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, gated behind
-`ai.local_onnx_runtime: true` in `pwa.json` — `swift-pwa build` sets
+**A real backend (`MobileSAMBackend`, `SwiftPWASegmentation`, behind the ONNX
+Runtime tier — depending on the product is enough, and `ai.local_onnx_runtime:
+true` in `pwa.json` is the explicit form; either way `swift-pwa build` sets
 `SWIFT_PWA_ONNXRUNTIME=1` for you) exists on Android**, verified against real
 MobileSAM weights — see
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
@@ -1108,6 +1167,21 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   the latter, `getUserMedia` fails `NotReadableError` ("Could not start
   audio source") *after* the user grants the permission.
 
+- **A served file answers a `Range` request with a `200`, not a `206`.** A
+  `206 Partial Content` returned from `WebViewClient.shouldInterceptRequest` is
+  rejected by the WebView *before the page sees it* — the fetch fails with
+  `TypeError: Failed to fetch` and nothing is logged anywhere, by us or by
+  Chromium. Measured on a Fold7 against a correct 206 (right `Content-Range`,
+  right body, bounded stream). What Chromium does instead is range the stream
+  itself: given a plain `200` it seeks to the requested start offset and serves
+  **to the end of the file**, reporting `200` with no `Content-Range`. So
+  seeking works — which is what a `<video>` scrub and a range-fetching reader
+  need — but the end of the range is not honoured and no `Accept-Ranges: bytes`
+  is advertised, deliberately: claiming it would tell a client a `206` is
+  coming when none ever is, and a client that checks (pdf.js does) would pick
+  the range path and be wrong about what it got. `build.serve` mounts have
+  always behaved this way; runtime `ctx.serveDirectory` mounts now match them.
+
 - **`ctx.frame` falls back to `.unknown` on a very old System WebView.** The
   inbound bridge channel is `WebViewCompat.addWebMessageListener`, which reports
   which frame called (`isMainFrame` plus the sending document's origin) and is
@@ -1198,15 +1272,15 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   platform: `#if os(Android) AndroidArchiveExtractor() #else
   ZIPExtractor() #endif` (see `Examples/HelloPWA`). For **serving**,
   the `WebViewAssetLoader` is built at `Activity.onCreate` — *before*
-  any Swift `configure()` runs — so a mount that must exist at startup
-  has to be declared in `pwa.json`'s `build.serve`
-  (`{ "mount": "/packs", "from": "data/packs" }`, rooted at the
+  any Swift `configure()` runs — so a mount that must answer a request the
+  page makes before `configure()` returns has to be declared in `pwa.json`'s
+  `build.serve` (`{ "mount": "/packs", "from": "data/packs" }`, rooted at the
   app's `filesDir` / `cacheDir`); the bundler wires each into the
   generated Activity as an `addPathHandler`. A runtime
-  `ctx.serveDirectory(_:at:)` for an *undeclared* prefix is a desktop
-  capability and won't take effect on Android. The
-  `fs.extractZipProgress` / `fs.createZipProgress` streams emit a single
-  terminal progress tick on Android (the unary JNI RPC has no per-entry
+  `ctx.serveDirectory(_:at:)` works for any other prefix, from any root the
+  app can read — see the Range note below for the one way it differs from
+  desktop. The `fs.extractZipProgress` / `fs.createZipProgress` streams emit a
+  single terminal progress tick on Android (the unary JNI RPC has no per-entry
   channel), then `done`.
 
 ## 8. Troubleshooting

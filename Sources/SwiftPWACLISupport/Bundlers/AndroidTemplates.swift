@@ -232,6 +232,7 @@ enum AndroidTemplates {
         urlSchemes: [String] = [],
         networkConfigStaged: Bool = false,
         webPermissions: [String] = [],
+        extraPermissions: [String] = [],
         minSdk: Int = 28
     ) -> String {
         // `permissions` in pwa.json → `uses-permission`. Emitted only for what
@@ -261,6 +262,24 @@ enum AndroidTemplates {
                 + "\n         ctx.permissions, and Android still prompts the user. -->"
             let lines = androidPermissions.map { "\n    " + $0.xml }.joined()
             webPermissionBlock = comment + lines
+        }
+        // `android.permissions` in pwa.json → the same element, emitted
+        // verbatim. These are permissions the web platform has no name for, so
+        // the mapping above can't reach them; the app names the Android string
+        // itself. Last, and de-duplicated against everything already emitted —
+        // both the built-ins below and the web-derived block above — so listing
+        // one that swift-pwa already declares is a no-op rather than a doubled
+        // element.
+        var extraPermissionBlock = ""
+        let alreadyDeclared = Set(androidPermissions.map(\.name)).union(builtInPermissionNames)
+        var seen = Set<String>()
+        let extras = extraPermissions.filter { !alreadyDeclared.contains($0) && seen.insert($0).inserted }
+        if !extras.isEmpty {
+            let comment = "\n    <!-- android.permissions in pwa.json, emitted verbatim. A dangerous"
+                + "\n         or special permission still needs its runtime request; declaring"
+                + "\n         it here only makes that request possible. -->"
+            let lines = extras.map { "\n    <uses-permission android:name=\"\($0)\"/>" }.joined()
+            extraPermissionBlock = comment + lines
         }
         // When the project ships an icon, reference the launcher mipmap the
         // bundler drops into res/mipmap/. aapt/Gradle handle density scaling
@@ -308,7 +327,9 @@ enum AndroidTemplates {
                  system installer surfaces a dialog routing the user there
                  if it's off. Apps that don't ship updater.installAndRelaunch
                  may delete this line, but the plugin won't work without it. -->
-            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\(webPermissionBlock)
+            <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES"/>\(webPermissionBlock)\(
+                extraPermissionBlock
+            )
 
             <application
                 android:label="\(label)"\(iconAttr)
@@ -356,6 +377,18 @@ enum AndroidTemplates {
     /// One `<uses-permission>` line. Most need nothing but a name; Bluetooth
     /// needs both of the other two attributes, which is why this isn't a
     /// `[String]`.
+    /// The `uses-permission` entries the generated manifest always carries.
+    /// Kept beside the template that emits them so an `android.permissions`
+    /// entry naming one is dropped rather than doubled — and so the two lists
+    /// can't drift apart silently.
+    static let builtInPermissionNames: Set<String> = [
+        "android.permission.INTERNET",
+        "android.permission.POST_NOTIFICATIONS",
+        "android.permission.USE_BIOMETRIC",
+        "android.permission.USE_FINGERPRINT",
+        "android.permission.REQUEST_INSTALL_PACKAGES"
+    ]
+
     struct AndroidUsesPermission: Equatable {
         var name: String
         /// `android:usesPermissionFlags`, e.g. `neverForLocation`.
@@ -818,6 +851,29 @@ enum AndroidTemplates {
                 // would leave the primary Activity's outbound JNI
                 // calls hitting a null bridge ref (silent no-op).
                 bridge.attach()
+                pushLifecycle("resumed")
+            }
+
+            override fun onPause() {
+                // Before `super`, so an app that re-locks on being backgrounded
+                // has its handler queued while this process is still scheduled.
+                pushLifecycle("paused")
+                super.onPause()
+            }
+
+            /// Surface the Activity's foreground state to Swift, where it
+            /// becomes `WindowEvent.didFocus` / `.didBlur` — the same events
+            /// the desktop backends emit when their window gains or loses
+            /// focus. Android had no equivalent at all: an app that re-walks
+            /// its folders on becoming active (there is no recursive directory
+            /// watch to lean on) or re-locks on being backgrounded had nothing
+            /// to hang that on (#214).
+            ///
+            /// Secondary (spawned) windows don't own the runtime, so they skip
+            /// — their lifecycle would otherwise be reported as the primary's.
+            private fun pushLifecycle(state: String) {
+                if (isSecondary || !hasBridge) return
+                push(JSONObject().put("channel", "window.lifecycle").put("state", state))
             }
 
             override fun onDestroy() {
@@ -1018,6 +1074,9 @@ enum AndroidTemplates {
         import android.content.Intent
         import androidx.appcompat.app.AppCompatActivity
         import androidx.core.view.WindowCompat
+        import java.io.File
+        import java.io.FileInputStream
+        import org.json.JSONObject
         import androidx.core.view.WindowInsetsCompat
         import androidx.core.view.WindowInsetsControllerCompat
         import androidx.webkit.WebViewAssetLoader
@@ -1124,6 +1183,13 @@ enum AndroidTemplates {
                         view: WebView,
                         request: WebResourceRequest
                     ): WebResourceResponse? {
+                        // A directory the app mounted at runtime with
+                        // `ctx.serveDirectory` wins over the bundle, matching
+                        // every other backend (longest-prefix, mounts before
+                        // the `/` root). Swift owns the table and answers here;
+                        // null means "not mine", which is every request in an
+                        // app that mounts nothing.
+                        servedMountResponse(request)?.let { return it }
                         val response = assetLoader.shouldInterceptRequest(request.url)
                         // SPA history-routing fallback: a main-frame navigation to a
                         // client-side route with no file under assets/web/ (the loader
@@ -1400,6 +1466,62 @@ enum AndroidTemplates {
             // JNI
             // -------------------------------------------------------------
 
+            // -------------------------------------------------------------
+            // Served directories (`ctx.serveDirectory`)
+            // -------------------------------------------------------------
+
+            /// Serve a file from a directory the Swift side mounted at
+            /// runtime, or null if this request falls under no mount.
+            ///
+            /// **A plain 200 with the whole stream, deliberately.** The obvious
+            /// implementation parses the `Range` header and answers 206, and
+            /// that is measured to fail: a 206 returned from
+            /// `shouldInterceptRequest` is rejected by the WebView before it
+            /// ever reaches the page, as `TypeError: Failed to fetch` with no
+            /// diagnostic anywhere. What actually happens is that Chromium
+            /// handles the range itself — given a 200 and a stream it skips to
+            /// the requested offset — so a `<video>` seeks and a range-fetching
+            /// reader gets its bytes. It reports that to the page as a **200
+            /// with no `Content-Range`**, serving from the offset to the end of
+            /// the file rather than to the end of the range.
+            ///
+            /// Hence no `Accept-Ranges: bytes` either. Advertising it would tell
+            /// a client that a 206 is coming, and none ever is; a client that
+            /// checks (pdf.js does) would pick the range path over the
+            /// whole-file one and be wrong about what it got. This is exactly
+            /// what `InternalStoragePathHandler` does for a `build.serve` mount,
+            /// so both kinds of mount behave alike.
+            private fun servedMountResponse(request: WebResourceRequest): WebResourceResponse? {
+                // A mount is read-only; anything else belongs to `fs.*`.
+                if (!request.method.equals("GET", ignoreCase = true)) return null
+                val json = try {
+                    nativeResolveMount(request.url.toString())
+                } catch (t: Throwable) {
+                    android.util.Log.e("swift-pwa", "resolving a served mount failed: ${t.message}", t)
+                    null
+                } ?: return null
+                return try {
+                    val resolved = JSONObject(json)
+                    // `WebResourceResponse` wants the type and the charset
+                    // apart, and Core's MIME table spells them together
+                    // ("text/css; charset=utf-8"). Passing the whole string as
+                    // the type makes the WebView refuse the resource.
+                    val mime = resolved.getString("mime")
+                    val semicolon = mime.indexOf(';')
+                    val type = if (semicolon < 0) mime else mime.substring(0, semicolon).trim()
+                    val charset = if (semicolon < 0) null else {
+                        mime.substring(semicolon + 1).trim().removePrefix("charset=").ifEmpty { null }
+                    }
+                    WebResourceResponse(type, charset, FileInputStream(File(resolved.getString("path"))))
+                } catch (t: Throwable) {
+                    // The file was there when Swift stat'd it and isn't now, or
+                    // can't be opened. A response with a null stream is the
+                    // shape the WebView reads as "not found".
+                    android.util.Log.e("swift-pwa", "serving ${request.url} failed: ${t.message}", t)
+                    WebResourceResponse(null, null, null)
+                }
+            }
+
             private external fun nativeAttach(self: SwiftPWABridge)
             private external fun nativeDetach()
             private external fun nativeIngest(json: String)
@@ -1434,6 +1556,14 @@ enum AndroidTemplates {
             /// answer before the load proceeds. Returns one of the NAV_*
             /// constants below, mirroring Core's `NavigationDisposition`.
             private external fun nativeDecideNavigation(url: String, isMainFrame: Boolean): Int
+
+            /// Synchronous for the same reason: `shouldInterceptRequest` has to
+            /// return the response. Called on a WebView worker thread, not the
+            /// UI thread. Returns a JSON object describing the file to serve
+            /// (`path` / `mime` / `size`), or null when the URL falls under no
+            /// `ctx.serveDirectory` mount — which is every request in an app
+            /// that has none.
+            private external fun nativeResolveMount(url: String): String?
 
             /// Hand a URL to whichever app claims it — the browser for
             /// http(s), a mail client for mailto, an app's own scheme. Shared

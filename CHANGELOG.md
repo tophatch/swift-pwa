@@ -9,6 +9,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`ctx.serveDirectory(_:at:)` works on Android** — a directory the app mounts
+  at *runtime*, from any root it can read, served on the bundle origin (#213).
+
+  It was documented as a desktop capability and was a silent no-op there. The
+  `WebViewAssetLoader` is built in `Activity.onCreate`, before any Swift runs,
+  so the only mounts that could exist were `pwa.json`'s build-time
+  `build.serve` entries, rooted inside app storage. That covers a content pack
+  the app downloads into its own directory and nothing else: an app whose roots
+  are folders the *user* points it at — a reader's library, wherever the books
+  already live — could not serve one file to its own page. Copying them into
+  app storage is a different product, and `fs.readBinary` is a base64 copy of
+  every file (a 300 MB PDF becomes a 400 MB string) that defeats range-based
+  loading anyway.
+
+  **Kotlin deliberately keeps no mount table.** The obvious design — Swift
+  pushes each mount over the RPC, Kotlin holds a prefix→root map — needs a sync
+  protocol and can go stale between a `serveDirectory` call and the request that
+  follows it. Instead `shouldInterceptRequest` asks Swift synchronously, the way
+  `shouldOverrideUrlLoading` already did, so **Core's `AssetProvider` is the one
+  mount table for all five backends**: same longest-prefix match, same per-mount
+  traversal guard, same MIME table, and `unserveDirectory` takes effect on the
+  next request with nothing to keep in sync. It costs a JNI upcall into a
+  lock-guarded path lookup, on a WebView worker thread rather than the UI
+  thread, and answers nil for everything outside a mount — which on Android is
+  the entire app bundle, since that provider is never given a `/` root.
+
+  **One platform limit, measured rather than assumed: a `Range` request is
+  answered `200`, not `206`.** A `206` returned from `shouldInterceptRequest` is
+  rejected by the WebView *before the page sees it* — `TypeError: Failed to
+  fetch`, with nothing logged by us or by Chromium, against a correct 206
+  carrying the right `Content-Range` and a bounded stream. What Chromium does
+  instead is range the stream itself: given a `200` it seeks to the requested
+  start offset and serves to the end of the file. So a `<video>` scrub and a
+  range-fetching reader both work; the end of the range is ignored. No
+  `Accept-Ranges: bytes` is advertised, deliberately — promising a 206 that
+  never arrives would send a client that checks (pdf.js does) down the range
+  path to be wrong about what it got. `build.serve` mounts have always behaved
+  this way; runtime mounts now match them. Device-verified on a Fold7 via
+  `Scripts/verify-android-served-mounts.sh`.
+
+- **`android.permissions` in `pwa.json`** — Android permission names emitted
+  verbatim as `<uses-permission>` entries (#214).
+
+  `permissions.web` declares capabilities the *web platform* has a name for and
+  maps each onto whatever Android calls it, so a permission with no web
+  counterpart had no door at all. All-files access is the case that prompted it:
+  an app reading folders the user points it at, by path, needs
+  `MANAGE_EXTERNAL_STORAGE`, and the only way to get it was editing the
+  generated `AndroidManifest.xml` — which the next build overwrites.
+
+  ```json
+  "android": { "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"] }
+  ```
+
+  Emitted after the built-in and web-derived entries, duplicates dropped.
+  Validated for *shape* at build time (a bare `MANAGE_EXTERNAL_STORAGE` is
+  refused, naming the fully-qualified form) but deliberately **not** against an
+  allowlist of known permissions: OEMs define their own and new platform
+  releases add more, so a list would go stale and start refusing valid
+  declarations. Declaring still grants nothing — a dangerous or special
+  permission needs its runtime request, which is what the declaration makes
+  possible. Some carry store-policy consequences; that is the app's call, not a
+  reason the manifest can't express them.
+
+- **`WindowEvent.didFocus` / `.didBlur` now mean the same thing on all five
+  backends** — this window became, or stopped being, the one the user is
+  working in (#214).
+
+  Only macOS reported both from a real OS signal. Windows emitted `didFocus`
+  from `WM_SETFOCUS` and had no `WM_KILLFOCUS` counterpart, so an app could
+  learn it had become active and never that it had stopped. Both GTK backends
+  emitted either one *only* from an explicit `focus()` call, which is the app
+  talking to itself. iOS did the same. Android surfaced nothing at all.
+
+  Now: `notify::is-active` on GTK3 and GTK4, `WM_KILLFOCUS` on Windows,
+  `Activity.onResume` / `onPause` on Android, and scene did-become-active /
+  will-resign-active on iOS. The two mobile backends matter most here — an app
+  that was backgrounded there was *suspended*, so anything it was watching
+  stopped being watched — and they are why an app re-reading state on becoming
+  active, or re-engaging a lock on leaving, can now be written once in Swift and
+  be right everywhere. `.didBlur` is pushed before `super.onPause()` so the
+  handler is queued while the process is still scheduled. An explicit `focus()`
+  is de-duplicated against the signal that follows it, so presenting a window
+  doesn't report focus twice.
+
 - **`navigator.audioSession` works on Android** — the W3C Audio Session API,
   filled natively where the engine doesn't ship it, rather than exposed as a
   swift-pwa-shaped API beside it.

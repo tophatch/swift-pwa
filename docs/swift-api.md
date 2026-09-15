@@ -365,8 +365,13 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   and take effect for in-flight requests, so a pack extracted *after* a
   window exists is immediately fetchable — no per-pack call needed; the
   app mounts the **container** once.
-- Range / `206 Partial Content` is honored on all backends, so a large
-  `<video>` seeks/streams off disk instead of buffering.
+- Range is honored on all backends, so a large `<video>` seeks/streams off disk
+  instead of buffering. Four of them answer `206 Partial Content`; **Android
+  serves from the requested offset to the end of the file, under a `200`**,
+  because its WebView rejects a `206` returned from an intercepted response
+  before the page ever sees it (measured — the fetch fails outright, with no
+  diagnostic anywhere). Seeking works either way, which is what the header is
+  for; a client that branches on `206` takes its whole-file path there.
 - The prefix is fully app-chosen (anything but the bundle root `/`).
 - Content types are derived from the file extension and cover the web-facing
   set — HTML/JS/CSS/JSON/WASM, PNG/JPEG/WebP/GIF/SVG/ICO, HEIC/HEIF/AVIF, the
@@ -399,19 +404,26 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   unreachable, Windows serves its whole bundle origin through the router like
   every other backend, and one table answers for all five.
 
-**Android** builds its asset loader before any Swift runs, so a mount
-that must exist at startup is declared in `pwa.json` instead — the
+**Android** builds its asset loader before any Swift runs, so a mount that must
+exist *before the first page load* is declared in `pwa.json` as well — the
 bundler wires it into the generated Activity:
 
 ```json
 "build": { "serve": [ { "mount": "/packs", "from": "data/packs" } ] }
 ```
 
-`from` is rooted at the per-app data dir by default (a `cache/…` prefix
-roots it at the cache dir). On desktop the imperative
-`ctx.serveDirectory` is the equivalent and is read at `configure()` time;
-a runtime `serveDirectory` for an *undeclared* prefix is a desktop-only
-capability. See [docs/design/runtime-content-packs.md](design/runtime-content-packs.md).
+`from` is rooted at the per-app data dir by default (a `cache/…` prefix roots it
+at the cache dir), and it is the only form that can serve a request the page
+makes before `configure()` has run.
+
+Everything else `ctx.serveDirectory` does works on Android: a prefix mounted at
+runtime, from **any** root the app can read — not only inside app storage, which
+is all a `build.serve` mount can reach — and `unserveDirectory` takes it away
+again. The WebView asks the same `AssetProvider` the other four backends resolve
+against, so one mount table governs all five. Reading a folder the user picked
+by path additionally needs
+[`android.permissions`](android-setup.md#declaring-an-android-permission-androidpermissions).
+See [docs/design/runtime-content-packs.md](design/runtime-content-packs.md).
 
 ## Window events
 
@@ -431,10 +443,30 @@ await main.subscribe { event in
 }
 ```
 
-WM-driven focus / minimize / fullscreen events on Linux are currently
-only emitted when the corresponding programmatic method is called —
-user-driven changes (alt-tab, click another window) don't yet reach
-subscribers on either GTK backend. See
+**`.didFocus` / `.didBlur` mean "this window became, or stopped being, the one
+the user is working in" on all five backends** — including the two where that
+isn't a window manager's idea of focus at all. On **Android** they come from
+`Activity.onResume` / `onPause`, and on **iOS** from the scene becoming active /
+resigning active, which is where a mobile app re-reads state it couldn't watch
+while suspended and re-engages a lock. So the same Swift is correct everywhere:
+
+```swift
+Task {
+    for await event in main.eventStream() {
+        switch event {
+        case .didFocus: await library.rescan()
+        case .didBlur: lock.engage()
+        default: break
+        }
+    }
+}
+```
+
+Two notes. `.didFocus` is also emitted by an explicit `focus()` call, and the
+backends de-duplicate that against the real signal that follows, so presenting a
+window doesn't report focus twice. And minimize / fullscreen are still
+programmatic-only on the GTK backends — a user-driven alt-tab now reports focus,
+but iconifying from the window manager doesn't report `.didMinimize`. See
 [docs/linux-setup.md](linux-setup.md#known-limitations-on-linux).
 
 ## Server-push events

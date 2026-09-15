@@ -36,6 +36,23 @@ If you want to ship a web frontend as a real native app on every platform, today
 | Android           | Yes                 | Yes      | No       | No       |
 | On-device AI      | Built-in (`ai.*`)   | DIY      | DIY      | DIY      |
 
+### The bar every feature is held to
+
+**A capability should work on every platform an adopting app targets, and ask
+the developer for as little as possible — ideally nothing beyond the standard
+web API they would write anyway.**
+
+Most people shipping to five platforms don't own five platforms to test on, so a
+feature that quietly works on three of them isn't a bug they can report — it's a
+gap they never find. Two things follow, and they shape what lands here:
+
+- **Where a web API already exists, the job is to make it true everywhere**
+  rather than to invent a parallel one. An API beside the standard one forces
+  every app to carry a branch, and the branch breaks on the platform its author
+  doesn't have.
+- **Where no web API exists**, the plugin is adapted to each platform's own
+  conventions rather than ported literally from whichever one was written first.
+
 ## Quickstart
 
 Grab a release binary and scaffold a project:

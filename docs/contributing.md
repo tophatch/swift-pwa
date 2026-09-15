@@ -114,6 +114,12 @@ runtime/CLI never link a system copy — see the per-platform setup docs
 These are enforced by review (and mostly by CI). Full rationale in
 [`CLAUDE.md`](../CLAUDE.md):
 
+- **Every feature works everywhere, with minimal developer requirement.** An
+  adopting app should get a capability on every platform it targets without
+  per-platform code — ideally without writing anything beyond the standard web
+  API. Adopters rarely own all five platforms, so a capability that works on
+  three is a gap they can't report. Prefer making an existing web API work
+  everywhere over adding a parallel one beside it.
 - **Cross-platform parity is the default.** A feature that lands on one backend
   ships the equivalent on the others in the same change, adapted to each
   platform's norms. If parity isn't feasible, document the gap in the relevant

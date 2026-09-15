@@ -645,6 +645,7 @@ keyboard's play key do the right thing.
 ```js
 navigator.mediaSession.metadata = new MediaMetadata({
   title: 'Chapter 4', artist: 'The Book', album: 'Part One',
+  artwork: [{ src: '/covers/book.png', sizes: '512x512', type: 'image/png' }],
 });
 navigator.mediaSession.playbackState = 'playing';
 navigator.mediaSession.setActionHandler('pause', () => audio.pause());
@@ -672,8 +673,21 @@ Two Android notes:
   once `POST_NOTIFICATIONS` is granted (Android 13+ asks at runtime); request it
   with the [`notifications.*`](#notifications) plugin. The `MediaSession` itself
   — and therefore media *keys* — works without it.
-- **Artwork isn't published yet.** `MediaMetadata.artwork` round-trips in JS so
-  your code reads back what it set, but the OS shows title and artist only.
+- **Artwork is fetched by the page, not by the OS.** `MediaMetadata.artwork`
+  works — the cover appears on the lock screen and in the notification — but the
+  fill reads the image *in your document* and sends the bytes, rather than
+  handing the platform your URL. That is why it works at all: an artwork `src`
+  in your own bundle sits on a virtual origin no other process on the device can
+  resolve, and a `blob:` handle exists nowhere but that document. It also means
+  any URL your page can fetch is fair game, including `blob:` and `data:`.
+
+  Two consequences worth knowing. The fill picks the entry closest to **512 px**
+  rather than the first or the largest, so offering several `sizes` gets you the
+  sharp one without pushing a print-resolution master through the bridge; and
+  artwork over **4 MB** is skipped with a `console.warn`, leaving the track
+  showing without its image. The text is published immediately and the image
+  follows when it loads, so a cover that has to be downloaded never delays the
+  controls appearing.
 
 ### `setSinkId` — choosing an output device, and where it isn't offered
 

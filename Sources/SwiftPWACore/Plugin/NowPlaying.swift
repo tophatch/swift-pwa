@@ -41,11 +41,45 @@ public struct NowPlayingMetadata: Sendable, Codable, Equatable {
     public var title: String?
     public var artist: String?
     public var album: String?
+    /// Cover art for the lock screen and the notification.
+    public var artwork: NowPlayingArtwork?
 
-    public init(title: String? = nil, artist: String? = nil, album: String? = nil) {
+    public init(
+        title: String? = nil,
+        artist: String? = nil,
+        album: String? = nil,
+        artwork: NowPlayingArtwork? = nil
+    ) {
         self.title = title
         self.artist = artist
         self.album = album
+        self.artwork = artwork
+    }
+}
+
+/// Cover art, as **bytes rather than a URL**, which is the whole design
+/// decision here.
+///
+/// The page names artwork the way the W3C spec says — a `src` URL in a
+/// `MediaMetadata` — but that URL is only meaningful *inside the webview*: it
+/// can be a bundle asset on a virtual origin no HTTP client on the device can
+/// resolve, a `blob:` handle that exists only in that document, or a `data:`
+/// URL. So the polyfill fetches it where it resolves and sends what came back.
+/// The alternative — handing the platform a string and hoping — fails silently
+/// on exactly the most common case, an asset in the app's own bundle.
+public struct NowPlayingArtwork: Sendable, Codable, Equatable {
+    /// The encoded image, in whatever format the page's artwork URL served.
+    /// Crosses the bridge as base64 (`Data`'s default JSON representation) and
+    /// is handed to the platform's own decoder, so anything that decoder takes
+    /// works — PNG, JPEG, WebP.
+    public var data: Data
+    /// What the fetch reported as the content type, when it reported one.
+    /// Advisory: every platform decoder here sniffs the bytes.
+    public var mimeType: String?
+
+    public init(data: Data, mimeType: String? = nil) {
+        self.data = data
+        self.mimeType = mimeType
     }
 }
 

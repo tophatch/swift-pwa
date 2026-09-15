@@ -124,6 +124,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the outcome is already true; leave it absent when a no-op would make the page
   believe something false.**
 
+- **`MediaMetadata.artwork` reaches the lock screen and the notification** on
+  Android, which completes the `navigator.mediaSession` fill.
+
+  The design decision worth recording is that **the page fetches its own
+  artwork and the bytes cross the bridge**, rather than the URL crossing and
+  the platform fetching. Handing Android a `src` would fail on the most common
+  case by far — cover art in the app's own bundle, which lives on a virtual
+  origin no other process on the device can resolve — and fail silently, since
+  a decode that finds nothing looks the same as a track with no art. Fetching
+  in the document also makes `blob:` and `data:` artwork work for free.
+
+  Two behaviours follow from that choice and are documented rather than
+  implied: the fill picks the artwork entry closest to **512 px** instead of
+  the first or the largest, so a page offering several `sizes` gets a sharp
+  cover without pushing a print-resolution master through the bridge; and art
+  over **4 MB** is skipped with a `console.warn` rather than resized, because
+  re-encoding a page's own image is a surprise. Metadata text publishes
+  immediately and the image follows, so downloading a cover never delays the
+  controls.
+
+  Device-verified on a Fold7 against the real controls: a page offering a 96 px
+  and a 512 px cover gets the 512 px one drawn in the media notification;
+  switching to a track with no artwork clears it rather than leaving the
+  previous cover under the new title; an artwork URL that 404s leaves the track
+  showing with a warning; and the notification's own pause button still reaches
+  the page's handler.
+
 ### Fixed
 
 - **Android serves the web bundle at the origin root**, so a page's

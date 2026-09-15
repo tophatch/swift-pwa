@@ -1820,6 +1820,7 @@ enum AndroidTemplates {
         private var nowPlayingTitle: String? = null
         private var nowPlayingArtist: String? = null
         private var nowPlayingAlbum: String? = null
+        private var nowPlayingArtwork: android.graphics.Bitmap? = null
         private var nowPlayingState = "none"
         private var nowPlayingActions = listOf<String>()
         private var nowPlayingDurationMs = 0L
@@ -1869,10 +1870,19 @@ enum AndroidTemplates {
                 nowPlayingTitle = null
                 nowPlayingArtist = null
                 nowPlayingAlbum = null
+                nowPlayingArtwork = null
             } else {
                 nowPlayingTitle = meta.optString("title", null.toString()).takeIf { meta.has("title") && !meta.isNull("title") }
                 nowPlayingArtist = meta.optString("artist", null.toString()).takeIf { meta.has("artist") && !meta.isNull("artist") }
                 nowPlayingAlbum = meta.optString("album", null.toString()).takeIf { meta.has("album") && !meta.isNull("album") }
+                // Absent means *clear*, not "leave what's there". The polyfill
+                // publishes a new track's text first and its image in a second
+                // call, so the first call has no artwork by construction —
+                // carrying the old bitmap over would put the previous track's
+                // cover next to the new track's title until the fetch landed,
+                // and keep it forever for a track that has none. A brief
+                // coverless moment is the honest rendering.
+                nowPlayingArtwork = decodeArtwork(meta.optJSONObject("artwork"))
             }
             pushNowPlaying()
         }
@@ -1904,6 +1914,26 @@ enum AndroidTemplates {
             pushNowPlaying()
         }
 
+        /// Base64 bytes from the page's own `fetch` — see `NowPlayingArtwork`
+        /// for why the URL can't travel instead. Decoding is best-effort: a
+        /// corrupt or unsupported image costs the cover art, never the
+        /// notification.
+        private fun decodeArtwork(json: JSONObject?): android.graphics.Bitmap? {
+            val encoded = json?.optString("data").orEmpty()
+            if (encoded.isEmpty()) return null
+            return try {
+                val bytes = android.util.Base64.decode(encoded, android.util.Base64.DEFAULT)
+                android.graphics.BitmapFactory.decodeByteArray(bytes, 0, bytes.size).also {
+                    if (it == null) {
+                        android.util.Log.w("swift-pwa", "mediaSession artwork could not be decoded")
+                    }
+                }
+            } catch (t: Throwable) {
+                android.util.Log.w("swift-pwa", "mediaSession artwork could not be decoded: ${t.message}")
+                null
+            }
+        }
+
         private fun pushNowPlaying() {
             val session = ensureMediaSession()
 
@@ -1913,6 +1943,9 @@ enum AndroidTemplates {
                     .putString(android.media.MediaMetadata.METADATA_KEY_ARTIST, nowPlayingArtist ?: "")
                     .putString(android.media.MediaMetadata.METADATA_KEY_ALBUM, nowPlayingAlbum ?: "")
                     .putLong(android.media.MediaMetadata.METADATA_KEY_DURATION, nowPlayingDurationMs)
+                    // ALBUM_ART is what the lock screen and Now Playing draw;
+                    // the notification's large icon is set separately below.
+                    .putBitmap(android.media.MediaMetadata.METADATA_KEY_ALBUM_ART, nowPlayingArtwork)
                     .build()
             )
 
@@ -1969,6 +2002,7 @@ enum AndroidTemplates {
                 .setContentTitle(nowPlayingTitle ?: activity.applicationInfo.loadLabel(activity.packageManager))
                 .setContentText(nowPlayingArtist ?: "")
                 .setSmallIcon(icon)
+                .setLargeIcon(nowPlayingArtwork)
                 .setStyle(Notification.MediaStyle().setMediaSession(session.sessionToken))
                 .setOngoing(nowPlayingState == "playing")
                 .build()

@@ -357,8 +357,6 @@
                     this.title = init.title === undefined ? "" : String(init.title);
                     this.artist = init.artist === undefined ? "" : String(init.artist);
                     this.album = init.album === undefined ? "" : String(init.album);
-                    // Kept so a page can read back what it set; artwork is not
-                    // yet published to the OS (see docs/javascript-api.md).
                     this.artwork = init.artwork === undefined ? [] : init.artwork;
                 }
             };
@@ -368,6 +366,75 @@
         const handlers = new Map();   // action -> callback
         let metadata = null;
         let playbackState = "none";
+
+        // Roughly what a lock screen draws cover art at on a high-density
+        // phone. Picking by size rather than taking artwork[0] matters: a page
+        // that offers 96px and 512px versions gets the sharp one, and a page
+        // that offers a 2048px master doesn't push 4 MB through the bridge for
+        // a thumbnail.
+        const ARTWORK_TARGET_PX = 512;
+        // A ceiling rather than a resize, because re-encoding the page's own
+        // artwork would be a surprise. Over this it's skipped with a warning —
+        // the track still shows, just without the image.
+        const ARTWORK_MAX_BYTES = 4 * 1024 * 1024;
+        // Bumped on every assignment, so a slow fetch for the previous track
+        // can't land its cover on the current one.
+        let metadataGeneration = 0;
+
+        // `sizes` is a space-separated list ("96x96 128x128") or "any"; 0 means
+        // "no usable size given", not "zero pixels".
+        const artworkMaxDimension = (sizes) => {
+            let max = 0;
+            for (const token of String(sizes === undefined ? "" : sizes).split(/\s+/)) {
+                const parsed = /^(\d+)x(\d+)$/i.exec(token);
+                if (parsed) max = Math.max(max, Number(parsed[1]), Number(parsed[2]));
+            }
+            return max;
+        };
+
+        // Smallest entry that still covers the target; an entry with no usable
+        // size ("any", an SVG) is preferred over one known to be too small,
+        // since upscaling a thumbnail looks worse than whatever "any" turns
+        // out to be.
+        const pickArtwork = (list) => {
+            let best = null;
+            let bestScore = Infinity;
+            for (const entry of Array.isArray(list) ? list : []) {
+                if (!entry || !entry.src) continue;
+                const max = artworkMaxDimension(entry.sizes);
+                const score = max === 0
+                    ? 1e4
+                    : max >= ARTWORK_TARGET_PX ? max - ARTWORK_TARGET_PX
+                        : 1e5 + (ARTWORK_TARGET_PX - max);
+                if (score < bestScore) {
+                    bestScore = score;
+                    best = entry;
+                }
+            }
+            return best;
+        };
+
+        // Fetched here, in the document, because that is the only place the
+        // page's own artwork URL means anything — a bundle asset sits on a
+        // virtual origin, and a `blob:` handle exists nowhere else at all.
+        const readArtwork = async (entry) => {
+            const response = await fetch(entry.src);
+            if (!response.ok) throw new Error("HTTP " + response.status);
+            const blob = await response.blob();
+            if (blob.size > ARTWORK_MAX_BYTES) {
+                throw new Error(blob.size + " bytes exceeds the " + ARTWORK_MAX_BYTES + "-byte limit");
+            }
+            const dataURL = await new Promise((resolve, reject) => {
+                const reader = new FileReader();
+                reader.onload = () => resolve(String(reader.result));
+                reader.onerror = () => reject(reader.error || new Error("unreadable"));
+                reader.readAsDataURL(blob);
+            });
+            return {
+                data: dataURL.slice(dataURL.indexOf(",") + 1),
+                mimeType: blob.type || null,
+            };
+        };
 
         const publishActions = () => {
             invoke("__audio.nowPlaying.setActions", { actions: [...handlers.keys()] })
@@ -392,13 +459,32 @@
             get metadata() { return metadata; },
             set metadata(value) {
                 metadata = value || null;
-                invoke("__audio.nowPlaying.setMetadata", {
-                    metadata: metadata && {
-                        title: metadata.title || null,
-                        artist: metadata.artist || null,
-                        album: metadata.album || null,
-                    },
-                }).catch(() => {});
+                const generation = ++metadataGeneration;
+                const published = metadata && {
+                    title: metadata.title || null,
+                    artist: metadata.artist || null,
+                    album: metadata.album || null,
+                };
+                invoke("__audio.nowPlaying.setMetadata", { metadata: published }).catch(() => {});
+
+                // Artwork follows the text rather than gating it, so the track
+                // appears on the lock screen straight away and gains its image
+                // when the bytes arrive. A page that sets metadata from a
+                // network response would otherwise show nothing until the
+                // image downloaded.
+                const chosen = metadata && pickArtwork(metadata.artwork);
+                if (!chosen) return;
+                readArtwork(chosen).then((artwork) => {
+                    if (generation !== metadataGeneration) return;
+                    invoke("__audio.nowPlaying.setMetadata", {
+                        metadata: { ...published, artwork },
+                    }).catch(() => {});
+                }, (error) => {
+                    // Warned rather than swallowed: the track still shows, so
+                    // the only symptom is a missing image, and a page author
+                    // needs to be told which URL didn't load.
+                    console.warn("swift-pwa: mediaSession artwork could not be loaded", chosen.src, error);
+                });
             },
 
             get playbackState() { return playbackState; },

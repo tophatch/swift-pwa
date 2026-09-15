@@ -295,6 +295,41 @@ struct NowPlayingPluginTests {
         #expect(nowPlaying.metadata?.artist == "A Book")
     }
 
+    @Test("artwork arrives as bytes, and the mime type rides along")
+    func artwork() async {
+        let (app, nowPlaying) = makeApp()
+        // A one-pixel PNG, base64 — the shape the polyfill produces after
+        // fetching the page's own artwork URL.
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        let json = """
+        {"metadata":{"title":"Chapter 1","artwork":{"data":"\(png)","mimeType":"image/png"}}}
+        """
+        guard case .ok = await dispatch(app, "__audio.nowPlaying.setMetadata", json) else {
+            Issue.record("expected ok"); return
+        }
+        let artwork = nowPlaying.metadata?.artwork
+        #expect(artwork?.mimeType == "image/png")
+        #expect(artwork?.data == Data(base64Encoded: png))
+        // PNG magic, so a base64 decode that silently produced garbage fails here.
+        #expect(artwork?.data.prefix(4).elementsEqual([0x89, 0x50, 0x4E, 0x47]) == true)
+    }
+
+    /// The polyfill publishes a track's text first and its image second, so a
+    /// payload without artwork is the *normal* first half of a track change —
+    /// it has to clear, or the previous cover outlives its track.
+    @Test("metadata without artwork clears it rather than keeping the last one")
+    func artworkCleared() async {
+        let (app, nowPlaying) = makeApp()
+        let png = "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
+        _ = await dispatch(
+            app, "__audio.nowPlaying.setMetadata",
+            #"{"metadata":{"title":"one","artwork":{"data":"\#(png)"}}}"#
+        )
+        #expect(nowPlaying.metadata?.artwork != nil)
+        _ = await dispatch(app, "__audio.nowPlaying.setMetadata", #"{"metadata":{"title":"two"}}"#)
+        #expect(nowPlaying.metadata?.artwork == nil)
+    }
+
     @Test("clearing metadata is distinct from never setting it")
     func clearMetadata() async {
         let (app, nowPlaying) = makeApp()
@@ -387,5 +422,29 @@ struct MediaSessionPolyfillTests {
         for state in NowPlayingPlaybackState.allCases {
             #expect(bridge.contains("\"\(state.rawValue)\""), "bridge.js is missing \(state.rawValue)")
         }
+    }
+
+    /// Artwork is fetched in the page rather than passed as a URL, because the
+    /// page's URL is the only one that resolves — see `NowPlayingArtwork`.
+    @Test("artwork is fetched in the document and sent as bytes")
+    func artworkFetchedInPage() {
+        #expect(bridge.contains("const readArtwork = async (entry)"))
+        #expect(bridge.contains("await fetch(entry.src)"))
+        #expect(bridge.contains("readAsDataURL(blob)"))
+    }
+
+    /// Without the generation guard a slow fetch for the previous track lands
+    /// its cover on the current one — the failure is invisible in a unit test
+    /// and obvious on a lock screen.
+    @Test("a stale artwork fetch can't land on the next track")
+    func artworkGenerationGuard() {
+        #expect(bridge.contains("const generation = ++metadataGeneration"))
+        #expect(bridge.contains("if (generation !== metadataGeneration) return"))
+    }
+
+    @Test("oversized artwork is skipped rather than pushed through the bridge")
+    func artworkSizeCap() {
+        #expect(bridge.contains("ARTWORK_MAX_BYTES"))
+        #expect(bridge.contains("blob.size > ARTWORK_MAX_BYTES"))
     }
 }

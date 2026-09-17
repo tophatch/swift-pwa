@@ -229,4 +229,91 @@ struct AndroidToolchainTests {
         ))
         #expect(properties.contains(#"sdk.dir=C:\\Users\\x\\AppData\\Local\\Android\\Sdk"#))
     }
+
+    // MARK: - Swift release matching
+
+    // There is no repo-wide Android Swift pin (docs/android-setup.md §1): the
+    // installed SDK names the release, and the host has to serve it. These
+    // cover the parsing that decision rests on.
+
+    @Test("reads the Swift release from both SDK bundle spellings")
+    func sdkBundleRelease() {
+        // Through 6.2 the bundle was `swift-6.2-RELEASE-android-0.1`; from 6.4
+        // it is `swift-6.4.0-RELEASE_android`. Understanding only the old
+        // spelling selected no toolchain at all, silently, and the cross-build
+        // ran under Xcode's Swift and failed on module version.
+        #expect(AndroidToolchain.swiftRelease(inSDKBundleName: "swift-6.2-RELEASE-android-0.1") == "6.2")
+        #expect(AndroidToolchain.swiftRelease(inSDKBundleName: "swift-6.4.0-RELEASE_android") == "6.4")
+        #expect(AndroidToolchain.swiftRelease(inSDKBundleName: "swift-6.10-RELEASE-android-0.3") == "6.10")
+    }
+
+    @Test("ignores names that aren't an Android SDK bundle")
+    func sdkBundleReleaseRejects() {
+        // A host toolchain is not an SDK — mistaking one for the other would
+        // report a match against a bundle that can't cross-compile anything.
+        #expect(AndroidToolchain.swiftRelease(inSDKBundleName: "swift-6.2-RELEASE.xctoolchain") == nil)
+        #expect(AndroidToolchain.swiftRelease(inSDKBundleName: "some-other-bundle") == nil)
+        #expect(AndroidToolchain.swiftRelease(inSDKBundleName: "swift-x.y-RELEASE-android") == nil)
+    }
+
+    @Test("finds the installed Android SDK bundle and strips .artifactbundle")
+    func installedSDK() {
+        let p = Self.probes(dirs: ["/home/u/.swiftpm/swift-sdks/swift-6.4.0-RELEASE_android.artifactbundle"])
+        let sdk = AndroidToolchain.installedAndroidSDK(env: ["HOME": "/home/u"], probes: p)
+        #expect(sdk == AndroidToolchain.InstalledAndroidSDK(bundle: "swift-6.4.0-RELEASE_android", release: "6.4"))
+    }
+
+    @Test("reports a bundle whose name carries no release, rather than reporting no SDK")
+    func installedSDKUnparseable() {
+        // Distinct states with distinct fixes: "install an SDK" vs "this one
+        // can't be matched to a toolchain". Folding them together is how a
+        // cross-build ends up running under whatever compiler is ambient.
+        let p = Self.probes(dirs: ["/home/u/.swiftpm/swift-sdks/my-android-sdk.artifactbundle"])
+        let sdk = AndroidToolchain.installedAndroidSDK(env: ["HOME": "/home/u"], probes: p)
+        #expect(sdk == AndroidToolchain.InstalledAndroidSDK(bundle: "my-android-sdk", release: nil))
+    }
+
+    @Test("newest bundle wins when two SDK generations are installed")
+    func installedSDKPrefersNewest() {
+        let p = Self.probes(dirs: [
+            "/home/u/.swiftpm/swift-sdks/swift-6.2-RELEASE-android-0.1.artifactbundle",
+            "/home/u/.swiftpm/swift-sdks/swift-6.4.0-RELEASE_android.artifactbundle"
+        ])
+        #expect(AndroidToolchain.installedAndroidSDK(env: ["HOME": "/home/u"], probes: p)?.release == "6.4")
+    }
+
+    @Test("no Android bundle → nil")
+    func installedSDKAbsent() {
+        let p = Self.probes(dirs: ["/home/u/.swiftpm/swift-sdks/swift-6.4.0-RELEASE-wasm.artifactbundle"])
+        #expect(AndroidToolchain.installedAndroidSDK(env: ["HOME": "/home/u"], probes: p) == nil)
+    }
+
+    @Test("$XDG_DATA_HOME is honoured in the swift-sdks root list")
+    func sdkRootsHonourXDG() {
+        let roots = AndroidToolchain.swiftSDKRoots(env: ["HOME": "/home/u", "XDG_DATA_HOME": "/data"])
+        #expect(roots.contains("/data/swiftpm/swift-sdks"))
+        #expect(roots.contains("/home/u/.swiftpm/swift-sdks"))
+    }
+
+    @Test("ranks the exact release toolchain ahead of a patch-versioned one")
+    func toolchainRanking() {
+        let p = Self.probes(dirs: [
+            "/home/u/Library/Developer/Toolchains/swift-6.4.0-RELEASE.xctoolchain",
+            "/home/u/Library/Developer/Toolchains/swift-6.4-RELEASE.xctoolchain",
+            "/home/u/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain",
+            "/home/u/Library/Developer/Toolchains/swift-latest.xctoolchain"
+        ])
+        #expect(AndroidToolchain.releaseToolchainNames(matching: "6.4", env: ["HOME": "/home/u"], probes: p) == [
+            "swift-6.4-RELEASE.xctoolchain",
+            "swift-6.4.0-RELEASE.xctoolchain"
+        ])
+    }
+
+    @Test("no toolchain for the SDK's release → empty, not a near miss")
+    func toolchainNoMatch() {
+        // `swift-6.2-RELEASE` must not answer for a 6.4 SDK: the SDK's
+        // prebuilt modules only load in their own release.
+        let p = Self.probes(dirs: ["/home/u/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain"])
+        #expect(AndroidToolchain.releaseToolchainNames(matching: "6.4", env: ["HOME": "/home/u"], probes: p).isEmpty)
+    }
 }

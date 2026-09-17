@@ -1186,19 +1186,7 @@ struct AndroidBundler {
 
     /// Candidate SwiftPM swift-sdks roots, most-likely first.
     private func swiftSDKRootCandidates() -> [URL] {
-        let home = URL(fileURLWithPath: NSHomeDirectory())
-        var roots: [URL] = []
-        #if os(macOS)
-            roots.append(home.appendingPathComponent("Library/org.swift.swiftpm/swift-sdks"))
-        #endif
-        // Legacy data dir — used by swiftly-managed toolchains today.
-        roots.append(home.appendingPathComponent(".swiftpm/swift-sdks"))
-        // XDG location (newer SwiftPM): $XDG_DATA_HOME ?? ~/.local/share.
-        if let xdg = ProcessInfo.processInfo.environment["XDG_DATA_HOME"], !xdg.isEmpty {
-            roots.append(URL(fileURLWithPath: xdg).appendingPathComponent("swiftpm/swift-sdks"))
-        }
-        roots.append(home.appendingPathComponent(".local/share/swiftpm/swift-sdks"))
-        return roots
+        AndroidToolchain.swiftSDKRoots().map { URL(fileURLWithPath: $0) }
     }
 
     /// Map an Android ABI to the SDK's per-arch directory names:

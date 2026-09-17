@@ -19,10 +19,15 @@ and you can drive `__SWIFT_PWA__.invoke(...)` from a host shell.
 The host needs the same toolchain as a regular Android build (see
 [android-setup.md](android-setup.md) §1), plus `adb` and Python 3:
 
+The Swift release is whichever the Android SDK bundle you install names —
+there is no project-wide pin ([android-setup.md §There is no project-wide Swift
+version](android-setup.md#there-is-no-project-wide-swift-version)), so install
+the SDK first and match the toolchain to it:
+
 ```bash
 brew install swiftly openjdk@17 python3
-swiftly install 6.2.0
-swift sdk install <swift-android-sdk-6.2-url> --checksum <sha>
+swift sdk install <swift-android-sdk-url> --checksum <sha>
+swiftly install <the release that SDK names, exact patch>
 curl -fsSLo /tmp/ndk.zip https://dl.google.com/android/repository/android-ndk-r27d-darwin.zip
 unzip /tmp/ndk.zip -d ~/
 

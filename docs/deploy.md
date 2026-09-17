@@ -100,11 +100,14 @@ bundle id as `TOOLCHAINS` for the cross-build. You'll see:
 swift-pwa: cross-compile toolchain: org.swift.6200202509111a (swift-6.2-RELEASE.xctoolchain, matched to the Swift 6.2 Android SDK)
 ```
 
-This is macOS-only (the `TOOLCHAINS` / `.xctoolchain` mechanism is Apple-specific
-— on a Linux host, match the toolchain with `swiftly`; see
-[android-setup.md](android-setup.md)). It's non-fatal: an explicit `TOOLCHAINS`
-(or a `swiftly run +X` wrapper) always wins, and if the SDK/toolchain can't be
-resolved deploy prints a hint and continues.
+The `TOOLCHAINS` / `.xctoolchain` half is macOS-only, that mechanism being
+Apple-specific; on a Linux or Windows host the build wraps itself in
+`swiftly run +<release>` instead, which the same code decides. It's non-fatal
+either way: an explicit `TOOLCHAINS` (or your own `swiftly run +X` wrapper)
+always wins, and if the SDK/toolchain can't be resolved deploy prints a hint and
+continues. `swift-pwa doctor --target android` reports the pairing before you
+spend a build on it — see
+[android-setup.md](android-setup.md#there-is-no-project-wide-swift-version).
 
 ## iOS
 

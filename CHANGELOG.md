@@ -9,6 +9,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`swift-pwa doctor --target android` now checks the host against the
+  installed Swift Android SDK**, and the docs stop naming a Swift version
+  (#218).
+
+  The Swift Android SDK's prebuilt `.swiftmodule`s load only in their own
+  release, so a cross-compile on a host without that release fails with
+  `module compiled with Swift X cannot be imported by the Swift Y compiler` —
+  at the end of a multi-minute build, naming the compiler rather than the fix.
+  `doctor` now reports the pairing up front: which release the installed SDK
+  bundle needs, and whether this machine can serve it (a matching
+  `.xctoolchain` on macOS, the ambient `swift` or a swiftly-installed release
+  elsewhere). Advisory, not required, because a plain `build --target android`
+  emits the Gradle scaffold and needs no cross-compile at all.
+
+  **The policy it encodes: there is no project-wide Android Swift version, per
+  host or otherwise.** The alternative — one release across every machine — was
+  considered and rejected. From Xcode 27 a Mac cannot choose (the macOS SDK
+  passes `-target-arch-variant`, which earlier compilers reject), CI cannot
+  enforce a choice either way (the `android` job is scaffold-only on purpose,
+  since a hosted runner can't cross-compile this reliably), and after #217 the
+  matching is automatic anyway. So the installed SDK names the release and the
+  CLI finds a toolchain for it. `docs/android-setup.md` said `swiftly install
+  6.2.0` and read as though 6.2 were *the* supported version; its examples are
+  now labelled as shape, not as a supported set.
+
+  Checking this surfaced one stale claim: the **API 28 floor is swift-pwa's
+  own**, not the SDK's. It was the SDK's under 6.2, whose `swift-sdk.json`
+  declared triples for API 28–36; the 6.4 bundle declares 23–36 again
+  (measured). The bundler still clamps to 28 and the docs now say why that is
+  ours to lift, with a build and an on-device run at the lower API, rather than
+  something the toolchain imposes.
+
 - **`ctx.serveDirectory(_:at:)` works on Android** — a directory the app mounts
   at *runtime*, from any root it can read, served on the bundle origin (#213).
 

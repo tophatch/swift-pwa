@@ -578,16 +578,6 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
-**Swift 6.4 can't link a Linux app yet ([#229](https://github.com/tophatch/swift-pwa/issues/229)).**
-Under 6.4 — where `swiftbuild` became the default build engine — the vendored
-zstd decoder's object never reaches the product link, so *any* app linking the
-GTK backend fails with `undefined reference to symbol 'ZSTD_isError'` and
-`libzstd.so.1: DSO missing from command line`. Measured on `Examples/HelloPWA`
-and on a fresh `swift-pwa init` app; the same tree links cleanly under 6.2.0 and
-6.3.1. **Stay on 6.2 / 6.3.x on Linux until that's fixed.** (There is no
-project-wide Swift version — see [docs/android-setup.md](android-setup.md) §1 —
-so this is a per-box choice, and CI pins 6.2.)
-
 **GTK4 can't run the driver's backgrounded mode.** `swift-pwa drive
 --background` (see [docs/app-driver.md](app-driver.md#running-a-suite-without-losing-the-machine----background))
 parks the app's window off screen so a test suite doesn't take over the machine.

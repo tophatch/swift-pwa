@@ -118,4 +118,26 @@ struct DoctorAudioPolicyTests {
         defer { try? FileManager.default.removeItem(at: root) }
         #expect(Doctor.audioPolicy(in: root).isEmpty)
     }
+
+    // MARK: - swiftly list scanning (the non-Apple half of the toolchain match)
+
+    @Test("matches a swiftly-installed toolchain in the SDK's release line")
+    func swiftlyListMatches() {
+        // Real `swiftly list` output: one toolchain per line, with optional
+        // trailing markers.
+        #expect(Doctor.swiftlyLine("Swift 6.4.0", isRelease: "6.4"))
+        #expect(Doctor.swiftlyLine("Swift 6.4.0 (in use) (default)", isRelease: "6.4"))
+        #expect(Doctor.swiftlyLine("Swift 6.4", isRelease: "6.4"))
+    }
+
+    @Test("a different release line is not a match")
+    func swiftlyListRejects() {
+        // `Swift 6.40` must not answer for 6.4: the SDK's prebuilt modules
+        // load only in their own release, so a prefix test alone would report
+        // a toolchain that can't compile against the SDK.
+        #expect(!Doctor.swiftlyLine("Swift 6.40.0", isRelease: "6.4"))
+        #expect(!Doctor.swiftlyLine("Swift 6.2.0 (in use) (default)", isRelease: "6.4"))
+        #expect(!Doctor.swiftlyLine("Installed release toolchains", isRelease: "6.4"))
+        #expect(!Doctor.swiftlyLine("", isRelease: "6.4"))
+    }
 }

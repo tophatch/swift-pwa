@@ -30,9 +30,40 @@ generated `MainActivity` + `SwiftPWABridge`.
 
 ## 1. Toolchain
 
+### There is no project-wide Swift version
+
+**The Swift Android SDK you install decides the Swift release, per machine.**
+There is no number this project pins, and deliberately so — the hosts that
+build it cannot agree on one. From Xcode 27 a Mac has no choice at all (see the
+Xcode callout below); a Linux or Windows box is free to sit on whatever its
+toolchain manager gave it. Forcing one release across a fleet buys nothing the
+matching doesn't already do, and CI cannot enforce it either way: the `android`
+CI job is scaffold-only on purpose, because a hosted runner can't cross-compile
+this reliably. Device verification happens on real hardware instead.
+
+So the rule is per-host, and the CLI does the matching:
+
+- the installed SDK bundle's name carries the release it needs
+  (`swift-6.4.0-RELEASE_android` → Swift 6.4);
+- `swift-pwa build --cross-compile-android` selects a toolchain for it — via
+  `TOOLCHAINS` on macOS, `swiftly run +<release>` elsewhere — and prints which;
+- `swift-pwa doctor --target android` reports whether this host has one
+  *before* you spend a cross-compile finding out, e.g.
+
+  ```text
+  ✓ Android SDK / toolchain match: swift-6.4.0-RELEASE_android needs Swift 6.4 — swift-6.4.0-RELEASE.xctoolchain is installed
+  ✓ Android SDK / toolchain match: swift-6.2-RELEASE-android-0.1 needs Swift 6.2; the ambient swift is 6.3, so the cross-compile runs under `swiftly run +6.2`
+  ```
+
+Version numbers below are examples of the shape, not a supported set. The one
+check that *does* run everywhere is `ManifestDependencyDriftTests`, and it is
+about declared dependencies, not toolchains.
+
+### What you need
+
 The cross-compile path verified against this repo's `Examples/HelloPWA`:
 
-| Component                            | Pinned version             | Install                                                                                                |
+| Component                            | Version                    | Install                                                                                                |
 |--------------------------------------|----------------------------|--------------------------------------------------------------------------------------------------------|
 | Swift toolchain                      | **exactly the SDK's release** | `brew install swiftly && swiftly init && swiftly install <version>` — must match the SDK exactly (see §2) |
 | Swift Android SDK                    | e.g. swift-6.4.0-RELEASE_android | `swift sdk install <bundle-url> --checksum <sha>` — take both from the "Swift SDK for Android" download link on <https://www.swift.org/install/macos/> (the path is not guessable from `releases.json`) |
@@ -44,10 +75,11 @@ The cross-compile path verified against this repo's `Examples/HelloPWA`:
 | Gradle wrapper                       | **8.10.2 (vendored)**      | Shipped inside the generated scaffold (`gradlew`, `gradlew.bat`, `gradle/wrapper/*`); no separate install needed. AGP 8.5 + Kotlin 2.0 dependencies are resolved on first wrapper run. |
 
 > **Install the exact patch version, not the `major.minor`.** Swift's
-> `.swiftmodule` format isn't ABI-stable across patch versions, so a 6.2.4
-> compiler refuses to import the SDK's 6.2.0 modules with `module compiled
+> `.swiftmodule` format isn't ABI-stable across patch versions, so a compiler
+> one patch ahead of the SDK refuses to import its modules — `module compiled
 > with Swift 6.2 cannot be imported by the Swift 6.2.4 compiler`. `swiftly
-> install 6.2` resolves to the latest patch; name the SDK's own version.
+> install <major.minor>` resolves to the *latest* patch, which is how you end
+> up there; name the SDK's own version.
 
 > **On a Mac, the toolchain also has to satisfy Xcode's SDK.** From Xcode 27
 > (Swift 6.4), the macOS SDK passes `-target-arch-variant`, which earlier
@@ -112,18 +144,24 @@ that never exported anything. (Only `sdk.dir` — an `ndk.dir` AGP doesn't need
 gets version-matched against its own default and warns `CXX1104` on every module
 task.)
 
-`swift-pwa doctor --target android` prints where each piece was found, and
-`deploy` fails up front — before the multi-minute cross-compile — when the JDK or
-SDK is missing, rather than letting Gradle report it at the end.
+`swift-pwa doctor --target android` prints where each piece was found — plus
+whether this host has a toolchain for the installed Swift Android SDK's release
+(see [§There is no project-wide Swift version](#there-is-no-project-wide-swift-version)) —
+and `deploy` fails up front, before the multi-minute cross-compile, when the JDK
+or SDK is missing, rather than letting Gradle report it at the end.
 
 A second pin worth knowing about, derived from the SDK's own metadata:
 
-> **Why the API 28 floor.** The Swift Android SDK 6.2 distribution's
-> `swift-sdk.json` only declares target triples for API 28–36. The
-> older API 24 floor was dropped in that release. The CLI's bundler
-> clamps to API 28 even when `pwa.json`'s `android.min_sdk` is lower,
-> with a warning, since SwiftPM otherwise silently resolves to a
-> wrong-arch resource path.
+> **Why the API 28 floor.** This is swift-pwa's clamp, not the SDK's any
+> more. It started as the SDK's: the 6.2 distribution's `swift-sdk.json`
+> declared target triples for API 28–36 only, having dropped the older API 24
+> floor, and SwiftPM silently resolves to a wrong-arch resource path when
+> asked for a triple that isn't declared. The 6.4 SDK declares API **23**–36
+> again (measured against the installed bundle), so the bundler's clamp to 28
+> — applied with a warning when `pwa.json`'s `android.min_sdk` is lower — is
+> now a swift-pwa floor rather than a toolchain limit. Lowering it needs a
+> verified build and an on-device run at the lower API, so it stays until
+> someone needs it.
 
 ## 2. Project layout
 
@@ -1076,13 +1114,14 @@ as `TOOLCHAINS` for the cross-build (printing which one it picked). An explicit
 
 You only need to set `TOOLCHAINS` by hand when invoking `swift build
 --swift-sdk` **directly** (the CLI's auto-selection doesn't reach a raw
-`swift build`), as the spike's verification did — set
-`TOOLCHAINS=org.swift.6200202509111a` (or whatever id
-`~/Library/Developer/Toolchains/swift-6.2-RELEASE.xctoolchain` resolves to on
-your machine):
+`swift build`), as the spike's verification did. The value is the
+`CFBundleIdentifier` of the `.xctoolchain` matching your installed SDK's
+release — read it off your own machine rather than copying one from here:
 
 ```bash
-export TOOLCHAINS=org.swift.6200202509111a
+# Whatever swift-<release>-RELEASE.xctoolchain your Android SDK needs:
+tc=~/Library/Developer/Toolchains/swift-<release>-RELEASE.xctoolchain
+export TOOLCHAINS=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$tc/Info.plist")
 export SWIFT_PWA_ONNXRUNTIME=1
 export LIBRARY_PATH="$(pwd)/Vendor/onnxruntime-android/arm64-v8a"
 swift build --swift-sdk aarch64-unknown-linux-android28 --target SwiftPWAONNXRuntimeAndroidSmoke
@@ -1243,9 +1282,10 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   on the roadmap. The Ed25519 signature pins the artifact identity
   separately from the platform's same-key check on the APK signing
   cert (see `AndroidUpdater`'s type docstring for why both).
-- **API 28 floor.** Driven by the Swift Android SDK 6.2's
-  `targetTriples` map, which only declares triples for API 28–36.
-  See §1's "Why the API 28 floor" callout.
+- **API 28 floor.** Originally the Swift Android SDK 6.2's `targetTriples`
+  map, which declared triples for API 28–36 only; the 6.4 SDK declares 23–36,
+  so this is now swift-pwa's own clamp and is unverified below 28. See §1's
+  "Why the API 28 floor" callout.
 - **Tray is unimplemented, indefinitely.** Android has no system-tray
   surface analogous to macOS' menu bar / Windows' notification area;
   the closest equivalent (a foreground service with a persistent

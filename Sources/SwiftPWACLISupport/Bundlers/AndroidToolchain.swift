@@ -277,6 +277,106 @@ enum AndroidToolchain {
         return 2000 + major
     }
 
+    // MARK: - Swift release matching
+
+    /// An installed Swift Android SDK bundle: its directory name (minus
+    /// `.artifactbundle`) and the Swift release it was built with.
+    ///
+    /// `release` is `nil` when the name carries no version this understands.
+    /// That is worth reporting rather than folding into "no SDK": it is the
+    /// state where a cross-build silently runs under whatever compiler is
+    /// ambient and fails on module version, far from the cause.
+    struct InstalledAndroidSDK: Equatable {
+        let bundle: String
+        let release: String?
+    }
+
+    /// Candidate SwiftPM swift-sdks roots, most-likely first. The root varies
+    /// by host *and* by SwiftPM version / install method, so every caller
+    /// probes the list rather than assuming one — getting it wrong silently
+    /// skips runtime-stdlib bundling, and the APK then assembles fine and
+    /// crashes at `System.loadLibrary` on-device.
+    static func swiftSDKRoots(env: [String: String] = ProcessInfo.processInfo.environment) -> [String] {
+        let home = env["HOME"] ?? NSHomeDirectory()
+        var roots: [String] = []
+        #if os(macOS)
+            roots.append("\(home)/Library/org.swift.swiftpm/swift-sdks")
+        #endif
+        // Legacy data dir — what swiftly-managed toolchains use today.
+        roots.append("\(home)/.swiftpm/swift-sdks")
+        // XDG location (newer SwiftPM): $XDG_DATA_HOME ?? ~/.local/share.
+        if let xdg = env["XDG_DATA_HOME"], !xdg.isEmpty {
+            roots.append("\(xdg)/swiftpm/swift-sdks")
+        }
+        roots.append("\(home)/.local/share/swiftpm/swift-sdks")
+        if let appData = env["APPDATA"], !appData.isEmpty {
+            roots.append("\(appData)/org.swift.swiftpm/swift-sdks")
+        }
+        return roots
+    }
+
+    /// The installed Swift Android SDK bundle, if there is one. Sorted
+    /// descending so a machine carrying two SDK generations reports the newer
+    /// one — the one a fresh `swift sdk install` just put there.
+    static func installedAndroidSDK(
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        probes: Probes = .host
+    ) -> InstalledAndroidSDK? {
+        for root in swiftSDKRoots(env: env) {
+            let names = probes.contentsOfDirectory(root)
+                .filter { $0.lowercased().contains("android") }
+                .sorted(by: >)
+            guard let name = names.first else { continue }
+            let bundle = name.hasSuffix(".artifactbundle")
+                ? String(name.dropLast(".artifactbundle".count))
+                : name
+            return InstalledAndroidSDK(bundle: bundle, release: swiftRelease(inSDKBundleName: bundle))
+        }
+        return nil
+    }
+
+    /// The `major.minor` Swift release a Swift Android SDK bundle name
+    /// declares. Two spellings, because the bundle was renamed: through 6.2 it
+    /// was `swift-6.2-RELEASE-android-0.1`, from 6.4 it is
+    /// `swift-6.4.0-RELEASE_android`. Understanding only the old spelling
+    /// meant no toolchain was selected at all, silently, and the cross-build
+    /// ran under Xcode's Swift and failed on module version.
+    ///
+    /// The `android` requirement is what keeps this from claiming a plain
+    /// `swift-6.2-RELEASE.xctoolchain` is an Android SDK.
+    static func swiftRelease(inSDKBundleName name: String) -> String? {
+        guard name.lowercased().contains("android"),
+              let range = name.range(of: #"^swift-[0-9]+\.[0-9]+"#, options: .regularExpression)
+        else { return nil }
+        return String(name[range].dropFirst("swift-".count))
+    }
+
+    /// Installed release `.xctoolchain` **names** that can compile against
+    /// Swift `release` (`"6.4"`), best match first: the exact
+    /// `swift-<release>-RELEASE.xctoolchain`, then any `swift-<release>.…`
+    /// bundle (a patch-versioned or same-line snapshot toolchain).
+    ///
+    /// Apple-shaped by nature — `.xctoolchain` and `TOOLCHAINS` are Xcode
+    /// concepts. Elsewhere the equivalent match is made through swiftly; see
+    /// `AndroidBundler.androidBuildTool`.
+    static func releaseToolchainNames(
+        matching release: String,
+        env: [String: String] = ProcessInfo.processInfo.environment,
+        probes: Probes = .host
+    ) -> [String] {
+        let home = env["HOME"] ?? NSHomeDirectory()
+        let exact = "swift-\(release)-RELEASE.xctoolchain"
+        return probes.contentsOfDirectory("\(home)/Library/Developer/Toolchains")
+            .filter {
+                $0.hasSuffix(".xctoolchain")
+                    && ($0.hasPrefix("swift-\(release)-RELEASE") || $0.hasPrefix("swift-\(release)."))
+            }
+            // Rank exact=0/other=1 so the comparator is a real strict-weak
+            // ordering — a bare `$0 == exact` predicate isn't, and yields
+            // undefined results once several candidates exist.
+            .sorted { ($0 == exact ? 0 : 1, $0) < ($1 == exact ? 0 : 1, $1) }
+    }
+
     // MARK: - Gradle environment
 
     /// Env overrides for a `gradlew` invocation. Only the pieces the ambient

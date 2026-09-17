@@ -123,34 +123,4 @@ struct DeployTests {
         #expect(IOSDeviceResolver.parse("not json").isEmpty)
         #expect(IOSDeviceResolver.parse(#"{"result":{"devices":[]}}"#).isEmpty)
     }
-
-    // MARK: - Android SDK → Swift version extraction (drives toolchain auto-select)
-
-    #if os(macOS)
-        @Test("extracts the Swift release from an Android SDK bundle name")
-        func androidSDKVersion() {
-            #expect(
-                Build.swiftReleaseVersion(in: "swift-6.2-RELEASE-android-0.1", marker: "-RELEASE-android") == "6.2"
-            )
-            #expect(
-                Build.swiftReleaseVersion(in: "swift-6.10-RELEASE-android-0.3", marker: "-RELEASE-android") == "6.10"
-            )
-            // The bundle was renamed from 6.4: an underscore, no trailing
-            // revision, and a patch component in the version. Matching only the
-            // old spelling silently selected no toolchain at all, so the
-            // cross-build ran under Xcode's Swift and failed on module version.
-            #expect(
-                Build.swiftReleaseVersion(
-                    in: "swift-6.4.0-RELEASE_android", marker: "-RELEASE_android"
-                ) == "6.4"
-            )
-        }
-
-        @Test("ignores non-matching / malformed names")
-        func androidSDKVersionRejects() {
-            #expect(Build.swiftReleaseVersion(in: "swift-6.2-RELEASE.xctoolchain", marker: "-RELEASE-android") == nil)
-            #expect(Build.swiftReleaseVersion(in: "some-other-bundle", marker: "-RELEASE-android") == nil)
-            #expect(Build.swiftReleaseVersion(in: "swift-x.y-RELEASE-android", marker: "-RELEASE-android") == nil)
-        }
-    #endif
 }

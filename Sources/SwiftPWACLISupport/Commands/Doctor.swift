@@ -178,9 +178,109 @@ struct Doctor: AsyncParsableCommand {
                 androidJDK(),
                 androidSwiftSDK()
             ]
+            if let match = await androidToolchainMatch() { checks.append(match) }
             if let drift = androidEntryDriftCheck() { checks.append(drift) }
             return checks
         }
+    }
+
+    /// Whether this host can actually compile against the Swift Android SDK
+    /// it has installed.
+    ///
+    /// There is deliberately **no repo-wide Swift pin** for Android (see
+    /// docs/android-setup.md §1): the installed SDK names the release it
+    /// needs, and the CLI matches a toolchain to it — via `TOOLCHAINS` on a
+    /// Mac, via `swiftly run +<release>` elsewhere. That policy is only
+    /// friendly if a host missing the release says so *here*, rather than
+    /// through "module compiled with Swift X cannot be imported by the Swift Y
+    /// compiler" at the end of a multi-minute cross-compile.
+    ///
+    /// Advisory, not required, and `nil` when no Android SDK bundle is
+    /// installed at all — the "Swift Android SDK" check above already reports
+    /// that, and a second failure line reads as a second problem.
+    private static func androidToolchainMatch() async -> Check? {
+        guard let sdk = AndroidToolchain.installedAndroidSDK() else { return nil }
+        let name = "Android SDK / toolchain match"
+        guard let release = sdk.release else {
+            return Check(
+                name: name, ok: false,
+                detail: "'\(sdk.bundle)' carries no Swift release in its name, so no toolchain can be "
+                    + "matched to it",
+                required: false,
+                fix: "Set TOOLCHAINS (macOS) or wrap the build in `swiftly run +<release>` by hand "
+                    + "— see docs/android-setup.md §1."
+            )
+        }
+        #if os(macOS)
+            if let toolchain = AndroidToolchain.releaseToolchainNames(matching: release).first {
+                return Check(
+                    name: name, ok: true,
+                    detail: "\(sdk.bundle) needs Swift \(release) — \(toolchain) is installed",
+                    required: false, fix: nil
+                )
+            }
+            return Check(
+                name: name, ok: false,
+                detail: "\(sdk.bundle) needs Swift \(release), but no swift-\(release)-RELEASE*.xctoolchain "
+                    + "is installed",
+                required: false,
+                // Xcode's Swift of the same number is a *different build* and
+                // cannot load the SDK's prebuilt modules, so "you already have
+                // 6.4 in Xcode" is not the answer here.
+                fix: "Install the swift.org \(release) toolchain — Xcode's Swift of the same version is a "
+                    + "different build and can't load the SDK's modules. See docs/android-setup.md §1."
+            )
+        #else
+            let ambient = await AndroidBundler.ambientSwiftVersion()
+            if ambient == release {
+                return Check(
+                    name: name, ok: true,
+                    detail: "\(sdk.bundle) needs Swift \(release) — the ambient swift is \(release)",
+                    required: false, fix: nil
+                )
+            }
+            let ambientLabel = ambient ?? "unreadable"
+            // swiftly being *present* isn't the question: `swiftly run
+            // +<release>` fails outright when it has no such toolchain rather
+            // than falling back, so ask it what it has.
+            if let swiftly = AndroidBundler.locateSwiftly(), await swiftlyHasRelease(release, swiftly: swiftly) {
+                return Check(
+                    name: name, ok: true,
+                    detail: "\(sdk.bundle) needs Swift \(release); the ambient swift is \(ambientLabel), so the "
+                        + "cross-compile runs under `swiftly run +\(release)`",
+                    required: false, fix: nil
+                )
+            }
+            return Check(
+                name: name, ok: false,
+                detail: "\(sdk.bundle) needs Swift \(release), the ambient swift is \(ambientLabel), and "
+                    + "swiftly has no \(release) toolchain to bridge them",
+                required: false,
+                fix: "swiftly install \(release).<patch> — name the SDK's own patch version, since "
+                    + "`.swiftmodule` isn't ABI-stable across patches. See docs/android-setup.md §1."
+            )
+        #endif
+    }
+
+    #if !os(macOS)
+        /// Whether `swiftly list` reports an installed toolchain on the
+        /// `release` line. Its output is one toolchain per line, `Swift 6.4.0`
+        /// or `Swift 6.4.0 (in use) (default)`.
+        private static func swiftlyHasRelease(_ release: String, swiftly: String) async -> Bool {
+            guard let output = try? await Shell.capture(swiftly, ["list"], timeout: 30, discardStderr: true)
+            else { return false }
+            return output.split(whereSeparator: \.isNewline).contains { swiftlyLine($0, isRelease: release) }
+        }
+    #endif
+
+    /// Pure half of the `swiftly list` scan, so it is testable on every host:
+    /// does this line name a toolchain in the `release` line? Matches
+    /// `Swift 6.4` and `Swift 6.4.1 (in use)`, but not `Swift 6.40`.
+    static func swiftlyLine(_ line: some StringProtocol, isRelease release: String) -> Bool {
+        let trimmed = line.trimmingCharacters(in: .whitespaces)
+        guard trimmed.hasPrefix("Swift \(release)") else { return false }
+        let rest = trimmed.dropFirst("Swift \(release)".count)
+        return rest.isEmpty || rest.first == "." || rest.first == " "
     }
 
     /// In an Android project, flag a stale JNI entry point — `package_id`

@@ -249,6 +249,33 @@ For TestFlight / App Store distribution, `xcodebuild archive` →
 `xcodebuild -exportArchive -exportOptionsPlist ...` is still the canonical
 chain (a CLI wrapper is a later follow-up).
 
+### When `deploy` installs but the app doesn't launch
+
+`swift-pwa deploy --target ios` installs and then launches. A refused *launch*
+doesn't fail the deploy — the app is on the device, and every cause is fixed on
+the device itself and retried with `--no-build` — so the last line says which of
+the two happened:
+
+```
+Deployed to <device>.                                  # installed and running
+Installed on <device>; the app is not running.         # installed, launch refused
+```
+
+The line above it is `devicectl`'s own reason, not a guess. The two you'll meet
+most:
+
+- **The screen is locked.** iOS won't foreground an app onto a locked screen, and
+  it won't bring the pairing tunnel up for a device that hasn't been unlocked
+  since it booted. Unlock it and re-run with `--no-build`.
+- **The developer isn't trusted yet.** Only on the first install of a
+  development or free-team build: Settings → General → VPN & Device Management →
+  (your Apple account) → Trust. `deploy` adds that instruction when `devicectl`
+  reports it.
+
+The exit status is 0 either way, because installing without launching is a
+legitimate outcome — script against the artifact or a subsequent `drive` call
+rather than against the exit code.
+
 ### Driving a physical device
 
 `swift-pwa drive --target ios` runs the whole loop against a real iPhone or

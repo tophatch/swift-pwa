@@ -273,10 +273,26 @@ struct Build: AsyncParsableCommand {
         try Self.preflight(manifest: pwa, projectRoot: cwd)
         await Self.reportToolGaps(target: target, crossCompileAndroid: crossCompileAndroid)
 
-        try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
+        // Where this build's link step looks for vendored native libraries:
+        // the tiers swift-pwa resolves itself, then whatever the app declared.
+        // Handed to the bundler as `-Xlinker` search paths rather than an
+        // environment variable, which Swift 6.4's build engine stopped passing
+        // to the link task (#219) — see `NativeLibrarySearch`. Android resolves
+        // its own inside the per-ABI cross-compile loop, since one search path
+        // can only carry one ABI's copy.
+        var tierLibraryDirs: [URL] = []
+        tierLibraryDirs += try await Self.applyLocalLlamaGate(manifest: pwa, target: target, projectRoot: cwd)
         Self.applyGeminiNanoGate(manifest: pwa, target: target)
         Self.applyPhiSilicaGate(manifest: pwa, target: target)
-        try await Self.applyLocalOnnxRuntimeGate(manifest: pwa, target: target, projectRoot: cwd)
+        tierLibraryDirs += try await Self.applyLocalOnnxRuntimeGate(
+            manifest: pwa, target: target, projectRoot: cwd
+        )
+        var nativeLibraryDirs = tierLibraryDirs
+        if target != .android {
+            nativeLibraryDirs += try NativeLibrarySearch.declaredDirs(
+                manifest: pwa, target: target, projectRoot: cwd
+            )
+        }
 
         try await Self.runPrebuild(manifest: pwa, projectRoot: cwd, skip: skipPrebuild)
 
@@ -290,11 +306,17 @@ struct Build: AsyncParsableCommand {
         try Self.validateLastWindowClosed(manifest: pwa)
         try Self.validateExternalURLs(manifest: pwa)
         try Self.validateAndroidPermissions(manifest: pwa)
+        // Both of these build and *run* the app on this host, so they get the
+        // tiers' search paths — never the app's own declared ones, which
+        // `CommandCatalog` resolves for the host itself (the `--target` here
+        // may not be this machine).
         try await Self.validatePermissions(
-            manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
+            manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue,
+            nativeLibraryDirs: tierLibraryDirs
         )
         try await Self.validateAgentSurface(
-            manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue
+            manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue,
+            nativeLibraryDirs: tierLibraryDirs
         )
 
         try FileManager.default.createDirectory(at: outputDir, withIntermediateDirectories: true)
@@ -436,7 +458,8 @@ struct Build: AsyncParsableCommand {
                 manifest: pwa,
                 projectRoot: cwd,
                 outputDir: outputDir,
-                configuration: configuration
+                configuration: configuration,
+                nativeLibraryDirs: nativeLibraryDirs
             )
             artifact = try await bundler.build()
         case .windows:
@@ -465,7 +488,8 @@ struct Build: AsyncParsableCommand {
                 bootstrapWebView2: bootstrapWebview2,
                 signIdentity: sign,
                 singleFile: singleFile,
-                configuration: configuration
+                configuration: configuration,
+                nativeLibraryDirs: nativeLibraryDirs
             )
             artifact = try await bundler.build()
         case .android:
@@ -565,23 +589,24 @@ struct Build: AsyncParsableCommand {
     /// - **Apple (macOS / iOS)** — just set the flag; SwiftPM's `.binaryTarget`
     ///   downloads + checksum-verifies the llama xcframework (Metal).
     /// - **Linux** — there's no binary-library target, so additionally fetch the
-    ///   prebuilt `libllama.a` (Vulkan) and prepend its directory to
-    ///   `LIBRARY_PATH` so the child `swift build` resolves `-lllama`. Requires a
-    ///   host Vulkan dev lib (`libvulkan-dev`) at link time + a Vulkan driver at
-    ///   runtime. See `LlamaLinuxArtifact`.
+    ///   prebuilt `libllama.a` (Vulkan) and return its directory, which the
+    ///   bundler puts on the child `swift build`'s link search path so
+    ///   `-lllama` resolves. Requires a host Vulkan dev lib (`libvulkan-dev`)
+    ///   at link time + a Vulkan driver at runtime. See `LlamaLinuxArtifact`.
     /// - **Windows** — like Linux, no binary-library target, so fetch the
-    ///   prebuilt `llama.lib` and prepend its directory to `LIB` (the
-    ///   MSVC-linker search-path env var, the Windows counterpart to Linux's
-    ///   `LIBRARY_PATH` — the same trick `CWebView2Shim` uses) so the child
-    ///   `swift build` resolves `llama.lib`. On **x64** the lib is the Vulkan
+    ///   prebuilt `llama.lib` and return its directory (plus the Vulkan SDK's
+    ///   `Lib`) for the same treatment, spelled `/LIBPATH:` for the MSVC
+    ///   linker. On **x64** the lib is the Vulkan
     ///   build, so this also needs the Vulkan SDK's `vulkan-1.lib` at link time
     ///   + a Vulkan driver at runtime; on **arm64** (Copilot+) the lib is
     ///   **CPU-only** by default, so no Vulkan SDK is needed — unless the
     ///   experimental `LLAMA_WIN_ARM64_VULKAN` opt-in is set (Adreno Vulkan; output
     ///   currently garbage, for re-testing only). See `LlamaWindowsArtifact`.
     /// - **Android** — not supported yet; warn and ignore.
-    static func applyLocalLlamaGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
-        guard manifest.ai?.localLlama == true else { return }
+    static func applyLocalLlamaGate(
+        manifest: PWAManifest, target: BuildTarget, projectRoot: URL
+    ) async throws -> [URL] {
+        guard manifest.ai?.localLlama == true else { return [] }
         switch target {
         case .macos, .ios:
             #if !os(Windows)
@@ -592,14 +617,11 @@ struct Build: AsyncParsableCommand {
             #if os(Linux)
                 let libDir = try await LlamaLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
                 setenv("SWIFT_PWA_LLAMA", "1", 1)
-                // Prepend so our lib wins, but keep any existing search path.
-                let existing = ProcessInfo.processInfo.environment["LIBRARY_PATH"]
-                let combined = existing.map { "\(libDir.path):\($0)" } ?? libDir.path
-                setenv("LIBRARY_PATH", combined, 1)
                 print(
                     "swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend "
                         + "(SwiftPWALlama, Vulkan); libllama.a from \(libDir.path)"
                 )
+                return [libDir]
             #else
                 print(
                     "swift-pwa: ai.local_llama for --target linux must be run on a Linux host — "
@@ -610,22 +632,19 @@ struct Build: AsyncParsableCommand {
             #if os(Windows)
                 let libDir = try await LlamaWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
                 // `_putenv_s` (not POSIX `setenv`) so both the CRT and Win32
-                // environment blocks update — `ProcessInfo.environment` reads the
-                // latter, and `WindowsBundler.resolvePackageEnvOverrides` reads
-                // `LIB` back through it to build the child `swift build`'s env.
+                // environment blocks update — `ProcessInfo.environment` reads
+                // the latter, which is what the child `swift build` inherits.
                 _ = _putenv_s("SWIFT_PWA_LLAMA", "1")
-                // Build the LIB search path: our llama.lib dir, plus (x64 only)
-                // the Vulkan SDK's `Lib` (for `vulkan-1.lib`, the loader import
-                // library that `.linkedLibrary("vulkan-1")` needs at link time —
-                // the SDK sets VULKAN_SDK but does NOT add its Lib to LIB), plus
-                // whatever's already there. `;`-separated; case-insensitive LIB
-                // lookup since a VS dev shell exports `Lib` (PowerShell) or `LIB`
-                // (cmd). The Vulkan SDK's Lib is appended only for a Vulkan build:
-                // x64 always; arm64 only under the EXPERIMENTAL `LLAMA_WIN_ARM64_VULKAN`
-                // opt-in (default arm64 is CPU-only — no `vulkan-1` to find — and the
-                // Adreno X1's Vulkan output is currently garbage; see docs).
+                // Search dirs for the link step: our llama.lib dir, plus (Vulkan
+                // builds only) the Vulkan SDK's `Lib`, which holds `vulkan-1.lib`
+                // — the loader import library `.linkedLibrary("vulkan-1")` needs.
+                // The SDK sets VULKAN_SDK but does NOT put its Lib on the
+                // linker's path. x64 is always Vulkan; arm64 only under the
+                // EXPERIMENTAL `LLAMA_WIN_ARM64_VULKAN` opt-in (default arm64 is
+                // CPU-only — no `vulkan-1` to find — and the Adreno X1's Vulkan
+                // output is currently garbage; see docs).
                 let env = ProcessInfo.processInfo.environment
-                var search = [libDir.path]
+                var search = [libDir]
                 #if arch(arm64)
                     let wantVulkan = env["LLAMA_WIN_ARM64_VULKAN"] != nil
                     let backend = wantVulkan ? "Vulkan — EXPERIMENTAL/arm64" : "CPU"
@@ -635,7 +654,7 @@ struct Build: AsyncParsableCommand {
                 #endif
                 if wantVulkan {
                     if let sdk = env["VULKAN_SDK"], !sdk.isEmpty {
-                        search.append("\(sdk)\\Lib")
+                        search.append(URL(fileURLWithPath: "\(sdk)\\Lib"))
                     } else {
                         print(
                             "swift-pwa: warning — VULKAN_SDK is not set, so the link step can't find "
@@ -644,13 +663,11 @@ struct Build: AsyncParsableCommand {
                         )
                     }
                 }
-                let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
-                let combined = (existing.map { search + [$0] } ?? search).joined(separator: ";")
-                _ = _putenv_s("LIB", combined)
                 print(
                     "swift-pwa: ai.local_llama → bundling the on-device llama.cpp backend "
                         + "(SwiftPWALlama, \(backend)); llama.lib from \(libDir.path)"
                 )
+                return search
             #else
                 print(
                     "swift-pwa: ai.local_llama for --target windows must be run on a Windows host — "
@@ -663,6 +680,7 @@ struct Build: AsyncParsableCommand {
                     + "\(target) yet — ignoring it for this build."
             )
         }
+        return []
     }
 
     /// Honor `pwa.json`'s `ai.gemini_nano`. Unlike llama, the Gemini Nano
@@ -719,18 +737,20 @@ struct Build: AsyncParsableCommand {
     ///   downloads + checksum-verifies the ONNX Runtime xcframework.
     /// - **Android** — no per-arch work happens here, because Android
     ///   cross-compiles multiple ABIs in one build and each needs its own
-    ///   `libonnxruntime.so` on `LIBRARY_PATH` for that ABI's link step
+    ///   `libonnxruntime.so` on the search path of that ABI's link step
     ///   alone. `AndroidBundler.stageJniLibs` asks ``OnnxRuntimeTier`` the
     ///   same question directly and resolves + stages the `.so` per ABI via
     ///   `OnnxRuntimeAndroidArtifact` inside its cross-compile loop.
-    static func applyLocalOnnxRuntimeGate(manifest: PWAManifest, target: BuildTarget, projectRoot: URL) async throws {
+    static func applyLocalOnnxRuntimeGate(
+        manifest: PWAManifest, target: BuildTarget, projectRoot: URL
+    ) async throws -> [URL] {
         // `ai.onnx_gpu` (desktop GPU execution providers — DirectML on Windows,
         // CUDA on Linux; see docs/proposals/onnx-gpu-execution-providers.md)
         // implies the ONNX Runtime tier, so either flag enables it — and so
         // does depending on one of the tier's products, which is what actually
         // makes the linker need the library. See ``OnnxRuntimeTier``.
         let onnxGpu = manifest.ai?.onnxGpu == true
-        guard let reason = OnnxRuntimeTier.reason(manifest: manifest, projectRoot: projectRoot) else { return }
+        guard let reason = OnnxRuntimeTier.reason(manifest: manifest, projectRoot: projectRoot) else { return [] }
         if case let .packageDependency(product) = reason {
             print("""
             swift-pwa: Package.swift depends on \(product), which links the on-device ONNX Runtime — \
@@ -756,12 +776,12 @@ struct Build: AsyncParsableCommand {
             )
         case .linux:
             // ONNX Runtime desktop is a *shared* lib (unlike llama's static
-            // Linux slice), so the dir goes on LIBRARY_PATH for the link step
-            // here and the `.so`(s) are staged into the AppImage at runtime (see
+            // Linux slice), so the dir goes on the link step's search path here
+            // and the `.so`(s) are staged into the AppImage at runtime (see
             // LinuxBundler, which re-resolves via the same idempotent call).
             #if os(Linux)
-                // GPU (CUDA 12) resolves three libs; CPU resolves one. Both put
-                // the dir on LIBRARY_PATH; the GPU build additionally defines
+                // GPU (CUDA 12) resolves three libs; CPU resolves one. Both
+                // return the dir; the GPU build additionally defines
                 // SWIFT_PWA_ONNXRUNTIME_GPU so the manifest links the CUDA-aware
                 // module and OrtModelSession compiles the CUDA EP append.
                 let libDir = onnxGpu
@@ -769,12 +789,11 @@ struct Build: AsyncParsableCommand {
                     : try await OnnxRuntimeLinuxArtifact.ensureLibDir(projectRoot: projectRoot)
                 setenv("SWIFT_PWA_ONNXRUNTIME", "1", 1)
                 if onnxGpu { setenv("SWIFT_PWA_ONNXRUNTIME_GPU", "1", 1) }
-                let existing = ProcessInfo.processInfo.environment["LIBRARY_PATH"]
-                setenv("LIBRARY_PATH", existing.map { "\(libDir.path):\($0)" } ?? libDir.path, 1)
                 print(
                     "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
                         + "(SwiftPWASegmentation, \(onnxGpu ? "GPU/CUDA" : "CPU")); libonnxruntime.so from \(libDir.path)"
                 )
+                return [libDir]
             #else
                 print(
                     "swift-pwa: ai.local_onnx_runtime for --target linux must be run on a Linux host — "
@@ -793,19 +812,16 @@ struct Build: AsyncParsableCommand {
                     ? try await OnnxRuntimeWindowsDirectMLArtifact.ensureLibDir(projectRoot: projectRoot)
                     : try await OnnxRuntimeWindowsArtifact.ensureLibDir(projectRoot: projectRoot)
                 // `_putenv_s` (not POSIX `setenv`) so both CRT + Win32 env
-                // blocks update — WindowsBundler reads `LIB` back through
-                // ProcessInfo. The runtime DLLs from the same dir are staged
-                // next to the .exe by WindowsBundler.
+                // blocks update — the child `swift build` inherits the latter.
+                // The runtime DLLs from the same dir are staged next to the
+                // .exe by WindowsBundler.
                 _ = _putenv_s("SWIFT_PWA_ONNXRUNTIME", "1")
                 if onnxGpu { _ = _putenv_s("SWIFT_PWA_ONNXRUNTIME_GPU", "1") }
-                let env = ProcessInfo.processInfo.environment
-                let existing = env.first { $0.key.caseInsensitiveCompare("LIB") == .orderedSame }?.value
-                let combined = (existing.map { [libDir.path, $0] } ?? [libDir.path]).joined(separator: ";")
-                _ = _putenv_s("LIB", combined)
                 print(
                     "swift-pwa: ai.local_onnx_runtime → bundling the on-device ONNX Runtime tier "
                         + "(SwiftPWASegmentation, \(onnxGpu ? "GPU/DirectML" : "CPU")); onnxruntime.lib from \(libDir.path)"
                 )
+                return [libDir]
             #else
                 print(
                     "swift-pwa: ai.local_onnx_runtime for --target windows must be run on a Windows host — "
@@ -813,6 +829,7 @@ struct Build: AsyncParsableCommand {
                 )
             #endif
         }
+        return []
     }
 
     /// `ai.onnx_gpu` is desktop-only (Windows DirectML / Linux CUDA). On
@@ -951,7 +968,8 @@ struct Build: AsyncParsableCommand {
     ]
 
     static func validatePermissions(
-        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String
+        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String,
+        nativeLibraryDirs: [URL] = []
     ) async throws {
         try PermissionCheck.validateNames(manifest)
         if target == .macos || target == .ios {
@@ -975,7 +993,8 @@ struct Build: AsyncParsableCommand {
         // checked (measured at 9.0s against 1.1s on a warm scaffold), and the
         // artifact that gets checked should be the artifact being produced.
         let dump = try await CommandCatalog.dumpAll(
-            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: true
+            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: true,
+            nativeLibraryDirs: nativeLibraryDirs
         )
         if let drift = PermissionCheck.drift(
             declared: manifest.permissions?.allDeclarations, compiled: dump.declaredPermissions
@@ -985,7 +1004,8 @@ struct Build: AsyncParsableCommand {
     }
 
     static func validateAgentSurface(
-        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String
+        manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String,
+        nativeLibraryDirs: [URL] = []
     ) async throws {
         guard let expose = manifest.agent?.expose, !expose.isEmpty else { return }
         guard target == .host else {
@@ -1000,7 +1020,8 @@ struct Build: AsyncParsableCommand {
         // checked (measured at 9.0s against 1.1s on a warm scaffold), and the
         // artifact that gets checked should be the artifact being produced.
         let dump = try await CommandCatalog.dumpAll(
-            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: true
+            projectRoot: projectRoot, manifest: manifest, configuration: configuration, quiet: true,
+            nativeLibraryDirs: nativeLibraryDirs
         )
         try AgentCheck.report(AgentPolicy.resolve(manifest.agent, against: dump.commands), appName: manifest.name)
         try AgentCheck.reportDrift(AgentPolicy.drift(declared: manifest.agent, compiled: dump.agentTools))

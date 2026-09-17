@@ -317,8 +317,9 @@ jobs:
     # macos-llama: builds the prebuilt static lib via the same script the
     # publish workflow uses (cached on the build-script hash → only rebuilds on
     # a llama.cpp pin bump), then runs the gated suite. The lib is found at link
-    # time via LIBRARY_PATH — no unsafeFlags. The GBNF + API tests run here; the
-    # model-dependent e2e tests skip (no GGUF in CI).
+    # time via `-Xlinker -L` — no unsafeFlags, and no LIBRARY_PATH, which Swift
+    # 6.4's swiftbuild engine stops passing to the link task (#219). The GBNF +
+    # API tests run here; the model-dependent e2e tests skip (no GGUF in CI).
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
@@ -370,12 +371,12 @@ jobs:
           set +u; . "$SDK_DIR/setup-env.sh"; set -u
           bash Scripts/build-llama-linux.sh
       - name: Test SwiftPWALlama (gate on)
-        # libllama.a found via LIBRARY_PATH; SWIFT_PWA_LLAMA puts the target in
+        # libllama.a found via `-Xlinker -L`; SWIFT_PWA_LLAMA puts the target in
         # the graph. Tiny suite, but give it room (the link pass + first build).
         timeout-minutes: 20
         env:
           SWIFT_PWA_LLAMA: "1"
-        run: LIBRARY_PATH="$PWD/Vendor/llama-linux:${LIBRARY_PATH:-}" swift test --filter SwiftPWALlamaTests -v
+        run: swift test --filter SwiftPWALlamaTests -Xlinker -L"$PWD/Vendor/llama-linux" -v
 
   windows-llama:
     # Windows coverage for the opt-in llama.cpp backend (x64 / Vulkan). Unlike
@@ -411,8 +412,8 @@ jobs:
           swift-build: 6.3.1-RELEASE
       - run: swift --version
       - name: Install WebView2 SDK + WIL (NuGet)
-        # The full package graph compiles CWebView2Shim, which needs these on
-        # INCLUDE / LIB even though the llama suite doesn't use WebView2.
+        # The full package graph compiles CWebView2Shim, which needs these
+        # even though the llama suite doesn't use WebView2.
         shell: pwsh
         run: |
           nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
@@ -439,7 +440,12 @@ jobs:
         if: steps.llama-cache.outputs.cache-hit != 'true'
         shell: pwsh
         run: pwsh Scripts/build-llama-windows.ps1 -Arch x64
-      - name: Add WebView2 / WIL / llama.lib to INCLUDE / LIB
+      - name: Collect the WebView2 / WIL / llama header + library dirs
+        # As flags, not on INCLUDE / LIB: Swift 6.4's swiftbuild engine passes
+        # neither to the tasks that need them — measured on a real Windows box,
+        # a header only on INCLUDE is `file not found` and a library only on
+        # LIB is `could not open`, both with a passing flag-based control
+        # (#219). One mechanism beats two that can silently disagree.
         shell: pwsh
         run: |
           $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
@@ -447,16 +453,21 @@ jobs:
           $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
           $llamaLib    = "$pwd\Vendor\llama-windows"
           $vulkanLib   = "$env:VULKAN_SDK\Lib"   # vulkan-1.lib (loader import lib)
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$llamaLib;$vulkanLib;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "SWIFT_PWA_CI_INCLUDES=$webview2Inc;$wilInc"
+          Add-Content -Path $env:GITHUB_ENV -Value "SWIFT_PWA_CI_LIBPATHS=$webview2Lib;$llamaLib;$vulkanLib"
       - name: Build + link-check SwiftPWALlama (gate on)
         # SWIFT_PWA_LLAMA puts the target in the graph; llama.lib / vulkan-1.lib
-        # resolve off LIB. `--build-tests` links SwiftPWALlamaTests, exercising
-        # the systemLibrary + linker settings without running anything.
+        # resolve off the `/LIBPATH:` flags. `--build-tests` links
+        # SwiftPWALlamaTests, exercising the systemLibrary + linker settings
+        # without running anything.
         timeout-minutes: 30
+        shell: pwsh
         env:
           SWIFT_PWA_LLAMA: "1"
-        run: swift build --build-tests
+        run: |
+          $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
+          $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
+          swift build --build-tests @flags
 
   linux-gtk3:
     runs-on: ubuntu-24.04
@@ -610,16 +621,23 @@ jobs:
         run: |
           nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
           nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
-      - name: Add WebView2 / WIL to INCLUDE / LIB
+      - name: Collect the WebView2 / WIL header + library dirs
+        # As flags, not on INCLUDE / LIB — Swift 6.4's swiftbuild engine passes
+        # neither to the tasks that need them (#219). The same single mechanism
+        # the CLI itself now uses.
         shell: pwsh
         run: |
           $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
           $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
           $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "SWIFT_PWA_CI_INCLUDES=$webview2Inc;$wilInc"
+          Add-Content -Path $env:GITHUB_ENV -Value "SWIFT_PWA_CI_LIBPATHS=$webview2Lib"
       - name: Build (release)
-        run: swift build -c release
+        shell: pwsh
+        run: |
+          $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
+          $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
+          swift build -c release @flags
       - name: Smoke-test the built CLI (it must actually run)
         # This job compiles and link-checks but never used to *run* anything,
         # and that blind spot shipped two bugs in the Windows CLI — a crash on
@@ -662,7 +680,11 @@ jobs:
         # test bundles on Windows (see next step) — it's still the
         # cheapest way to compile-check the cross-platform test suites
         # against the Windows toolchain.
-        run: swift build --build-tests
+        shell: pwsh
+        run: |
+          $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
+          $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
+          swift build --build-tests @flags
       - name: Test (SwiftPWAWindowsTestRunner)
         # Why an executable instead of `swift test`: SwiftPM's
         # swift-testing discovery build plugin emits 0-byte stubs for
@@ -683,7 +705,11 @@ jobs:
         # `--build-tests`, `swift run` still does an incremental link
         # pass and Windows runners are slow.
         timeout-minutes: 12
-        run: swift run SwiftPWAWindowsTestRunner
+        shell: pwsh
+        run: |
+          $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
+          $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
+          swift run @flags SwiftPWAWindowsTestRunner
 
   android:
     # Android Gradle-scaffold smoke test on Examples/HelloPWA: generate the

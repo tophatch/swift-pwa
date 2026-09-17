@@ -61,6 +61,11 @@ struct WindowsBundler {
     /// of a folder (portable format only). See `embedWebOverlay`.
     var singleFile: Bool = false
     var configuration: BuildConfiguration = .release
+    /// Directories holding vendored native libraries this build links against
+    /// — the llama.cpp / ONNX Runtime tiers swift-pwa resolves, the Vulkan
+    /// SDK's `Lib`, plus the app's own `windows.native_library_dirs`. See
+    /// ``NativeLibrarySearch``.
+    var nativeLibraryDirs: [URL] = []
 
     func build() async throws -> URL {
         #if !os(Windows)
@@ -69,10 +74,20 @@ struct WindowsBundler {
             See docs/windows-setup.md for the toolchain (Swift 6, VS Build Tools, WebView2 SDK).
             """)
         #else
+            // WebView2's headers and its loader's import library both reach
+            // the build as flags. They rode on INCLUDE / LIB until Swift 6.4's
+            // build engine stopped passing either to the tasks that need them
+            // — measured on a real Windows box, with a control: a header only
+            // on INCLUDE is `file not found`, and the same header behind
+            // `-Xcc -I` compiles (#219).
+            let packagePaths = resolvePackagePaths()
+            let searchDirs = nativeLibraryDirs + (packagePaths?.libDirs ?? [])
             try await Shell.run(
-                "swift", ["build", "-c", configuration.swiftPMValue],
-                cwd: projectRoot,
-                envOverrides: resolvePackageEnvOverrides()
+                "swift",
+                ["build", "-c", configuration.swiftPMValue]
+                    + (packagePaths?.includeDirs ?? []).flatMap { ["-Xcc", "-I\($0.path)"] }
+                    + NativeLibrarySearch.linkerArgs(for: searchDirs, target: .windows),
+                cwd: projectRoot
             )
             // The .exe is named after the SwiftPM target, resolved from
             // the package rather than guessed from the display `name`.
@@ -177,6 +192,7 @@ struct WindowsBundler {
                 // "single-file" build emits onnxruntime.dll alongside when
                 // ai.local_onnx_runtime is on.
                 try await stageOnnxRuntimeDLLIfNeeded(nextTo: outputDir)
+                try stageDeclaredNativeLibraries(nextTo: outputDir)
                 try writeFileAssociationScripts(into: outputDir, exeName: exeName)
                 try writeURLSchemeScripts(into: outputDir, exeName: exeName)
                 print("swift-pwa: single-file build — web/ embedded into \(exeName)")
@@ -207,6 +223,7 @@ struct WindowsBundler {
             // Stage onnxruntime.dll next to the exe so the segmentation
             // backend's shared-lib dependency resolves at launch.
             try await stageOnnxRuntimeDLLIfNeeded(nextTo: bundleDir)
+            try stageDeclaredNativeLibraries(nextTo: bundleDir)
 
             if bootstrapWebView2 {
                 try await downloadBootstrapper(into: bundleDir)
@@ -307,6 +324,23 @@ struct WindowsBundler {
         print("swift-pwa: staged \(dlls.joined(separator: ", ")) next to the app (\(reason))")
     }
 
+    /// Copy the app's own vendored DLLs (`windows.native_library_dirs`) next to
+    /// the exe, which is where Windows' loader looks first. Without this the
+    /// build links cleanly against the import lib and the app dies at launch on
+    /// the user's machine with a missing-DLL dialog naming no fix.
+    private func stageDeclaredNativeLibraries(nextTo dir: URL) throws {
+        for src in try NativeLibrarySearch.declaredDirs(
+            manifest: manifest, target: .windows, projectRoot: projectRoot
+        ).flatMap({ NativeLibrarySearch.stageableLibraries(in: $0, target: .windows) }) {
+            let dest = dir.appendingPathComponent(src.lastPathComponent)
+            if FileManager.default.fileExists(atPath: dest.path) {
+                try FileManager.default.removeItem(at: dest)
+            }
+            try FileManager.default.copyItem(at: src, to: dest)
+            print("swift-pwa: staged \(src.lastPathComponent) next to the app (windows.native_library_dirs)")
+        }
+    }
+
     private func embedWebOverlay(into exe: URL) throws {
         let webRoot = projectRoot.appendingPathComponent(manifest.web.directory)
         guard FileManager.default.fileExists(atPath: webRoot.path) else {
@@ -343,10 +377,13 @@ struct WindowsBundler {
     /// Walk likely locations to find the swift-pwa repo's `packages/`
     /// folder (where `nuget install` drops `Microsoft.Web.WebView2`
     /// and `Microsoft.Windows.ImplementationLibrary` headers + libs).
-    /// If we find them, prepend the matching directories to INCLUDE
-    /// and LIB before launching `swift build`, so users no longer
-    /// have to re-export both env vars in every fresh PowerShell
-    /// session.
+    /// If we find them, return the header directories and the loader's
+    /// import-library directory, which the caller passes to `swift build` as
+    /// `-Xcc -I` / `-Xlinker /LIBPATH:` — so users no longer have to re-export
+    /// INCLUDE and LIB in every fresh PowerShell session.
+    ///
+    /// Flags rather than those two environment variables because Swift 6.4's
+    /// `swiftbuild` engine passes neither to the tasks that need them (#219).
     ///
     /// Returns `nil` (no override) on non-Windows hosts and on hosts
     /// where we can't locate the packages — falls through to inherited
@@ -369,7 +406,7 @@ struct WindowsBundler {
     /// environment is missing entirely, `swift build` fails earlier
     /// with `lld-link: error: could not open 'msvcrt.lib'`, which
     /// the docs cover.
-    private func resolvePackageEnvOverrides() -> [String: String]? {
+    private func resolvePackagePaths() -> (includeDirs: [URL], libDirs: [URL])? {
         #if !os(Windows)
             return nil
         #else
@@ -407,34 +444,17 @@ struct WindowsBundler {
             let webview2LibPath = swiftPwaRoot
                 .appendingPathComponent("\(webview2Subpath)/\(arch)").path
 
-            // Preserve whatever's already on INCLUDE / LIB — the user's
-            // VS Developer Shell put the Windows SDK and MSVC paths
-            // there, and we'd break the C++ build by replacing them.
-            // Case-insensitive lookup because PowerShell exports `Include`
-            // / `Lib` (capital first letter) while cmd.exe exports
-            // `INCLUDE` / `LIB`.
-            let env = ProcessInfo.processInfo.environment
-            let existingInclude = env.first(where: {
-                $0.key.caseInsensitiveCompare("INCLUDE") == .orderedSame
-            })?.value ?? ""
-            let existingLib = env.first(where: {
-                $0.key.caseInsensitiveCompare("LIB") == .orderedSame
-            })?.value ?? ""
-
-            let newInclude = [webview2IncludePath, wilIncludePath]
-                .joined(separator: ";")
-                + (existingInclude.isEmpty ? "" : ";" + existingInclude)
-            let newLib = webview2LibPath
-                + (existingLib.isEmpty ? "" : ";" + existingLib)
-
             print("""
-            swift-pwa: prepending swift-pwa NuGet packages to INCLUDE / LIB
+            swift-pwa: using the swift-pwa NuGet packages
               WebView2: \(webview2IncludePath)
               WIL:      \(wilIncludePath)
               Loader:   \(webview2LibPath)
             """)
 
-            return ["INCLUDE": newInclude, "LIB": newLib]
+            return (
+                [URL(fileURLWithPath: webview2IncludePath), URL(fileURLWithPath: wilIncludePath)],
+                [URL(fileURLWithPath: webview2LibPath)]
+            )
         #endif
     }
 

@@ -46,9 +46,9 @@ nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages 
 ```
 
 Then enter a Visual Studio Developer Shell with the right architecture
-*before* setting INCLUDE/LIB and building. The default PowerShell
-session inherits the system `LIB`, which on a fresh box may point at
-x86 MSVC libs and produce confusing link-time errors like
+*before* building. The default PowerShell session inherits the system
+`LIB`, which on a fresh box may point at x86 MSVC libs and produce
+confusing link-time errors like
 `msvcrt.lib(chkstk.obj): machine type x86 conflicts with arm64`.
 
 ```powershell
@@ -65,13 +65,31 @@ x86 MSVC libs and produce confusing link-time errors like
 # Pick the arch matching your Swift toolchain. PROCESSOR_ARCHITECTURE
 # is "AMD64" on x64 and "ARM64" on Windows-on-ARM.
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
-$env:INCLUDE = "$pwd\packages\Microsoft.Web.WebView2\build\native\include;" +
-               "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include;" +
-               "$env:INCLUDE"
-$env:LIB     = "$pwd\packages\Microsoft.Web.WebView2\build\native\$arch;$env:LIB"
 
-swift build -c release
+swift build -c release `
+  -Xcc "-I$pwd\packages\Microsoft.Web.WebView2\build\native\include" `
+  -Xcc "-I$pwd\packages\Microsoft.Windows.ImplementationLibrary\include" `
+  -Xlinker "/LIBPATH:$pwd\packages\Microsoft.Web.WebView2\build\native\$arch"
 ```
+
+**Flags, not `$env:INCLUDE` / `$env:LIB`.** Those worked through Swift 6.3.x and
+**stop working on 6.4**, where `swiftbuild` became the default build engine and
+passes neither to the tasks that need them. Measured on a real box with
+controls: a header reachable only through `INCLUDE` is `'WebView2.h' file not
+found`, the same header behind `-Xcc -I` compiles; a library reachable only
+through `LIB` is `could not open 'WebView2LoaderStatic.lib'`, the same library
+behind `-Xlinker /LIBPATH:` links. `link.exe` does not understand `-L` at all,
+which is why the linker flag is spelled `/LIBPATH:`. `swift-pwa build --target
+windows` does all of this for you — this recipe is for building the repo itself,
+or an app with bare `swift build`.
+
+**One Swift `Platforms` version at a time.** The Windows installer leaves older
+releases in place, and `swiftbuild` refuses to start when two are present:
+`error: platform 'windows' already registered from …\Platforms\<older>`. It
+also leaves the *older* toolchain first on `PATH` while pointing `SDKROOT` at
+the new one, which pairs an old compiler with a new SDK (`module compiled with
+Swift 6.4 cannot be imported by the Swift 6.3.1 compiler`). Uninstall the
+release you're not using, and check `swift --version` after installing.
 
 The static loader (`WebView2LoaderStatic.lib`) is what `Package.swift`
 asks for — that means apps don't need to ship `WebView2Loader.dll`
@@ -168,7 +186,7 @@ the project being bundled:
 If any of those resolves, you'll see:
 
 ```text
-swift-pwa: prepending swift-pwa NuGet packages to INCLUDE / LIB
+swift-pwa: using the swift-pwa NuGet packages
   WebView2: …\Microsoft.Web.WebView2\build\native\include
   WIL:      …\Microsoft.Windows.ImplementationLibrary\include
   Loader:   …\Microsoft.Web.WebView2\build\native\x64
@@ -176,16 +194,17 @@ swift-pwa: prepending swift-pwa NuGet packages to INCLUDE / LIB
 
 If you're invoking `swift build` directly (e.g. plain `swift build -c
 release` outside the bundler), the auto-detect doesn't run and you
-still need the manual exports:
+still need to pass the paths yourself:
 
 ```powershell
 # Reuse the swift-pwa repo's NuGet packages from any sibling project:
 $arch     = if ($env:PROCESSOR_ARCHITECTURE -eq "ARM64") { "arm64" } else { "x64" }
 $swiftpwa = "C:\path\to\swift-pwa"  # absolute path to the swift-pwa checkout
-$env:INCLUDE = "$swiftpwa\packages\Microsoft.Web.WebView2\build\native\include;" +
-               "$swiftpwa\packages\Microsoft.Windows.ImplementationLibrary\include;" +
-               "$env:INCLUDE"
-$env:LIB     = "$swiftpwa\packages\Microsoft.Web.WebView2\build\native\$arch;$env:LIB"
+
+swift build -c release `
+  -Xcc "-I$swiftpwa\packages\Microsoft.Web.WebView2\build\native\include" `
+  -Xcc "-I$swiftpwa\packages\Microsoft.Windows.ImplementationLibrary\include" `
+  -Xlinker "/LIBPATH:$swiftpwa\packages\Microsoft.Web.WebView2\build\native\$arch"
 ```
 
 Symptoms of forgetting:
@@ -193,8 +212,8 @@ Symptoms of forgetting:
 | Missing                    | Failure mode                                                                                                                                                          |
 |----------------------------|-----------------------------------------------------------------------------------------------------------------------------------------------------------------------|
 | `Launch-VsDevShell.ps1`    | `lld-link: error: could not open 'msvcrt.lib'` — even at the manifest-compile stage.                                                                                  |
-| `INCLUDE` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`. Plain `swift build` only — the bundler auto-injects these.                            |
-| `LIB`                      | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`. Plain `swift build` only — same auto-inject.                                                            |
+| `-Xcc -I` (WebView2 / WIL) | `CWebView2Shim`: `'WebView2.h' file not found` or `'wil/com.h' file not found`. Plain `swift build` only — the bundler passes these for you.                          |
+| `-Xlinker /LIBPATH:`       | `lld-link: error: could not open 'WebView2LoaderStatic.lib'`. Plain `swift build` only — same.                                                                        |
 | stdlib junction            | `error: unable to load standard library for target 'x86_64-unknown-windows-msvc'`. See [One-time stdlib junction](#one-time-stdlib-junction-swift-asserts-installer). |
 
 ### One-time stdlib junction (Swift `+Asserts` installer)
@@ -387,6 +406,35 @@ produces is staged next to the `.exe`, which is where `Bundle.module`
 looks on Windows. Until 0.9.10 neither happened, so a bundle read its
 runtime out of the build machine's `.build/` directory and crashed on
 launch on any other box.
+
+### Vendoring a native library (`windows.native_library_dirs`)
+
+If your app links a native library Windows doesn't ship — a SQLite build of
+your own, say — name the directory holding its import library and DLL:
+
+```json
+"windows": { "native_library_dirs": ["Vendor/sqlite/windows-x64"] }
+```
+
+Each directory goes on the link step's search path (`-Xlinker /LIBPATH:<dir>`
+— `link.exe` does not understand `-L`), and every `.dll` in it is copied next
+to the `.exe`, which is where Windows' loader looks first. Both halves are
+needed: a bundle that links here and ships without the DLL dies at launch on
+the user's machine with a missing-DLL dialog that names no fix.
+
+Paths are relative to the project root (the directory holding `pwa.json`); an
+absolute path is used as given. A directory that isn't there fails the build,
+naming the entry, rather than reaching the linker as
+`could not open 'sqlite3.lib'`. Everything in the directory is staged, not just
+what the `.exe`'s import table names — a DLL the app `LoadLibrary`s is in
+neither list.
+
+The alternative is a `-L` in your `Package.swift`'s `unsafeFlags`, which
+poisons dependency resolution for anything that depends on your package; a
+global `LIB` no longer reaches the link step at all under Swift 6.4's
+`swiftbuild` engine. Linux and Android have the same key (Android's with an
+`<abi>` placeholder — see [docs/android-setup.md](android-setup.md)); on Apple,
+use a `.binaryTarget` xcframework instead.
 
 ## 4. Optional — On-device AI (llama.cpp)
 

@@ -340,6 +340,35 @@ binary in `usr/bin`, which is where `Bundle.module` looks on Linux. Until
 0.9.10 neither happened, so an AppImage read its runtime out of the build
 machine's `.build/` and crashed on launch on any other box.
 
+### Vendoring a native library (`linux.native_library_dirs`)
+
+If your app links a native library the distro doesn't ship — a SQLite build of
+your own, say — name the directory it lives in:
+
+```json
+"linux": { "native_library_dirs": ["Vendor/sqlite/linux-x86_64"] }
+```
+
+Each directory goes on the link step's search path (`-Xlinker -L<dir>`), and
+every `.so` in it is handed to `linuxdeploy --library`, so it lands in the
+AppImage's `usr/lib` with the rpath already patched. Both halves are needed: an
+AppImage that links here and ships without the library dies at launch on a box
+that doesn't happen to have it.
+
+Paths are relative to the project root (the directory holding `pwa.json`); an
+absolute path is used as given. A directory that isn't there fails the build,
+naming the entry, rather than reaching the linker as
+`cannot find -lsqlite3`. Everything shared in the directory is staged, not just
+what the binary's `DT_NEEDED` list names — a library the app `dlopen`s is in
+neither list, and its absence would only surface at runtime.
+
+The alternative is a `-L` in your `Package.swift`'s `unsafeFlags`, which
+poisons dependency resolution for anything that depends on your package; a
+global `LIBRARY_PATH` no longer reaches the link step at all under Swift 6.4's
+`swiftbuild` engine. Android has the same key with an `<abi>` placeholder (see
+[docs/android-setup.md](android-setup.md)); on Apple, use a `.binaryTarget`
+xcframework instead.
+
 ## 7. Optional — On-device AI (llama.cpp, Vulkan)
 
 The portable on-device AI backend (`SwiftPWALlama` / `LlamaBackend`) runs a
@@ -548,6 +577,16 @@ xdg-open "myapp://hello"
 ```
 
 ## Known limitations on Linux
+
+**Swift 6.4 can't link a Linux app yet ([#229](https://github.com/tophatch/swift-pwa/issues/229)).**
+Under 6.4 — where `swiftbuild` became the default build engine — the vendored
+zstd decoder's object never reaches the product link, so *any* app linking the
+GTK backend fails with `undefined reference to symbol 'ZSTD_isError'` and
+`libzstd.so.1: DSO missing from command line`. Measured on `Examples/HelloPWA`
+and on a fresh `swift-pwa init` app; the same tree links cleanly under 6.2.0 and
+6.3.1. **Stay on 6.2 / 6.3.x on Linux until that's fixed.** (There is no
+project-wide Swift version — see [docs/android-setup.md](android-setup.md) §1 —
+so this is a per-box choice, and CI pins 6.2.)
 
 **GTK4 can't run the driver's backgrounded mode.** `swift-pwa drive
 --background` (see [docs/app-driver.md](app-driver.md#running-a-suite-without-losing-the-machine----background))

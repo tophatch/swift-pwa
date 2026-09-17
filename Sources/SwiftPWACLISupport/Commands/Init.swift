@@ -751,10 +751,12 @@ enum Templates {
                 run: |
                   nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
                   nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
-                  $wv2 = "$pwd\\packages\\Microsoft.Web.WebView2\\build\\native"
-                  $wil = "$pwd\\packages\\Microsoft.Windows.ImplementationLibrary\\include"
-                  Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$wv2\\include;$wil;$env:INCLUDE"
-                  Add-Content -Path $env:GITHUB_ENV -Value "LIB=$wv2\\x64;$env:LIB"
+              # `packages/` is all the CLI needs: `swift-pwa build --target
+              # windows` finds it next to the project and passes the header and
+              # library paths to `swift build` as flags. They used to be set
+              # here on INCLUDE / LIB as well; Swift 6.4's build engine passes
+              # neither to the tasks that need them, so that advice would stop
+              # working the day this runner's toolchain moves.
               - name: Install the swift-pwa CLI
                 shell: pwsh
                 run: |

@@ -211,6 +211,12 @@ Required keys: `id`, `name`, `version`, `web`, `window`. The `macos` / `ios` / `
 "macos": { "info_plist": { "NSAppTransportSecurity": { "NSAllowsLocalNetworking": true } } }
 ```
 
+**Optional `native_library_dirs`** (`android` / `linux` / `windows`) — directories holding native libraries your app vendors itself, anything the platform doesn't ship and swift-pwa doesn't resolve for you. Each goes on the link step's search path *and* its shared libraries are staged into the artifact (`jniLibs/<abi>/`, the AppImage, next to the `.exe`) so the app doesn't link cleanly and then die at load. On Android **`<abi>` is substituted per ABI**, which is what makes a multi-ABI build with a vendored library expressible at all — the bundler links every ABI in one process, so a global search path can only carry one ABI's copy. The alternative, a `-L` in `unsafeFlags`, poisons dependency resolution for anything depending on your package. On Apple use a `.binaryTarget` xcframework instead. See [docs/android-setup.md](docs/android-setup.md#vendoring-a-native-library-androidnative_library_dirs).
+
+```json
+"android": { "native_library_dirs": ["Vendor/sqlite/<abi>"] }
+```
+
 **Optional `build.serve`** — serve extra directories on the bundle origin under an app-chosen path prefix, so page JS references runtime-imported content (a downloaded "content pack" of images / video) with an origin-relative URL — `videoEl.src = "/packs/<id>/clip.webm"` — that works unchanged on every backend, streamed with HTTP range requests. `ctx.serveDirectory(_:at:)` is the imperative equivalent, on all five — including a folder the *user* points the app at, wherever it already lives — and Android needs a mount declared here only when it must answer a request made before `configure()` returns (its asset loader is built before any Swift runs). See [docs/swift-api.md](docs/swift-api.md#serving-extra-directories-content-packs).
 
 ```json

@@ -43,7 +43,8 @@ enum CommandCatalog {
         projectRoot: URL,
         manifest: PWAManifest,
         configuration: String = "debug",
-        quiet: Bool = false
+        quiet: Bool = false,
+        nativeLibraryDirs: [URL] = []
     ) async throws -> Dump {
         guard ["debug", "release"].contains(configuration) else {
             throw ValidationError("--configuration must be 'debug' or 'release', got '\(configuration)'.")
@@ -71,11 +72,25 @@ enum CommandCatalog {
         // stdout — the catalog is the file.
         // Bare `swift` rather than `/usr/bin/env swift` — see the note in
         // `Drive.build`; the launcher form doesn't exist on Windows.
+        // This build is for the *host*, so it needs the host's vendored-library
+        // search paths — an app that links one can't be run headlessly at all
+        // without them, which is where the whole build stops.
         try await Shell.run(
             "swift",
-            ["run", "-c", configuration, exe],
+            // Before the executable name, not after: `swift run` treats
+            // everything past it as the program's own argv, so a trailing
+            // `-Xlinker` reaches the app instead of the linker and the build
+            // fails exactly as if the flag had never been passed.
+            ["run", "-c", configuration]
+                + NativeLibrarySearch.hostLinkerArgs(
+                    manifest: manifest, projectRoot: projectRoot, extra: nativeLibraryDirs
+                )
+                + [exe],
             cwd: projectRoot,
             envOverrides: [HeadlessDescribe.environmentVariable: catalogURL.path]
+                .merging(NativeLibrarySearch.hostRuntimeEnvironment(
+                    manifest: manifest, projectRoot: projectRoot, extra: nativeLibraryDirs
+                )) { current, _ in current }
         )
 
         guard fm.fileExists(atPath: catalogURL.path) else {

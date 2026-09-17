@@ -119,8 +119,8 @@ jobs:
   cli-binary-windows:
     # Windows is its own job because the build steps don't fit the
     # POSIX matrix shape — we need MSVC + Swift-for-Windows + the
-    # WebView2 / WIL NuGet packages on INCLUDE/LIB before swift build
-    # will resolve `CWebView2Shim`. (The `swift-pwa` CLI itself
+    # WebView2 / WIL NuGet packages on the build's search paths before
+    # swift build will resolve `CWebView2Shim`. (The `swift-pwa` CLI itself
     # doesn't *call* into the Windows backend, but SwiftPM compiles
     # every target in the package graph — so the C++ shims have to
     # build for the CLI link step to succeed.)
@@ -157,16 +157,22 @@ jobs:
         run: |
           nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
           nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
-      - name: Add WebView2 / WIL to INCLUDE / LIB
+      - name: Collect the WebView2 / WIL header + library dirs
+        # As flags, not on INCLUDE / LIB — Swift 6.4's swiftbuild engine passes
+        # neither to the tasks that need them (#219).
         shell: pwsh
         run: |
           $webview2Inc = "$pwd\packages\Microsoft.Web.WebView2\build\native\include"
           $wilInc      = "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include"
           $webview2Lib = "$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
-          Add-Content -Path $env:GITHUB_ENV -Value "INCLUDE=$webview2Inc;$wilInc;$env:INCLUDE"
-          Add-Content -Path $env:GITHUB_ENV -Value "LIB=$webview2Lib;$env:LIB"
+          Add-Content -Path $env:GITHUB_ENV -Value "SWIFT_PWA_CI_INCLUDES=$webview2Inc;$wilInc"
+          Add-Content -Path $env:GITHUB_ENV -Value "SWIFT_PWA_CI_LIBPATHS=$webview2Lib"
       - name: Build CLI
-        run: swift build -c release --product swift-pwa
+        shell: pwsh
+        run: |
+          $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
+          $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
+          swift build -c release --product swift-pwa @flags
       - name: Stage binary
         shell: pwsh
         run: |

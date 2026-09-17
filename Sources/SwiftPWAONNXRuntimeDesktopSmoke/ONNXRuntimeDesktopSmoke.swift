@@ -5,7 +5,7 @@
     /// linking story (see `docs/proposals/segmentation-plugin.md`). Proves the
     /// vendored `libonnxruntime.so` / `onnxruntime.dll`+`.lib` (from
     /// `Scripts/vendor-onnxruntime-{linux,windows}.sh`) links via
-    /// `.systemLibrary` + `LIBRARY_PATH`/`LIB` and its C API is callable from
+    /// `.systemLibrary` + a `-Xlinker` search path and its C API is callable from
     /// Swift. The Apple/Android counterparts are `SwiftPWAONNXRuntimeSmoke` /
     /// `SwiftPWAONNXRuntimeAndroidSmoke`.
     public enum ONNXRuntimeDesktopSmoke {

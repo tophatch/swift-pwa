@@ -9,6 +9,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **An app can declare the directories its own vendored native libraries live
+  in, per ABI** — `native_library_dirs` in `pwa.json`'s `android`, `linux` and
+  `windows` sections (#220).
+
+  ```json
+  "android": { "native_library_dirs": ["Vendor/sqlite/<abi>"] }
+  ```
+
+  An app that links a native library the platform doesn't ship had no way to
+  say where it is. The reporting adopter vendors SQLite for GRDB and hit
+  exactly that. swift-pwa already had the mechanism — the ONNX Runtime tier
+  resolves `libonnxruntime.so` per ABI inside the cross-compile loop and hands
+  the directory to *that ABI's* link step — but it was hard-wired to that one
+  tier. The generic workaround left to an app was a global search path, and the
+  bundler links every ABI in one process, so a single global value can only
+  ever carry one ABI's copy: **a multi-ABI build with a vendored library was
+  not expressible at all.** `<abi>` is substituted per ABI, which is what makes
+  it expressible.
+
+  Each resolved directory goes on that build's link search path, and the shared
+  libraries in it are staged into the artifact: `jniLibs/<abi>/` on Android,
+  `linuxdeploy --library` into the AppImage, next to the `.exe` on Windows.
+  Staging is the half an app can't do by hand either — the Gradle scaffold is
+  regenerated on every build, so a `.so` copied in manually is gone next time
+  and the APK dies at launch with `UnsatisfiedLinkError`. Everything in the
+  directory is staged, not the subset the built binary's `DT_NEEDED` list names
+  — a library the app `dlopen`s by name is in neither list, and its absence
+  only shows up on a device. A declared directory that isn't there fails the
+  build naming the entry, rather than reaching the linker as `unable to find
+  library -lsqlite3`, which names neither.
+
+  Two more places needed it, both found by building a real app against a real
+  vendored `.so` rather than by reasoning about it, and each only visible once
+  the one before it worked. The CLI's own host runs — `dev`, `drive`, and the
+  headless catalog dump `build` uses to check `permissions` / `agent.expose` —
+  run the binary straight out of `.build`, where nothing has been staged, so
+  they need the directory on the loader's path as well as the linker's; the
+  link succeeded and the dump then died at load. And `linuxdeploy` walks the
+  binary's `DT_NEEDED` list against the *system* search path **before** it
+  looks at the `--library` files it is about to deploy, so it refused the
+  AppImage naming the very library it had been handed.
+
+  Verified end to end, both halves with a control that had to fail. On Linux,
+  an AppImage whose binary loads the bundled copy with the vendored directory
+  deleted. On Android, `arm64-v8a` and `x86_64` each linked against their own
+  `<abi>` directory, the right-architecture `.so` in each `jniLibs/<abi>/` and
+  in the assembled APK, and the app running on a Galaxy Z Fold7 — against the
+  same APK rebuilt with only the staged library removed, which dies at launch
+  with exactly the error this prevents:
+  `UnsatisfiedLinkError: dlopen failed: library "libmylib.so" not found: needed
+  by …/libProbeApp.so`.
+
+  The device run also turned up a trap worth documenting: Android 15+ wants
+  every `.so` **16 KB page-aligned**, and a hand-built vendored library usually
+  isn't, because a bare `clang -shared` still defaults to 4 KB. Everything
+  swift-pwa stages is already aligned — the Swift Android SDK's runtime,
+  `libc++_shared.so`, and the app's own `.so` all measure `0x4000` — so this is
+  the adopter's build to fix (`-Wl,-z,max-page-size=16384`), and
+  docs/android-setup.md now says so.
+
+  Not on Apple: SwiftPM's `.binaryTarget` xcframework is the first-class
+  mechanism there, and it carries the code-signing and rpath handling a
+  directory of loose dylibs does not. The asymmetry is upstream's, not ours —
+  it is also why the off-Apple mechanism below exists at all.
+
 - **`swift-pwa doctor --target android` now checks the host against the
   installed Swift Android SDK**, and the docs stop naming a Swift version
   (#218).
@@ -346,6 +411,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   previous cover under the new title; an artwork URL that 404s leaves the track
   showing with a warning; and the notification's own pause button still reaches
   the page's handler.
+
+### Changed
+
+- **Vendored native libraries reach the link step as a flag, not an
+  environment variable** — Linux and Windows, closing the desktop half of the
+  Android fix that shipped last release (#219).
+
+  Off Apple, swift-pwa hands a vendored library to the linker without writing a
+  `-L` into a package manifest's `unsafeFlags`, which would poison dependency
+  resolution for everyone depending on the package. That used to be
+  `LIBRARY_PATH` (Linux) / `LIB` (Windows). **Swift 6.4 makes `swiftbuild` the
+  default build engine, and it does not pass those to the link task.** Measured
+  on a real Linux box at 6.4.0, with 6.2.0 and 6.3.1 as the control: the same
+  build that links cleanly with `-Xlinker -L<dir>` fails with the environment
+  variable set, as `cannot find -lonnxruntime` — an error that reads like a
+  missing dependency rather than a missing search path, and names no fix. Under
+  the classic build system both mechanisms work, which is why nothing was
+  failing yet: CI pins Linux at 6.2 and Windows at 6.3.1.
+
+  All three tiers move: ONNX Runtime on Linux and Windows, llama.cpp on both,
+  and — found while doing it, and not in the issue — the **WebView2 loader's
+  import library and the WebView2 / WIL headers**, which `WindowsBundler` had
+  been putting on `LIB` and `INCLUDE` for every Windows build, AI tiers or not.
+  The Vulkan SDK's `Lib` moves with them. The Windows spelling is
+  `-Xlinker /LIBPATH:<dir>` and `-Xcc -I<dir>`: `link.exe` does not understand
+  `-L` at all and reads one as an input filename, so a wrong spelling fails on
+  *that* instead.
+
+  **`INCLUDE` is dropped too, not just `LIB`** — measured on the Windows box
+  under 6.4.0, each with a control that had to fail: a header reachable only
+  through `INCLUDE` is `'elsewhere.h' file not found` and the same header
+  behind `-Xcc -I` compiles; a library reachable only through `LIB` is a link
+  error and the same library behind `/LIBPATH:` links; and with neither, both
+  fail. Under 6.3.1 every one of those passes, which is what makes it a 6.4
+  regression rather than a broken box.
+
+  **The environment variables are gone rather than kept as a second
+  mechanism.** Two mechanisms is how this went unnoticed for a release: the
+  redundant one covers for the broken one until it doesn't, and then the
+  failure is silent again. The repo's own CI, `Scripts/remote-linux.sh`, the
+  Windows setup doc's manual recipe, and the workflow `swift-pwa init` emits
+  all move with the product, so none of them can drift back. (The generated
+  workflow simply stops setting them: `swift-pwa build --target windows` finds
+  `packages/` itself and passes the paths as flags.)
+
+  Verified on both hosts, in both directions, with 6.2.0 / 6.3.1 as the
+  control: a real app whose vendored `.so` the build could not find with the
+  environment variable set and linked cleanly with the flag; and the whole
+  swift-pwa package — `CWebView2Shim` included — building on Windows under
+  6.4.0 with **no** `INCLUDE` or `LIB` additions at all.
 
 ### Fixed
 

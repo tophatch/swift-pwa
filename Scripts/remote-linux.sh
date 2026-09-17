@@ -44,7 +44,7 @@
 #                       resolves its own, and syncing them dominates the transfer.
 #     --onnx            build the ONNX Runtime tier (SWIFT_PWA_ONNXRUNTIME=1),
 #                       syncing just the desktop `libonnxruntime.so` and pointing
-#                       LIBRARY_PATH / LD_LIBRARY_PATH at it. Run
+#                       the linker / LD_LIBRARY_PATH at it. Run
 #                       Scripts/vendor-onnxruntime-linux.sh here first. This is
 #                       how a runtime bump gets checked against the committed
 #                       headers on a real Linux box — hosted CI never builds
@@ -122,10 +122,12 @@ if [[ "$GTK4" == "1" ]]; then
 fi
 ONNX_LIB_DIR="Vendor/onnxruntime-desktop/linux-x86_64"
 if [[ "$ONNX" == "1" ]]; then
-    # LIBRARY_PATH resolves `.linkedLibrary("onnxruntime")` at link time and
-    # LD_LIBRARY_PATH at run time — the same pair the CLI sets for an app build.
+    # `-Xlinker -L` resolves `.linkedLibrary("onnxruntime")` at link time (see
+    # ONNX_FLAGS below) and LD_LIBRARY_PATH at run time — the same pair the CLI
+    # sets for an app build. Not LIBRARY_PATH: Swift 6.4's swiftbuild engine
+    # does not pass it to the link task, and the build then fails as if the
+    # library were missing (#219).
     REMOTE_ENV+=" export SWIFT_PWA_ONNXRUNTIME=1"
-    REMOTE_ENV+=" LIBRARY_PATH=\"\$HOME/$REMOTE_DIR/$ONNX_LIB_DIR\${LIBRARY_PATH:+:\$LIBRARY_PATH}\""
     REMOTE_ENV+=" LD_LIBRARY_PATH=\"\$HOME/$REMOTE_DIR/$ONNX_LIB_DIR\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}\";"
 fi
 
@@ -213,7 +215,9 @@ XML_ENV="if [ -f $XML_LIB/libxml2.so.2 ]; then export LD_LIBRARY_PATH=\"$XML_LIB
 echo "→ building on $HOST (gtk$([[ $GTK4 == 1 ]] && echo 4 || echo 3)${TOOLCHAIN:+, toolchain $TOOLCHAIN})"
 BUILD_ARGS=""
 [[ "$COMMAND" == "test" ]] && BUILD_ARGS="--build-tests"
-ssh "$HOST" "$REMOTE_ENV $XML_ENV cd ~/$REMOTE_DIR && $SWIFT build $BUILD_ARGS \$XMLFLAGS"
+ONNX_FLAGS=""
+[[ "$ONNX" == "1" ]] && ONNX_FLAGS="-Xlinker -L\$HOME/$REMOTE_DIR/$ONNX_LIB_DIR"
+ssh "$HOST" "$REMOTE_ENV $XML_ENV cd ~/$REMOTE_DIR && $SWIFT build $BUILD_ARGS $ONNX_FLAGS \$XMLFLAGS"
 
 [[ "$COMMAND" == "build" ]] && exit 0
 

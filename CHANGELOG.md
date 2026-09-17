@@ -317,6 +317,47 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`deploy --target ios` says why a launch was refused, instead of blaming
+  trust every time** (#224). The launch was wrapped in a blanket `catch` that
+  attributed *every* failure to an untrusted developer profile, so the message
+  sent you to Settings → VPN & Device Management to re-trust a profile that was
+  already trusted — while the real cause, a locked screen, was in `devicectl`'s
+  own output two lines above. The reporting adopter met it on two devices in a
+  row, both of which had launched that same app from that same profile fifteen
+  minutes earlier.
+
+  It couldn't do better, because the reason never reached it: `Shell.run`
+  inherits stderr and throws an exit status with no payload, so the text was a
+  guess and it was the same guess every time. The launch now also writes
+  `devicectl --json-output` to a temp file and reports the **leaf** of the
+  `NSUnderlyingError` chain, where the specific reason lives — the outermost
+  link says "The application failed to launch.", which is the one thing the
+  caller already knew. stderr still passes through, so `devicectl`'s own
+  rendering stays on screen and a run that dies before writing the document
+  loses nothing.
+
+  **No table of error codes, and not simply "print the leaf"** — both were
+  ruled out by measuring four real documents off a device rather than reading
+  one. A device that hasn't been unlocked since boot fails two links deep in
+  `RemotePairingError` carrying only `NSLocalizedDescription`; a locked *screen*
+  on a live tunnel fails three deep in `FBSOpenApplicationErrorDomain`, with the
+  middle link describing the same thing in service-delegate jargon; and a bundle
+  id that isn't installed puts the useful sentence on the **outermost** link
+  under a leaf of LaunchServices bookkeeping that carries no message at all — so
+  a reader that printed the leaf would have printed nothing at all for that one.
+  The rule is the deepest link that actually carries a sentence, which is right
+  for all four and for the causes nobody has hit yet.
+  The Settings → Trust paragraph is kept, but only when `devicectl`'s own
+  wording says the profile isn't trusted — matched on wording rather than a code
+  because that case is *unmeasured* here (reproducing it means un-trusting a
+  team on a device, which takes out every other development build on it), so it
+  only ever adds a paragraph and never replaces the real reason.
+
+  A refused launch still doesn't fail the deploy — the app is installed, and
+  every cause is fixed on the device and retried with `--no-build` — but the
+  final line no longer reads the same as a successful one: `Installed on
+  <device>; the app is not running.` rather than `Deployed to <device>.`
+
 - **An app that depends on an ONNX-tier product builds without also setting
   `ai.local_onnx_runtime`** (#215). The two used to be independent: the package
   graph decided whether the runtime was *linked*, and `pwa.json` decided whether

@@ -444,37 +444,71 @@ struct Deploy: AsyncParsableCommand {
             "/usr/bin/env", ["xcrun", "devicectl", "device", "install", "app", "--device", target.udid, app.path]
         )
 
+        var running = false
         if launch {
             let bundleID = pwa.ios?.bundleIdentifier ?? pwa.id
             print("→ launching \(bundleID)")
-            do {
-                try await Shell.run(
-                    "/usr/bin/env",
-                    [
-                        "xcrun",
-                        "devicectl",
-                        "device",
-                        "process",
-                        "launch",
-                        "--terminate-existing",
-                        "--device",
-                        target.udid,
-                        bundleID
-                    ]
-                )
-            } catch {
-                // The app is installed; a first launch under a development /
-                // free-team profile is refused until the developer is trusted on
-                // the device. That's a one-time manual step deploy can't do — so
-                // don't fail the whole deploy, just point at it.
+            running = await launchOnDevice(bundleID: bundleID, udid: target.udid)
+        }
+        // An install whose launch was refused is still an install, so this isn't
+        // an error — but it must not print the line a running app prints.
+        print(
+            launch && !running
+                ? "Installed on \(target.name) (\(target.udid)); the app is not running."
+                : "Deployed to \(target.name) (\(target.udid))."
+        )
+    }
+
+    /// Launch the app just installed on `udid`, answering whether it started.
+    ///
+    /// A refused launch doesn't fail the deploy: the install half succeeded, and
+    /// the usual causes are fixed on the device and retried with `--no-build`.
+    /// But it has to say *which* cause, and it used to say the same one every
+    /// time — that the developer needed trusting. That sent you to Settings to
+    /// re-trust a profile that was already trusted, while the real instruction,
+    /// on a device whose screen was locked, was in `devicectl`'s own line
+    /// directly above (#224).
+    ///
+    /// So the reason comes from `devicectl` rather than from a guess.
+    /// `--json-output` writes it structured; stderr still passes through, so
+    /// `devicectl`'s own rendering is on screen either way and a run that dies
+    /// before writing the document costs nothing.
+    private func launchOnDevice(bundleID: String, udid: String) async -> Bool {
+        let report = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-pwa-launch-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: report) }
+        do {
+            try await Shell.run(
+                "/usr/bin/env",
+                [
+                    "xcrun",
+                    "devicectl",
+                    "device",
+                    "process",
+                    "launch",
+                    "--terminate-existing",
+                    "--device",
+                    udid,
+                    "--json-output",
+                    report.path,
+                    bundleID
+                ]
+            )
+            return true
+        } catch {
+            let chain = DeviceCtlError.chain(fromJSON: (try? Data(contentsOf: report)) ?? Data())
+            let reason = DeviceCtlError.reason(chain) ?? "see devicectl's error above."
+            print("swift-pwa: installed, but the app did not launch — \(reason)")
+            if DeviceCtlError.mentionsUntrustedDeveloper(chain) {
                 print("""
-                swift-pwa: installed, but the launch was refused — a development/free-team app must \
-                be trusted on the device once before it will run: Settings → General → VPN & Device \
-                Management → (your Apple account) → Trust. Then tap the app, or re-run with --no-build.
+                swift-pwa: a development / free-team build must be trusted on the device once \
+                before it will run: Settings → General → VPN & Device Management → \
+                (your Apple account) → Trust.
                 """)
             }
+            print("swift-pwa: fix that on the device, then re-run with --no-build to retry the launch.")
+            return false
         }
-        print("Deployed to \(target.name) (\(target.udid)).")
     }
 
     // MARK: - macOS

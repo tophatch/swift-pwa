@@ -94,6 +94,155 @@ struct ManifestDependencyDriftTests {
         return nil
     }
 
+    // MARK: - One condition per target
+
+    /// One dependency *edge* as the manifest spells it: which target it points
+    /// at, and the platform condition on it (`nil` when there is none).
+    private struct Edge {
+        let target: String
+        let condition: String?
+        let line: Int
+    }
+
+    /// Keys that only a target *definition* carries. An edge is just a name, a
+    /// package and a condition, so a span holding any of these is a definition
+    /// and its own `name:` is not an edge.
+    private static let definitionKeys = [
+        "dependencies:", "path:", "swiftSettings:", "cSettings:", "cxxSettings:",
+        "linkerSettings:", "exclude:", "sources:", "resources:", "publicHeadersPath:",
+        "plugins:", "url:", "checksum:", "targets:", "type:"
+    ]
+
+    /// The manifest as logical lines: `(line number, text)`, with an edge that
+    /// swiftformat wrapped over several lines joined back into one.
+    ///
+    /// Without the join, a wrapped edge is invisible to the scan below — and
+    /// the wrapped ones are exactly the interesting ones, since a condition is
+    /// what pushes an edge past the 120-column limit. Two of them disagreed
+    /// when this check was written.
+    private static func logicalLines(in manifest: String) -> [(number: Int, text: String)] {
+        let raw = manifest.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
+        var result: [(number: Int, text: String)] = []
+        var index = 0
+        while index < raw.count {
+            let line = raw[index].trimmingCharacters(in: .whitespaces)
+            guard line == ".product(" || line == ".target(" else {
+                result.append((index + 1, line))
+                index += 1
+                continue
+            }
+            var joined = line
+            var scan = index + 1
+            while scan < raw.count {
+                let next = raw[scan].trimmingCharacters(in: .whitespaces)
+                joined += next
+                scan += 1
+                if next.hasPrefix(")") { break }
+            }
+            if definitionKeys.contains(where: { joined.contains($0) }) {
+                // A definition: leave its lines alone so the edges nested in
+                // its `dependencies:` are seen individually.
+                result.append((index + 1, line))
+                index += 1
+            } else {
+                result.append((index + 1, joined))
+                index = scan
+            }
+        }
+        return result
+    }
+
+    /// Every edge in the manifest, by the three spellings it uses:
+    /// `.target(name: "X", condition: …)`, `.product(name: "X", package: …)`,
+    /// and a bare `"X"` on its own line.
+    ///
+    /// Coarse, like ``declarationBlock(for:in:)`` above. A *definition* spells
+    /// `name:` on its own line under `.target(`, so it never looks like an edge.
+    private static func edges(in manifest: String) -> [Edge] {
+        var found: [Edge] = []
+        for (number, line) in logicalLines(in: manifest) {
+            guard !line.hasPrefix("//") else { continue }
+
+            for prefix in [".target(name: \"", ".product(name: \""] where line.contains(prefix) {
+                guard let nameStart = line.range(of: prefix)?.upperBound,
+                      let nameEnd = line[nameStart...].firstIndex(of: "\"")
+                else { continue }
+                let name = String(line[nameStart ..< nameEnd])
+                // The platform list, not the whole `condition:` clause: what
+                // follows it on the line depends on whether the edge ends the
+                // array, so the clause's tail is punctuation, not meaning.
+                var condition: String?
+                if let listStart = line.range(of: "platforms: ")?.upperBound,
+                   let listEnd = line[listStart...].firstIndex(of: ")")
+                {
+                    condition = String(line[listStart ..< listEnd])
+                }
+                found.append(Edge(target: name, condition: condition, line: number))
+            }
+
+            // A bare `"X"` (or `"X",`) is an unconditional edge.
+            let bare = line.hasSuffix(",") ? String(line.dropLast()) : line
+            let inner = bare.dropFirst().dropLast()
+            if bare.count > 2, bare.hasPrefix("\""), bare.hasSuffix("\""),
+               !inner.contains(where: { $0 == "\"" || $0 == " " })
+            {
+                found.append(Edge(target: String(inner), condition: nil, line: number))
+            }
+        }
+        return found
+    }
+
+    /// The one product whose edges knowingly disagree, and why.
+    ///
+    /// `Crypto` is `cryptoPlatforms` from the runtime (Apple omitted — there
+    /// its consumers use CryptoKit, and an edge would compile BoringSSL into
+    /// every Apple app linking `SwiftPWACore`) and unconditional from the CLI,
+    /// which runs on macOS hosts and imports it outright. Neither side can
+    /// take the other's spelling. What makes it safe is that the two never
+    /// meet: no app graph contains `SwiftPWACLISupport`, and the CLI's own
+    /// edge is the one its product reaches first. Verified by building the
+    /// package and running this suite on macOS under 6.4.
+    private static let deliberatelyDivergent: Set<String> = ["Crypto"]
+
+    /// Two edges onto one target with different platform conditions is a link
+    /// failure waiting on declaration order — see the rule above
+    /// `zstdPlatforms` in `Package.swift`. It shipped once (#229): a
+    /// `.when(.macOS)` edge onto `CZstd` was visited before the `.when(.linux)`
+    /// one, and under Swift 6.4 every Linux app stopped linking.
+    ///
+    /// An unconditional edge counts as its own spelling: it does *not* rescue a
+    /// target some other edge has filtered out (measured on 6.4.0), so mixing
+    /// the two is the same bug.
+    @Test("every edge onto a target spells the same platform condition")
+    func conditionsAgreePerTarget() throws {
+        let manifest = try String(
+            contentsOf: Self.repoRoot.appendingPathComponent("Package.swift"), encoding: .utf8
+        )
+        var byTarget: [String: [Edge]] = [:]
+        for edge in Self.edges(in: manifest) {
+            byTarget[edge.target, default: []].append(edge)
+        }
+        var divergent: [String] = []
+        for (target, edges) in byTarget.sorted(by: { $0.key < $1.key })
+            where !Self.deliberatelyDivergent.contains(target)
+        {
+            let spellings = Set(edges.map { $0.condition ?? "<unconditional>" })
+            guard spellings.count > 1 else { continue }
+            let detail = edges
+                .map { "line \($0.line): \($0.condition ?? "unconditional")" }
+                .joined(separator: ", ")
+            divergent.append("\(target) — \(detail)")
+        }
+        #expect(
+            divergent.isEmpty,
+            """
+            Dependency edges onto one target disagree about platforms. \
+            Give every edge the same condition (hoist it into a `let` if it \
+            needs a name): \(divergent.joined(separator: "; "))
+            """
+        )
+    }
+
     @Test("every target that imports a package module declares it")
     func importsAreDeclared() throws {
         let manifest = try String(

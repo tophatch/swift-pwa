@@ -71,8 +71,14 @@ function Enter-BuildEnv {
     $wv2 = Join-Path $Packages "Microsoft.Web.WebView2\build\native\include"
     $wil = Join-Path $Packages "Microsoft.Windows.ImplementationLibrary\include"
     if (-not (Test-Path $wv2)) { throw "WebView2 headers not at $wv2 - restore NuGet packages or pass -Packages." }
-    $env:INCLUDE = "$wv2;$wil;$env:INCLUDE"
-    $env:LIB = "$(Join-Path $Packages 'Microsoft.Web.WebView2\build\native\x64');$env:LIB"
+    # Flags, not $env:INCLUDE / $env:LIB: Swift 6.4's swiftbuild engine passes
+    # neither to the tasks that need them, so a build that relies on the
+    # environment fails as if the headers were never installed.
+    $script:BuildFlags = @(
+        "-Xcc", "-I$wv2",
+        "-Xcc", "-I$wil",
+        "-Xlinker", "/LIBPATH:$(Join-Path $Packages 'Microsoft.Web.WebView2\build\native\x64')"
+    )
 }
 
 function Write-Utf8NoBom([string]$Path, [string]$Text) {
@@ -187,7 +193,7 @@ New-Item -ItemType Directory -Path $WorkDir | Out-Null
 Write-Host "Building the CLI in $Repo..." -ForegroundColor Cyan
 Push-Location $Repo
 try {
-    swift build --product swift-pwa | Out-Null
+    swift build --product swift-pwa @BuildFlags | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "CLI build failed" }
 } finally { Pop-Location }
 

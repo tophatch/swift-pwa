@@ -44,6 +44,44 @@ FileHandle.standardError.write(
     Data("swift-pwa: Linux backend selection = \(useGtk4 ? "GTK4 + WebKitGTK 6.0" : "GTK3 + WebKitGTK 4.1")\n".utf8)
 )
 
+// **A shared target's platform condition must be spelled identically at every
+// edge that reaches it.** Not a style preference — a build-correctness rule.
+//
+// Swift 6.4's `swiftbuild` engine resolves a target's platform filter once,
+// from whichever edge it visits first, and a filter that doesn't match the
+// platform being built drops that target's object from the *product* link.
+// Another edge that does match doesn't rescue it, and neither does an
+// unconditional third one (both measured). So two edges onto one target with
+// different conditions is a link failure waiting on declaration order.
+//
+// It cost a release: `SwiftPWAWebKit`'s `.when(.macOS)` edge onto `CZstd` was
+// visited before `SwiftPWAGTK`'s `.when(.linux)` one, so under 6.4 every Linux
+// app failed to link with `undefined reference to 'ZSTD_isError'` — against a
+// target no Linux code path had any reason to care about (#229).
+//
+// `ManifestDependencyDriftTests` enforces this over the manifest text.
+
+/// Platforms whose backend builds a delta-capable updater, and so links the
+/// vendored zstd decoder (`Sources/CZstd`). iOS updates go through
+/// `itms-services://` (Apple owns the transfer, no local artifact to patch)
+/// and Android through the Play Store, so neither compiles its ~900 KB of C.
+let zstdPlatforms: [Platform] = [.macOS, .linux, .windows]
+
+/// Where the *runtime* links swift-crypto. Apple is absent on purpose: there
+/// `Crypto`'s consumers use CryptoKit through `canImport`, and an edge here
+/// would compile BoringSSL into every Apple app that links `SwiftPWACore`.
+///
+/// The CLI's own edges are unconditional instead — it runs on macOS hosts and
+/// imports `Crypto` outright — which is the one place this file knowingly
+/// breaks the rule above. See `ManifestDependencyDriftTests`, which names it.
+let cryptoPlatforms: [Platform] = [.linux, .windows, .android]
+
+/// Where ZIPFoundation builds: not Windows (its CZLib shim uses
+/// `#import <zlib.h>`, which clang-cl rejects, and Windows ships no system
+/// zlib) and not Android (it assumes glibc/Darwin POSIX). The test target has
+/// to say the same thing as the target it tests.
+let zipPlatforms: [Platform] = [.macOS, .iOS, .linux]
+
 let gtkSystemLibraryTarget: Target = useGtk4
     ? .systemLibrary(
         name: "CGtk4Shim",
@@ -151,25 +189,27 @@ let optionalLinuxTrayTargets: [Target] =
 /// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
 /// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit
 /// itself is Apple-only). On Apple it shadows CryptoKit; on Linux it
-/// links against BoringSSL. Linux-conditional because the GTK target's
-/// .swift sources are all `#if os(Linux)`-guarded — pulling Crypto in on
-/// macOS hosts where the GTK target compiles to an empty object would
-/// just bloat the link.
+/// links against BoringSSL.
+///
+/// `cryptoPlatforms`, not `.linux`: `SwiftPWACore` and `SwiftPWAModelStore`
+/// reach the same product, and every runtime edge onto it has to agree (see
+/// the rule above `zstdPlatforms`).
 let gtkBackendTarget: Target = useGtk4
     ? .target(
         name: "SwiftPWAGTK",
         dependencies: [
             "SwiftPWACore",
-            .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+            .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
             .target(name: "CGtk4Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK6Shim", condition: .when(platforms: [.linux])),
             // Hand-rolled StatusNotifierItem tray (GTK4 has no GtkStatusIcon
             // and can't link the GTK3-only appindicator).
             .target(name: "CStatusNotifierShim", condition: .when(platforms: [.linux])),
-            // libzstd for delta (binary-patch) update reconstruction. Linux
-            // only (the AppImage updater is the sole consumer); needs
-            // libzstd-dev at build time.
-            .target(name: "CZstd", condition: .when(platforms: [.linux])),
+            // Vendored zstd decoder for delta (binary-patch) update
+            // reconstruction — the AppImage updater is the Linux consumer.
+            // `zstdPlatforms`, not `.linux`, because the Apple and Windows
+            // backends reach the same target: see the rule above it.
+            .target(name: "CZstd", condition: .when(platforms: zstdPlatforms)),
             // GeoClue 2 over D-Bus — the `geo.*` backend, shared by both
             // Linux backends because it needs no toolkit.
             .target(name: "CGeoClueShim", condition: .when(platforms: [.linux])),
@@ -183,14 +223,15 @@ let gtkBackendTarget: Target = useGtk4
         name: "SwiftPWAGTK",
         dependencies: [
             "SwiftPWACore",
-            .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+            .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
             .target(name: "CGtk3Shim", condition: .when(platforms: [.linux])),
             .target(name: "CWebKitGTK4Shim", condition: .when(platforms: [.linux])),
             .target(name: "CAyatanaAppIndicator3Shim", condition: .when(platforms: [.linux])),
-            // libzstd for delta (binary-patch) update reconstruction. Linux
-            // only (the AppImage updater is the sole consumer); needs
-            // libzstd-dev at build time.
-            .target(name: "CZstd", condition: .when(platforms: [.linux])),
+            // Vendored zstd decoder for delta (binary-patch) update
+            // reconstruction — the AppImage updater is the Linux consumer.
+            // `zstdPlatforms`, not `.linux`, because the Apple and Windows
+            // backends reach the same target: see the rule above it.
+            .target(name: "CZstd", condition: .when(platforms: zstdPlatforms)),
             // GeoClue 2 over D-Bus — the `geo.*` backend, shared by both
             // Linux backends because it needs no toolkit.
             .target(name: "CGeoClueShim", condition: .when(platforms: [.linux])),
@@ -276,11 +317,7 @@ let package = Package(
                 // is linked `-shared`, where undefined symbols are legal) and
                 // then dies at load with `cannot locate symbol
                 // "$s6Crypto0A8KitErrorON"`. Declared here, where it's used.
-                .product(
-                    name: "Crypto",
-                    package: "swift-crypto",
-                    condition: .when(platforms: [.linux, .windows, .android])
-                ),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
                 // libsecret (Secret Service) shim for LinuxSecretStore — the
                 // secrets.* plugin's Linux backing. Linux-only; on other
                 // platforms the edge is absent so the C targets aren't built.
@@ -374,7 +411,7 @@ let package = Package(
         .target(
             name: "SwiftPWAImageIO",
             dependencies: [
-                .target(name: "CStbImage", condition: .when(platforms: [.linux])),
+                .target(name: "CStbImage"),
                 .target(name: "CHeifShim", condition: .when(platforms: [.linux])),
                 .target(name: "CWicShim", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android]))
@@ -416,11 +453,7 @@ let package = Package(
                 // Bionic libc. So gate it to macOS / iOS / Linux. Windows uses
                 // a `tar.exe`-backed `ZIPExtractor`; Android uses
                 // `AndroidArchiveExtractor` (Kotlin `java.util.zip` over JNI).
-                .product(
-                    name: "ZIPFoundation",
-                    package: "ZIPFoundation",
-                    condition: .when(platforms: [.macOS, .iOS, .linux])
-                )
+                .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: zipPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -464,11 +497,7 @@ let package = Package(
             name: "SwiftPWAModelStore",
             dependencies: [
                 "SwiftPWACore",
-                .product(
-                    name: "Crypto",
-                    package: "swift-crypto",
-                    condition: .when(platforms: [.linux, .windows, .android])
-                )
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -480,9 +509,10 @@ let package = Package(
             dependencies: [
                 "SwiftPWACore",
                 // Vendored zstd decoder for delta (binary-patch) updates on
-                // macOS. iOS uses `itms-services://` (Apple owns the transfer,
-                // no local artifact to patch), so the edge is macOS-only.
-                .target(name: "CZstd", condition: .when(platforms: [.macOS]))
+                // macOS — `zstdPlatforms` excludes iOS, which updates through
+                // `itms-services://`. Not `.macOS`: the other backends reach
+                // the same target, and the conditions have to agree.
+                .target(name: "CZstd", condition: .when(platforms: zstdPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -535,11 +565,10 @@ let package = Package(
             name: "SwiftPWAAndroid",
             dependencies: [
                 "SwiftPWACore",
-                // swift-crypto's `Crypto` module — same conditional
-                // wiring as the GTK / Windows backends, available
-                // for an Android updater backend in a future v0.5.x
-                // (not implemented yet).
-                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.android])),
+                // swift-crypto's `Crypto` module — same wiring as the GTK /
+                // Windows backends, available for an Android updater backend
+                // in a future v0.5.x (not implemented yet).
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
                 .target(name: "CSwiftPWAAndroidJNI", condition: .when(platforms: [.android]))
             ],
             swiftSettings: swiftSettings
@@ -629,15 +658,15 @@ let package = Package(
             dependencies: [
                 "SwiftPWACore",
                 // swift-crypto's `Crypto` module is what `WindowsUpdater`
-                // uses for Ed25519 verification. Same rationale as the
-                // GTK targets — Linux/Windows-conditional so the empty
-                // object on macOS hosts doesn't pull BoringSSL in.
-                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows])),
+                // uses for Ed25519 verification. `cryptoPlatforms` for the
+                // same reason as the GTK backend's edge.
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
                 .target(name: "CWebView2Shim", condition: .when(platforms: [.windows])),
                 // Vendored zstd decoder for delta-update reconstruction on the
                 // portable install path (compiled from source — no DLL to
-                // stage, no runtime dependency).
-                .target(name: "CZstd", condition: .when(platforms: [.windows]))
+                // stage, no runtime dependency). `zstdPlatforms`, not
+                // `.windows`: see the rule above it.
+                .target(name: "CZstd", condition: .when(platforms: zstdPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -677,10 +706,9 @@ let package = Package(
                 .product(name: "Crypto", package: "swift-crypto"),
                 // Vendored stb (portable public-domain C) for the multi-size
                 // Windows `.exe` icon builder's PNG decode/re-encode. Linked on
-                // every host — not platform-gated like SwiftPWAImageIO's use of
-                // it — so the resize path (`WindowsIcon.resizePNG`) is available
-                // and unit-testable on the CI machines (macOS/Linux) even though
-                // the embed it feeds only runs on a Windows host.
+                // every host so the resize path (`WindowsIcon.resizePNG`) is
+                // available and unit-testable on the CI machines (macOS/Linux)
+                // even though the embed it feeds only runs on a Windows host.
                 .target(name: "CStbImage")
             ],
             // No `resources:` on purpose. The vendored Gradle wrapper (pinned
@@ -721,7 +749,7 @@ let package = Package(
                 // that run it, since swift-testing can't discover on Windows.
                 .target(name: "SwiftPWAImage", condition: .when(platforms: [.windows])),
                 .target(name: "SwiftPWAImageIO", condition: .when(platforms: [.windows])),
-                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.windows]))
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -745,7 +773,7 @@ let package = Package(
             name: "SwiftPWAGTKTests",
             dependencies: [
                 .target(name: "SwiftPWAGTK", condition: .when(platforms: [.linux])),
-                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: [.linux])),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
                 "_SwiftPWATestSupport"
             ],
             swiftSettings: swiftSettings
@@ -791,11 +819,7 @@ let package = Package(
                 // Same Windows gate as the target — the round-trip tests
                 // drive ZIPFoundation directly, which doesn't build on
                 // Windows. The test file is `#if canImport(ZIPFoundation)`.
-                .product(
-                    name: "ZIPFoundation",
-                    package: "ZIPFoundation",
-                    condition: .when(platforms: [.macOS, .iOS, .linux, .android])
-                )
+                .product(name: "ZIPFoundation", package: "ZIPFoundation", condition: .when(platforms: zipPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -1063,11 +1087,30 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // Scripts/vendor-onnxruntime-{linux,windows}.sh), found at link time via a
     // `-Xlinker` search path the CLI passes — the same mechanism SwiftPWALlama
     // uses off-Apple, never `unsafeFlags`.
+    //
+    // `ai.onnx_gpu` opts a desktop build into the GPU execution-provider ONNX
+    // Runtime artifacts (DirectML on Windows, CUDA on Linux; see
+    // docs/proposals/onnx-gpu-execution-providers.md). Build.swift sets
+    // SWIFT_PWA_ONNXRUNTIME_GPU when the flag is on. It changes *which* ONNX
+    // Runtime module a desktop build links: Linux keeps `ONNXRuntimeDesktop`
+    // (the CUDA build's headers are the identical ORT C API — CUDA's append-EP
+    // is an in-header C function), but Windows swaps to `ONNXRuntimeDirectML`,
+    // whose own pinned ORT 1.24.4 headers match the DirectML runtime's API
+    // version and add `dml_provider_factory.h`.
+    let onnxGpu = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
+
+    // Where `ONNXRuntimeDesktop` is linked — every edge onto it uses this, so
+    // the GPU swap can't leave two edges disagreeing (see the rule above
+    // `zstdPlatforms`). That takes the smoke target with it: on a Windows GPU
+    // build there is no CPU desktop runtime to smoke, and its headers wouldn't
+    // match the DirectML one that is there.
+    let onnxDesktopPlatforms: [Platform] = onnxGpu ? [.linux] : [.linux, .windows]
+
     package.targets.append(contentsOf: [
         .systemLibrary(name: "ONNXRuntimeDesktop", path: "Vendor/onnxruntime-desktop-headers"),
         .target(
             name: "SwiftPWAONNXRuntimeDesktopSmoke",
-            dependencies: [.target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows]))],
+            dependencies: [.target(name: "ONNXRuntimeDesktop", condition: .when(platforms: onnxDesktopPlatforms))],
             swiftSettings: swiftSettings,
             linkerSettings: [.linkedLibrary("onnxruntime", .when(platforms: [.linux, .windows]))]
         )
@@ -1090,16 +1133,6 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // model tier (`ai.vision.ensureModel`) — the same resumable, checksum-
     // pinned download machinery SwiftPWALlama uses, modality-agnostic. Plain
     // Foundation, cross-platform, no gating.
-    // `ai.onnx_gpu` opts a desktop build into the GPU execution-provider ONNX
-    // Runtime artifacts (DirectML on Windows, CUDA on Linux; see
-    // docs/proposals/onnx-gpu-execution-providers.md). Build.swift sets
-    // SWIFT_PWA_ONNXRUNTIME_GPU when the flag is on. It changes *which* ONNX
-    // Runtime module the desktop segmentation build links: Linux keeps
-    // `ONNXRuntimeDesktop` (the CUDA build's headers are the identical ORT
-    // C API — CUDA's append-EP is an in-header C function), but Windows
-    // swaps to `ONNXRuntimeDirectML`, whose own pinned ORT 1.24.4 headers match
-    // the DirectML runtime's API version and add `dml_provider_factory.h`.
-    let onnxGpu = ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME_GPU"] != nil
 
     /// The ONNX Runtime module dependencies (per-platform, plus the GPU swap on
     /// Windows). Shared by the ONNX tier target (`SwiftPWAONNX`, which owns the
@@ -1112,13 +1145,9 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
             deps.append(.target(name: "ONNXRuntime", condition: .when(platforms: [.macOS, .iOS])))
         #endif
         deps.append(.target(name: "ONNXRuntimeAndroid", condition: .when(platforms: [.android])))
+        deps.append(.target(name: "ONNXRuntimeDesktop", condition: .when(platforms: onnxDesktopPlatforms)))
         if onnxGpu {
-            deps.append(contentsOf: [
-                .target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux])),
-                .target(name: "ONNXRuntimeDirectML", condition: .when(platforms: [.windows]))
-            ])
-        } else {
-            deps.append(.target(name: "ONNXRuntimeDesktop", condition: .when(platforms: [.linux, .windows])))
+            deps.append(.target(name: "ONNXRuntimeDirectML", condition: .when(platforms: [.windows])))
         }
         return deps
     }
@@ -1150,8 +1179,11 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         .target(name: "SwiftPWAAndroid", condition: .when(platforms: [.android])),
         // Desktop has no CoreGraphics (Apple) or BitmapFactory-over-RPC
         // (Android) to decode/resize an image, so a tiny vendored stb_image
-        // C target does it (see Sources/CStbImage). Linux/Windows only.
-        .target(name: "CStbImage", condition: .when(platforms: [.linux, .windows]))
+        // C target does it (see Sources/CStbImage). Used on Linux/Windows, but
+        // declared unconditionally like every other edge onto it — the CLI's
+        // icon builder needs it on every host, and the conditions have to
+        // agree (see the rule above `zstdPlatforms`).
+        .target(name: "CStbImage")
     ])
 
     package.products.append(.library(name: "SwiftPWASegmentation", targets: ["SwiftPWASegmentation"]))

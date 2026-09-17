@@ -113,6 +113,14 @@ can't express them.
   link fine on one platform, then fail at the link step on another; and an
   `#if canImport(Glibc)` guard silently excludes Android, which broke every
   Android build for five releases. Guard: `ManifestDependencyDriftTests`.
+- **A shared target's platform condition has to match at *every* edge onto it.**
+  `swiftbuild` resolves a target's platform filter from the first dependency
+  edge it visits, so one edge whose condition doesn't match the platform being
+  built drops that target's object from the product link — a second edge that
+  does match doesn't rescue it, and neither does an unconditional third one.
+  A `.when(.macOS)` edge onto `CZstd`, declared before the `.when(.linux)` one,
+  broke the link of every Linux *and* Windows app under Swift 6.4 (#229). Guard:
+  `ManifestDependencyDriftTests`.
 - **A green local `swift test` proves nothing about CI, and a green Linux run
   may not have run what you think.** The local toolchain runs ahead of the
   runners' and their actor-isolation diagnostics differ; and

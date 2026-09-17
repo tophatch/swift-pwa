@@ -464,6 +464,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Swift 6.4 can link a Linux or Windows app again** (#229). Under 6.4 —
+  where `swiftbuild` became the default build engine — *every* app linking the
+  GTK backend failed at the product link with `undefined reference to symbol
+  'ZSTD_isError'` and `libzstd.so.1: DSO missing from command line`. The
+  vendored zstd decoder compiled fine and its object sat in the products
+  directory; it just never reached the link. Windows was broken the same way
+  and worse, with `Crypto` missing too: `lld-link: error: undefined symbol:
+  $s6Crypto6SHA256VACycfC` … `ZSTD_isError` — the updater's whole verification
+  path.
+
+  The cause is neither zstd nor Linux. **swiftbuild resolves a target's
+  platform filter once, from whichever dependency edge it reaches first**, and
+  a filter that doesn't match the platform being built drops that target's
+  object from the product link. `CZstd` is reached from three backends —
+  `.when(.macOS)` from the Apple one, `.when(.linux)` from GTK,
+  `.when(.windows)` from Windows — and the Apple edge is declared first, so
+  Linux and Windows builds both took the Apple filter and dropped it. Two
+  minimal packages measured what does and doesn't rescue it: a second edge that
+  *does* match the platform does not, and neither does an unconditional edge
+  from a third consumer. The only thing standing between a working build and a
+  broken one was the order the edges happen to be declared in.
+
+  So every edge onto a shared target now spells the same condition, hoisted
+  into a named `let` where it needs one: `zstdPlatforms`, `cryptoPlatforms`,
+  `zipPlatforms`, `onnxDesktopPlatforms` (which the GPU tier's Windows swap
+  would otherwise split). A target's platform condition is a property of the
+  target, not of each edge. Two divergences that had nothing to do with this
+  bug turned up while unifying them: the `SwiftPWAArchiveTests` edge onto
+  ZIPFoundation claimed `.android`, which the library cannot build for at all,
+  and `CStbImage` was gated three different ways. `Crypto` is the one edge set
+  that *can't* agree — the runtime must not pull swift-crypto onto Apple, where
+  its consumers use CryptoKit, while the CLI imports it outright on every host
+  it runs on — so that exception is named, explained and allowed in the test
+  rather than left to be rediscovered.
+
+  `ManifestDependencyDriftTests` fails if any other two edges disagree, reading
+  edges wrapped over several lines as well as single-line ones — the wrapped
+  ones are where both surprises were hiding, since a condition is what pushes a
+  line past the column limit. That guard is the durable part: the manifest read
+  perfectly reasonably, and the failure it caused was three hops away in
+  another platform's link.
+
+  Measured before and after on all three desktop platforms under 6.4: both
+  Linux boxes (GTK3 and GTK4, different distros) build the package clean, link
+  `Examples/HelloPWA` with `CZstd`'s object in the link list, and start the
+  binary under Xvfb; the Windows box goes from the undefined-symbol wall above
+  to a linked 30 MB `.exe`; macOS builds and the suite passes. 6.2.0 and 6.3.1
+  build the same tree unchanged. docs/linux-setup.md drops the "stay on
+  6.2 / 6.3.x" limitation this shipped with, and the four
+  `Scripts/verify-windows-*.ps1` probes now pass `-Xcc -I` / `-Xlinker
+  /LIBPATH:` instead of setting `$env:INCLUDE` / `$env:LIB`, which 6.4 ignores
+  (#219) — they would have failed on any box that moved to it.
+
 - **`deploy --target ios` says why a launch was refused, instead of blaming
   trust every time** (#224). The launch was wrapped in a blanket `catch` that
   attributed *every* failure to an untrusted developer profile, so the message

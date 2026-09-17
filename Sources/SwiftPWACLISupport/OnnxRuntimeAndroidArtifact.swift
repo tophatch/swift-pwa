@@ -12,7 +12,7 @@ import Foundation
 /// On Apple the lib reaches the build through SwiftPM's `.binaryTarget`
 /// (auto-downloaded + checksum-verified). Android has no binary-library
 /// target, so the CLI fetches `libonnxruntime.so` itself — to a
-/// content-addressed cache — and points `LIBRARY_PATH` at its directory,
+/// content-addressed cache — and hands its directory to that ABI's link step,
 /// which the child `swift build --swift-sdk <triple>` inherits and uses to
 /// resolve `.linkedLibrary("onnxruntime")` (no `unsafeFlags`, which would
 /// poison dependency resolution). Built + published by
@@ -64,7 +64,7 @@ enum OnnxRuntimeAndroidArtifact {
     }
 
     /// Ensure `libonnxruntime.so` for `abi` is available and return the
-    /// **directory** to put on `LIBRARY_PATH`. Throws (with an actionable
+    /// **directory** to put on that ABI's link search path. Throws (with an actionable
     /// message) on an unpublished ABI, a download failure, or a checksum
     /// mismatch.
     static func ensureLibDir(projectRoot: URL, abi: String) async throws -> URL {

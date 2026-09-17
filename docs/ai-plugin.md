@@ -760,15 +760,18 @@ and sets `SWIFT_PWA_LLAMA=1` for the underlying build, pulling in the
 cached across projects. **On Linux and Windows** there's no binary-library
 target, so the CLI fetches the prebuilt static lib (Vulkan — `libllama.a` on
 Linux, `llama.lib` on Windows) from the swift-pwa release, checksum-verifies +
-caches it, and points the build at it via the linker search-path env var
-(`LIBRARY_PATH` on Linux, `LIB` on Windows — the same trick `CWebView2Shim`
-uses; the headers ship in-tree as a `.systemLibrary`, so no `unsafeFlags`).
-When the flag is unset neither is in the package graph — non-AI adopters never
-resolve it. (Building the generated app with bare `swift build` instead of
-`swift-pwa build` won't include llama unless you export `SWIFT_PWA_LLAMA=1`
-yourself — and off Apple also point the linker env var at a directory
-containing the static lib, or set `SWIFT_PWA_LLAMA_LINUX_LIB_DIR` /
-`SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR` to it.) Linux needs `libvulkan-dev` and
+caches it, and points the build at it with a linker search-path **flag**
+(`-Xlinker -L<dir>` on Linux, `-Xlinker /LIBPATH:<dir>` on Windows; the headers
+ship in-tree as a `.systemLibrary`, so no `unsafeFlags`). It used to be the
+`LIBRARY_PATH` / `LIB` environment variable — Swift 6.4's `swiftbuild` engine
+stops passing those to the link task, so the build fails looking like a missing
+dependency (#219). When the flag is unset neither is in the package graph —
+non-AI adopters never resolve it. (Building the generated app with bare
+`swift build` instead of `swift-pwa build` won't include llama unless you
+export `SWIFT_PWA_LLAMA=1` yourself — and off Apple also pass the search-path
+flag for a directory containing the static lib, or set
+`SWIFT_PWA_LLAMA_LINUX_LIB_DIR` / `SWIFT_PWA_LLAMA_WINDOWS_LIB_DIR` to it.)
+Linux needs `libvulkan-dev` and
 Windows **x64** the Vulkan SDK's `vulkan-1.lib` to link, plus a Vulkan 1.2+
 driver/ICD at runtime; Windows **arm64** is CPU-only, so it needs neither (it
 links `llama.lib` alone) — see

@@ -425,6 +425,52 @@ All fields are optional; sensible defaults are derived from the
 top-level keys. The CLI flag `--android-abis` overrides
 `android.abis` when both are set.
 
+### Vendoring a native library (`android.native_library_dirs`)
+
+If your app links a native library the NDK doesn't ship — SQLite built for
+Android, say, because GRDB needs one — name the directory it lives in and the
+build finds it:
+
+```json
+"android": {
+  "abis": ["arm64-v8a", "x86_64"],
+  "native_library_dirs": ["Vendor/sqlite/<abi>"]
+}
+```
+
+**`<abi>` is substituted per ABI**, and that is the point. The bundler
+cross-compiles every ABI in one process, so a global search path — the
+workaround you'd otherwise be left with — can only ever carry one ABI's copy of
+the library; a multi-ABI build with a vendored library simply isn't expressible
+that way. Each resolved directory goes on that ABI's link search path, and
+every `.so` in it is staged into `jniLibs/<abi>/` beside the app's own binary.
+The second half matters as much as the first: the Gradle scaffold is
+regenerated on every build, so a `.so` you copy in by hand is gone next time,
+and the APK then installs and dies at launch with `UnsatisfiedLinkError`.
+
+Paths are relative to the project root (the directory holding `pwa.json`); an
+absolute path is used as given. A directory that isn't there fails the build,
+naming the entry — rather than reaching the linker as
+`unable to find library -lsqlite3`, which names neither. Everything shared in
+the directory is staged, not just what the built `.so`'s `DT_NEEDED` list
+mentions, because a library the app `dlopen`s by name is in neither list and
+its absence would only show up on a device.
+
+**Build the library 16 KB page-aligned** — `-Wl,-z,max-page-size=16384` on the
+link. Android 15+ requires it, and a `.so` without it is refused outright on a
+16 KB-page device. Everything swift-pwa stages beside your library is already
+aligned (the Swift Android SDK's runtime, `libc++_shared.so`, and your app's own
+`.so`); a hand-built vendored library is the one that usually isn't, because a
+bare `clang -shared` still defaults to 4 KB. A debuggable build tells you on
+launch — Android pops an *"App Compatibility"* dialog listing what failed the
+check — but a release build does not, so it's worth checking with
+`llvm-readelf -lW <lib> | grep LOAD` (the alignment column should read `0x4000`).
+
+The same key exists for [Linux](linux-setup.md) and [Windows](windows-setup.md)
+(without `<abi>` — they link one architecture per build). On Apple, use a
+`.binaryTarget` xcframework, which SwiftPM resolves for you and which carries
+the code-signing and rpath details a directory of loose dylibs does not.
+
 ### `window.background_color`
 
 Setting the top-level `window.background_color` makes the Android build
@@ -1095,9 +1141,9 @@ sha1-verifies it (against Maven's own published sidecar) and vendors:
   `.systemLibrary` (`ONNXRuntimeAndroid` in `Package.swift`, gated behind
   `SWIFT_PWA_ONNXRUNTIME`).
 - `Vendor/onnxruntime-android/<abi>/libonnxruntime.so` — **gitignored**;
-  found at cross-compile link time via `LIBRARY_PATH`, the exact mechanism
-  [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp) already
-  describes for Linux's llama.cpp build (no `unsafeFlags`).
+  found at cross-compile link time via a per-ABI `-Xlinker -L` search path,
+  the exact mechanism [docs/ai-plugin.md](ai-plugin.md#available-backend-llamacpp)
+  already describes for Linux's llama.cpp build (no `unsafeFlags`).
 
 Cross-compiling anything against the installed Android Swift SDK **requires
 the host toolchain of the SDK's own Swift release** — and specifically the
@@ -1123,9 +1169,14 @@ release — read it off your own machine rather than copying one from here:
 tc=~/Library/Developer/Toolchains/swift-<release>-RELEASE.xctoolchain
 export TOOLCHAINS=$(/usr/libexec/PlistBuddy -c 'Print CFBundleIdentifier' "$tc/Info.plist")
 export SWIFT_PWA_ONNXRUNTIME=1
-export LIBRARY_PATH="$(pwd)/Vendor/onnxruntime-android/arm64-v8a"
-swift build --swift-sdk aarch64-unknown-linux-android28 --target SwiftPWAONNXRuntimeAndroidSmoke
+swift build --swift-sdk aarch64-unknown-linux-android28 \
+  --target SwiftPWAONNXRuntimeAndroidSmoke \
+  -Xlinker -L"$(pwd)/Vendor/onnxruntime-android/arm64-v8a"
 ```
+
+(`LIBRARY_PATH` used to do that last part and no longer can: Swift 6.4's
+`swiftbuild` engine doesn't pass it to the link task, and the build then fails
+as `unable to find library -lonnxruntime`.)
 
 Verified end-to-end, including on an actual device: a throwaway executable
 linked against the vendored `.so` this way, then pushed via `adb push` +
@@ -1141,7 +1192,7 @@ executable, not in anything committed to this repo.
 The real `MobileSAMBackend` (`SwiftPWASegmentation` target) is verified the
 same way at the link level — a throwaway executable depending on the
 `SwiftPWASegmentation` product, built with the same
-`TOOLCHAINS`/`LIBRARY_PATH`/`--swift-sdk` invocation, links successfully
+`TOOLCHAINS`/search-path/`--swift-sdk` invocation, links successfully
 with `OrtGetApiBase@VERS_<ort version>` showing as an undefined symbol resolving
 against the real vendored `.so` (`nm` on the resulting binary, not a stub).
 

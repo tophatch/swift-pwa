@@ -68,7 +68,7 @@ enum OnnxRuntimeLinuxGpuArtifact {
 
     /// Ensure all three GPU libs are available and return the **directory**
     /// holding them (normalized so both `libonnxruntime.so.1` and a
-    /// `libonnxruntime.so` symlink resolve). Used for `LIBRARY_PATH` (link) +
+    /// `libonnxruntime.so` symlink resolve). Used for the link search path +
     /// `linuxdeploy --library` (runtime). Throws on download/checksum failure.
     static func ensureLibDir(projectRoot: URL) async throws -> URL {
         let fm = FileManager.default

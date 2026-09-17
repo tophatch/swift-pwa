@@ -855,8 +855,8 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
     //     build script produced one, else the checksummed release asset.
     //   * Linux/Windows → a `.systemLibrary` over **vendored, committed headers**
     //     (`Vendor/llama-headers/`, same llama.cpp pin as the xcframework). The
-    //     prebuilt static lib itself is found at link time via the `LIBRARY_PATH`
-    //     (Linux) / `LIB` (Windows) env var the CLI sets — NO `unsafeFlags`,
+    //     prebuilt static lib itself is found at link time via the `-Xlinker`
+    //     search path the CLI passes — NO `unsafeFlags`,
     //     which would poison version-pinned dependency resolution. Everything
     //     else links through the always-safe `.linkedLibrary`.
     let llamaCTarget: Target
@@ -981,9 +981,8 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_LLAMA"] != nil {
 // `Vendor/onnxruntime-android-headers/` (a plain `.systemLibrary`, no
 // pkgConfig — host-agnostic to declare, so it isn't wrapped in an `#if os`
 // guard below), the `.so` itself gitignored under `Vendor/onnxruntime-
-// android/<abi>/` and found at cross-compile link time via `LIBRARY_PATH`
-// (clang's Android cross-linker driver honors it exactly like the host
-// one — no `unsafeFlags`). Verified end-to-end, including on-device: a
+// android/<abi>/` and found at cross-compile link time via a per-ABI
+// `-Xlinker -L` search path the CLI passes — no `unsafeFlags`. Verified end-to-end, including on-device: a
 // throwaway executable target linked against the vendored
 // `libonnxruntime.so` via `swift build --swift-sdk
 // aarch64-unknown-linux-android28` (`nm -D` shows `OrtGetApiBase` as an
@@ -1038,7 +1037,7 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
         // below alongside the Android one — same reasoning: a systemLibrary over
         // committed headers is safe to put in the graph on any host, and the
         // actual `libonnxruntime.so` / `onnxruntime.dll`+`.lib` is found at link
-        // time via `LIBRARY_PATH` / `LIB` (Microsoft's prebuilt CPU build,
+        // time via the CLI's `-Xlinker` search path (Microsoft's prebuilt CPU build,
         // vendored by Scripts/vendor-onnxruntime-{linux,windows}.sh).
     #endif
 
@@ -1061,9 +1060,9 @@ if ProcessInfo.processInfo.environment["SWIFT_PWA_ONNXRUNTIME"] != nil {
     // are identical to the Android release's, just a separate modulemap dir).
     // Host-agnostic to declare, like `ONNXRuntimeAndroid`. The `.so`/`.dll`+
     // `.lib` are Microsoft's prebuilt **CPU** desktop build (vendored by
-    // Scripts/vendor-onnxruntime-{linux,windows}.sh), found at link time via
-    // `LIBRARY_PATH` (Linux) / `LIB` (Windows) — the same env-search mechanism
-    // SwiftPWALlama uses off-Apple, never `unsafeFlags`.
+    // Scripts/vendor-onnxruntime-{linux,windows}.sh), found at link time via a
+    // `-Xlinker` search path the CLI passes — the same mechanism SwiftPWALlama
+    // uses off-Apple, never `unsafeFlags`.
     package.targets.append(contentsOf: [
         .systemLibrary(name: "ONNXRuntimeDesktop", path: "Vendor/onnxruntime-desktop-headers"),
         .target(

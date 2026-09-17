@@ -430,13 +430,22 @@ struct AndroidBundler {
                 // A build *flag* rather than `unsafeFlags` in the manifest, so
                 // dependency resolution is still unpoisoned, which was the
                 // original reason for the env var.
-                var linkerSearchArgs: [String] = []
+                var searchDirs: [URL] = []
                 var onnxLibDir: URL?
                 if OnnxRuntimeTier.isEnabled(manifest: manifest, projectRoot: projectRoot) {
                     let libDir = try await OnnxRuntimeAndroidArtifact.ensureLibDir(projectRoot: projectRoot, abi: abi)
                     onnxLibDir = libDir
-                    linkerSearchArgs = ["-Xlinker", "-L\(libDir.path)"]
+                    searchDirs.append(libDir)
                 }
+                // The app's own vendored libraries, resolved for *this* ABI —
+                // `<abi>` is substituted per iteration, which is the whole
+                // reason a single global search path can't express a multi-ABI
+                // build with a vendored library.
+                let declaredLibDirs = try NativeLibrarySearch.declaredDirs(
+                    manifest: manifest, target: .android, projectRoot: projectRoot, abi: abi
+                )
+                searchDirs += declaredLibDirs
+                let linkerSearchArgs = NativeLibrarySearch.linkerArgs(for: searchDirs, target: .android)
 
                 try await Shell.run(
                     buildTool.exe,
@@ -511,6 +520,19 @@ struct AndroidBundler {
                 if let onnxLibDir {
                     let src = onnxLibDir.appendingPathComponent("libonnxruntime.so")
                     let dst = abiDir.appendingPathComponent("libonnxruntime.so")
+                    if !FileManager.default.fileExists(atPath: dst.path) {
+                        try FileManager.default.copyItem(at: src, to: dst)
+                    }
+                }
+                // The app's own vendored `.so` files go in beside them, for the
+                // same reason and from the same directory that satisfied this
+                // ABI's link step. Everything in the directory, not just what
+                // the built `.so`'s NEEDED list names — a `dlopen`ed library
+                // isn't in that list and its absence only shows up on a device.
+                for src in declaredLibDirs.flatMap({
+                    NativeLibrarySearch.stageableLibraries(in: $0, target: .android)
+                }) {
+                    let dst = abiDir.appendingPathComponent(src.lastPathComponent)
                     if !FileManager.default.fileExists(atPath: dst.path) {
                         try FileManager.default.copyItem(at: src, to: dst)
                     }

@@ -15,7 +15,7 @@ import Foundation
 /// `swift build` inherits and uses to resolve `.linkedLibrary("llama")` (no
 /// `unsafeFlags`, which would poison dependency resolution). `LIB` is the
 /// MSVC-linker search-path env var, the Windows counterpart to Linux's
-/// `LIBRARY_PATH` — the same trick `CWebView2Shim` already relies on. Built +
+/// the linker's search path, as `CWebView2Shim`'s loader lib is too. Built +
 /// published by `.github/workflows/llama-windows.yml` from the same pinned
 /// llama.cpp commit as the Linux lib + the Apple xcframework; the per-arch
 /// `sha256_*` pins below are auto-pinned by that workflow.

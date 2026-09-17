@@ -8,6 +8,10 @@ struct AppImageBundler {
     let projectRoot: URL
     let outputDir: URL
     var configuration: BuildConfiguration = .release
+    /// Directories holding vendored native libraries this build links against
+    /// — the llama.cpp / ONNX Runtime tiers swift-pwa resolves, plus the app's
+    /// own `linux.native_library_dirs`. See ``NativeLibrarySearch``.
+    var nativeLibraryDirs: [URL] = []
 
     func build() async throws -> URL {
         // 1. swift build.
@@ -18,7 +22,8 @@ struct AppImageBundler {
         // alongside the binary, which is what we actually want.
         try await Shell.run(
             "/usr/bin/env",
-            ["swift", "build", "-c", configuration.swiftPMValue],
+            ["swift", "build", "-c", configuration.swiftPMValue]
+                + NativeLibrarySearch.linkerArgs(for: nativeLibraryDirs, target: .linux),
             cwd: projectRoot
         )
         // SwiftPM target / product name, resolved from the package
@@ -149,6 +154,21 @@ struct AppImageBundler {
             args += ["--library", libDir.appendingPathComponent("libonnxruntime.so.1").path]
             print("swift-pwa: bundling libonnxruntime.so.1 into the AppImage (on-device ONNX Runtime tier)")
         }
+        // The app's own vendored libraries go in the same way, and for the same
+        // reason: they exist on no system path on the user's machine either, so
+        // an AppImage without them links clean here and dies at launch there.
+        let declaredLibDirs = try NativeLibrarySearch.declaredDirs(
+            manifest: manifest, target: .linux, projectRoot: projectRoot
+        )
+        for dir in declaredLibDirs {
+            let libs = NativeLibrarySearch.stageableLibraries(in: dir, target: .linux)
+            for lib in libs { args += ["--library", lib.path] }
+            let noun = libs.count == 1 ? "library" : "libraries"
+            print(
+                "swift-pwa: bundling \(libs.count) native \(noun) from \(dir.path) "
+                    + "into the AppImage (linux.native_library_dirs)"
+            )
+        }
         args += ["--output", "appimage"]
         // `linuxdeploy` and its plugins are themselves AppImages, and by default
         // each one self-mounts over FUSE. That path **never returns here**: the
@@ -160,9 +180,23 @@ struct AppImageBundler {
         // completes in **26 seconds** — so this isn't a workaround with a cost,
         // it's faster as well. It's also the mode AppImage documents for
         // automation, where FUSE often isn't available at all.
+        // linuxdeploy walks the binary's `DT_NEEDED` list before it looks at
+        // `--library`, and resolves each entry against the system search path —
+        // so a vendored library that lives nowhere on it stops the deploy with
+        // `Could not find dependency: libfoo.so`, even though we were about to
+        // hand it that exact file. Measured on a real AppImage build. Putting
+        // the directories on LD_LIBRARY_PATH is how linuxdeploy documents
+        // pointing its resolver at a library tree of your own.
+        var deployEnv = ["APPIMAGE_EXTRACT_AND_RUN": "1"]
+        if !declaredLibDirs.isEmpty {
+            let existing = ProcessInfo.processInfo.environment["LD_LIBRARY_PATH"]
+            let paths = declaredLibDirs.map(\.path)
+            deployEnv["LD_LIBRARY_PATH"] = (existing.map { paths + [$0] } ?? paths)
+                .joined(separator: ":")
+        }
         try await Shell.run(
             "/usr/bin/env", args, cwd: outputDir,
-            envOverrides: ["APPIMAGE_EXTRACT_AND_RUN": "1"]
+            envOverrides: deployEnv
         )
 
         // linuxdeploy emits <Name>-<arch>.AppImage in cwd.

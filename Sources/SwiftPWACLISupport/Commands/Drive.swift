@@ -912,7 +912,8 @@ struct LaunchedApp {
         // to the same binary `env` would have found.
         try await Shell.run(
             "swift",
-            ["build", "-c", options.configuration, "--product", exe],
+            ["build", "-c", options.configuration, "--product", exe]
+                + NativeLibrarySearch.hostLinkerArgs(manifest: pwa, projectRoot: cwd),
             cwd: cwd,
             stdoutTo: progressSink
         )
@@ -939,7 +940,8 @@ struct LaunchedApp {
             timeout: options.timeout,
             route: options.route,
             webRoot: webRoot,
-            background: options.background
+            background: options.background,
+            runtimeEnvironment: NativeLibrarySearch.hostRuntimeEnvironment(manifest: pwa, projectRoot: cwd)
         )
     }
 
@@ -1257,7 +1259,8 @@ struct LaunchedApp {
         timeout: TimeInterval,
         route: String?,
         webRoot: URL? = nil,
-        background: Bool = false
+        background: Bool = false,
+        runtimeEnvironment: [String: String] = [:]
     ) throws -> LaunchedApp {
         let process = Process()
         process.executableURL = executable
@@ -1284,6 +1287,10 @@ struct LaunchedApp {
         if background {
             env[DriverBackground.environmentVariable] = "1"
         }
+        // The binary runs straight out of `.build`, where no bundler has staged
+        // the app's vendored libraries — without their directory on the
+        // loader's path it dies at load rather than starting.
+        for (key, value) in runtimeEnvironment { env[key] = value }
         process.environment = env
 
         let stdout = Pipe()

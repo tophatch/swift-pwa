@@ -346,16 +346,16 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// - **Android** — additionally resolves the prebuilt
         ///   `libonnxruntime.so` per requested ABI (downloaded +
         ///   checksum-verified, or read from a local `Vendor/onnxruntime-android/`
-        ///   vendoring), prepends its directory to `LIBRARY_PATH` so the
-        ///   per-ABI cross-compile resolves `-lonnxruntime`, and stages the
+        ///   vendoring), puts its directory on that ABI's link search path so
+        ///   the per-ABI cross-compile resolves `-lonnxruntime`, and stages the
         ///   `.so` into `jniLibs/<abi>/` so the APK doesn't crash at launch
         ///   with `UnsatisfiedLinkError`. Only `arm64-v8a` is published today
         ///   — see `OnnxRuntimeAndroidArtifact`.
         /// - **Linux / Windows** — resolves Microsoft's prebuilt **CPU**
         ///   `libonnxruntime.so` / `onnxruntime.dll`+`.lib` (downloaded +
         ///   checksum-verified, or from a local `Vendor/onnxruntime-desktop/`
-        ///   vendoring), puts its directory on `LIBRARY_PATH` (Linux) / `LIB`
-        ///   (Windows) for the link step, and stages the shared lib into the
+        ///   vendoring), puts its directory on the link step's search path,
+        ///   and stages the shared lib into the
         ///   AppImage / next to the `.exe`. See `ai.onnx_gpu` below to move
         ///   desktop inference onto the GPU.
         ///
@@ -506,6 +506,32 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "linux": { "document_types": [{ "mime_types": ["image/png", "application/pdf"] }] }
         /// ```
         public var documentTypes: [MimeDocumentType]?
+        /// Directories holding native libraries this app vendors itself —
+        /// anything the platform doesn't ship and swift-pwa doesn't resolve for
+        /// you (the reported case: SQLite, built per ABI, for GRDB). Each is
+        /// put on the link step's library search path, and the shared libraries
+        /// in it are staged into the app so it doesn't link cleanly and then
+        /// die at load.
+        ///
+        /// The alternative an app is otherwise left with — a `-L` in
+        /// `unsafeFlags` — poisons dependency resolution for anything that
+        /// depends on the package, and a global `LIBRARY_PATH` / `LIB` no
+        /// longer reaches the link step at all under Swift 6.4's `swiftbuild`
+        /// engine. See ``NativeLibrarySearch``.
+        ///
+        /// Paths are relative to the project root (the directory holding
+        /// `pwa.json`); an absolute path is used as given. Everything in the
+        /// directory is staged, not just what the built binary's `DT_NEEDED`
+        /// list names — that list misses anything the app `dlopen`s, and the
+        /// miss only surfaces at runtime.
+        ///
+        /// The `.so` files are handed to `linuxdeploy --library`, so they land
+        /// in the AppImage's `usr/lib` with the runtime path already set.
+        ///
+        /// ```json
+        /// "linux": { "native_library_dirs": ["Vendor/sqlite/linux-x86_64"] }
+        /// ```
+        public var nativeLibraryDirs: [String]?
     }
 
     /// One MIME-based document-type entry (Linux / Android share the shape).
@@ -536,9 +562,40 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
         /// sometimes unavoidable.
         public var icon: String?
-        public init(documentTypes: [ExtensionDocumentType]? = nil, icon: String? = nil) {
+        /// Directories holding native libraries this app vendors itself —
+        /// anything the platform doesn't ship and swift-pwa doesn't resolve for
+        /// you (the reported case: SQLite, built per ABI, for GRDB). Each is
+        /// put on the link step's library search path, and the shared libraries
+        /// in it are staged into the app so it doesn't link cleanly and then
+        /// die at load.
+        ///
+        /// The alternative an app is otherwise left with — a `-L` in
+        /// `unsafeFlags` — poisons dependency resolution for anything that
+        /// depends on the package, and a global `LIBRARY_PATH` / `LIB` no
+        /// longer reaches the link step at all under Swift 6.4's `swiftbuild`
+        /// engine. See ``NativeLibrarySearch``.
+        ///
+        /// Paths are relative to the project root (the directory holding
+        /// `pwa.json`); an absolute path is used as given. Everything in the
+        /// directory is staged, not just what the built binary's `DT_NEEDED`
+        /// list names — that list misses anything the app `dlopen`s, and the
+        /// miss only surfaces at runtime.
+        ///
+        /// The `.dll` files are copied next to the `.exe` (and into the MSIX),
+        /// which is where Windows' loader looks first.
+        ///
+        /// ```json
+        /// "windows": { "native_library_dirs": ["Vendor/sqlite/windows-x64"] }
+        /// ```
+        public var nativeLibraryDirs: [String]?
+        public init(
+            documentTypes: [ExtensionDocumentType]? = nil,
+            icon: String? = nil,
+            nativeLibraryDirs: [String]? = nil
+        ) {
             self.documentTypes = documentTypes
             self.icon = icon
+            self.nativeLibraryDirs = nativeLibraryDirs
         }
     }
 
@@ -656,6 +713,35 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "android": { "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"] }
         /// ```
         public var permissions: [String]?
+        /// Directories holding native libraries this app vendors itself —
+        /// anything the platform doesn't ship and swift-pwa doesn't resolve for
+        /// you (the reported case: SQLite, built per ABI, for GRDB). Each is
+        /// put on the link step's library search path, and the shared libraries
+        /// in it are staged into the app so it doesn't link cleanly and then
+        /// die at load.
+        ///
+        /// The alternative an app is otherwise left with — a `-L` in
+        /// `unsafeFlags` — poisons dependency resolution for anything that
+        /// depends on the package, and a global `LIBRARY_PATH` / `LIB` no
+        /// longer reaches the link step at all under Swift 6.4's `swiftbuild`
+        /// engine. See ``NativeLibrarySearch``.
+        ///
+        /// Paths are relative to the project root (the directory holding
+        /// `pwa.json`); an absolute path is used as given. Everything in the
+        /// directory is staged, not just what the built binary's `DT_NEEDED`
+        /// list names — that list misses anything the app `dlopen`s, and the
+        /// miss only surfaces at runtime.
+        ///
+        /// **`<abi>` is substituted** with each ABI being built, which is what
+        /// makes a multi-ABI build expressible: the bundler links every ABI in
+        /// one process, so a single global search path could only ever carry
+        /// one ABI's copy. The staged `.so` files land in `jniLibs/<abi>/`
+        /// beside the app's own.
+        ///
+        /// ```json
+        /// "android": { "native_library_dirs": ["Vendor/sqlite/<abi>"] }
+        /// ```
+        public var nativeLibraryDirs: [String]?
         public init(
             packageId: String? = nil,
             minSdk: Int? = nil,
@@ -665,7 +751,8 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             signing: AndroidSigningSection? = nil,
             documentTypes: [DocumentType]? = nil,
             network: NetworkSection? = nil,
-            permissions: [String]? = nil
+            permissions: [String]? = nil,
+            nativeLibraryDirs: [String]? = nil
         ) {
             self.packageId = packageId
             self.minSdk = minSdk
@@ -676,6 +763,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.documentTypes = documentTypes
             self.network = network
             self.permissions = permissions
+            self.nativeLibraryDirs = nativeLibraryDirs
         }
 
         /// One `android.document_types` entry: a set of MIME types the app

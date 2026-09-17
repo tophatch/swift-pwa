@@ -11,7 +11,7 @@ import Foundation
 ///
 /// The Linux analogue of `OnnxRuntimeAndroidArtifact` / `LlamaLinuxArtifact`.
 /// Unlike llama's Linux slice (a *static* `libllama.a`), ONNX Runtime desktop
-/// ships only a *shared* `.so`, so this dir goes on `LIBRARY_PATH` for the
+/// ships only a *shared* `.so`, so this dir goes on the link search path for the
 /// link step **and** the `.so` is staged next to the app at runtime (see
 /// `LinuxBundler`). Re-hosted on this repo's stable `onnxruntime-vendor-linux`
 /// release from Microsoft's official archive by
@@ -45,7 +45,7 @@ enum OnnxRuntimeLinuxArtifact {
     /// holding it — normalized so both names resolve: `libonnxruntime.so.1`
     /// (the SONAME the binary's NEEDED entry references at runtime) and a
     /// `libonnxruntime.so` symlink (what `-lonnxruntime` finds at link time).
-    /// Used for `LIBRARY_PATH` (link) + `linuxdeploy --library` (runtime).
+    /// Used for the `-Xlinker -L` search path (link) + `linuxdeploy --library` (runtime).
     /// Throws on a download failure or checksum mismatch.
     static func ensureLibDir(projectRoot: URL) async throws -> URL {
         let fm = FileManager.default

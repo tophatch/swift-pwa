@@ -12,9 +12,9 @@ import Foundation
 /// On Apple the lib reaches the build through SwiftPM's `.binaryTarget`
 /// (auto-downloaded + checksum-verified). Linux has no binary-library target, so
 /// the CLI fetches `libllama.a` itself — to a content-addressed cache — and
-/// points `LIBRARY_PATH` at its directory, which the child `swift build`
-/// inherits and uses to resolve `.linkedLibrary("llama")` (no `unsafeFlags`,
-/// which would poison dependency resolution). Built + published by
+/// hands its directory to the child `swift build` as a `-Xlinker` search path,
+/// which resolves `.linkedLibrary("llama")` (no `unsafeFlags`, which would
+/// poison dependency resolution; see ``NativeLibrarySearch``). Built + published by
 /// `.github/workflows/llama-linux.yml` from the same pinned llama.cpp commit as
 /// the xcframework; `sha256_x86_64` below is auto-pinned by that workflow.
 ///
@@ -40,7 +40,7 @@ enum LlamaLinuxArtifact {
     }
 
     /// Ensure `libllama.a` is available and return the **directory** to put on
-    /// `LIBRARY_PATH`. Throws (with an actionable message) on an unsupported
+    /// the link step's search path. Throws (with an actionable message) on an unsupported
     /// arch, a download failure, or a checksum mismatch.
     static func ensureLibDir(projectRoot: URL) async throws -> URL {
         let fm = FileManager.default

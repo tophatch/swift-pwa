@@ -29,12 +29,15 @@ public final class AssetProvider: @unchecked Sendable {
         let writable: Bool
         /// SPA history-routing fallback (only ever set on the `/` bundle
         /// mount): when a request under this mount names no file on disk and
-        /// looks like a client-side route, serve `fallbackDocument` instead of
+        /// looks like a client-side route, serve `indexDocument` instead of
         /// 404ing. `false` on served-pack mounts.
         var spaFallback: Bool = false
-        /// The document served for an SPA-fallback hit (the bundle entry, e.g.
-        /// `index.html`), relative to `root`.
-        var fallbackDocument: String = "index.html"
+        /// The document this mount serves when the request names no file of
+        /// its own — a directory path (`/`, `/docs/`) under any mount, or an
+        /// SPA-fallback hit under the bundle. Relative to `root`; for the
+        /// bundle mount it is the app's entry, which is why `/` lands on the
+        /// app even when the entry isn't called `index.html`.
+        var indexDocument: String = "index.html"
     }
 
     public init(scheme: String = "pwa", host: String = "localhost", root: URL) {
@@ -67,7 +70,7 @@ public final class AssetProvider: @unchecked Sendable {
         mounts.removeAll { $0.prefix == "/" }
         mounts.append(Mount(
             prefix: "/", root: root.standardizedFileURL, writable: false,
-            spaFallback: spaFallback, fallbackDocument: fallbackDocument
+            spaFallback: spaFallback, indexDocument: fallbackDocument
         ))
     }
 
@@ -122,7 +125,14 @@ public final class AssetProvider: @unchecked Sendable {
         guard url.scheme?.lowercased() == scheme else { return nil }
         guard let urlHost = url.host?.lowercased(), urlHost == host else { return nil }
         var path = url.path
-        if path.isEmpty || path == "/" { path = "/index.html" }
+        if path.isEmpty { path = "/" }
+        // `URL.path` drops a trailing slash, so `/docs/` and `/docs` are
+        // indistinguishable by the time we get here — and they mean different
+        // things below. Read the slash off the raw string instead, ahead of
+        // any query or fragment.
+        let isDirectoryPath = path == "/" || url.absoluteString
+            .prefix { $0 != "?" && $0 != "#" }
+            .hasSuffix("/")
 
         // Longest prefix first, so `/packs/...` beats the `/` bundle mount.
         let ordered: [Mount] = {
@@ -140,13 +150,28 @@ public final class AssetProvider: @unchecked Sendable {
             if let size = Self.regularFileSize(candidate) {
                 return Resolved(fileURL: candidate, mimeType: Self.mimeType(for: candidate), fileSize: size)
             }
+            // A directory path names no file of its own, so serve its index —
+            // and at the mount's own root that index is the app's entry
+            // document, which is what makes `location.replace('/')` ("go back
+            // to the top") land on the app rather than on a 404. A deeper
+            // directory has no entry of its own and takes the web default.
+            // Only paths that *end* in a slash count: `/docs` is left alone
+            // because serving `/docs/index.html` there would resolve the
+            // document's own relative URLs one directory too high.
+            if isDirectoryPath {
+                let document = relative.isEmpty ? mount.indexDocument : "index.html"
+                let index = candidate.appendingPathComponent(document).standardizedFileURL
+                if let size = Self.regularFileSize(index) {
+                    return Resolved(fileURL: index, mimeType: Self.mimeType(for: index), fileSize: size)
+                }
+            }
             // No file on disk. If this mount opts into SPA history routing and
             // the request looks like a client-side route (not an asset), serve
             // its fallback document instead of falling through to a 404 — so a
             // hard reload / deep-link of `/settings` loads the app. Only the
             // bundle `/` mount ever sets `spaFallback`.
             if mount.spaFallback, Self.looksLikeNavigation(path) {
-                let fallback = mount.root.appendingPathComponent(mount.fallbackDocument).standardizedFileURL
+                let fallback = mount.root.appendingPathComponent(mount.indexDocument).standardizedFileURL
                 if let size = Self.regularFileSize(fallback) {
                     return Resolved(
                         fileURL: fallback, mimeType: Self.mimeType(for: fallback), fileSize: size
@@ -215,7 +240,7 @@ public final class AssetProvider: @unchecked Sendable {
         let direct = bundle.root.appendingPathComponent(relative).standardizedFileURL
         if Self.regularFileSize(direct) != nil { return nil }
 
-        let fallback = bundle.root.appendingPathComponent(bundle.fallbackDocument).standardizedFileURL
+        let fallback = bundle.root.appendingPathComponent(bundle.indexDocument).standardizedFileURL
         guard let size = Self.regularFileSize(fallback) else { return nil }
         return Resolved(fileURL: fallback, mimeType: Self.mimeType(for: fallback), fileSize: size)
     }

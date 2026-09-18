@@ -569,6 +569,23 @@ struct AndroidBundlerUnitTests {
         #expect(!on.contains("https://swift-pwa.local/web/"))
     }
 
+    /// Issue #242, second half: a not-found came back as a response with a
+    /// null stream, which the WebView renders as `ERR_INVALID_RESPONSE` — a
+    /// protocol failure, not a missing file, and an hour of looking for the
+    /// wrong bug.
+    @Test("a missing bundle path 404s with a body that names it")
+    func bridgeKtNotFoundHasABody() {
+        let kt = AndroidTemplates.swiftPWABridgeKt()
+        #expect(kt.contains("private fun notFoundResponse(path: String): WebResourceResponse"))
+        #expect(kt.contains("404,"))
+        #expect(kt.contains("\"Not Found\","))
+        // Only for our own origin: inventing a 404 for a null response on any
+        // other host would break every outbound request the page makes.
+        #expect(kt.contains("request.url.host == \"swift-pwa.local\""))
+        // The path is escaped before it reaches the body.
+        #expect(kt.contains(".replace(\"<\", \"&lt;\")"))
+    }
+
     @Test("SwiftPWASystemPlugins maps PackageInstaller status codes to stable names")
     func systemPluginsMapsStatuses() {
         let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
@@ -641,7 +658,7 @@ struct AndroidBundlerUnitTests {
             ]
         )
         // Bundle handler is present.
-        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this))"))
+        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this, \"index.html\"))"))
         // Each declared mount maps to an internal-storage handler under the
         // right root, prefix normalized to end with "/".
         #expect(activity.contains(
@@ -671,12 +688,29 @@ struct AndroidBundlerUnitTests {
     @Test("the web bundle is served at the origin root, not under /web/")
     func mainActivityServesBundleAtRoot() {
         let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
-        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this))"))
+        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this, \"index.html\"))"))
         #expect(activity.contains("private class WebBundlePathHandler"))
         // The prefix the delegate applies is what puts the bundle at the root.
-        #expect(activity.contains("assets.handle(\"web/\" + path.removePrefix(\"/\"))"))
+        #expect(activity.contains("assets.handle(\"web/\" + resolved)"))
         // And nothing navigates to the old location any more.
         #expect(!activity.contains("swift-pwa.local/web/"))
+    }
+
+    /// Issue #242: the bundle entry was served at `/index.html` and at no
+    /// other name, so `location.replace("/")` — the ordinary "go back to the
+    /// top" — hit `ERR_INVALID_RESPONSE` on Android and worked everywhere
+    /// else.
+    @Test("the bundle handler serves web.entry at the origin root")
+    func mainActivityServesEntryAtRoot() {
+        let activity = AndroidTemplates.mainActivityKt(
+            packageId: "com.example.hi", soBaseName: "Hi", entry: "app.html"
+        )
+        // The entry is baked into the handler, so an app whose entry isn't
+        // called index.html has a working root too.
+        #expect(activity.contains("WebBundlePathHandler(this, \"app.html\")"))
+        #expect(activity.contains("relative.isEmpty() -> entry"))
+        // A deeper directory has no entry of its own; it takes the web default.
+        #expect(activity.contains("relative.endsWith(\"/\") -> relative + \"index.html\""))
     }
 
     @Test("no build.serve mounts leaves the asset loader chain unchanged")

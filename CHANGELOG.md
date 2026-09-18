@@ -5,6 +5,43 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **The origin root (`/`) serves the app's entry, on Android too** (#242).
+  #212 put the Android bundle at the origin root so every root-absolute asset
+  resolved; what didn't come with it was the directory index. `web.entry` was
+  served at `/index.html` and at no other name, so the one navigation an app
+  writes as "go back to the top" —
+
+  ```js
+  window.location.replace(`${location.origin}/`);
+  ```
+
+  — landed on Chrome's `net::ERR_INVALID_RESPONSE` with no back stack to
+  recover with, on Android alone. Measured on a Galaxy Z Fold7 (Android 16),
+  0.11.1. The bundle handler now resolves a directory path to its index: the
+  mount's own root serves the entry, a deeper directory (`/docs/`) serves its
+  `index.html`, and a path with no trailing slash still 404s, because serving
+  `/docs/index.html` for `/docs` would resolve that document's relative URLs
+  one directory too high.
+
+  The same resolution moved into Core's `AssetProvider`, which Apple, both GTK
+  backends, Windows' interception path and Android's runtime
+  (`ctx.serveDirectory`) mounts all share — so it now honours `web.entry`
+  rather than a hardcoded `index.html`. An app whose entry is `app.html` had no
+  working origin root anywhere.
+
+- **A missing file on Android says so** (#242). A not-found out of
+  `shouldInterceptRequest` was a response with a null stream, which the WebView
+  renders as `ERR_INVALID_RESPONSE` — a protocol failure, not a missing file,
+  which sends you looking for a corrupt mount rather than for the path you
+  never staged. It cost the reporter an hour. Both the bundle and a runtime
+  mount now answer a real `404` carrying a body that names the path. Only for
+  the app's own origin: a null response for any other host means "not mine",
+  and inventing a 404 there would break every outbound request the page makes.
+
 ## [0.11.1] - 2026-09-18
 
 ### Added

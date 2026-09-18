@@ -114,6 +114,12 @@ To point at a different directory (e.g. `dist/` from a Vite build), edit the `we
 "web": { "directory": "dist", "entry": "index.html" }
 ```
 
+`web.entry` is served at the origin root as well as under its own name, on
+every platform — so `location.replace('/')` ("go back to the top") lands on the
+app whatever the entry is called. A directory path deeper in the bundle
+(`/docs/`) serves its own `index.html` if there is one; a path with no trailing
+slash never does.
+
 ### Configuring `pwa.json`
 
 `pwa.json` is the single source of truth. `Info.plist`, `.desktop`, bundle identifiers, window dimensions, and icon assets are all generated from it.

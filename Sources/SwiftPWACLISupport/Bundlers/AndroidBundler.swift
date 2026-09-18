@@ -206,7 +206,7 @@ struct AndroidBundler {
         try FileManager.default.createDirectory(at: kotlinDir, withIntermediateDirectories: true)
         try AndroidTemplates.mainActivityKt(
             packageId: pkg, soBaseName: soBase, serveMounts: manifest.build?.serve ?? [],
-            background: windowBackground
+            background: windowBackground, entry: manifest.web.entry
         ).write(
             to: kotlinDir.appendingPathComponent("MainActivity.kt"),
             atomically: true, encoding: .utf8

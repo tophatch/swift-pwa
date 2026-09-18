@@ -650,7 +650,8 @@ enum AndroidTemplates {
         packageId: String,
         soBaseName: String,
         serveMounts: [PWAManifest.ServeMount] = [],
-        background: WindowBackground? = nil
+        background: WindowBackground? = nil,
+        entry: String = "index.html"
     ) -> String {
         // `window.background_color` set → paint the WebView's own surface to
         // match before its first paint. The activity theme's windowBackground
@@ -781,7 +782,7 @@ enum AndroidTemplates {
                 // first.
                 val assetLoader = WebViewAssetLoader.Builder()
                     .setDomain("swift-pwa.local")\(serveHandlerLines(serveMounts))
-                    .addPathHandler("/", WebBundlePathHandler(this))
+                    .addPathHandler("/", WebBundlePathHandler(this, \(kotlinString(entry))))
                     .build()
 
                 bridge = SwiftPWABridge(this, webView, assetLoader)
@@ -987,12 +988,27 @@ enum AndroidTemplates {
         /// reimplementing keeps its MIME guessing, its `..` containment check
         /// and its not-found shape (a response with a null stream, which the
         /// SPA fallback tests for).
-        private class WebBundlePathHandler(context: android.content.Context) :
-            WebViewAssetLoader.PathHandler {
+        private class WebBundlePathHandler(
+            context: android.content.Context,
+            private val entry: String
+        ) : WebViewAssetLoader.PathHandler {
             private val assets = WebViewAssetLoader.AssetsPathHandler(context)
 
-            override fun handle(path: String): android.webkit.WebResourceResponse? =
-                assets.handle("web/" + path.removePrefix("/"))
+            override fun handle(path: String): android.webkit.WebResourceResponse? {
+                val relative = path.removePrefix("/")
+                // A directory path names no file of its own, so serve its
+                // index — and at the origin root that index is the app's
+                // entry document. `location.replace("/")` is the ordinary
+                // way a page says "go back to the top", and without this it
+                // is the one navigation that works on the other four
+                // backends and dead-ends here.
+                val resolved = when {
+                    relative.isEmpty() -> entry
+                    relative.endsWith("/") -> relative + "index.html"
+                    else -> relative
+                }
+                return assets.handle("web/" + resolved)
+            }
         }
         """
     }
@@ -1205,6 +1221,18 @@ enum AndroidTemplates {
                                 )
                                 return assetLoader.shouldInterceptRequest(entryUrl)
                             }
+                        }
+                        // A not-found from the asset loader is a response with
+                        // a null stream, and the WebView renders that as
+                        // `ERR_INVALID_RESPONSE` — which reads as a broken
+                        // protocol and sends you hunting for a corrupt mount
+                        // rather than for the path you never staged. Answer
+                        // with a real 404 that says which path it was. Only
+                        // for our own origin: a null response for any other
+                        // host means "not mine", and inventing a 404 there
+                        // would break every outbound request the page makes.
+                        if (response?.data == null && request.url.host == "swift-pwa.local") {
+                            return notFoundResponse(request.url.path ?: "/")
                         }
                         return response
                     }
@@ -1491,6 +1519,29 @@ enum AndroidTemplates {
             /// whole-file one and be wrong about what it got. This is exactly
             /// what `InternalStoragePathHandler` does for a `build.serve` mount,
             /// so both kinds of mount behave alike.
+            /// A 404 a human can read. `WebResourceResponse` insists on a
+            /// non-empty reason phrase and throws otherwise, and a body is
+            /// what turns the failure from `ERR_INVALID_RESPONSE` into a page
+            /// naming the missing file.
+            private fun notFoundResponse(path: String): WebResourceResponse {
+                val escaped = path
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                val body = "<!doctype html><html><head><meta charset=\"utf-8\">" +
+                    "<title>404</title></head><body><h1>404</h1>" +
+                    "<p>swift-pwa: nothing is served at <code>" + escaped + "</code>.</p>" +
+                    "</body></html>"
+                return WebResourceResponse(
+                    "text/html",
+                    "utf-8",
+                    404,
+                    "Not Found",
+                    mapOf("Cache-Control" to "no-store"),
+                    java.io.ByteArrayInputStream(body.toByteArray(Charsets.UTF_8))
+                )
+            }
+
             private fun servedMountResponse(request: WebResourceRequest): WebResourceResponse? {
                 // A mount is read-only; anything else belongs to `fs.*`.
                 if (!request.method.equals("GET", ignoreCase = true)) return null
@@ -1515,10 +1566,11 @@ enum AndroidTemplates {
                     WebResourceResponse(type, charset, FileInputStream(File(resolved.getString("path"))))
                 } catch (t: Throwable) {
                     // The file was there when Swift stat'd it and isn't now, or
-                    // can't be opened. A response with a null stream is the
-                    // shape the WebView reads as "not found".
+                    // can't be opened. Same legible 404 the bundle gives —
+                    // a response with a null stream would reach the page as
+                    // `ERR_INVALID_RESPONSE` instead.
                     android.util.Log.e("swift-pwa", "serving ${request.url} failed: ${t.message}", t)
-                    WebResourceResponse(null, null, null)
+                    notFoundResponse(request.url.path ?: "/")
                 }
             }
 

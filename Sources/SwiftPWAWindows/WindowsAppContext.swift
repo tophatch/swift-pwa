@@ -19,6 +19,14 @@
         public let events = EventBus()
         public let permissions = PermissionPolicy()
         public let externalURLs = ExternalURLPolicy()
+
+        /// The platform pieces a plugin can pick up without the app naming a
+        /// backend type (see ``AppContext/urlOpener``). Windows has no OS
+        /// authorization browser, so a sign-in opens the default one and
+        /// catches the redirect on loopback — which is also why loopback is
+        /// what `redirect: 'auto'` picks here: a portable `.exe` can't register
+        /// a URL scheme without the user running a script first.
+        public let urlOpener: (any URLOpener)? = WindowsURLOpener()
         /// Stored to satisfy ``AppContext``; this backend never reads it.
         /// macOS is the only platform where an app outlives its windows —
         /// see ``LastWindowClosedPolicy``.

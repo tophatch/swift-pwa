@@ -158,3 +158,9 @@ endpoint.
 | `E_NET` | Transport failure, invalid URL / body, non-2xx download, or checksum mismatch. |
 
 A non-2xx **request** response is not an error — it's a `status` on the result.
+
+## See also
+
+- **[`auth.*`](auth.md)** — the step before the `Authorization:` header. It opens
+  a provider's consent page in the system browser and catches the OAuth redirect
+  back; the token exchange and every call afterwards go through this client.

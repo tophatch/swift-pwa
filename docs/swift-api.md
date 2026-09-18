@@ -321,6 +321,50 @@ object as its own mask, streaming per-cell progress — and
 [docs/proposals/segmentation-plugin.md](proposals/segmentation-plugin.md)
 for the design and current implementation status.
 
+`AuthPlugin` (`auth.*` — opening a provider's consent page and catching the
+OAuth redirect) is the one plugin that takes **no platform adapter at all**:
+
+```swift
+ctx.use(AuthPlugin(networkClient: URLSessionNetworkClient()))
+```
+
+The browser, and on Apple the OS authorization session
+(`ASWebAuthenticationSession`), come from the backend through
+`AppContext.urlOpener` and `AppContext.authorizationSession` — so this line
+compiles unchanged on all five platforms, rather than needing an `#if os(…)`
+ladder naming `AppleURLOpener` / `GTKURLOpener` / `WindowsURLOpener` /
+`AndroidURLOpener`. A per-platform branch in a shared `main.swift` is a branch
+that breaks on the platform its author can't test. The `NetworkClient` stays
+explicit because it already is for `net.*`: Android's `URLSession` has no
+injectable CA trust store.
+
+`OAuthAuthorizer` is the same object underneath, usable directly so a flow can
+run entirely in Swift and a token never becomes visible to the page:
+
+```swift
+let auth = OAuthAuthorizer(
+    urlOpener: ctx.urlOpener,
+    events: ctx.events,
+    networkClient: URLSessionNetworkClient(),
+    presenter: ctx.authorizationSession
+)
+let grant = try await auth.authorize(AuthorizationRequest(
+    authorizationEndpoint: URL(string: "https://accounts.google.com/o/oauth2/v2/auth")!,
+    clientId: clientID,
+    scopes: ["https://www.googleapis.com/auth/drive.readonly"]
+))
+let tokens = try await auth.exchange(TokenExchangeRequest(
+    tokenEndpoint: URL(string: "https://oauth2.googleapis.com/token")!,
+    clientId: clientID,
+    code: grant.code,
+    codeVerifier: grant.codeVerifier,
+    redirectURI: grant.redirectURI
+))
+```
+
+PKCE (`S256`) and `state` are generated and verified inside the flow and are not
+configurable. See [docs/auth.md](auth.md).
+
 ## Multi-window
 
 ```swift

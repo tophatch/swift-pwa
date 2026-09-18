@@ -34,6 +34,9 @@ struct AgentPolicyTests {
         CommandDescriptor(name: "secrets.get", kind: .unary, args: .object(name: "SecretArgs", fields: [
             BridgeField(name: "key", schema: .string)
         ]), result: .void),
+        CommandDescriptor(name: "auth.exchange", kind: .unary, args: .object(name: "TokenExchangeArgs", fields: [
+            BridgeField(name: "code", schema: .string)
+        ]), result: .unknown),
         CommandDescriptor(name: "fs.readText", kind: .unary, args: .object(name: "ReadArgs", fields: [
             BridgeField(name: "path", schema: .string)
         ]), result: .string),
@@ -211,6 +214,21 @@ struct AgentPolicyTests {
         #expect(resolution.tools.isEmpty)
         let error = try? #require(resolution.errors.first { $0.contains("secrets.get") })
         #expect(error?.contains("credentials never leave the native side") == true)
+    }
+
+    /// The same hole as `secrets.*`, one step earlier: `secrets.get` hands over a
+    /// key the app already had, `auth.exchange` mints a new one — for whichever
+    /// provider the agent names, since the endpoints are arguments. A consent
+    /// sheet written from the developer's description would say "Sign in".
+    @Test("the auth namespace can never be exposed")
+    func authIsForbidden() {
+        let resolution = Self.resolve(Self.section(Self.expose("auth.exchange")))
+        #expect(resolution.tools.isEmpty)
+        let error = try? #require(resolution.errors.first { $0.contains("auth.exchange") })
+        #expect(error?.contains("mints credentials") == true)
+        // Each refusal carries its own reason: being handed the `secrets.*`
+        // story here would point at a fix that isn't the problem.
+        #expect(error?.contains("credentials never leave the native side") != true)
     }
 
     @Test("bridge internals can never be exposed")

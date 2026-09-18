@@ -43,6 +43,41 @@ public struct BridgeError: Error, Sendable, Codable, Equatable {
     /// the same distinction `permissions` draws between undeclared and denied.
     public static let urlScheme = "E_URL_SCHEME"
 
+    /// The user dismissed the consent browser (`auth.authorize`). Not a
+    /// failure of anything — a page shows its signed-out state and moves on —
+    /// which is why it is its own code rather than a generic handler error.
+    public static let authCancelled = "E_AUTH_CANCELLED"
+
+    /// No matching callback arrived within the flow's timeout. Distinct from
+    /// ``authCancelled`` because the app can't tell whether the user is still
+    /// looking at the consent page; a retry is reasonable, a signed-out state
+    /// is not.
+    public static let authTimeout = "E_AUTH_TIMEOUT"
+
+    /// The provider refused — `error=access_denied`, `invalid_scope`, a
+    /// disabled client. The message carries the provider's own
+    /// `error_description`, which is the only thing that makes these
+    /// diagnosable.
+    public static let authDenied = "E_AUTH_DENIED"
+
+    /// A callback came back with a wrong or missing `state`. Only reachable
+    /// where the receiver is one-shot (Apple's `ASWebAuthenticationSession`):
+    /// the loopback and custom-scheme receivers drop such a callback and keep
+    /// waiting, since a mismatch is either an attack or another app's stray
+    /// request and neither should end a flow the user is still in.
+    public static let authState = "E_AUTH_STATE"
+
+    /// The redirect couldn't be resolved: `auto` on a platform where the
+    /// framework can't know the scheme, an unusable redirect URI, or a scheme
+    /// this build doesn't register. Raised *before* the browser opens, which is
+    /// the point — the alternative surfaces minutes later as a dead redirect.
+    public static let authRedirect = "E_AUTH_REDIRECT"
+
+    /// The token endpoint returned a non-2xx or a body without an
+    /// `access_token`. Separate from ``net`` because the request itself
+    /// succeeded; it is the grant that was refused.
+    public static let authToken = "E_AUTH_TOKEN"
+
     /// This build has no codec for the requested source or output format. Kept
     /// distinct from ``image`` because it answers a question the page could
     /// have asked first via `image.info`, and because it is a property of the

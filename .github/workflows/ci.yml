@@ -6,9 +6,9 @@ on:
   pull_request:
   workflow_dispatch:
   schedule:
-    # Weekly, for the opt-in jobs below (simulator-drive, driven-input) — too
-    # slow, or too dependent on a real environment, to gate a PR on, but they
-    # shouldn't rot unwatched either.
+    # Weekly, for the opt-in jobs below (simulator-drive, driven-input, oauth,
+    # and the next-toolchain canaries) — too slow, or too dependent on a real
+    # environment, to gate a PR on, but they shouldn't rot unwatched either.
     - cron: "17 5 * * 1"
 
 concurrency:
@@ -284,6 +284,158 @@ jobs:
           WEBKIT_DISABLE_DMABUF_RENDERER: "1"
           WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
         run: bash Scripts/verify-driven-input.sh
+
+  # An OAuth flow is three mechanisms wearing one command — a URL handed to the
+  # system browser, an HTTP listener on 127.0.0.1, and a `state` check — and the
+  # unit suite can only reach the one that doesn't involve another process. Every
+  # gating job compiles the backends and launches nothing, which is how `drive`
+  # and the agent check both turned out never to have worked on Windows.
+  #
+  # Linux only, and off the PR gate, for the same reasons as `driven-input`: this
+  # needs a real browser on a real display, which Xvfb plus the runner image's
+  # Chrome provides and a hosted macOS or Windows runner does not (no logged-in
+  # desktop). The mobile halves can't run hosted at all — they need a cabled
+  # device — so `verify-oauth-android.sh` / `-ios.sh` stay manual.
+  #
+  # `--require-browser` is load-bearing. Without it the script SKIPs when it
+  # can't reach a browser, which is right for a developer on a headless box and
+  # catastrophic here: the job would report green having tested nothing, which is
+  # precisely the failure its own controls exist to prevent.
+  oauth:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install GTK, WebKitGTK, Xvfb and the desktop-entry tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            xvfb \
+            xdg-utils \
+            desktop-file-utils
+      - name: Register a URL handler the runner can actually run
+        # **This is a fetcher, not a browser, and that is deliberate.** A hosted
+        # runner cannot reliably run a GUI browser: the image ships Chrome but
+        # registers no default handler, and Ubuntu 24.04's AppArmor restriction
+        # on unprivileged user namespaces breaks its sandbox — `g_app_info_…`
+        # reports a *successful spawn* and the browser then dies, so the flow
+        # fails as "no browser on this box" while everything is registered
+        # correctly. Both of those were measured here, in that order.
+        #
+        # What this still exercises is the whole chain that can regress in *our*
+        # code: `system.openURL` → `ExternalURLPolicy` → `GTKURLOpener` → GIO's
+        # default-handler resolution → a spawned process receiving the URL, and
+        # then the real loopback receiver, `state` check, PKCE round-trip and
+        # timeout. What it does not exercise is a browser *rendering* a consent
+        # page — so a green run here is not evidence that a real browser works.
+        # That is what the desktop and device runs in docs/auth.md are for.
+        run: |
+          set -euo pipefail
+          sudo tee /usr/local/bin/swift-pwa-ci-open >/dev/null <<'SH'
+          #!/usr/bin/env bash
+          exec curl -sS -L -o /dev/null --max-time 30 "$1"
+          SH
+          sudo chmod +x /usr/local/bin/swift-pwa-ci-open
+          mkdir -p ~/.local/share/applications
+          cat > ~/.local/share/applications/swift-pwa-ci-open.desktop <<'DESKTOP'
+          [Desktop Entry]
+          Type=Application
+          Name=swift-pwa CI URL handler
+          Exec=/usr/local/bin/swift-pwa-ci-open %u
+          Terminal=false
+          NoDisplay=true
+          MimeType=x-scheme-handler/http;x-scheme-handler/https;
+          DESKTOP
+          update-desktop-database ~/.local/share/applications
+          xdg-settings set default-web-browser swift-pwa-ci-open.desktop
+          xdg-settings get default-web-browser
+      - name: Preflight — can this runner hand a URL to its handler at all?
+        # Deliberately the same path the app takes (GIO → the registered handler
+        # → loopback), minus the app. Without it a red CONTROL line in the next
+        # step is ambiguous between "the runner's handler is broken" and "the
+        # feature regressed", which is the one distinction whoever reads the
+        # tracking issue needs first. It has already paid for itself once.
+        run: |
+          set -euo pipefail
+          python3 -m http.server 8731 --bind 127.0.0.1 >/tmp/preflight.log 2>&1 &
+          server=$!
+          trap 'kill $server 2>/dev/null || true' EXIT
+          sleep 1
+          gio open "http://127.0.0.1:8731/preflight" || true
+          for _ in $(seq 1 60); do
+            grep -q "GET /preflight" /tmp/preflight.log && break
+            sleep 0.5
+          done
+          grep -q "GET /preflight" /tmp/preflight.log || {
+            echo "::error::the registered handler never fetched the preflight URL — the runner, not the code"
+            cat /tmp/preflight.log
+            exit 1
+          }
+          echo "the registered handler fetched the preflight URL"
+      - name: Run a whole authorization-code flow against a stand-in provider
+        env:
+          # Headless WebKitGTK needs its compositing and sandbox off, the same
+          # way the GUI-gated suites do; the CRITICAL lines it prints without
+          # them are noise, not failures.
+          WEBKIT_DISABLE_COMPOSITING_MODE: "1"
+          WEBKIT_DISABLE_DMABUF_RENDERER: "1"
+          WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
+        run: bash Scripts/verify-oauth.sh --require-browser
+      - name: File or update the tracking issue
+        # Same shape as the next-toolchain canaries: a weekly email is easy to
+        # filter into oblivion, an open issue is the thing that gets triaged, and
+        # a growing comment thread says how many weeks it has been broken.
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "CI: oauth canary failing (linux)"
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # Written to a file rather than a `$(cat <<…)` capture: bash 3.2,
+          # which is what a macOS dev box checks this with, can't parse a
+          # heredoc inside command substitution.
+          body="$RUNNER_TEMP/oauth-body.md"
+          cat > "$body" <<BODY
+          The \`oauth\` job failed driving a real app through a whole
+          authorization-code flow.
+
+          [Failing run]($run_url) — read the PASS/FAIL list before anything else;
+          each line names the mechanism it covers.
+
+          **Which half broke?** A failing **CONTROL** line is the environment,
+          not the code: with \`--require-browser\` a runner that can't reach a
+          browser fails here rather than skipping, so check the default-handler
+          step first. A failing **check** is the feature — \`verify-oauth.sh\`
+          runs against a fresh \`swift-pwa init\` app and a stand-in provider in
+          its own process, so a red line means the loopback receiver, the
+          \`state\` check, or the PKCE round-trip actually regressed.
+
+          The last check must time out. If *that* one fails while the rest pass,
+          suspect the negative control itself — every check above it is then
+          equally consistent with a receiver that resolves whatever it is handed.
+
+          Nothing is blocked meanwhile: this job is not a required check. The
+          mobile halves (\`verify-oauth-android.sh\`, \`verify-oauth-ios.sh\`)
+          can't run hosted and are unaffected — re-run those on a cabled device
+          if the failure looks like it reaches the custom-scheme path.
+          BODY
+          number=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+            echo "commented on existing #$number"
+          else
+            gh issue create --title "$TITLE" --body-file "$body"
+          fi
 
   # MARK: - Next-toolchain canaries
   #

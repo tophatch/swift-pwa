@@ -578,6 +578,17 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**No OS sign-in browser.** `auth.authorize` opens the *default* browser and
+catches the OAuth redirect on a loopback `127.0.0.1` listener. Apple has
+`ASWebAuthenticationSession` — one object for the browser, the callback and
+cancellation, plus the prompt that shares Safari's cookies — and Linux has no
+cross-desktop equivalent to fill it with. Two consequences worth knowing: the
+user's browser session is whatever their browser already has (no separate
+cookie jar to prompt about), and **closing the browser tab isn't observable**, so
+a cancelled sign-in reaches the app as `E_AUTH_TIMEOUT` at the end of
+`timeoutMs` rather than as `E_AUTH_CANCELLED`. Give the waiting state its own
+Cancel button. See [docs/auth.md](auth.md).
+
 **GTK4 can't run the driver's backgrounded mode.** `swift-pwa drive
 --background` (see [docs/app-driver.md](app-driver.md#running-a-suite-without-losing-the-machine----background))
 parks the app's window off screen so a test suite doesn't take over the machine.

@@ -133,6 +133,13 @@ Not every command can be a tool, and the check explains which rule it hit:
   *is* read-only, so a consent sheet built from "Read a stored setting,
   `read_only: true`" would be accurate right up to the moment an agent walks
   off with the API key.
+- **Never `auth.*`.** The same hole as `secrets.*`, one step earlier: that one
+  hands over a key the app already had, this one *mints* a new one.
+  `auth.exchange` returns an access token and a refresh token, and both commands
+  take the provider's endpoints as arguments — so an agent holding them chooses
+  whose credential to get. A consent sheet written from your description would
+  honestly say "Sign in". Expose the command that uses the sign-in
+  (`myapp.syncLibrary`) instead.
 - **Never `__*`.** Bridge internals.
 
 ### Expose the function, never the key

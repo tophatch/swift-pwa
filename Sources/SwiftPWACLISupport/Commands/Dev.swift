@@ -73,18 +73,19 @@ struct Dev: AsyncParsableCommand {
 
         let task = Process()
         task.executableURL = try Bash.which("swift")
-        // Host build — an app that links a vendored native library needs its
-        // search path here too, or `dev` fails where `build` would have worked.
-        // Read afresh: the manifest above is inside the built-in-server branch.
-        task.arguments = try ["run"] + NativeLibrarySearch.hostLinkerArgs(
-            manifest: PWAManifest.load(from: cwd.appendingPathComponent(manifest)),
-            projectRoot: cwd
-        )
+        // Host build — an app that vendors a native library needs both its
+        // search paths here too, or `dev` fails where `build` would have
+        // worked. Read afresh: the manifest above is inside the
+        // built-in-server branch.
+        let devManifest = try PWAManifest.load(from: cwd.appendingPathComponent(manifest))
+        task.arguments = try ["run"]
+            + NativeLibrarySearch.hostLinkerArgs(manifest: devManifest, projectRoot: cwd)
+            + NativeLibrarySearch.hostCompilerArgs(manifest: devManifest, projectRoot: cwd)
         var env = ProcessInfo.processInfo.environment
         env["PWA_DEV_SERVER"] = devURL
         // …and so the app can *load* them once it's running.
         for (key, value) in try NativeLibrarySearch.hostRuntimeEnvironment(
-            manifest: PWAManifest.load(from: cwd.appendingPathComponent(manifest)), projectRoot: cwd
+            manifest: devManifest, projectRoot: cwd
         ) { env[key] = value }
         task.environment = env
         try task.run()

@@ -1,9 +1,16 @@
 import ArgumentParser
 import Foundation
 
-/// How a vendored native library reaches the link step — both the ones
-/// swift-pwa resolves itself (the llama.cpp and ONNX Runtime tiers) and the
-/// ones an app declares in `pwa.json`.
+/// How a vendored native library reaches the build — both the ones swift-pwa
+/// resolves itself (the llama.cpp and ONNX Runtime tiers) and the ones an app
+/// declares in `pwa.json`.
+///
+/// Two search paths, because a vendored library has two halves and the compile
+/// comes first: `native_include_dirs` puts its headers where the clang importer
+/// looks, `native_library_dirs` puts its binaries where the linker looks. An
+/// app that could declare only the second couldn't vendor anything with an API
+/// — the build died at the first Swift module importing the C shim, long before
+/// any link step (#238).
 ///
 /// swift-pwa never writes a `-L` into a package manifest's `unsafeFlags`: that
 /// poisons dependency resolution for everyone depending on the package. The
@@ -34,8 +41,32 @@ enum NativeLibrarySearch {
         }
     }
 
-    /// The `native_library_dirs` an app declared for `target`, resolved
-    /// against the project root and checked to exist.
+    /// `swift build` arguments putting `dirs` on the **header** search path of
+    /// every C/Objective-C compile and clang-module build the package drives.
+    ///
+    /// No per-target spelling: the clang importer takes `-I` on every platform
+    /// this ships to, `clang-cl` included, and it is already the spelling
+    /// ``WindowsBundler`` uses for the WebView2 and WIL headers.
+    ///
+    /// `CPATH` is not an alternative. It is what an app vendoring SQLite used
+    /// through 0.10.x, and Swift 6.4's `swiftbuild` engine drops it for the same
+    /// reason it drops `LIBRARY_PATH` (#219) — the compile fails as
+    /// `'sqlite3.h' file not found`, which reads as a missing dependency rather
+    /// than a missing search path.
+    static func compilerArgs(for dirs: [URL]) -> [String] {
+        dirs.flatMap { ["-Xcc", "-I\($0.path)"] }
+    }
+
+    /// Which of an app's two declared search-path lists is being resolved.
+    /// The raw value is the `pwa.json` key, so a diagnostic names the line the
+    /// user has to go and edit.
+    enum DirKind: String {
+        case library = "native_library_dirs"
+        case include = "native_include_dirs"
+    }
+
+    /// The `native_library_dirs` / `native_include_dirs` an app declared for
+    /// `target`, resolved against the project root and checked to exist.
     ///
     /// `<abi>` is substituted with the Android ABI being linked — the same
     /// placeholder ``OnnxRuntimeAndroidArtifact/urlTemplate`` uses, and the
@@ -51,13 +82,17 @@ enum NativeLibrarySearch {
         manifest: PWAManifest,
         target: BuildTarget,
         projectRoot: URL,
-        abi: String? = nil
+        abi: String? = nil,
+        kind: DirKind = .library
     ) throws -> [URL] {
-        let declared: [String]? = switch target {
-        case .android: manifest.android?.nativeLibraryDirs
-        case .linux: manifest.linux?.nativeLibraryDirs
-        case .windows: manifest.windows?.nativeLibraryDirs
-        case .macos, .ios: nil
+        let declared: [String]? = switch (kind, target) {
+        case (.library, .android): manifest.android?.nativeLibraryDirs
+        case (.library, .linux): manifest.linux?.nativeLibraryDirs
+        case (.library, .windows): manifest.windows?.nativeLibraryDirs
+        case (.include, .android): manifest.android?.nativeIncludeDirs
+        case (.include, .linux): manifest.linux?.nativeIncludeDirs
+        case (.include, .windows): manifest.windows?.nativeIncludeDirs
+        case (_, .macos), (_, .ios): nil
         }
         guard let declared, !declared.isEmpty else { return [] }
 
@@ -66,7 +101,7 @@ enum NativeLibrarySearch {
             if entry.contains("<abi>") {
                 guard let abi else {
                     throw ValidationError("""
-                    swift-pwa: \(target.rawValue).native_library_dirs entry "\(entry)" uses <abi>, \
+                    swift-pwa: \(target.rawValue).\(kind.rawValue) entry "\(entry)" uses <abi>, \
                     which only --target android substitutes (it is the only target that links more \
                     than one architecture per build). Name the directory outright.
                     """)
@@ -82,7 +117,7 @@ enum NativeLibrarySearch {
             guard FileManager.default.fileExists(atPath: url.path, isDirectory: &isDir), isDir.boolValue else {
                 let forABI = abi.map { " (for \($0))" } ?? ""
                 throw ValidationError("""
-                swift-pwa: \(target.rawValue).native_library_dirs names "\(entry)"\(forABI), but \
+                swift-pwa: \(target.rawValue).\(kind.rawValue) names "\(entry)"\(forABI), but \
                 \(url.path) is not a directory. Paths are relative to the project root \
                 (the directory holding pwa.json); an absolute path is used as given.
                 """)
@@ -101,8 +136,40 @@ enum NativeLibrarySearch {
     static func hostLinkerArgs(
         manifest: PWAManifest, projectRoot: URL, extra: [URL] = []
     ) throws -> [String] {
-        let dirs = try extra + declaredDirs(manifest: manifest, target: .host, projectRoot: projectRoot)
+        var dirs = try extra + declaredDirs(manifest: manifest, target: .host, projectRoot: projectRoot)
+        dirs += windowsPackageDirs(projectRoot: projectRoot).libDirs
         return linkerArgs(for: dirs, target: .host)
+    }
+
+    /// The WebView2 / WIL NuGet package directories, on Windows.
+    ///
+    /// These are a vendored dependency swift-pwa resolves for the app, in the
+    /// same sense as the llama.cpp and ONNX Runtime tiers — the difference is
+    /// only that they were resolved inside ``WindowsBundler`` and so reached
+    /// the bundler's own `swift build` and nothing else. Empty everywhere but
+    /// Windows.
+    private static func windowsPackageDirs(projectRoot: URL) -> (includeDirs: [URL], libDirs: [URL]) {
+        #if os(Windows)
+            WindowsBundler.resolvePackagePaths(projectRoot: projectRoot, quiet: true) ?? ([], [])
+        #else
+            ([], [])
+        #endif
+    }
+
+    /// Header search-path flags for a build of the app **for this machine**.
+    ///
+    /// Same reach as ``hostLinkerArgs``, and for the same reason: `dev`,
+    /// `drive` and the headless catalog dump compile the app's sources, so a
+    /// vendored header they can't find stops them where `build` would have
+    /// worked. No `extra` — the tiers swift-pwa resolves reach the compile
+    /// through their own SwiftPM targets, and there is no second consumer to
+    /// generalize for.
+    static func hostCompilerArgs(manifest: PWAManifest, projectRoot: URL) throws -> [String] {
+        var dirs = try declaredDirs(
+            manifest: manifest, target: .host, projectRoot: projectRoot, kind: .include
+        )
+        dirs += windowsPackageDirs(projectRoot: projectRoot).includeDirs
+        return compilerArgs(for: dirs)
     }
 
     /// Environment additions so a *run* of the app on this host can load what
@@ -135,8 +202,25 @@ enum NativeLibrarySearch {
             #endif
             let paths = dirs.map(\.path)
             let existing = ProcessInfo.processInfo.environment
-                .first { $0.key.caseInsensitiveCompare(key) == .orderedSame }?.value
-            return [key: (existing.map { paths + [$0] } ?? paths).joined(separator: separator)]
+                .first { $0.key.caseInsensitiveCompare(key) == .orderedSame }
+            // Keyed by the spelling the environment already uses (`Path`, not
+            // `PATH`) where there is one. Windows compares environment names
+            // case-insensitively, and handing a child a block holding both
+            // spellings is fatal rather than merely redundant: SwiftPM builds
+            // its `ProcessEnvironmentKey` dictionary from it and traps with
+            // `Duplicate values for key: ProcessEnvironmentKey(value: "PATH")`,
+            // which names neither swift-pwa nor the manifest entry that caused
+            // it. Measured on a real Windows box — every `swift-pwa build` of
+            // an app declaring `windows.native_library_dirs` died here.
+            //
+            // Spelled out rather than built in one dictionary literal: the
+            // inline form type-checked on macOS and crashed the 6.4 Windows
+            // compiler outright ("failed to produce diagnostic for
+            // expression").
+            let resolvedKey = existing?.key ?? key
+            var ordered = paths
+            if let inherited = existing?.value { ordered.append(inherited) }
+            return [resolvedKey: ordered.joined(separator: separator)]
         #else
             return [:]
         #endif

@@ -74,7 +74,8 @@ enum CommandCatalog {
         // `Drive.build`; the launcher form doesn't exist on Windows.
         // This build is for the *host*, so it needs the host's vendored-library
         // search paths — an app that links one can't be run headlessly at all
-        // without them, which is where the whole build stops.
+        // without them, which is where the whole build stops. Both halves: the
+        // headers stop the compile before the linker's search path is reached.
         try await Shell.run(
             "swift",
             // Before the executable name, not after: `swift run` treats
@@ -85,6 +86,7 @@ enum CommandCatalog {
                 + NativeLibrarySearch.hostLinkerArgs(
                     manifest: manifest, projectRoot: projectRoot, extra: nativeLibraryDirs
                 )
+                + NativeLibrarySearch.hostCompilerArgs(manifest: manifest, projectRoot: projectRoot)
                 + [exe],
             cwd: projectRoot,
             envOverrides: [HeadlessDescribe.environmentVariable: catalogURL.path]

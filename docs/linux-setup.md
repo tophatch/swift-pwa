@@ -343,13 +343,24 @@ machine's `.build/` and crashed on launch on any other box.
 ### Vendoring a native library (`linux.native_library_dirs`)
 
 If your app links a native library the distro doesn't ship — a SQLite build of
-your own, say — name the directory it lives in:
+your own, say — name the directory holding its headers and the directory
+holding its binaries:
 
 ```json
-"linux": { "native_library_dirs": ["Vendor/sqlite/linux-x86_64"] }
+"linux": {
+  "native_include_dirs": ["Vendor/sqlite/include"],
+  "native_library_dirs": ["Vendor/sqlite/linux-x86_64"]
+}
 ```
 
-Each directory goes on the link step's search path (`-Xlinker -L<dir>`), and
+`native_include_dirs` goes on the header search path of every C compile and
+clang-module build in your package (`-Xcc -I<dir>`), which is what lets a C
+shim's `#include <sqlite3.h>` resolve. It is the half the build reaches first:
+without it the compile fails with `'sqlite3.h' file not found` and the link
+step below never happens. Nothing is staged from it — a header is a build-time
+input.
+
+Each library directory goes on the link step's search path (`-Xlinker -L<dir>`), and
 every `.so` in it is handed to `linuxdeploy --library`, so it lands in the
 AppImage's `usr/lib` with the rpath already patched. Both halves are needed: an
 AppImage that links here and ships without the library dies at launch on a box
@@ -364,8 +375,9 @@ neither list, and its absence would only surface at runtime.
 
 The alternative is a `-L` in your `Package.swift`'s `unsafeFlags`, which
 poisons dependency resolution for anything that depends on your package; a
-global `LIBRARY_PATH` no longer reaches the link step at all under Swift 6.4's
-`swiftbuild` engine. Android has the same key with an `<abi>` placeholder (see
+global `LIBRARY_PATH` no longer reaches the link step, and a global `CPATH` no
+longer reaches the compile, under Swift 6.4's `swiftbuild` engine. Android has
+the same keys with an `<abi>` placeholder (see
 [docs/android-setup.md](android-setup.md)); on Apple, use a `.binaryTarget`
 xcframework instead.
 

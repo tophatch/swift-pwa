@@ -446,6 +446,16 @@ struct AndroidBundler {
                 )
                 searchDirs += declaredLibDirs
                 let linkerSearchArgs = NativeLibrarySearch.linkerArgs(for: searchDirs, target: .android)
+                // …and its headers, which the compile needs *before* any of
+                // the above matters: a C shim's `#include <sqlite3.h>` fails
+                // the first Swift module that imports it, and the link step
+                // the search path above serves is never reached (#238).
+                let includeArgs = try NativeLibrarySearch.compilerArgs(
+                    for: NativeLibrarySearch.declaredDirs(
+                        manifest: manifest, target: .android, projectRoot: projectRoot,
+                        abi: abi, kind: .include
+                    )
+                )
 
                 try await Shell.run(
                     buildTool.exe,
@@ -463,7 +473,7 @@ struct AndroidBundler {
                         // the linker say so, at build time, in the package
                         // whose manifest is wrong.
                         + ["-Xlinker", "--no-undefined"]
-                        + linkerSearchArgs,
+                        + linkerSearchArgs + includeArgs,
                     cwd: projectRoot
                 )
                 // SwiftPM's executable target names its output `<Name>`

@@ -288,9 +288,18 @@ struct Build: AsyncParsableCommand {
             manifest: pwa, target: target, projectRoot: cwd
         )
         var nativeLibraryDirs = tierLibraryDirs
+        // The headers for those libraries, which the *compile* needs — resolved
+        // here for the same targets and handed to the same bundlers. Android
+        // again resolves its own per ABI inside the loop. No tier equivalent:
+        // the tiers swift-pwa resolves reach the compile through their own
+        // SwiftPM targets, so only the app's own declaration matters here.
+        var nativeIncludeDirs: [URL] = []
         if target != .android {
             nativeLibraryDirs += try NativeLibrarySearch.declaredDirs(
                 manifest: pwa, target: target, projectRoot: cwd
+            )
+            nativeIncludeDirs = try NativeLibrarySearch.declaredDirs(
+                manifest: pwa, target: target, projectRoot: cwd, kind: .include
             )
         }
 
@@ -459,7 +468,8 @@ struct Build: AsyncParsableCommand {
                 projectRoot: cwd,
                 outputDir: outputDir,
                 configuration: configuration,
-                nativeLibraryDirs: nativeLibraryDirs
+                nativeLibraryDirs: nativeLibraryDirs,
+                nativeIncludeDirs: nativeIncludeDirs
             )
             artifact = try await bundler.build()
         case .windows:
@@ -489,7 +499,8 @@ struct Build: AsyncParsableCommand {
                 signIdentity: sign,
                 singleFile: singleFile,
                 configuration: configuration,
-                nativeLibraryDirs: nativeLibraryDirs
+                nativeLibraryDirs: nativeLibraryDirs,
+                nativeIncludeDirs: nativeIncludeDirs
             )
             artifact = try await bundler.build()
         case .android:

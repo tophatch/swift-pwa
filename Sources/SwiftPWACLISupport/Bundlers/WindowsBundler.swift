@@ -66,6 +66,11 @@ struct WindowsBundler {
     /// SDK's `Lib`, plus the app's own `windows.native_library_dirs`. See
     /// ``NativeLibrarySearch``.
     var nativeLibraryDirs: [URL] = []
+    /// Directories holding the headers for the libraries the app vendors
+    /// itself (`windows.native_include_dirs`) — passed the same way as the
+    /// WebView2 / WIL headers below, and needed for the same reason: `INCLUDE`
+    /// no longer reaches the compile task (#219, #238).
+    var nativeIncludeDirs: [URL] = []
 
     func build() async throws -> URL {
         #if !os(Windows)
@@ -80,12 +85,14 @@ struct WindowsBundler {
             // — measured on a real Windows box, with a control: a header only
             // on INCLUDE is `file not found`, and the same header behind
             // `-Xcc -I` compiles (#219).
-            let packagePaths = resolvePackagePaths()
+            let packagePaths = Self.resolvePackagePaths(projectRoot: projectRoot)
             let searchDirs = nativeLibraryDirs + (packagePaths?.libDirs ?? [])
             try await Shell.run(
                 "swift",
                 ["build", "-c", configuration.swiftPMValue]
-                    + (packagePaths?.includeDirs ?? []).flatMap { ["-Xcc", "-I\($0.path)"] }
+                    + NativeLibrarySearch.compilerArgs(
+                        for: nativeIncludeDirs + (packagePaths?.includeDirs ?? [])
+                    )
                     + NativeLibrarySearch.linkerArgs(for: searchDirs, target: .windows),
                 cwd: projectRoot
             )
@@ -406,7 +413,15 @@ struct WindowsBundler {
     /// environment is missing entirely, `swift build` fails earlier
     /// with `lld-link: error: could not open 'msvcrt.lib'`, which
     /// the docs cover.
-    private func resolvePackagePaths() -> (includeDirs: [URL], libDirs: [URL])? {
+    /// Also called by ``NativeLibrarySearch`` for the CLI's *host* runs — the
+    /// headless catalog dump, `dev` and `drive` compile `CWebView2Shim` too,
+    /// and until they were given these flags every `swift-pwa build --target
+    /// windows` on Swift 6.4 died in the catalog dump with
+    /// `'wil/com.h' file not found`, before the bundler below ever ran.
+    /// `quiet` suppresses the banner for those callers.
+    static func resolvePackagePaths(
+        projectRoot: URL, quiet: Bool = false
+    ) -> (includeDirs: [URL], libDirs: [URL])? {
         #if !os(Windows)
             return nil
         #else
@@ -444,12 +459,14 @@ struct WindowsBundler {
             let webview2LibPath = swiftPwaRoot
                 .appendingPathComponent("\(webview2Subpath)/\(arch)").path
 
-            print("""
-            swift-pwa: using the swift-pwa NuGet packages
-              WebView2: \(webview2IncludePath)
-              WIL:      \(wilIncludePath)
-              Loader:   \(webview2LibPath)
-            """)
+            if !quiet {
+                print("""
+                swift-pwa: using the swift-pwa NuGet packages
+                  WebView2: \(webview2IncludePath)
+                  WIL:      \(wilIncludePath)
+                  Loader:   \(webview2LibPath)
+                """)
+            }
 
             return (
                 [URL(fileURLWithPath: webview2IncludePath), URL(fileURLWithPath: wilIncludePath)],

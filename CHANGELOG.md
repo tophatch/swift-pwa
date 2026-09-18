@@ -5,6 +5,84 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`native_include_dirs` — a vendored library's headers reach the compile, not
+  just its binaries the link** (#238). `native_library_dirs` (0.10.8, #220) put
+  the `.so`/`.a` on the linker's search path and staged it into the artifact.
+  The compile happens first, and nothing put the matching header anywhere, so an
+  app vendoring anything with an API — the reported case is SQLite, because GRDB
+  needs one and the NDK ships none — died at the first Swift module importing
+  the C shim:
+
+  ```
+  GRDBSQLite/shim.h:1:10: error: 'sqlite3.h' file not found
+  ```
+
+  ```json
+  "android": {
+    "native_include_dirs": ["Vendor/sqlite/include"],
+    "native_library_dirs": ["Vendor/sqlite/<abi>"]
+  }
+  ```
+
+  Emitted as `-Xcc -I<dir>` on `android`, `linux` and `windows`, at every place
+  #220's own closing measurement found the library half was needed: the three
+  bundlers *and* the CLI's host runs (`dev`, `drive`, and the headless catalog
+  dump `build` uses to check `permissions` / `agent.expose`), which compile the
+  same sources.
+
+  A separate key rather than something `native_library_dirs` implies, because
+  the two are genuinely different directories: the library is per-ABI and the
+  header, being architecture-independent, is not. `<abi>` is substituted in
+  both, so neither key surprises someone who learned the other.
+
+  This is the second half of the regression #219 documents. `CPATH` was the
+  recipe an adopter used through 0.10.x, and Swift 6.4's `swiftbuild` engine
+  drops it for the same reason it drops `LIBRARY_PATH` — #219 moved the library
+  half to a flag, and the header half had no flag to move to. With neither
+  reaching the build, there was no supported way to build such an app for
+  Android from a clean checkout at all: a bare `swift build --swift-sdk` takes
+  `-Xcc` but stages nothing and assembles no APK, and the CLI, which does, took
+  no passthrough.
+
+  Verified on real hardware on all three, with a control:
+  `Scripts/verify-vendored-native-deps.sh` (Android cross-compile, Linux) and
+  `Scripts/verify-vendored-native-deps.ps1` (Windows) scaffold an app that
+  vendors a library, build it with a genuinely cold clang module cache, and
+  check the symbol landed in the built binary. The control is not optional
+  here — clang's module cache holds the built shim module *across a change of
+  include flags*, so a machine that once compiled with `-Xcc -I` goes on
+  succeeding indefinitely. Deleting `.build/out/Products` is not enough and
+  neither are the intermediates; the scripts wipe `.build` wholesale for each
+  run. The probe library is built under a name nothing else provides, because
+  most Linux boxes ship a system `sqlite3.h` that would satisfy the control and
+  make the run report a pass it hadn't earned.
+
+### Fixed
+
+- **Windows: `swift-pwa build --target windows` could not complete on Swift
+  6.4** — two faults found by running the check above on a real box, both
+  older than #238 and neither reachable from CI, which compiles the Windows
+  backend but never runs the CLI against an app.
+
+  The headless catalog dump (and `dev`, and `drive`) compiles `CWebView2Shim`
+  like any other build, but the WebView2 / WIL include and lib directories
+  were resolved inside `WindowsBundler` and reached only the bundler's own
+  `swift build`. They rode on `INCLUDE` / `LIB` for everything else until 6.4
+  stopped forwarding those (#219), so every build died in the permissions
+  check with `'wil/com.h' file not found` — before the bundler ran at all.
+  `NativeLibrarySearch` now passes them to the host runs too.
+
+  And an app declaring `windows.native_library_dirs` crashed SwiftPM outright:
+  the runtime-environment override was keyed `PATH` while Windows' own
+  environment spells it `Path`, and a child handed both traps with
+  `Duplicate values for key: ProcessEnvironmentKey(value: "PATH")` — naming
+  neither swift-pwa nor the manifest entry behind it. The override now uses
+  whichever spelling the environment already has.
+
 ## [0.11.0] - 2026-09-18
 
 ### Added

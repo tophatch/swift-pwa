@@ -532,6 +532,34 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "linux": { "native_library_dirs": ["Vendor/sqlite/linux-x86_64"] }
         /// ```
         public var nativeLibraryDirs: [String]?
+        /// Directories holding the **headers** for the libraries this app
+        /// vendors — the other half of ``nativeLibraryDirs``, and the half the
+        /// build reaches first. Each goes on the header search path of every C
+        /// compile and clang-module build in the package (`-Xcc -I`), which is
+        /// what lets a C shim's `#include <sqlite3.h>` resolve. Without it the
+        /// build dies at the first Swift module importing that shim, long
+        /// before any link step — so an app that could declare only the library
+        /// half couldn't vendor anything with an API at all.
+        ///
+        /// A separate key rather than something ``nativeLibraryDirs`` implies,
+        /// because the two are genuinely different search paths: a header is
+        /// architecture-independent and the library usually isn't, so they sit
+        /// in different directories in the layout this was reported against.
+        ///
+        /// Paths are relative to the project root (the directory holding
+        /// `pwa.json`); an absolute path is used as given. Nothing is staged
+        /// into the app — a header is a build-time input, and only the
+        /// libraries have to travel.
+        ///
+        /// A global `CPATH` is not the alternative: Swift 6.4's `swiftbuild`
+        /// engine doesn't forward it to the compile task, the same way it
+        /// stopped forwarding `LIBRARY_PATH` to the link task (#219, #238).
+        /// See ``NativeLibrarySearch``.
+        ///
+        /// ```json
+        /// "linux": { "native_include_dirs": ["Vendor/sqlite/include"] }
+        /// ```
+        public var nativeIncludeDirs: [String]?
     }
 
     /// One MIME-based document-type entry (Linux / Android share the shape).
@@ -588,14 +616,44 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "windows": { "native_library_dirs": ["Vendor/sqlite/windows-x64"] }
         /// ```
         public var nativeLibraryDirs: [String]?
+        /// Directories holding the **headers** for the libraries this app
+        /// vendors — the other half of ``nativeLibraryDirs``, and the half the
+        /// build reaches first. Each goes on the header search path of every C
+        /// compile and clang-module build in the package (`-Xcc -I`), which is
+        /// what lets a C shim's `#include <sqlite3.h>` resolve. Without it the
+        /// build dies at the first Swift module importing that shim, long
+        /// before any link step — so an app that could declare only the library
+        /// half couldn't vendor anything with an API at all.
+        ///
+        /// A separate key rather than something ``nativeLibraryDirs`` implies,
+        /// because the two are genuinely different search paths: a header is
+        /// architecture-independent and the library usually isn't, so they sit
+        /// in different directories in the layout this was reported against.
+        ///
+        /// Paths are relative to the project root (the directory holding
+        /// `pwa.json`); an absolute path is used as given. Nothing is staged
+        /// into the app — a header is a build-time input, and only the
+        /// libraries have to travel.
+        ///
+        /// A global `CPATH` is not the alternative: Swift 6.4's `swiftbuild`
+        /// engine doesn't forward it to the compile task, the same way it
+        /// stopped forwarding `LIBRARY_PATH` to the link task (#219, #238).
+        /// See ``NativeLibrarySearch``.
+        ///
+        /// ```json
+        /// "windows": { "native_include_dirs": ["Vendor/sqlite/include"] }
+        /// ```
+        public var nativeIncludeDirs: [String]?
         public init(
             documentTypes: [ExtensionDocumentType]? = nil,
             icon: String? = nil,
-            nativeLibraryDirs: [String]? = nil
+            nativeLibraryDirs: [String]? = nil,
+            nativeIncludeDirs: [String]? = nil
         ) {
             self.documentTypes = documentTypes
             self.icon = icon
             self.nativeLibraryDirs = nativeLibraryDirs
+            self.nativeIncludeDirs = nativeIncludeDirs
         }
     }
 
@@ -742,6 +800,39 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// "android": { "native_library_dirs": ["Vendor/sqlite/<abi>"] }
         /// ```
         public var nativeLibraryDirs: [String]?
+        /// Directories holding the **headers** for the libraries this app
+        /// vendors — the other half of ``nativeLibraryDirs``, and the half the
+        /// build reaches first. Each goes on the header search path of every C
+        /// compile and clang-module build in the package (`-Xcc -I`), which is
+        /// what lets a C shim's `#include <sqlite3.h>` resolve. Without it the
+        /// build dies at the first Swift module importing that shim, long
+        /// before any link step — so an app that could declare only the library
+        /// half couldn't vendor anything with an API at all.
+        ///
+        /// A separate key rather than something ``nativeLibraryDirs`` implies,
+        /// because the two are genuinely different search paths: a header is
+        /// architecture-independent and the library usually isn't, so they sit
+        /// in different directories in the layout this was reported against.
+        ///
+        /// Paths are relative to the project root (the directory holding
+        /// `pwa.json`); an absolute path is used as given. Nothing is staged
+        /// into the app — a header is a build-time input, and only the
+        /// libraries have to travel.
+        ///
+        /// **`<abi>` is substituted** here too, for the uncommon layout where
+        /// the headers really are per-ABI — refusing it on one key and
+        /// accepting it on its sibling is the kind of asymmetry nobody guesses
+        /// right.
+        ///
+        /// A global `CPATH` is not the alternative: Swift 6.4's `swiftbuild`
+        /// engine doesn't forward it to the compile task, the same way it
+        /// stopped forwarding `LIBRARY_PATH` to the link task (#219, #238).
+        /// See ``NativeLibrarySearch``.
+        ///
+        /// ```json
+        /// "android": { "native_include_dirs": ["Vendor/sqlite/include"] }
+        /// ```
+        public var nativeIncludeDirs: [String]?
         public init(
             packageId: String? = nil,
             minSdk: Int? = nil,
@@ -752,7 +843,8 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             documentTypes: [DocumentType]? = nil,
             network: NetworkSection? = nil,
             permissions: [String]? = nil,
-            nativeLibraryDirs: [String]? = nil
+            nativeLibraryDirs: [String]? = nil,
+            nativeIncludeDirs: [String]? = nil
         ) {
             self.packageId = packageId
             self.minSdk = minSdk
@@ -764,6 +856,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
             self.network = network
             self.permissions = permissions
             self.nativeLibraryDirs = nativeLibraryDirs
+            self.nativeIncludeDirs = nativeIncludeDirs
         }
 
         /// One `android.document_types` entry: a set of MIME types the app

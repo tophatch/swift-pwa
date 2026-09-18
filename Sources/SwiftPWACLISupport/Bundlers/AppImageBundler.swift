@@ -12,6 +12,10 @@ struct AppImageBundler {
     /// — the llama.cpp / ONNX Runtime tiers swift-pwa resolves, plus the app's
     /// own `linux.native_library_dirs`. See ``NativeLibrarySearch``.
     var nativeLibraryDirs: [URL] = []
+    /// Directories holding the headers for the libraries the app vendors
+    /// itself (`linux.native_include_dirs`) — the half the compile needs,
+    /// which it reaches before the link step `nativeLibraryDirs` serves (#238).
+    var nativeIncludeDirs: [URL] = []
 
     func build() async throws -> URL {
         // 1. swift build.
@@ -23,7 +27,8 @@ struct AppImageBundler {
         try await Shell.run(
             "/usr/bin/env",
             ["swift", "build", "-c", configuration.swiftPMValue]
-                + NativeLibrarySearch.linkerArgs(for: nativeLibraryDirs, target: .linux),
+                + NativeLibrarySearch.linkerArgs(for: nativeLibraryDirs, target: .linux)
+                + NativeLibrarySearch.compilerArgs(for: nativeIncludeDirs),
             cwd: projectRoot
         )
         // SwiftPM target / product name, resolved from the package

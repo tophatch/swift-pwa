@@ -410,13 +410,24 @@ launch on any other box.
 ### Vendoring a native library (`windows.native_library_dirs`)
 
 If your app links a native library Windows doesn't ship — a SQLite build of
-your own, say — name the directory holding its import library and DLL:
+your own, say — name the directory holding its headers and the directory
+holding its import library and DLL:
 
 ```json
-"windows": { "native_library_dirs": ["Vendor/sqlite/windows-x64"] }
+"windows": {
+  "native_include_dirs": ["Vendor/sqlite/include"],
+  "native_library_dirs": ["Vendor/sqlite/windows-x64"]
+}
 ```
 
-Each directory goes on the link step's search path (`-Xlinker /LIBPATH:<dir>`
+`native_include_dirs` goes on the header search path of every C compile and
+clang-module build in your package (`-Xcc -I<dir>` — the same way swift-pwa
+passes the WebView2 and WIL headers), which is what lets a C shim's
+`#include <sqlite3.h>` resolve. It is the half the build reaches first: without
+it the compile fails with `'sqlite3.h' file not found` and the link step below
+never happens. Nothing is staged from it — a header is a build-time input.
+
+Each library directory goes on the link step's search path (`-Xlinker /LIBPATH:<dir>`
 — `link.exe` does not understand `-L`), and every `.dll` in it is copied next
 to the `.exe`, which is where Windows' loader looks first. Both halves are
 needed: a bundle that links here and ships without the DLL dies at launch on
@@ -431,8 +442,9 @@ neither list.
 
 The alternative is a `-L` in your `Package.swift`'s `unsafeFlags`, which
 poisons dependency resolution for anything that depends on your package; a
-global `LIB` no longer reaches the link step at all under Swift 6.4's
-`swiftbuild` engine. Linux and Android have the same key (Android's with an
+global `LIB` no longer reaches the link step, and a global `INCLUDE` no longer
+reaches the compile, under Swift 6.4's `swiftbuild` engine. Linux and Android
+have the same keys (Android's with an
 `<abi>` placeholder — see [docs/android-setup.md](android-setup.md)); on Apple,
 use a `.binaryTarget` xcframework instead.
 
@@ -822,6 +834,19 @@ served. It is checked against the bug it was written for: on the pre-fix code it
 reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
+
+**Through 0.11.0, `swift-pwa build --target windows` could not complete on a
+Swift 6.4 box.** Every build runs a headless catalog dump to check `permissions`
+and `agent.expose` against the app, and that dump compiles `CWebView2Shim` like
+any other build — but the WebView2 / WIL directories were resolved inside the
+bundler and reached only the bundler's own `swift build`. They rode on `INCLUDE`
+/ `LIB` everywhere else, and 6.4 stopped forwarding those, so the build died at
+`'wil/com.h' file not found` before the bundler ran. The CLI now passes them to
+its host runs (`dev` and `drive` too). A box still on 6.3.x never saw it. In the
+same change: an app declaring `windows.native_library_dirs` crashed SwiftPM with
+`Duplicate values for key: ProcessEnvironmentKey(value: "PATH")`, because the
+runtime-environment override was keyed `PATH` while Windows spells it `Path` and
+compares the two as equal.
 
 **A window moved to a negative coordinate used to kill the app.** `WM_MOVE`
 packs its coordinates as *signed* 16-bit words, and the handler read them

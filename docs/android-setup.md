@@ -428,15 +428,27 @@ top-level keys. The CLI flag `--android-abis` overrides
 ### Vendoring a native library (`android.native_library_dirs`)
 
 If your app links a native library the NDK doesn't ship — SQLite built for
-Android, say, because GRDB needs one — name the directory it lives in and the
-build finds it:
+Android, say, because GRDB needs one — name the directory holding its headers
+and the directory holding its binaries, and the build finds both:
 
 ```json
 "android": {
   "abis": ["arm64-v8a", "x86_64"],
+  "native_include_dirs": ["Vendor/sqlite/include"],
   "native_library_dirs": ["Vendor/sqlite/<abi>"]
 }
 ```
+
+**Both keys, and the header one matters first.** `native_include_dirs` goes on
+the header search path of every C compile and clang-module build in your
+package (`-Xcc -I<dir>`), which is what lets a C shim's `#include <sqlite3.h>`
+resolve — GRDB's `GRDBSQLite/shim.h` is exactly that one line. Without it the
+build stops at the first Swift module importing that shim, with
+`'sqlite3.h' file not found`, long before any of the library half below is
+reached. They're separate keys because they're separate directories in the
+usual layout: the library is per-ABI and the header, being
+architecture-independent, is not. `<abi>` is substituted in both, for the
+layouts where the headers really are per-ABI.
 
 **`<abi>` is substituted per ABI**, and that is the point. The bundler
 cross-compiles every ABI in one process, so a global search path — the
@@ -466,7 +478,7 @@ launch — Android pops an *"App Compatibility"* dialog listing what failed the
 check — but a release build does not, so it's worth checking with
 `llvm-readelf -lW <lib> | grep LOAD` (the alignment column should read `0x4000`).
 
-The same key exists for [Linux](linux-setup.md) and [Windows](windows-setup.md)
+Both keys exist for [Linux](linux-setup.md) and [Windows](windows-setup.md)
 (without `<abi>` — they link one architecture per build). On Apple, use a
 `.binaryTarget` xcframework, which SwiftPM resolves for you and which carries
 the code-signing and rpath details a directory of loose dylibs does not.

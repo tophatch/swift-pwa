@@ -913,7 +913,8 @@ struct LaunchedApp {
         try await Shell.run(
             "swift",
             ["build", "-c", options.configuration, "--product", exe]
-                + NativeLibrarySearch.hostLinkerArgs(manifest: pwa, projectRoot: cwd),
+                + NativeLibrarySearch.hostLinkerArgs(manifest: pwa, projectRoot: cwd)
+                + NativeLibrarySearch.hostCompilerArgs(manifest: pwa, projectRoot: cwd),
             cwd: cwd,
             stdoutTo: progressSink
         )

@@ -9,7 +9,7 @@ Tauri/Wails analogue for the Swift world. One Swift package, one JS API
 (`__SWIFT_PWA__.invoke()` / `subscribe()`), one CLI (`swift-pwa`) that produces
 `.app`, `.ipa`, `.AppImage`, and Windows portable / MSIX from the same source.
 All five platforms are first-class: macOS, iOS, Linux (GTK3 **and** GTK4),
-Windows, Android. Last tagged release: **v0.11.0**.
+Windows, Android. Last tagged release: **v0.11.1**.
 
 **[`CHANGELOG.md`](CHANGELOG.md) is the authority on what shipped and why** —
 read its most recent entries when you need context on recent work, and the

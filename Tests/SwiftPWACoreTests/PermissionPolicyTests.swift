@@ -106,7 +106,75 @@ struct PermissionPolicyTests {
         // These names travel into `pwa.json` and the diagnostics, so a rename
         // is a breaking change rather than a tidy-up.
         #expect(Set(DevicePermission.allCases.map(\.rawValue)) == [
-            "camera", "microphone", "geolocation", "notifications", "bluetooth"
+            "camera", "microphone", "geolocation", "notifications", "bluetooth", "allFiles"
         ])
+    }
+
+    // MARK: - The runtime tier (#243)
+
+    /// A test double standing in for a backend's OS seam.
+    private final class StubAuthority: DevicePermissionAuthority, @unchecked Sendable {
+        var answer: PermissionState?
+        var requested: [DevicePermission] = []
+        init(answer: PermissionState?) { self.answer = answer }
+        func state(of _: DevicePermission) async -> PermissionState? { answer }
+        func request(_ permission: DevicePermission) async -> PermissionState? {
+            requested.append(permission)
+            answer = .granted
+            return answer
+        }
+    }
+
+    @Test("an undeclared permission is unavailable, not denied")
+    func statusUndeclaredIsUnavailable() async {
+        let policy = PermissionPolicy()
+        policy.setAuthority(StubAuthority(answer: .granted))
+        // The difference is the whole point: `denied` is worth a button,
+        // `unavailable` never becomes `granted` on this build.
+        #expect(await policy.status(.allFiles) == .unavailable)
+        #expect(await policy.request(.allFiles) == .unavailable)
+    }
+
+    @Test("a vetoed permission is unavailable, and is never asked about")
+    func statusVetoedIsUnavailable() async {
+        let policy = PermissionPolicy()
+        policy.declare(.allFiles)
+        let authority = StubAuthority(answer: .denied)
+        policy.setAuthority(authority)
+        policy.setVeto { permission, _ in permission == .allFiles }
+        #expect(await policy.request(.allFiles) == .unavailable)
+        // The app ruled it out, so the user was never put in front of a prompt.
+        #expect(authority.requested.isEmpty)
+    }
+
+    @Test("with no authority installed, a declared permission is granted")
+    func statusWithoutAuthority() async {
+        // Linux, Windows and macOS install none: nothing stands between a
+        // declared app and files it can already open by path.
+        let policy = PermissionPolicy()
+        policy.declare(.allFiles)
+        #expect(await policy.status(.allFiles) == .granted)
+        #expect(await policy.request(.allFiles) == .granted)
+    }
+
+    @Test("the backend's answer wins, and a request routes to it")
+    func statusFromAuthority() async {
+        let policy = PermissionPolicy()
+        policy.declare(.allFiles)
+        let authority = StubAuthority(answer: .denied)
+        policy.setAuthority(authority)
+        #expect(await policy.status(.allFiles) == .denied)
+        #expect(await policy.request(.allFiles) == .granted)
+        #expect(authority.requested == [.allFiles])
+    }
+
+    @Test("a permission the backend has no opinion on falls back to granted")
+    func statusAuthorityAbstains() async {
+        let policy = PermissionPolicy()
+        policy.declare(.camera)
+        policy.setAuthority(StubAuthority(answer: nil))
+        // Camera consent is reached through the web API's own seam; the
+        // runtime tier has nothing to add and must not claim otherwise.
+        #expect(await policy.status(.camera) == .granted)
     }
 }

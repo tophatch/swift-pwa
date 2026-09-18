@@ -1,4 +1,9 @@
-# Web permissions (`ctx.permissions`)
+# Permissions (`ctx.permissions`)
+
+Most of what's here is a *web* permission: something a page asks for through an
+ordinary API, which the runtime answers on its behalf. One of them — All-files
+access — reaches no web API at all and has to be asked for directly; that's
+[the runtime tier](#asking-for-the-capability-no-web-api-asks-for) further down.
 
 When a page calls `getUserMedia`, `navigator.geolocation.getCurrentPosition` or
 `Notification.requestPermission`, the webview asks its *embedder* — this runtime
@@ -162,6 +167,72 @@ ignored where the platform already happens to work. See
 [the proposal](proposals/permissions-bridge.md) for the measurements behind each
 cell — every one was taken on real hardware.
 
+## Asking, for the capability no web API asks for
+
+Declaring is a ceiling, not a grant. For camera, microphone, location and
+notifications that's the end of it: the page calls the web API, the webview
+asks the platform, and the user sees a prompt. **All-files access has no such
+API**, so declaring it used to be the end of the road — the app could name
+`MANAGE_EXTERNAL_STORAGE` in its manifest and had no way to reach the Settings
+screen that grants it (#243).
+
+Two calls, on all five platforms:
+
+```swift
+if await ctx.permissions.status(.allFiles) == .denied {
+    let state = await ctx.permissions.request(.allFiles)   // resolves when the user is done
+}
+```
+```js
+const { state } = await __SWIFT_PWA__.invoke('permissions.status', { name: 'allFiles' });
+if (state === 'denied') {
+    await __SWIFT_PWA__.invoke('permissions.request', { name: 'allFiles' });
+}
+```
+
+Three states, because "no" splits in two and an app that can't tell them apart
+shows the wrong UI:
+
+| State | Meaning | What the app should do |
+| :--- | :--- | :--- |
+| `granted` | Usable now | Nothing |
+| `denied` | Not granted, but **asking is possible** | Offer a button; `request` reaches a prompt or a Settings screen |
+| `unavailable` | Nothing to ask | Use the other route — a picker, its own storage. Never offer a button |
+
+`unavailable` covers four things that look different and act the same:
+undeclared, vetoed, a platform with no such grant (iOS), and an OS version that
+predates it. **A store that won't approve the permission lands here too**: Play
+restricts `MANAGE_EXTERNAL_STORAGE` to apps whose core function needs it, so an
+app that ships without the declaration reads `unavailable` at runtime rather
+than handing the user to a Settings screen that shows nothing. Design for that
+answer — see [the Android fallback](android-setup.md#all-files-access) — rather
+than treating it as the error case.
+
+| Platform | `allFiles` | Why |
+| :--- | :--- | :--- |
+| **Linux / Windows** | `granted` | Nothing stands between the app and files it can open by path |
+| **macOS** | `granted` | The first read of a protected folder (Desktop, Documents, Downloads) raises the system's own prompt; there is nothing to ask in advance |
+| **Android** (API 30+) | `denied` → Settings hand-off | A *special* permission: no dialog exists, only a Settings screen |
+| **Android** (below 30) | `denied` → runtime prompt | The broad grant was the ordinary storage pair |
+| **iOS** | `unavailable` | There is no such grant, and no prospect of one — a document picker or a scoped bookmark is the design |
+
+**Nothing is emitted into the MSIX for it**, deliberately. Windows' counterpart
+is the `broadFileSystemAccess` *restricted* capability, which needs Store
+approval and governs only the WinRT `StorageFile` APIs — not the Win32 calls
+Foundation makes, which is how a swift-pwa app actually opens a file. Emitting
+it would cost every packaged app its Store eligibility and buy nothing.
+
+`request` is safe to call when already granted (it answers from the current
+state rather than prompting twice), and it asks nothing at all for a permission
+the app never declared or has vetoed: a capability the app ruled out is not one
+to put a system prompt in front of the user for.
+
+It is deliberately **not** how the web APIs get their consent. `getUserMedia`
+and friends still reach the platform's own prompt through their own seam, and
+`status` reports `granted` for them wherever the runtime tier has nothing to
+add — the honest reading of "nothing further stands between this app and the
+capability", not a claim that the user has already agreed.
+
 ## Location: `geo.*`
 
 Location is the one capability the permission work can't reach through the web
@@ -194,6 +265,11 @@ through a page request the way camera and microphone do. It's declared under
   "device": { "bluetooth": { "reason": "Send jobs to your plotter." } }
 }
 ```
+
+`allFiles` is under the same key for the same reason: the web's answer to
+"read the user's files" is a directory picker, and what `allFiles` names is the
+app that walks folders it was given a *path* to — a library whose books are the
+user's own directories, a sidecar written beside the original.
 
 Everything downstream is identical — the same `declare`, the same veto, the same
 build-time cross-check, the same undeclared diagnostic. Only the key differs,

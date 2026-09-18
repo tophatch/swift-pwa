@@ -445,6 +445,7 @@ enum AndroidTemplates {
                 AndroidUsesPermission(name: "android.permission.ACCESS_COARSE_LOCATION")
             ]
         case "bluetooth": bluetoothPermissions(minSdk: minSdk)
+        case "allFiles": allFilesPermissions(minSdk: minSdk)
         // `notifications` is already declared unconditionally above for the
         // native notifications plugin, so it adds nothing here.
         default: []
@@ -473,6 +474,29 @@ enum AndroidTemplates {
             AndroidUsesPermission(name: "android.permission.BLUETOOTH", maxSdkVersion: 30),
             AndroidUsesPermission(name: "android.permission.BLUETOOTH_ADMIN", maxSdkVersion: 30),
             AndroidUsesPermission(name: "android.permission.ACCESS_FINE_LOCATION", maxSdkVersion: 30)
+        ]
+        return permissions
+    }
+
+    /// All-files access changed shape at API 30, the way Bluetooth did at 31.
+    ///
+    /// From 30 it is a **special** permission: `MANAGE_EXTERNAL_STORAGE` can
+    /// only be granted from a Settings screen the app sends the user to
+    /// (`ctx.permissions.request(.allFiles)`), never from a dialog. Before 30
+    /// the broad grant was the ordinary runtime pair, which carries
+    /// `maxSdkVersion` so a modern device never sees it.
+    ///
+    /// Declaring it is a store-policy decision as well as a technical one:
+    /// Google Play restricts `MANAGE_EXTERNAL_STORAGE` to apps whose core
+    /// function needs it, and an app that ships without the declaration reads
+    /// `unavailable` at runtime rather than offering a hand-off to a Settings
+    /// screen that would show nothing. See docs/android-setup.md.
+    private static func allFilesPermissions(minSdk: Int) -> [AndroidUsesPermission] {
+        var permissions = [AndroidUsesPermission(name: "android.permission.MANAGE_EXTERNAL_STORAGE")]
+        guard minSdk < 30 else { return permissions }
+        permissions += [
+            AndroidUsesPermission(name: "android.permission.READ_EXTERNAL_STORAGE", maxSdkVersion: 29),
+            AndroidUsesPermission(name: "android.permission.WRITE_EXTERNAL_STORAGE", maxSdkVersion: 29)
         ]
         return permissions
     }
@@ -1845,6 +1869,12 @@ enum AndroidTemplates {
         private var pendingSaveFile: ((String) -> Unit)? = null
         private var pendingOpenDirectory: ((String) -> Unit)? = null
         private var pendingNotificationPerm: ((Boolean) -> Unit)? = null
+        // All-files access: the Settings round trip (API 30+) and the legacy
+        // runtime pair (below 30). Separate slots from the web-permission one
+        // because this request is the *app* asking, not a page, and the two
+        // can be in flight at once.
+        private var pendingAllFilesSettings: (() -> Unit)? = null
+        private var pendingLegacyStoragePerm: ((Boolean) -> Unit)? = null
         // Web permission requests (camera / microphone / location) waiting on
         // the Swift-side policy, keyed by the id sent with the host event.
         // A map rather than a single slot: a page may ask for the camera and
@@ -1939,6 +1969,31 @@ enum AndroidTemplates {
                 cb?.invoke(granted)
             }
 
+        // All-files access has no dialog: from API 30 it is a *special*
+        // permission granted only on a Settings screen. The launcher exists
+        // for the trip back — the result code is always CANCELED, so the
+        // answer is whatever `Environment.isExternalStorageManager()` says
+        // once the user returns.
+        private val allFilesSettingsLauncher: ActivityResultLauncher<Intent> =
+            appActivity.registerForActivityResult(
+                ActivityResultContracts.StartActivityForResult()
+            ) {
+                val cb = pendingAllFilesSettings
+                pendingAllFilesSettings = null
+                cb?.invoke()
+            }
+
+        // Below API 30 the broad grant was the ordinary runtime pair, so the
+        // app's Swift and JS don't branch on the OS version to ask for it.
+        private val legacyStoragePermLauncher: ActivityResultLauncher<Array<String>> =
+            appActivity.registerForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { results ->
+                val cb = pendingLegacyStoragePerm
+                pendingLegacyStoragePerm = null
+                cb?.invoke(results.isNotEmpty() && results.values.all { it })
+            }
+
         // Camera / microphone / location, which the WebView cannot request
         // for itself: `onPermissionRequest` fires *after* Android has already
         // decided the app has no such permission, so the app has to ask.
@@ -1984,6 +2039,8 @@ enum AndroidTemplates {
                 }
                 "notifications.requestAuthorization" -> notificationsRequestAuth(done)
                 "permissions.resolve" -> permissionsResolve(json, done)
+                "permissions.allFilesState" -> done(allFilesState(), null)
+                "permissions.requestAllFiles" -> requestAllFiles(done)
                 "geo.current" -> geoCurrent(json, done)
                 "geo.watch.start" -> geoWatchStart(json, done)
                 "geo.watch.stop" -> geoWatchStop(json, done)
@@ -2445,6 +2502,100 @@ enum AndroidTemplates {
 
         private fun notificationsAuthorized(): Boolean {
             return NotificationManagerCompat.from(activity).areNotificationsEnabled()
+        }
+
+        // -----------------------------------------------------------
+        // All-files access (`ctx.permissions.status/request(.allFiles)`)
+        // -----------------------------------------------------------
+
+        /// Whether the app's own manifest requests `name`.
+        ///
+        /// Load-bearing for the `unavailable` answer: the Settings screen
+        /// shows nothing for an app that never declared the permission, and
+        /// Google Play restricts `MANAGE_EXTERNAL_STORAGE` to apps whose core
+        /// function needs it — so an app that shipped without the declaration
+        /// has to read as "this needs a different design", not as "offer the
+        /// user a button".
+        private fun declaresPermission(name: String): Boolean {
+            return try {
+                val info = activity.packageManager.getPackageInfo(
+                    activity.packageName,
+                    android.content.pm.PackageManager.GET_PERMISSIONS
+                )
+                info.requestedPermissions?.contains(name) == true
+            } catch (t: Throwable) {
+                android.util.Log.e("swift-pwa", "reading our own declared permissions failed: ${t.message}", t)
+                false
+            }
+        }
+
+        private fun allFilesStateName(): String {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (!declaresPermission(android.Manifest.permission.MANAGE_EXTERNAL_STORAGE)) {
+                    return "unavailable"
+                }
+                return if (android.os.Environment.isExternalStorageManager()) "granted" else "denied"
+            }
+            val read = android.Manifest.permission.READ_EXTERNAL_STORAGE
+            if (!declaresPermission(read)) return "unavailable"
+            val granted = ContextCompat.checkSelfPermission(activity, read) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            return if (granted) "granted" else "denied"
+        }
+
+        private fun allFilesState(): String =
+            JSONObject().put("state", allFilesStateName()).toString()
+
+        private fun requestAllFiles(done: (String?, String?) -> Unit) {
+            val state = allFilesStateName()
+            // Already settled: granted needs no prompt, and unavailable has
+            // nothing to prompt with.
+            if (state != "denied") {
+                done(JSONObject().put("state", state).toString(), null)
+                return
+            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                if (pendingLegacyStoragePerm != null) {
+                    done(null, "swift-pwa: an all-files access request is already in flight")
+                    return
+                }
+                pendingLegacyStoragePerm = {
+                    done(JSONObject().put("state", allFilesStateName()).toString(), null)
+                }
+                legacyStoragePermLauncher.launch(
+                    arrayOf(
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
+                )
+                return
+            }
+            if (pendingAllFilesSettings != null) {
+                done(null, "swift-pwa: an all-files access request is already in flight")
+                return
+            }
+            pendingAllFilesSettings = {
+                done(JSONObject().put("state", allFilesStateName()).toString(), null)
+            }
+            // The per-app screen first. Some builds don't ship it, in which
+            // case the all-apps list is still a way through; if neither resolves
+            // there is nothing to hand off to and the honest answer is that
+            // this device can't grant it.
+            val perApp = Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + activity.packageName)
+            )
+            val allApps = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+            for (intent in listOf(perApp, allApps)) {
+                try {
+                    allFilesSettingsLauncher.launch(intent)
+                    return
+                } catch (t: Throwable) {
+                    android.util.Log.e("swift-pwa", "all-files Settings hand-off failed: ${t.message}", t)
+                }
+            }
+            pendingAllFilesSettings = null
+            done(JSONObject().put("state", "unavailable").toString(), null)
         }
 
         private fun notificationsRequestAuth(done: (String?, String?) -> Unit) {

@@ -644,18 +644,24 @@ talking to a plain-http endpoint. See [net-plugin.md](net-plugin.md).
 
 `permissions.web` in `pwa.json` declares capabilities the *web platform* has a
 name for — camera, microphone, geolocation — and the bundler maps each onto
-whatever Android calls it. A permission with no web counterpart can't come
-through that door. **All-files access** is the case that prompted this: an app
-that reads folders the user points it at, by path, as ordinary `FileManager`
-roots, needs `MANAGE_EXTERNAL_STORAGE`, and the only way to get it used to be
-hand-editing the generated `AndroidManifest.xml` — which the next
-`swift-pwa build` overwrites.
+whatever Android calls it, and `permissions.device` covers the two the runtime
+knows by name without a web counterpart (`bluetooth`, `allFiles`). Anything
+else can't come through either door: before this key, the only way to declare
+an OEM permission or a platform one swift-pwa doesn't model was hand-editing
+the generated `AndroidManifest.xml`, which the next `swift-pwa build`
+overwrites.
 
 ```json
 "android": {
-  "permissions": ["android.permission.MANAGE_EXTERNAL_STORAGE"]
+  "permissions": ["com.samsung.android.permission.SSENSOR"]
 }
 ```
+
+> For All-files access, prefer
+> [`permissions.device: ["allFiles"]`](#all-files-access). It emits the same
+> `<uses-permission>` element, and it is the spelling `swift-pwa build`
+> cross-checks against `ctx.permissions.declare(.allFiles)` — the ceiling the
+> runtime reads before it will ask the user for anything.
 
 Each entry is emitted verbatim as a `<uses-permission>` element, after the
 built-in and web-derived ones, with duplicates dropped — so naming something
@@ -668,12 +674,64 @@ releases add more, so a list here would go stale and start refusing valid
 declarations.
 
 Declaring grants nothing. A *dangerous* permission still needs its runtime
-request, and a *special* one like All-files access needs the
-`ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION` hand-off to Settings — the
-declaration is only what makes that request possible. Some permissions carry
-store-policy consequences (Play restricts All-files access to apps whose core
-function needs it); that is the app's call to make, and not a reason the
-manifest can't express it.
+request, and a *special* one like All-files access needs a hand-off to Settings
+— the declaration is only what makes that request possible. Some permissions
+carry store-policy consequences; that is the app's call to make, and not a
+reason the manifest can't express it.
+
+### All-files access
+
+An app whose library is the user's own folders needs *paths* — a `FileManager`
+walk, a rescan, a sidecar file beside the original — and on Android paths mean
+`MANAGE_EXTERNAL_STORAGE`. Declare it by name and the runtime handles both the
+manifest entry and the request:
+
+```json
+"permissions": { "device": ["allFiles"] }
+```
+
+```js
+const { state } = await __SWIFT_PWA__.invoke('permissions.status', { name: 'allFiles' });
+if (state === 'denied') {
+    await __SWIFT_PWA__.invoke('permissions.request', { name: 'allFiles' });
+}
+```
+
+The Swift form is `ctx.permissions.declare(.allFiles)` plus
+`await ctx.permissions.status(.allFiles)` / `.request(.allFiles)`, and both work
+on all five platforms — see [permissions.md](permissions.md#asking-for-the-capability-no-web-api-asks-for)
+for what the other four answer. Three Android-specific things:
+
+- **There is no dialog.** From API 30 this is a *special* permission granted
+  only from a Settings screen; `request` sends the user to the per-app screen
+  (`ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION`) and resolves when they come
+  back, whether or not they granted it. Below 30 it is the ordinary runtime
+  storage pair and raises a normal prompt, so the app's own code doesn't branch
+  on the OS version.
+- **Undeclared reads as `unavailable`, not `denied`.** The Settings screen shows
+  nothing for an app whose manifest never asked, so a hand-off there would be a
+  button that visibly does nothing.
+- **Play may refuse the declaration.** All-files access is restricted to apps
+  whose core function needs it, and a rejected app ships without the permission
+  — where the runtime again reports `unavailable`. The fallback is a different
+  shape of app rather than a different call: copy or import the content into
+  `app.dataDir()` (through `dialog.openDirectory`, whose SAF grant persists
+  across launches) and serve it from a `build.serve` mount or
+  `ctx.serveDirectory`. It costs the property that the library *is* the user's
+  folders, which is why it's worth knowing before the store review rather than
+  after.
+
+### Which device is this?
+
+`ProcessInfo.processInfo.hostName` is `localhost` on every Android device, and
+that string is what an app writes into any "which device is this" field — where
+it shows up on another device as "continue reading from localhost". Read
+`__platform.info`'s **`deviceName`** instead: the model (`SM-F966B`) on Android,
+the device's own name on iOS, the hostname on the three desktops, never empty.
+
+```js
+const { deviceName } = await __SWIFT_PWA__.invoke('__platform.info');
+```
 
 ### The Activity lifecycle reaches Swift
 

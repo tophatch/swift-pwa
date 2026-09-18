@@ -617,6 +617,31 @@ struct AndroidBundlerUnitTests {
         #expect(kt.contains(".replace(\"<\", \"&lt;\")"))
     }
 
+    /// #243: an app could declare All-files access and never request it —
+    /// the hand-off is `startActivity` on a Settings intent, which is JNI the
+    /// Swift side has no route to.
+    @Test("SwiftPWASystemPlugins can read and request All-files access")
+    func systemPluginsAllFilesAccess() {
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        // The two RPC names `AndroidPermissionAuthority` calls.
+        #expect(kt.contains("\"permissions.allFilesState\" -> done(allFilesState(), null)"))
+        #expect(kt.contains("\"permissions.requestAllFiles\" -> requestAllFiles(done)"))
+        // Undeclared is `unavailable`, and the check is the app's own manifest
+        // — a Settings screen shows nothing for an app that never asked, and
+        // Play may refuse the declaration outright.
+        #expect(kt.contains("private fun declaresPermission(name: String): Boolean"))
+        #expect(kt.contains("MANAGE_EXTERNAL_STORAGE"))
+        #expect(kt.contains("Environment.isExternalStorageManager()"))
+        // The hand-off is a Settings screen, not a dialog, and the answer is
+        // re-read when the user comes back.
+        #expect(kt.contains("ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"))
+        #expect(kt.contains("ActivityResultContracts.StartActivityForResult()"))
+        // Below API 30 the broad grant was the ordinary runtime pair, so an
+        // app's Swift and JS don't branch on the OS version.
+        #expect(kt.contains("READ_EXTERNAL_STORAGE"))
+        #expect(kt.contains("legacyStoragePermLauncher.launch("))
+    }
+
     @Test("SwiftPWASystemPlugins maps PackageInstaller status codes to stable names")
     func systemPluginsMapsStatuses() {
         let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)

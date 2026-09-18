@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`ctx.permissions` can ask, not just declare — and All-files access is a
+  permission it knows by name** (#243). `android.permissions` (0.11.0, #214) got
+  `MANAGE_EXTERNAL_STORAGE` into the manifest; declaring it grants nothing, and
+  an app had no way to perform the `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION`
+  hand-off that does. `AndroidURLOpener` is `ACTION_VIEW` on a URL — the wrong
+  action, and it won't take an `intent://` either — and `AndroidAppContext`
+  exposes no `JNIEnv`, correctly. So the only route was an app-side JNI shim
+  beside the generated Kotlin, which `swift-pwa build` regenerates around.
+
+  ```swift
+  ctx.permissions.declare(.allFiles)
+  if await ctx.permissions.status(.allFiles) == .denied {
+      _ = await ctx.permissions.request(.allFiles)   // resolves when the user is done
+  }
+  ```
+  ```json
+  "permissions": { "device": ["allFiles"] }
+  ```
+
+  Declaring the name emits the platform entries — `MANAGE_EXTERNAL_STORAGE`, plus
+  the legacy storage pair capped at API 29 for an app that still supports below
+  30 — so the request and the manifest can't drift apart. `permissions.status` /
+  `permissions.request` are the JS spellings.
+
+  **Three states, because "no" splits in two.** `granted` is usable now;
+  `denied` is worth a button, because asking is possible; `unavailable` never
+  becomes granted on this build, so the app needs a different design rather than
+  a button. `unavailable` is what an undeclared or vetoed permission reports,
+  what iOS reports for `allFiles` (a document picker or a scoped bookmark is the
+  design there, and no prompt will ever change that) — and what an app reports
+  when a store refused the declaration. Play restricts All-files access to apps
+  whose core function needs it, so that is a case to design the fallback around
+  rather than an error path; [docs/android-setup.md](docs/android-setup.md#all-files-access)
+  names it.
+
+  Linux, Windows and macOS answer `granted`: nothing stands between the app and
+  a path it can already open, and macOS raises its own prompt on the first read
+  of a protected folder. The seam is `DevicePermissionAuthority`, installed by a
+  backend's `AppContext`; a backend with nothing to ask abstains and the policy's
+  own two ceilings answer. This is deliberately *not* how the web APIs get their
+  consent — `getUserMedia` and friends still reach the platform's own prompt
+  through their own seam.
+
+- **`__platform.info` reports a `deviceName`** (#243). `ProcessInfo.hostName` is
+  `localhost` on every Android device, and that string is what an app writes
+  into a "which device is this" field — where it surfaces on another device as
+  "continue reading from localhost". `deviceName` is the model on Android (read
+  from Bionic's property store rather than a JNI hop to `Build.MODEL`), the
+  device's own name on iOS, and the hostname (minus a `.local` suffix) on the
+  three desktops. Never empty.
+
 ### Fixed
 
 - **The origin root (`/`) serves the app's entry, on Android too** (#242).

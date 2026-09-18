@@ -1,4 +1,9 @@
 import Foundation
+#if os(Android)
+    import Android
+#elseif os(iOS)
+    import UIKit
+#endif
 
 /// What `__platform.info` returns to JS. Apps can read this to make
 /// per-platform UI decisions — e.g. greying out a "Copy from
@@ -37,19 +42,31 @@ public struct PlatformInfo: Sendable, Codable, Equatable {
     /// *remaining* headroom via `system.memory`'s `availableBytes` rather than a
     /// fixed cap). Constant for the session.
     public var appMemoryLimitBytes: UInt64?
+    /// What to call this device in something a person reads — a
+    /// "continue reading on…" list, a sync sidecar, a bug report.
+    ///
+    /// `ProcessInfo.hostName` is the obvious source and is **`localhost` on
+    /// every Android device**, which is how "continue reading from localhost"
+    /// ends up in an app's UI. So: the hostname on the three desktops, the
+    /// device's own name on iOS, and the model (`ro.product.model`, e.g.
+    /// `SM-F966B`) on Android. Never empty — an unknown device reports its OS
+    /// identifier rather than a blank a page would have to special-case.
+    public var deviceName: String
 
     public init(
         os: String,
         commands: [String],
         tempDir: String,
         physicalMemoryBytes: UInt64 = 0,
-        appMemoryLimitBytes: UInt64? = nil
+        appMemoryLimitBytes: UInt64? = nil,
+        deviceName: String = ""
     ) {
         self.os = os
         self.commands = commands
         self.tempDir = tempDir
         self.physicalMemoryBytes = physicalMemoryBytes
         self.appMemoryLimitBytes = appMemoryLimitBytes
+        self.deviceName = deviceName.isEmpty ? os : deviceName
     }
 }
 
@@ -103,7 +120,8 @@ public final class PlatformInfoPlugin: Plugin {
                 commands: registryRef.names().sorted(),
                 tempDir: temp,
                 physicalMemoryBytes: ProcessInfo.processInfo.physicalMemory,
-                appMemoryLimitBytes: appMemoryLimit()
+                appMemoryLimitBytes: appMemoryLimit(),
+                deviceName: currentDeviceName()
             )
         })
 
@@ -122,6 +140,33 @@ public final class PlatformInfoPlugin: Plugin {
 /// Private — exposed via `__platform.info`'s `os` field. Lowercased
 /// to match the values JS code on the page typically compares
 /// against (e.g. `if (info.os === 'android')`).
+/// The device's own name, per platform. See ``PlatformInfo/deviceName`` for
+/// why `ProcessInfo.hostName` isn't it.
+///
+/// Android answers through Bionic's property store rather than a JNI hop to
+/// `Build.MODEL`: it's the same string, and it keeps a foundational call that
+/// every page makes early off the RPC path.
+func currentDeviceName() async -> String {
+    #if os(Android)
+        var value = [CChar](repeating: 0, count: 92) // PROP_VALUE_MAX
+        guard __system_property_get("ro.product.model", &value) > 0 else { return "" }
+        // `String(validatingCString:)` is deprecated and the replacement wants
+        // the NUL already gone, so cut it here.
+        let bytes = value.prefix { $0 != 0 }.map { UInt8(bitPattern: $0) }
+        return String(decoding: bytes, as: UTF8.self)
+    #elseif os(iOS)
+        // Not the user's chosen device name since iOS 16 unless the app is
+        // entitled — it degrades to the model ("iPad"), which is still the
+        // right answer for this field and needs no entitlement.
+        return await MainThread.run { UIDevice.current.name }
+    #else
+        let host = ProcessInfo.processInfo.hostName
+        // `.local` is mDNS bookkeeping, not part of what the machine is
+        // called; a person reading a device list doesn't want it.
+        return host.hasSuffix(".local") ? String(host.dropLast(6)) : host
+    #endif
+}
+
 private func currentOSIdentifier() -> String {
     #if os(macOS)
         return "macos"

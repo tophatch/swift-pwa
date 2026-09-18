@@ -24,6 +24,22 @@ public enum DevicePermission: String, Sendable, Codable, CaseIterable {
     /// Talking to Bluetooth LE peripherals through `ble.*`. Declared under
     /// `permissions.device` in `pwa.json`, not `permissions.web`.
     case bluetooth
+    /// Reading and writing the user's own files **by path** — the whole of
+    /// shared storage, not a folder they handed over through a picker.
+    ///
+    /// Declared under `permissions.device` in `pwa.json`, like ``bluetooth``,
+    /// because no web API asks for it: the File System Access API's directory
+    /// picker is the web's answer, and what this models is the app that walks
+    /// folders it was given a *path* to — a library whose books are the user's
+    /// own directories, a sidecar file written beside the original.
+    ///
+    /// It is the one permission here whose answer differs by platform rather
+    /// than by device: ambient on Linux and Windows, ambient-with-a-prompt on
+    /// macOS, an explicit hand-off to Settings on Android (API 30+), and not
+    /// available at all on iOS. ``PermissionPolicy/status(_:)`` is how an app
+    /// finds out which of those it is on, before it offers the user a button
+    /// that can't work.
+    case allFiles
 }
 
 /// The name this enum shipped under in 0.10.0, when everything in it came from
@@ -44,6 +60,51 @@ public enum PermissionDenial: String, Sendable, Equatable {
     case undeclared
     /// The app refused it itself, from its own in-app privacy controls.
     case vetoed
+}
+
+/// Where a permission stands with the OS *right now*, as opposed to whether
+/// the app is allowed to ask (``PermissionDecision``).
+///
+/// Three states rather than a `Bool` because "no" splits in two, and an app
+/// that can't tell them apart shows the wrong UI. ``denied`` is worth a button;
+/// ``unavailable`` never becomes ``granted`` on this device, and offering to
+/// ask would be offering something that does nothing.
+public enum PermissionState: String, Sendable, Codable, Equatable, CaseIterable {
+    /// The app can use the capability now.
+    case granted
+    /// Not granted, but asking is possible — ``PermissionPolicy/request(_:)``
+    /// will reach a prompt or a Settings hand-off.
+    case denied
+    /// Nothing to ask. The app never declared it, the app has vetoed it, the
+    /// platform has no such grant to give (All-files access on iOS), or the OS
+    /// version predates it. The app needs its other route — a document picker,
+    /// its own storage — and the decision is a build-time one, not a button.
+    ///
+    /// A permission a store refuses to approve lands here too: an app shipped
+    /// without the declaration reads `unavailable` at runtime rather than
+    /// offering a hand-off that Settings would show nothing for.
+    case unavailable
+}
+
+/// The platform seam behind ``PermissionPolicy/status(_:)`` and
+/// ``PermissionPolicy/request(_:)``. One per backend that has something to
+/// ask; installed by its `AppContext`, never by an app.
+///
+/// Only consulted for a permission that has cleared the declaration and the
+/// veto, so an implementation answers about the OS alone.
+public protocol DevicePermissionAuthority: Sendable {
+    /// Where `permission` stands with the OS, without asking the user
+    /// anything. Return nil for a permission this backend has no opinion on,
+    /// which falls back to ``PermissionState/granted`` — the honest answer
+    /// where nothing stands between a declared app and the capability.
+    func state(of permission: DevicePermission) async -> PermissionState?
+
+    /// Ask, and answer with where things stand once the user is done. Returns
+    /// nil for a permission this backend can't ask about.
+    ///
+    /// May take as long as the user does: on Android All-files access is a
+    /// trip to a Settings screen and back.
+    func request(_ permission: DevicePermission) async -> PermissionState?
 }
 
 public enum PermissionDecision: Sendable, Equatable {
@@ -82,6 +143,7 @@ public final class PermissionPolicy: @unchecked Sendable {
     private var declared: Set<DevicePermission> = []
     private var veto: (@Sendable (DevicePermission, String) -> Bool)?
     private var diagnosed: Set<DevicePermission> = []
+    private var authority: (any DevicePermissionAuthority)?
 
     public init() {}
 
@@ -199,7 +261,80 @@ public final class PermissionPolicy: @unchecked Sendable {
         return .deny(candidates.isEmpty ? .undeclared : .vetoed)
     }
 
-    private func diagnoseUndeclared(_ permission: DevicePermission, origin: String) {
+    /// Install the backend's OS seam. Called by each `AppContext`; an app
+    /// never calls this.
+    public func setAuthority(_ authority: (any DevicePermissionAuthority)?) {
+        lock.lock()
+        defer { lock.unlock() }
+        self.authority = authority
+    }
+
+    /// Where `permission` stands with the OS right now — read it before
+    /// offering the user a button, so an app doesn't offer one that can't
+    /// work.
+    ///
+    /// Undeclared or vetoed is ``PermissionState/unavailable``: both are the
+    /// app's own doing and neither changes by asking. Everything else is the
+    /// backend's answer, or ``PermissionState/granted`` where the backend has
+    /// none — nothing stands between a declared app and a capability the
+    /// platform grants ambiently.
+    ///
+    /// Asks the user nothing.
+    public func status(_ permission: DevicePermission) async -> PermissionState {
+        guard let authority = clearedAuthority(for: permission) else { return .unavailable }
+        return await authority?.state(of: permission) ?? .granted
+    }
+
+    /// Ask for `permission`, and answer with where it stands once the user is
+    /// done. Safe to call when already granted — a backend answers from the
+    /// current state rather than asking twice.
+    ///
+    /// Undeclared or vetoed returns ``PermissionState/unavailable`` without
+    /// asking anything: a permission the app ruled out is not one to put a
+    /// system prompt in front of the user for.
+    ///
+    /// This is deliberately *not* how the web APIs get their consent —
+    /// `getUserMedia` and friends still reach the platform's own prompt
+    /// through ``decide(_:origin:)`` at each backend's permission seam. It
+    /// exists for a capability no web API asks for.
+    public func request(_ permission: DevicePermission) async -> PermissionState {
+        guard let authority = clearedAuthority(for: permission) else { return .unavailable }
+        return await authority?.request(permission) ?? .granted
+    }
+
+    /// The installed authority, or nil when the app's own two ceilings already
+    /// settle the question. Double-optional at the call site: the outer nil
+    /// means "refused here", the inner one "nothing installed".
+    private func clearedAuthority(for permission: DevicePermission) -> (any DevicePermissionAuthority)?? {
+        lock.lock()
+        let isDeclared = declared.contains(permission)
+        let veto = veto
+        let authority = authority
+        lock.unlock()
+
+        guard isDeclared else {
+            // The same one-off diagnostic the web seam emits: a page told
+            // `unavailable` can't tell a missing declaration from a platform
+            // that has no such grant, and this is the only place the
+            // difference can surface.
+            diagnoseUndeclared(
+                permission, origin: "ctx.permissions",
+                consequence: """
+                `status` and `request` answer `unavailable` until then, which reads to an app as \
+                'this platform cannot do it' — indistinguishable from a device that really can't.
+                """
+            )
+            return .none
+        }
+        // The veto takes an origin because it was written for a page's
+        // request; this one is the app asking on its own behalf.
+        if veto?(permission, "ctx.permissions") == true { return .none }
+        return .some(authority)
+    }
+
+    private func diagnoseUndeclared(
+        _ permission: DevicePermission, origin: String, consequence: String? = nil
+    ) {
         lock.lock()
         let isFirst = diagnosed.insert(permission).inserted
         lock.unlock()
@@ -211,7 +346,7 @@ public final class PermissionPolicy: @unchecked Sendable {
         swift-pwa: refused a '\(permission.rawValue)' permission request from \(origin) \
         because this app has not declared it. Add \
         `ctx.permissions.declare(.\(permission.rawValue))` to your configure closure. \
-        The page sees an ordinary denial, which looks exactly like the user saying no.
+        \(consequence ?? "The page sees an ordinary denial, which looks exactly like the user saying no.")
         """)
     }
 }

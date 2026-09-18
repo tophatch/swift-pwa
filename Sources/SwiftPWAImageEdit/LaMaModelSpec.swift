@@ -122,9 +122,10 @@ public struct LaMaModelSource: Sendable, Equatable {
     /// against the exact bytes `Scripts/vendor-lama.sh` downloads (which
     /// `.github/workflows/lama-vendor.yml` re-hosts byte-identically).
     ///
-    /// > The `lama-vendor` release must be published (run the workflow) before
-    /// > `LaMaBackend(cacheDirectory:)`'s `ai.ensureModel` can fetch from this
-    /// > URL. Until then, use `LaMaBackend(modelPath:)` with a local export.
+    /// The `lama-vendor` release is published and serving these exact bytes, so
+    /// `LaMaBackend(cacheDirectory:)`'s `ai.ensureModel` fetches from this URL
+    /// directly. `LaMaBackend(modelPath:)` remains the route for a local export
+    /// of your own.
     public static let bigLama = LaMaModelSource(
         url: URL(string: "https://github.com/tophatch/swift-pwa/releases/download/lama-vendor/big-lama.onnx")!,
         sha256: "1faef5301d78db7dda502fe59966957ec4b79dd64e16f03ed96913c7a4eb68d6",

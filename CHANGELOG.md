@@ -33,6 +33,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rather than a hardcoded `index.html`. An app whose entry is `app.html` had no
   working origin root anywhere.
 
+- **A ranged response's `Content-Length` and its body agree** (#244). Chromium
+  applies the `Range` to whatever stream `shouldInterceptRequest` returns: it
+  bounds the range with `available()`, `skip()`s to the start offset, reports
+  `Content-Length` as the length that was *asked for* — and then reads the
+  stream to EOF. Measured over a 12,270-byte file on a Fold7: `bytes=100-199`
+  announced 100 bytes and delivered 12,170. Chromium tolerates its own
+  mismatch, and no `Accept-Ranges: bytes` is advertised so nothing on Android
+  ranges by choice, but a consumer that trusted the header would truncate
+  silently — and every range of a large file was reading the whole tail for
+  nothing.
+
+  The runtime now caps the stream at the end of the range. It deliberately does
+  *not* skip to the start offset: Chromium already does, and doing it twice
+  would deliver the wrong bytes. `available()` still reports the full remaining
+  length, because that is what Chromium's bounds check runs against before it
+  skips. Applies to the bundle, `build.serve` mounts and runtime
+  `ctx.serveDirectory` mounts alike. A range with no explicit end (`bytes=500-`,
+  `bytes=-50`) already agreed with itself and passes through untouched.
+
 - **A missing file on Android says so** (#242). A not-found out of
   `shouldInterceptRequest` was a response with a null stream, which the WebView
   renders as `ERR_INVALID_RESPONSE` — a protocol failure, not a missing file,

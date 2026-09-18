@@ -569,6 +569,37 @@ struct AndroidBundlerUnitTests {
         #expect(!on.contains("https://swift-pwa.local/web/"))
     }
 
+    /// Issue #244: Chromium applies the `Range` to whatever stream we hand
+    /// back — it skips to the start offset and reports `Content-Length` as the
+    /// requested length, then reads to EOF. Capping the stream is the half
+    /// that composes; skipping ourselves would deliver the wrong bytes.
+    @Test("a ranged response's body is capped at the end of the range")
+    func bridgeKtCapsRangedBodies() {
+        let kt = AndroidTemplates.swiftPWABridgeKt()
+        #expect(kt.contains("private fun capToRange("))
+        #expect(kt.contains("private class RangeCappedInputStream("))
+        // Every response path goes through the cap: the bundle, the SPA
+        // fallback document, and a runtime `ctx.serveDirectory` mount.
+        #expect(kt.contains("servedMountResponse(request)?.let { return capToRange(request, it) }"))
+        #expect(kt.contains("return capToRange(request, response)"))
+        #expect(kt.contains("capToRange(request, assetLoader.shouldInterceptRequest(entryUrl))"))
+        // A suffix range (`bytes=-50`) already agrees with itself; passing it
+        // to the cap as if `-50` were an end would truncate the body to zero.
+        #expect(kt.contains("if (spec.isEmpty() || spec.startsWith(\"-\")) return response"))
+        // `available()` must stay the full length — Chromium bounds the range
+        // against it before skipping.
+        #expect(kt.contains("override fun available(): Int = inner.available()"))
+        // The stream is swapped in place. Rebuilding the response instead
+        // throws `statusCode can't be less than 100` on Chromium's own thread
+        // — a response from the 3-argument constructor has no status — and
+        // that takes the app down, not just the request.
+        #expect(kt.contains("response.data = RangeCappedInputStream(stream, end + 1)"))
+        #expect(!kt.contains("response.reasonPhrase,"))
+        // The skip Chromium performs has to move our counter, or the cap
+        // measures from the offset rather than from the start of the file.
+        #expect(kt.contains("position += skipped"))
+    }
+
     /// Issue #242, second half: a not-found came back as a response with a
     /// null stream, which the WebView renders as `ERR_INVALID_RESPONSE` — a
     /// protocol failure, not a missing file, and an hour of looking for the

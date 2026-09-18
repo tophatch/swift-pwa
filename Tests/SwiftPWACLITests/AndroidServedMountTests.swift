@@ -19,7 +19,7 @@ struct AndroidServedMountTests {
     @Test("the mount table is consulted before the asset loader")
     func mountsWinOverTheBundle() {
         let intercept = bridge.range(of: "override fun shouldInterceptRequest")
-        let consult = bridge.range(of: "servedMountResponse(request)?.let { return it }")
+        let consult = bridge.range(of: "servedMountResponse(request)?.let { return capToRange(request, it) }")
         let assetLoader = bridge.range(of: "assetLoader.shouldInterceptRequest(request.url)")
         #expect(intercept != nil)
         // Order is the whole behaviour: `/` is a prefix of every mount, so the

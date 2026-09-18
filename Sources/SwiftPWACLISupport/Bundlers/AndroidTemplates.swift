@@ -1205,7 +1205,7 @@ enum AndroidTemplates {
                         // the `/` root). Swift owns the table and answers here;
                         // null means "not mine", which is every request in an
                         // app that mounts nothing.
-                        servedMountResponse(request)?.let { return it }
+                        servedMountResponse(request)?.let { return capToRange(request, it) }
                         val response = assetLoader.shouldInterceptRequest(request.url)
                         // SPA history-routing fallback: a main-frame navigation to a
                         // client-side route with no file under assets/web/ (the loader
@@ -1219,7 +1219,7 @@ enum AndroidTemplates {
                                 val entryUrl = android.net.Uri.parse(
                                     "https://swift-pwa.local/" + spaEntry
                                 )
-                                return assetLoader.shouldInterceptRequest(entryUrl)
+                                return capToRange(request, assetLoader.shouldInterceptRequest(entryUrl))
                             }
                         }
                         // A not-found from the asset loader is a response with
@@ -1234,7 +1234,7 @@ enum AndroidTemplates {
                         if (response?.data == null && request.url.host == "swift-pwa.local") {
                             return notFoundResponse(request.url.path ?: "/")
                         }
-                        return response
+                        return capToRange(request, response)
                     }
                     // Without this, a main-frame navigation to another site
                     // loads in place — and an app window has no address bar
@@ -1518,7 +1518,52 @@ enum AndroidTemplates {
             /// checks (pdf.js does) would pick the range path over the
             /// whole-file one and be wrong about what it got. This is exactly
             /// what `InternalStoragePathHandler` does for a `build.serve` mount,
-            /// so both kinds of mount behave alike.
+            /// so both kinds of mount behave alike — including the cap
+            /// `capToRange` puts on the body, which every response here goes
+            /// through.
+            /// Stop a ranged response's body at the end of the range it was
+            /// asked for.
+            ///
+            /// **Chromium, not us, applies the range** to whatever stream
+            /// `shouldInterceptRequest` hands back: it parses the `Range`
+            /// header, calls `available()` to bound it, `skip()`s to the start
+            /// offset, and reports `Content-Length` as the *requested* length
+            /// — then reads our stream to EOF. So `bytes=100-199` over a
+            /// 12,270-byte file arrived as a header saying 100 and a body of
+            /// 12,170 (#244). Chromium tolerates the mismatch; a consumer that
+            /// trusts the header would truncate silently, and the whole tail is
+            /// read for nothing on every range of a large file.
+            ///
+            /// We must not skip ourselves — Chromium already does, and doing it
+            /// twice would deliver the wrong bytes. Capping is the half that
+            /// composes: `available()` still reports the full length so
+            /// Chromium's own bounds check is unchanged, and the stream ends
+            /// where the range does. A range with no explicit end (`bytes=500-`,
+            /// `bytes=-50`) already agrees with itself, so it passes through.
+            private fun capToRange(
+                request: WebResourceRequest,
+                response: WebResourceResponse?
+            ): WebResourceResponse? {
+                val stream = response?.data ?: return response
+                val header = request.requestHeaders?.entries
+                    ?.firstOrNull { it.key.equals("Range", ignoreCase = true) }
+                    ?.value ?: return response
+                // First range only, matching what Chromium honours.
+                val spec = header.substringAfter("bytes=", "").substringBefore(',').trim()
+                if (spec.isEmpty() || spec.startsWith("-")) return response
+                val end = spec.substringAfter('-', "").trim().toLongOrNull() ?: return response
+                // Swap the stream in place rather than building a replacement.
+                // A `WebResourceResponse` from the 3-argument constructor —
+                // which is what both the stock asset handlers and
+                // `servedMountResponse` use — carries statusCode 0 and a null
+                // reason phrase, and the 6-argument constructor rejects both
+                // with `IllegalArgumentException: statusCode can't be less
+                // than 100`. That throws on Chromium's own thread inside
+                // `shouldInterceptRequest`, which takes the whole app down.
+                response.data = RangeCappedInputStream(stream, end + 1)
+                return response
+            }
+
             /// A 404 a human can read. `WebResourceResponse` insists on a
             /// non-empty reason phrase and throws otherwise, and a body is
             /// what turns the failure from `ERR_INVALID_RESPONSE` into a page
@@ -1647,6 +1692,51 @@ enum AndroidTemplates {
                 private const val NAV_OPEN_EXTERNALLY = 1
                 private const val NAV_BLOCK = 2
             }
+        }
+
+        /// A stream that ends at `limit` bytes, counting the bytes Chromium
+        /// itself skips to reach the start of a `Range`. See
+        /// `SwiftPWABridge.capToRange` for why the skipping is theirs and only
+        /// the capping is ours.
+        ///
+        /// `available()` deliberately reports the underlying stream's full
+        /// remaining length rather than what is left of the cap: Chromium calls
+        /// it to bound the requested range *before* skipping, and a short answer
+        /// there would make it reject a range it should satisfy.
+        private class RangeCappedInputStream(
+            private val inner: java.io.InputStream,
+            private val limit: Long
+        ) : java.io.InputStream() {
+            private var position = 0L
+
+            override fun read(): Int {
+                if (position >= limit) return -1
+                val byte = inner.read()
+                if (byte >= 0) position += 1
+                return byte
+            }
+
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (position >= limit) return -1
+                val allowed = minOf(len.toLong(), limit - position).toInt()
+                if (allowed <= 0) return -1
+                val read = inner.read(b, off, allowed)
+                if (read > 0) position += read
+                return read
+            }
+
+            // Chromium's skip to the range's start offset comes through here,
+            // so it has to move the counter — otherwise the cap would be
+            // measured from the offset instead of from the start of the file.
+            override fun skip(n: Long): Long {
+                val skipped = inner.skip(n)
+                position += skipped
+                return skipped
+            }
+
+            override fun available(): Int = inner.available()
+
+            override fun close() = inner.close()
         }
         """#
     }

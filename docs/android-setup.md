@@ -1292,6 +1292,15 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   the range path and be wrong about what it got. `build.serve` mounts have
   always behaved this way; runtime `ctx.serveDirectory` mounts now match them.
 
+  **The end of the range is honoured to the extent that the body stops there.**
+  Chromium reports `Content-Length` as the length that was *asked for* while
+  reading the stream to EOF, so a `bytes=100-199` over a 12,270-byte file
+  announced 100 bytes and delivered 12,170 (#244). The runtime now caps the
+  stream at the end of the range, which makes the header and the body agree and
+  stops a large file paying for its whole tail on every request. It does not
+  skip to the start offset — Chromium already does that, and doing it twice
+  would deliver the wrong bytes.
+
 - **`ctx.frame` falls back to `.unknown` on a very old System WebView.** The
   inbound bridge channel is `WebViewCompat.addWebMessageListener`, which reports
   which frame called (`isMainFrame` plus the sending document's origin) and is

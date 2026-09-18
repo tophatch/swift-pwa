@@ -285,6 +285,253 @@ jobs:
           WEBKIT_DISABLE_SANDBOX_THIS_IS_DANGEROUS: "1"
         run: bash Scripts/verify-driven-input.sh
 
+  # MARK: - Next-toolchain canaries
+  #
+  # Every job above pins its toolchain (Linux 6.2, Windows 6.3.1), and those
+  # pins are *floors* worth keeping — the GTK4 backend doesn't render below 6.2,
+  # and Foundation's file writing is broken on Windows before 6.3.1. The cost is
+  # that nothing gating a PR has ever run `swiftbuild`, the engine Swift 6.4
+  # made the default, so three engine-behaviour breaks in a row (#218, #219,
+  # #229) reached a real box before anything in CI went red. Each one compiled
+  # every target cleanly and failed at the **product link of an app** — which is
+  # why these jobs link `Examples/HelloPWA` rather than stopping at
+  # `swift build`, and why a fresh `swift-pwa init` app would be the wrong
+  # vehicle (it depends on the *released* package, not this checkout).
+  #
+  # Deliberately not on the PR gate: they track whatever release is current, so
+  # they can go red for a toolchain regression that isn't ours, and a check that
+  # can fail for someone else's reasons must never be able to block a merge.
+  # Weekly on the cron above, or `workflow_dispatch` on demand. They are not in
+  # the branch-protection list, and matrixing the pinned jobs instead would have
+  # renamed their checks (`linux-gtk4 (6.2)`) and wedged every PR on a required
+  # check that no longer exists.
+  #
+  # **When one goes red**, the question is ours or theirs. Ours: fix it, and add
+  # the guard that makes the class impossible rather than just the instance
+  # (`ManifestDependencyDriftTests` is the one this bought). Theirs: file it
+  # upstream and write the version into the platform doc's "Known limitations".
+  # Either way it ends within the week — a canary left red for a month is one
+  # nobody reads any more. If neither is possible yet, pin the version here so
+  # it goes green, and let bumping that pin carry the open question.
+  next-toolchain-linux:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      issues: write
+    env:
+      # The release under test. Bump deliberately — and see the "pin it green"
+      # note above: parking this on the last good release is how a break that
+      # isn't ours stops shouting every week. Keep it in step with the Windows
+      # job's two inputs below.
+      SWIFT_RELEASE: "6.4.0"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install GTK3 + WebKitGTK 4.1 + the toolchain's own runtime deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            libcurl4-openssl-dev \
+            libncurses-dev \
+            libpython3-dev \
+            libsqlite3-0 \
+            libxml2-dev
+      - name: Install the Swift release under test
+        # Neither installer this repo uses elsewhere can fetch it:
+        # `swift-actions/setup-swift@v2` answers `Version "6.4" is not
+        # available`, and `swiftly install 6.4.0` 404s on a URL it builds
+        # *without* the patch component. swift.org's own path keeps it
+        # (`swift-6.4.0-release/…/swift-6.4.0-RELEASE-…`) while the compiler
+        # banner prints `swift-6.4-RELEASE`, which is the trap in the middle.
+        # So take the tarball directly, from the version pinned above.
+        run: |
+          set -euo pipefail
+          base="https://download.swift.org/swift-${SWIFT_RELEASE}-release/ubuntu2404"
+          name="swift-${SWIFT_RELEASE}-RELEASE-ubuntu24.04"
+          curl -fsSL "${base}/swift-${SWIFT_RELEASE}-RELEASE/${name}.tar.gz" -o /tmp/swift.tar.gz
+          sudo mkdir -p /opt/swift
+          # Strip only the version-named top directory, never the `usr/` under
+          # it: `swift --version` runs fine from a flattened `bin/`, but
+          # swiftbuild derives the toolchain root from the binary's path and
+          # then looks for `swiftc` relative to the *working directory*
+          # (`…/swift-pwa/swiftc is not an executable file`). Keep the layout
+          # swiftly and the distro packages use.
+          sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo "/opt/swift/usr/bin" >> "$GITHUB_PATH"
+      - name: Report the toolchain under test
+        # First line of any failure report: which release, which engine.
+        run: swift --version
+      - name: Build the package
+        run: swift build
+      - name: Link an app against it
+        # Where the engine bugs actually surface. GTK3 here; #229 was measured
+        # byte-identical on both backends, so one is enough to catch the class.
+        working-directory: Examples/HelloPWA
+        run: swift build -c release
+      - name: What reached the product link
+        # swiftbuild builds the link list from the *declared* dependency edges,
+        # and its failures look like a missing symbol from a target that built
+        # perfectly well. This file against `Products/` is the whole diagnosis:
+        # a target's `.o` in the second but not the first is an edge problem,
+        # not a code one (#229). Printed on success too, so a later failure has
+        # a known-good list to diff against.
+        if: always()
+        working-directory: Examples/HelloPWA
+        run: |
+          find .build -name '*.LinkFileList' -print -exec cat {} \; || true
+          ls -la .build/out/Products/*/ || true
+      - name: File or update the tracking issue
+        # The weekly email is easy to filter into oblivion, so the canary files
+        # its own issue and comments on the existing one rather than opening a
+        # second — an open issue is the thing that actually gets triaged, and a
+        # growing comment thread says how many weeks it has been broken.
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "CI: next-toolchain canary failing (linux)"
+          RELEASE: ${{ env.SWIFT_RELEASE }}
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # Written to a file rather than a `$(cat <<…)` capture: bash 3.2,
+          # which is what a macOS dev box checks this with, can't parse a
+          # heredoc inside command substitution.
+          body="$RUNNER_TEMP/canary-body.md"
+          cat > "$body" <<BODY
+          The \`next-toolchain-linux\` job failed against Swift **$RELEASE**.
+
+          [Failing run]($run_url) — the job prints \`swift --version\` first, and
+          dumps the product's \`LinkFileList\` against \`Products/\` whether it
+          passes or fails. A target whose object is in the second but not the
+          first is a dependency-edge problem, not a code one (#229).
+
+          **Ours or theirs?** Ours: fix it, and add the guard for the class
+          rather than the instance. Theirs: file upstream and write the version
+          into the platform doc's *Known limitations*. Either way close this out
+          within the week — if neither is possible yet, pin \`SWIFT_RELEASE\`
+          (or the Windows job's two inputs) to the last good release so the
+          canary goes green, and let bumping that pin carry the open question.
+
+          Nothing is blocked meanwhile: this job is not a required check, and
+          the gating jobs stay on their pinned toolchains.
+          BODY
+          number=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+            echo "commented on existing #$number"
+          else
+            gh issue create --title "$TITLE" --body-file "$body"
+          fi
+
+  next-toolchain-windows:
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: windows-2022
+    timeout-minutes: 45
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up MSVC environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install the Swift release under test
+        uses: compnerd/gha-setup-swift@main
+        with:
+          # Keep the patch component. The compiler banner prints
+          # `swift-6.4-RELEASE`, but the download path this action builds is
+          # `swift-6.4.0-release/…/swift-6.4.0-RELEASE-windows10.exe` — dropping
+          # the `.0` (as `swiftly` does, and as this job did on its first run)
+          # 404s. Keep in step with SWIFT_RELEASE in the Linux job above.
+          swift-version: swift-6.4.0-release
+          swift-build: 6.4.0-RELEASE
+      - name: Report the toolchain under test
+        run: swift --version
+      - name: Install WebView2 SDK + WIL (NuGet)
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+          nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
+      - name: Link an app against the package
+        # Flags, never INCLUDE / LIB: 6.4 passes neither to the tasks that need
+        # them (#219), which is one of the breaks this job exists to catch.
+        #
+        # The app only, where the Linux job also builds the package first. A
+        # package-level build here additionally builds the *test* targets'
+        # resource bundles, and swiftbuild's `Touch` task on one of those is
+        # racy on Windows — `copy /b …_SwiftPWACLITests.bundle +,,` failing with
+        # "The process cannot access the file because it is being used by
+        # another process", green on one run and red on the next. That build is
+        # the gating `windows` job's business at its own pinned toolchain; what
+        # this job is here to ask is whether an app still links.
+        shell: pwsh
+        run: |
+          $flags  = @("$pwd\packages\Microsoft.Web.WebView2\build\native\include",
+                      "$pwd\packages\Microsoft.Windows.ImplementationLibrary\include") |
+                    ForEach-Object { '-Xcc', "-I$_" }
+          $flags += '-Xlinker', "/LIBPATH:$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
+          Set-Location Examples\HelloPWA
+          swift build -c release @flags
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: What reached the product link
+        if: always()
+        shell: pwsh
+        run: |
+          Get-ChildItem -Recurse -Filter '*.LinkFileList' Examples\HelloPWA\.build -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName; Get-Content $_.FullName }
+          Get-ChildItem Examples\HelloPWA\.build\out\Products\* -ErrorAction SilentlyContinue
+      - name: File or update the tracking issue
+        # The weekly email is easy to filter into oblivion, so the canary files
+        # its own issue and comments on the existing one rather than opening a
+        # second — an open issue is the thing that actually gets triaged, and a
+        # growing comment thread says how many weeks it has been broken.
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: "CI: next-toolchain canary failing (windows)"
+          RELEASE: "6.4.0"
+        run: |
+          set -euo pipefail
+          run_url="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID"
+          # Written to a file rather than a `$(cat <<…)` capture: bash 3.2,
+          # which is what a macOS dev box checks this with, can't parse a
+          # heredoc inside command substitution.
+          body="$RUNNER_TEMP/canary-body.md"
+          cat > "$body" <<BODY
+          The \`next-toolchain-windows\` job failed against Swift **$RELEASE**.
+
+          [Failing run]($run_url) — the job prints \`swift --version\` first, and
+          dumps the product's \`LinkFileList\` against \`Products/\` whether it
+          passes or fails. A target whose object is in the second but not the
+          first is a dependency-edge problem, not a code one (#229).
+
+          **Ours or theirs?** Ours: fix it, and add the guard for the class
+          rather than the instance. Theirs: file upstream and write the version
+          into the platform doc's *Known limitations*. Either way close this out
+          within the week — if neither is possible yet, pin \`SWIFT_RELEASE\`
+          (or the Windows job's two inputs) to the last good release so the
+          canary goes green, and let bumping that pin carry the open question.
+
+          Nothing is blocked meanwhile: this job is not a required check, and
+          the gating jobs stay on their pinned toolchains.
+          BODY
+          number=$(gh issue list --state open --limit 100 --json number,title \
+            --jq "[.[] | select(.title == \"$TITLE\")] | .[0].number // empty")
+          if [ -n "$number" ]; then
+            gh issue comment "$number" --body-file "$body"
+            echo "commented on existing #$number"
+          else
+            gh issue create --title "$TITLE" --body-file "$body"
+          fi
+
   macos-llama:
     # Coverage for the opt-in llama.cpp backend. It's env-gated
     # (SWIFT_PWA_LLAMA) so the default `macos` job above never compiles it —

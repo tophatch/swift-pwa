@@ -327,6 +327,12 @@ Key points:
   They're batched into one event rather than emitted one apiece because
   retention keeps only a channel's *latest* value, and a late subscriber would
   otherwise see only the last link.
+- **An OAuth callback arrives here on Android and not on iOS.** `auth.authorize`
+  catches the redirect on Android by matching `state` against URLs on this
+  channel — everything that doesn't match stays an ordinary deep link and still
+  reaches your handler. On iOS `ASWebAuthenticationSession` takes the callback
+  directly, so it never appears here at all and your router doesn't have to
+  filter authorization codes out of it. See [docs/auth.md](auth.md).
 - **A separate channel from `app.openFile`**, deliberately: a path to read and a
   URL to route are different payloads, and an app that handles documents
   shouldn't start receiving deep links it never declared. A `file://` URL counts
@@ -1470,6 +1476,59 @@ you; this is a thin, audited bridge to the OS store. Common pairing: a remote
 `AIBackend`'s API-key closure reads straight through it —
 `ImagenProvider(apiKey: { try? await store.get("google-ai") })`. Full reference
 and the per-platform store table: [docs/secrets.md](secrets.md).
+
+### `auth.*` — signing in with a cloud provider (all platforms)
+
+Opt-in (`AuthPlugin`). Opens a provider's consent page in the **system browser**
+and catches the OAuth redirect back — the one step of an authorization-code flow
+an app in a shell couldn't do for itself. Register it with one line that
+compiles on every platform:
+`ctx.use(AuthPlugin(networkClient: URLSessionNetworkClient()))`
+(`AndroidNetworkClient()` on Android).
+
+Not an in-page flow: Google, GitHub and Microsoft all refuse to render consent
+inside an embedded webview (`disallowed_useragent`), which is RFC 8252 §8.12
+working as intended — an app that hosts the consent page can read the password
+out of it.
+
+```js
+const { code, codeVerifier, redirectUri } =
+  await __SWIFT_PWA__.invoke('auth.authorize', {
+    authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+    clientId: '…',
+    scopes: ['https://www.googleapis.com/auth/drive.readonly'],
+    redirect: 'auto',                            // desktop → loopback; mobile → pass { scheme }
+    extraParams: { access_type: 'offline' },
+    timeoutMs: 300000,
+  });
+
+const tokens = await __SWIFT_PWA__.invoke('auth.exchange', {
+  tokenEndpoint: 'https://oauth2.googleapis.com/token',
+  clientId: '…', code, codeVerifier, redirectUri,
+});
+// { accessToken, refreshToken?, expiresIn?, tokenType?, scope?, idToken? }
+```
+
+`codeVerifier` and `redirectUri` are returned, not passed: the verifier is
+generated inside the flow, and with a loopback redirect the URI isn't known
+until the OS assigns a port — which the exchange then has to repeat byte for
+byte (RFC 6749 §4.1.3).
+
+**PKCE (`S256`) and `state` are always on and can't be configured off.** A
+callback whose `state` doesn't match is dropped and the flow keeps waiting,
+except under Apple's one-shot `ASWebAuthenticationSession`, where it throws
+`E_AUTH_STATE`.
+
+`redirect: 'auto'` picks loopback on macOS / Linux / Windows and **refuses on
+iOS / Android unless you pass `{ scheme }`** — the scheme there is
+provider-specific (Google's is the reversed client ID) and `pwa.json`'s
+`url_schemes` never reaches the running process, so a guess would fail minutes
+later at the provider's redirect with the app showing nothing.
+
+Errors: `E_AUTH_CANCELLED`, `E_AUTH_TIMEOUT`, `E_AUTH_DENIED`, `E_AUTH_STATE`,
+`E_AUTH_REDIRECT`, `E_AUTH_TOKEN`. Nothing is stored — pair it with
+[`secrets.*`](#secrets--secure-secret-storage). Full reference:
+[docs/auth.md](auth.md).
 
 ### `ble.*` — Bluetooth LE (all platforms)
 

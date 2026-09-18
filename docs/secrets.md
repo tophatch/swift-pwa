@@ -135,3 +135,10 @@ instead of the generate button; **Save** calls `secrets.set`, re-fetches
 | Code | Meaning |
 |---|---|
 | `E_SECRETS` | Store unavailable, access denied, I/O failure, or no store configured (`NoneSecretStore`). A missing key is **not** this — it returns `value: null`. |
+
+## See also
+
+- **[`auth.*`](auth.md)** — where the credential this store holds usually comes
+  from. `auth.authorize` opens the provider's consent page and catches the OAuth
+  redirect; `secrets.set` is where the refresh token it yields belongs. The auth
+  plugin deliberately stores nothing itself.

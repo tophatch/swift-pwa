@@ -37,6 +37,14 @@
         public let events = EventBus()
         public let permissions = PermissionPolicy()
         public let externalURLs = ExternalURLPolicy()
+
+        /// The platform pieces a plugin can pick up without the app naming a
+        /// backend type (see ``AppContext/urlOpener``). Android's nearest
+        /// equivalent to an OS authorization browser is Custom Tabs, which
+        /// needs `androidx.browser` — a runtime dependency for a nicer-looking
+        /// browser launch, so the scheme callback goes through `ACTION_VIEW`
+        /// and the `app.openURL` channel instead.
+        public let urlOpener: (any URLOpener)? = AndroidURLOpener()
         /// Stored to satisfy ``AppContext``; this backend never reads it.
         /// macOS is the only platform where an app outlives its windows —
         /// see ``LastWindowClosedPolicy``.

@@ -10,6 +10,11 @@
         public let events = EventBus()
         public let permissions = PermissionPolicy()
         public let externalURLs = ExternalURLPolicy()
+
+        /// The platform pieces a plugin can pick up without the app naming a
+        /// backend type (see ``AppContext/urlOpener``).
+        public let urlOpener: (any URLOpener)? = AppleURLOpener()
+        public let authorizationSession: (any AuthorizationSessionPresenter)? = SystemAuthorizationSession()
         public private(set) var windows: [WindowID: any Window] = [:]
         public var pendingExitCode: Int32?
         public var lastWindowClosed: LastWindowClosedPolicy = .reopen

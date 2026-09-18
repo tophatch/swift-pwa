@@ -71,9 +71,43 @@ public protocol AppContext: AnyObject, Sendable {
     ///
     /// Seeded from `pwa.json`'s `external_urls` block at `swift-pwa init` time.
     var externalURLs: ExternalURLPolicy { get }
+
+    /// How this backend hands a URL to the operating system, or `nil` where it
+    /// has no way to.
+    ///
+    /// Every backend already builds one for `SystemPlugin`; exposing it here is
+    /// what lets a plugin that needs a browser be registered with **one line
+    /// that compiles on all five** — `ctx.use(AuthPlugin(networkClient: …))` —
+    /// instead of an `#if os(…)` ladder naming `AppleURLOpener`,
+    /// `GTKURLOpener`, `WindowsURLOpener` and `AndroidURLOpener` in turn. A
+    /// per-platform branch in an adopter's shared `main.swift` is a branch that
+    /// breaks on the platform its author can't test.
+    ///
+    /// Defaults to `nil` so a backend that hasn't wired one (and the headless
+    /// catalog context) still conforms; consumers report `E_UNIMPLEMENTED`
+    /// rather than appearing to work.
+    var urlOpener: (any URLOpener)? { get }
+
+    /// The OS's own authorization browser, where the platform has one —
+    /// `ASWebAuthenticationSession` on macOS and iOS, `nil` elsewhere.
+    ///
+    /// Here rather than passed in for the same reason as ``urlOpener``, and
+    /// more sharply: the concrete type lives in the Apple backend, so an app
+    /// naming it directly cannot compile for Linux, Windows or Android at all.
+    var authorizationSession: (any AuthorizationSessionPresenter)? { get }
 }
 
 public extension AppContext {
+    /// No opener unless the backend supplies one.
+    var urlOpener: (any URLOpener)? {
+        nil
+    }
+
+    /// No OS authorization session unless the backend supplies one.
+    var authorizationSession: (any AuthorizationSessionPresenter)? {
+        nil
+    }
+
     /// Serve `directory`'s contents on the bundle origin under `prefix`
     /// (e.g. `/packs`), so page JS can reference them with an origin-relative
     /// URL (`/packs/<id>/clip.webm`) on every backend. Read-only (GET); writes

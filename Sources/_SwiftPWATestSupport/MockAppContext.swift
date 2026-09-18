@@ -9,6 +9,12 @@ public final class MockAppContext: AppContext {
     public let events = EventBus()
     public let permissions = PermissionPolicy()
     public let externalURLs = ExternalURLPolicy()
+
+    /// Settable so a test can stand in for what a backend supplies — the
+    /// browser a sign-in opens, and the OS authorization session Apple has and
+    /// nobody else does.
+    public var urlOpener: (any URLOpener)?
+    public var authorizationSession: (any AuthorizationSessionPresenter)?
     /// Stored to satisfy ``AppContext``; this backend never reads it.
     /// macOS is the only platform where an app outlives its windows —
     /// see ``LastWindowClosedPolicy``.

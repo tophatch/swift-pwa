@@ -481,6 +481,22 @@ Two iOS-specific things to expect:
 - **A file URL still goes to `app.openFile`.** The scene delegate splits the
   arriving contexts by kind rather than filtering, so a document keeps its
   security-scoped grant and a deep link gets its own channel.
+- **An OAuth callback does *not* arrive here.** `auth.authorize` uses
+  `ASWebAuthenticationSession` on iOS, which routes the redirect straight back to
+  the session rather than through `openURL` — so it never touches this channel
+  and nothing else listening on it can see the authorization code (asserted on a
+  real device by `Scripts/verify-oauth-ios.sh`). Declare the scheme in
+  `url_schemes` all the same: the session's `callbackURLScheme` is what the OS
+  matches, and an undeclared one never returns. See [docs/auth.md](auth.md).
+- **A sign-in started too early fails with an opaque error.**
+  `ASWebAuthenticationSession` refuses any anchor whose scene isn't
+  `.foregroundActive`, and a freshly launched app is `.foregroundInactive` for a
+  moment — so an `auth.authorize` fired from a startup path, or straight off a
+  deep link, used to fail with "The operation couldn't be completed. (…error
+  3.)" and nothing else. The runtime now waits briefly for a presentable scene,
+  and when it still can't present it appends what the anchor actually was
+  (`scenes=[…] windows=… key=…`) to the message, because Apple's own text names
+  neither the window nor the reason.
 
 ## Known limitations on iOS
 

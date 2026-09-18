@@ -576,6 +576,14 @@ on every platform:
 "url_schemes": ["myapp"]
 ```
 
+> **An OAuth callback arrives on this same channel**, which is how
+> `auth.authorize` catches it on Android: the redirect is an `ACTION_VIEW` intent
+> on the app's declared scheme, and the flow resolves on the first URL whose
+> `state` matches while everything else stays an ordinary deep link. Declare the
+> provider's scheme here — for Google that's the *reversed client ID* from the
+> Android OAuth client, which is also why `redirect: 'auto'` won't guess it. See
+> [docs/auth.md](auth.md).
+
 Each scheme becomes a `<data android:scheme="…"/>` spec on one generated
 `ACTION_VIEW` intent-filter carrying both `DEFAULT` and **`BROWSABLE`**
 categories. `BROWSABLE` is the load-bearing one: without it the filter matches

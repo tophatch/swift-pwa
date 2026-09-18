@@ -43,6 +43,7 @@ When adding new cases:
 | Module       | Cases | Last verified  |
 |--------------|-------|----------------|
 | Updater      | 10    | **macOS ✓**¹   |
+| OAuth        | 2     | **scripted ✓**²|
 
 ¹ **macOS cases 1 + 2 verified end-to-end 2026-07-14** against a real
 bundled `Examples/HelloPWA` + the real `AppleUpdater` (ad-hoc and
@@ -67,6 +68,54 @@ directly observed `Start-Process` relaunch. **Windows MSIX** is
 compile-verified only — its `Add-AppxPackage` E2E needs a signed
 package, a trusted cert, and sideloading (the box lacks `makeappx`), so
 it's still to be walked. **iOS** (`itms-services://`) needs an enterprise cert.
+
+² **OAuth (`auth.*`) — the scripted part is not manual, and was run on all
+five on 2026-09-18** (macOS, Linux GTK4 + GTK3, Windows x64, a cabled Galaxy Z
+Fold7 and a cabled iPad mini — 6/6 each). The two cases below are what is left.
+`Scripts/verify-oauth.sh` drives a whole authorization-code flow against a
+stand-in provider on any desktop box, so the loopback receiver, the PKCE
+round-trip, the `state` check and the timeout are all automated. What stays
+here is the two things it can't reach — both on Apple, both about a prompt only
+a human can read.
+
+### OAuth 1. iOS — the cookie-sharing prompt
+
+**What it covers:** `ASWebAuthenticationSession` asks "Do you want to allow
+*<app>* to use *accounts.google.com* to sign in?" before it opens. That prompt
+is the whole reason the session is used instead of opening Safari, and nothing
+programmatic observes it.
+
+**Why human-only:** the prompt is presented by the OS outside the app's view
+hierarchy; the driver can't see it and `eval` can't reach it.
+
+**Setup:** an app with `AuthPlugin` registered and a real Google iOS OAuth
+client, on a device already signed into that Google account in Safari.
+
+**Steps:** sign out in the app → tap Sign in → read the prompt → **Continue** →
+complete consent.
+
+**Pass criteria:** the prompt names the app and the provider's domain (not
+`127.0.0.1`, not a blank host); pressing **Continue** on a device already signed
+in reaches consent *without* asking for the password again; the app receives a
+code. Then repeat with `SystemAuthorizationSession(ephemeral: true)` and confirm
+the prompt does **not** appear and the password *is* asked for — that difference
+is the only proof the flag does anything.
+
+### OAuth 2. iOS — dismissing the sheet
+
+**What it covers:** `E_AUTH_CANCELLED`. Apple is the only platform that can
+report a dismissal at all; everywhere else a closed browser is indistinguishable
+from a slow user and the flow waits out its timeout.
+
+**Why human-only:** there is no way to dismiss the system sheet
+programmatically.
+
+**Steps:** start a sign-in, then swipe the sheet away / press Cancel.
+
+**Pass criteria:** the JS promise rejects with `E_AUTH_CANCELLED` **within a
+second or two** — not at the end of `timeoutMs`. A rejection that arrives five
+minutes later means the session's cancellation path isn't wired and the app is
+silently using the timeout instead.
 
 ---
 

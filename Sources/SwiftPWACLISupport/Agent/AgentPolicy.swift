@@ -72,6 +72,12 @@ enum AgentPolicy {
     /// case and makes intent explicit: doing the wrong thing takes deliberate
     /// code, not one string in a JSON file.
     ///
+    /// `auth.*` is refused for the same reason as `secrets.*`, one step earlier:
+    /// it is where a credential is *created* rather than read. `auth.exchange`
+    /// returns an access token and a refresh token, and both commands take the
+    /// provider's endpoints as arguments — so an agent holding them doesn't just
+    /// read a key the app already had, it chooses whose key to mint.
+    ///
     /// `agent.*` is the other one, for a plainer reason: a tool that could call
     /// `agent.enable` would be able to widen its own access, which makes the
     /// user's gate decorative.
@@ -90,6 +96,17 @@ enum AgentPolicy {
             annotations, would honestly call that read-only. Whatever needs the key, your app should do: \
             expose the command that uses it (`myapp.translate`) so the key never crosses the tool boundary \
             at all.
+            """
+        ),
+        (
+            "auth.",
+            """
+            The `auth.` namespace mints credentials: `auth.authorize` returns an authorization code and its \
+            verifier, `auth.exchange` turns those into an access token and a refresh token. A tool that can \
+            call it walks off with the tokens, while the consent sheet — built from your description — would \
+            honestly say "Sign in". Both commands also take the endpoints as arguments, so an agent chooses \
+            which provider to get a token for. Expose the command that *uses* the sign-in \
+            (`myapp.syncLibrary`) and keep the token on the native side.
             """
         ),
         (

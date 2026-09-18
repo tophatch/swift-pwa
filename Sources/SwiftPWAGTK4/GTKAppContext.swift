@@ -12,6 +12,13 @@
         public let events = EventBus()
         public let permissions = PermissionPolicy()
         public let externalURLs = ExternalURLPolicy()
+
+        /// The platform pieces a plugin can pick up without the app naming a
+        /// backend type (see ``AppContext/urlOpener``). Linux has no OS
+        /// authorization browser — no `ASWebAuthenticationSession` equivalent
+        /// exists across desktops — so a sign-in there opens the default
+        /// browser and catches the redirect on loopback.
+        public let urlOpener: (any URLOpener)? = GTKURLOpener()
         /// Stored to satisfy ``AppContext``; this backend never reads it.
         /// macOS is the only platform where an app outlives its windows —
         /// see ``LastWindowClosedPolicy``.

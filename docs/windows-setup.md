@@ -783,6 +783,12 @@ registration gets written depends on the package format:
   as a separate pair of files because handling a file type and handling a URL
   scheme are separate decisions.
 
+> **An OAuth sign-in doesn't need any of this.** `auth.authorize` defaults to a
+> loopback redirect on Windows (`http://127.0.0.1:<port>/callback`) precisely
+> because a portable `.exe` would otherwise need the user to run
+> `register-url-schemes.cmd` *before* they could finish signing in for the first
+> time — at a moment the app has no way to explain. See [docs/auth.md](auth.md).
+
 A protocol class differs from a file class in one detail worth knowing if you
 write the registry by hand: the key *is* the scheme, and it carries an **empty
 `URL Protocol` value** whose mere presence is what marks the class as a URL

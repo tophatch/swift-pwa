@@ -1,0 +1,67 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>swift-pwa OAuth probe</title>
+<!--
+  The page Scripts/verify-oauth.sh drives.
+
+  It does nothing a real app wouldn't: start a flow, hold the promise, and let
+  the script read what came back. The whole point of the harness is that the
+  browser leg and the socket leg are *real*, so the page deliberately holds no
+  state the native side didn't give it.
+-->
+<style>
+  body { margin: 0; padding: 24px; font: 14px/1.5 system-ui, sans-serif; }
+  pre { background: #f4f4f5; padding: 12px; border-radius: 6px; white-space: pre-wrap; }
+</style>
+
+<h1>OAuth probe</h1>
+<pre id="log">idle</pre>
+
+<script>
+  const probe = { result: null, error: null, running: false };
+  window.__probe = probe;
+
+  const log = (text) => { document.getElementById('log').textContent = text; };
+
+  /// Start a flow and park its promise. Returns immediately so the driving
+  /// script can go and play the provider while this is in flight — which is the
+  /// only ordering that works, since the loopback port isn't knowable until the
+  /// flow has already opened the browser.
+  probe.authorize = (args) => {
+    probe.result = null;
+    probe.error = null;
+    probe.running = true;
+    log('authorizing…');
+    __SWIFT_PWA__.invoke('auth.authorize', args).then(
+      (result) => { probe.result = result; probe.running = false; log(JSON.stringify(result, null, 2)); },
+      (error) => {
+        probe.error = { code: error.code || '', message: error.message || String(error) };
+        probe.running = false;
+        log('error: ' + probe.error.code + ' ' + probe.error.message);
+      },
+    );
+    return 'started';
+  };
+
+  probe.exchange = async (args) => {
+    try {
+      const tokens = await __SWIFT_PWA__.invoke('auth.exchange', args);
+      log(JSON.stringify(tokens, null, 2));
+      return { ok: true, tokens };
+    } catch (error) {
+      log('error: ' + (error.code || '') + ' ' + (error.message || error));
+      return { ok: false, code: error.code || '', message: error.message || String(error) };
+    }
+  };
+
+  /// Hand a URL to the system browser without going through a sign-in — the
+  /// control for "can this box open a browser at all". Without it, a run on a
+  /// headless machine reports every check as a failure of the feature.
+  probe.openControl = (url) => __SWIFT_PWA__.invoke('system.openURL', { url });
+
+  probe.snapshot = () => JSON.stringify({
+    running: probe.running,
+    result: probe.result,
+    error: probe.error,
+  });
+</script>

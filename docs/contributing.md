@@ -55,6 +55,80 @@ swiftformat .                                  # apply it
   all, and `SKIP` rather than `PASS` wherever a backend or session genuinely
   can't run a check. If you add a check, give it the same treatment.
 
+- **OAuth is checked by driving a real app against a real server, not a mock.**
+  `Scripts/verify-oauth.sh` scaffolds a fresh `swift-pwa init` app, registers
+  `AuthPlugin`, and runs a whole authorization-code flow against
+  `Scripts/oauth-probe/provider.py` — a stand-in authorization server in its
+  **own process**, so the PKCE challenge is verified by the far side of the
+  protocol. A challenge can be well-formed and wrong, and an in-process double
+  would agree with whatever the implementation computed.
+
+  It carries the two controls this repo keeps relearning. A leading
+  `system.openURL` check decides whether the box can open a browser at all, so a
+  headless machine SKIPs rather than reporting a broken feature — and the last
+  check is a flow nothing redirects to, which **must** fail with
+  `E_AUTH_TIMEOUT`. Without that one, every passing check above it is equally
+  consistent with a receiver that resolves whatever it is handed. Keep both if
+  you add a check.
+
+  **CI runs the desktop one weekly**, off the PR gate (the `oauth` job,
+  alongside `driven-input` and the next-toolchain canaries), and **files its own
+  issue** when it breaks rather than relying on a weekly email nobody reads. It
+  passes `--require-browser`, which turns "no browser on this box" from a SKIP
+  into a failure: skipping is right for a developer on a headless machine and
+  catastrophic in CI, where it would report green having tested nothing — the
+  exact failure the controls exist to prevent.
+
+  **What CI registers as the URL handler is a fetcher, not a browser**, and a
+  green run is *not* evidence that a real browser works. A hosted runner can't
+  give you one: the image ships Chrome but registers no default handler, and
+  Ubuntu 24.04's AppArmor restriction on unprivileged user namespaces breaks its
+  sandbox — GIO reports a *successful spawn* and the browser then dies, so the
+  run fails as "no browser on this box" while everything is registered
+  correctly. Both were measured, in that order, on the first two runs of this
+  job. What CI does still cover is every link that can regress in our code:
+  `system.openURL` → `ExternalURLPolicy` → `GTKURLOpener` → GIO's handler
+  resolution → a spawned process receiving the URL, then the real loopback
+  receiver, `state` check, PKCE round-trip and timeout. Rendering a consent page
+  is what the desktop and device runs are for.
+
+  A **preflight** step hands a URL to the handler with the app out of the
+  picture, so a red CONTROL line in the run itself isn't ambiguous between "the
+  runner is broken" and "the feature regressed" — the first question whoever
+  reads the tracking issue has. It caught exactly that on its first outing.
+
+  **`verify-oauth-android.sh` and `verify-oauth-ios.sh` are siblings, not
+  variants.** The redirect arrives differently on mobile and a desktop check
+  can't reach it: Android's fires the real `ACTION_VIEW` Intent the OS routes
+  from a provider's 302 (the only thing that exercises `SchemeRedirectReceiver`),
+  and iOS can't be driven that way at all — the callback has to travel through
+  `ASWebAuthenticationSession`'s own navigation, so the provider answers
+  `auto_redirect=1` with a 302 and the probe registers the session as
+  `ephemeral`, which skips the cookie-sharing prompt nothing can tap. The iOS
+  run needs `--device` whenever more than one Apple device is *paired*: pairing
+  is not cabling, and the default picks the sole connected one, which on a Mac
+  that ever paired a phone over Wi-Fi is the wrong one.
+
+  **`drive eval` and CDP both return the page's value as a JSON *string*.** So
+  anything the page built with `JSON.stringify` arrives as JSON inside JSON,
+  backslash-escaped. Decode twice and assert on values; a shell pattern like
+  `*'"ok":true'*` never matches `\"ok\":true`, and reads as a failure while the
+  flow is perfect. This cost a wrong verdict on **three** platforms in a row
+  before it was written down.
+
+  Two environment notes, both of which produced a confident wrong answer first.
+  The browser wait is **45 seconds**, because a cold Chrome under Xvfb takes far
+  longer than the 10 seconds that sufficed on a Mac with a browser already
+  running — at 10 seconds the control reported "no browser on this box" on a box
+  with two of them installed, which is the control failing at its one job. And
+  `verify-oauth.ps1` (the Windows sibling — no bash there) needs somebody
+  **logged on at the console**: `schtasks /it` runs the app as the interactive
+  user, and a server sitting at the login screen has a connected console session
+  with nobody on it. It detects that and SKIPs; without the check it reads as an
+  app that never started. It also needs the WebView2 / WIL NuGet packages passed
+  as `-Xcc` flags (`$env:SWIFT_PWA_WINDOWS_PACKAGES` points at them) — since
+  Swift 6.4, `$env:INCLUDE` is not enough.
+
 - **swiftformat is enforced by CI.** 4-space indent, 120 columns, `--self remove`.
   Run it before you push.
 - **Tests use [swift-testing](https://github.com/apple/swift-testing)** (`@Test`,

@@ -9,6 +9,195 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`auth.*` — open a provider's consent page and catch the OAuth redirect, on
+  all five platforms, with PKCE** (#221). The one step of an OAuth 2.0
+  authorization-code flow an app in a swift-pwa shell could not do for itself.
+
+  ```js
+  const { code, codeVerifier, redirectUri } =
+    await __SWIFT_PWA__.invoke('auth.authorize', {
+      authorizationEndpoint: 'https://accounts.google.com/o/oauth2/v2/auth',
+      clientId: '…', scopes: ['…/auth/drive.readonly'], redirect: 'auto',
+    });
+  const tokens = await __SWIFT_PWA__.invoke('auth.exchange', {
+    tokenEndpoint: 'https://oauth2.googleapis.com/token',
+    clientId: '…', code, codeVerifier, redirectUri,
+  });
+  ```
+
+  Everything either side of this already existed — `net.*` does the token
+  exchange and every call after it, `secrets.*` holds the refresh token — but
+  the middle is per-platform in a way an app shouldn't own, and it is the *same*
+  middle for Drive, Dropbox, OneDrive, GitHub and Graph alike. The reporting
+  adopter was designing Google Drive support and found the framework had
+  everything but this.
+
+  **It can't be done in the page.** Google, GitHub and Microsoft all refuse to
+  render consent inside an embedded webview (`disallowed_useragent`), which is
+  RFC 8252 §8.12 working as intended: an app that hosts the consent page can
+  read the password out of it. So the page is the system browser, and the
+  redirect has to cross a process boundary — two mechanisms, picked per
+  platform. Desktop binds a **loopback HTTP listener** on an OS-assigned
+  `127.0.0.1` port (new, beside `LoopbackServer`, reusing `LoopbackSocket`);
+  mobile catches a **custom scheme**, on iOS through `ASWebAuthenticationSession`
+  and on Android through `ACTION_VIEW` onto the existing `app.openURL` channel.
+
+  Loopback is what `redirect: 'auto'` picks on desktop because it registers
+  nothing — which matters most on a portable Windows `.exe`, where a custom
+  scheme costs the user a `register-url-schemes.cmd` run *before* they can ever
+  finish signing in, at a moment the app has no way to tell them about.
+
+  **`auto` refuses rather than guesses on iOS and Android.** The issue proposed
+  reading the scheme from `pwa.json`'s `url_schemes`; that can't work.
+  `url_schemes` is build-time only — it generates `CFBundleURLTypes`, an
+  `<intent-filter>`, a `.desktop` handler and Windows registry scripts, and
+  nothing carries it into the process — and even with the list in hand the right
+  entry is provider-specific (Google's is the reversed client ID, derived from a
+  value only the caller knows). A wrong guess wouldn't fail at the call; it would
+  fail minutes later at the provider's redirect, in a browser, with the app
+  showing nothing. So mobile takes `redirect: { scheme: … }` and names both fixes
+  in `E_AUTH_REDIRECT` when it is missing.
+
+  **PKCE (`S256`) and `state` are always on, with no way to weaken either.**
+  RFC 7636 is mandatory for native clients for exactly this runtime's reason: on
+  every platform where the redirect returns over a custom scheme, another locally
+  installed app can register the same scheme and receive the code. A callback
+  whose `state` doesn't match is dropped and the wait continues — a mismatch is
+  an attack or an unrelated local request, and neither should end a flow the user
+  is still in — except under Apple's one-shot session, where there is nothing
+  left to wait on and it throws `E_AUTH_STATE`.
+
+  The issue also reported that PKCE was impossible on Windows and Android for
+  want of a SHA-256. That turned out to be wrong about the framework (`Crypto` is
+  declared on `SwiftPWACore` for `.linux`/`.windows`/`.android` since #229, and
+  CryptoKit covers Apple) and right about apps, which have no hash of their own —
+  which is why the primitive owns the verifier and challenge rather than taking
+  them.
+
+  Registration is **one line that compiles on all five**:
+  `ctx.use(AuthPlugin(networkClient: URLSessionNetworkClient()))`. `AppContext`
+  gains `urlOpener` and `authorizationSession` so the backend hands in the
+  browser and (on Apple) the OS session, instead of every adopter writing an
+  `#if os(…)` ladder naming `AppleURLOpener` / `GTKURLOpener` /
+  `WindowsURLOpener` / `AndroidURLOpener` — a branch in a shared `main.swift` is
+  a branch that breaks on the platform its author can't test. `OAuthAuthorizer`
+  is the same object underneath, so a flow can run entirely in Swift and no token
+  need ever be visible to the page.
+
+  **`agent.expose` refuses the whole `auth.` namespace** at build time, alongside
+  `secrets.` and `agent.`. It is the same hole as `secrets.*` one step earlier:
+  that one hands an agent a key the app already had, this one *mints* a new one —
+  and since both commands take the provider's endpoints as arguments, an agent
+  holding them chooses whose credential to get, while the consent sheet built
+  from the developer's own description would honestly read "Sign in".
+
+  Nothing is stored: no token cache, no refresh scheduling, no keychain writes.
+  See [docs/auth.md](docs/auth.md) and the tutorial
+  [Signing in with a cloud provider](docs/tutorials/signing-in-with-a-cloud-provider.md).
+
+  Verified by `Scripts/verify-oauth.sh` (and `verify-oauth.ps1`, since Windows
+  has no bash), which drives a real app — scaffolded by a fresh `swift-pwa
+  init`, not an Example — against a stand-in authorization server running as its
+  **own process**, so the PKCE challenge is checked by the far side of the
+  protocol rather than by a test double: a challenge can be well-formed and
+  wrong. It carries the two controls this repo has learned to demand: a leading
+  `system.openURL` check, so a box with no browser SKIPs instead of reporting a
+  broken feature, and a final flow that nothing redirects to which *must* time
+  out, without which every check above it is equally consistent with a receiver
+  that resolves whatever it is handed.
+
+  Both controls earned their keep immediately. The browser wait was 10 seconds,
+  which is plenty for a Mac with a browser already running and far too short for
+  a cold Chrome under Xvfb — so the first Linux run reported "no browser on this
+  box" on a box with two installed, the control failing at its one job. And the
+  Windows script needs somebody **logged on at the console**: `schtasks /it` runs
+  the app as the interactive user, and a server sitting at the login screen has a
+  connected console session with no one on it. It detects that and SKIPs rather
+  than reporting an app that never started.
+
+  Where it stands per platform: **all five** run the whole flow green against a
+  real system browser — macOS, both Linux backends (GTK4 and GTK3, on their own
+  boxes) and Windows x64 through `verify-oauth.sh` / `.ps1`, **Android** on a
+  cabled Galaxy Z Fold7 through `verify-oauth-android.sh`, and **iOS** on a
+  cabled iPad mini through `verify-oauth-ios.sh`. All four desktop platforms also
+  pass the full Core suite, so the loopback receiver's real-socket tests have run
+  on BSD sockets and on Winsock.
+
+  The desktop run is wired into CI as a weekly `oauth` job, off the PR gate,
+  which **files its own tracking issue** on failure the way the next-toolchain
+  canaries do. It passes `--require-browser`, a new flag that turns "no browser
+  on this box" from a SKIP into a failure — skipping is right for a developer on
+  a headless machine and worthless in CI, where a job that skips everything
+  reports green having tested nothing. The handler CI registers is a **fetcher,
+  not a browser**, and the job says so: a hosted runner ships Chrome but
+  registers no default handler, and Ubuntu 24.04's AppArmor restriction on
+  unprivileged user namespaces breaks its sandbox so that GIO reports a
+  successful spawn and the browser then dies. Everything that can regress in our
+  own code is still covered end to end; rendering a consent page is what the
+  desktop and device runs are for.
+
+  The two mobile scripts exist because the redirect arrives differently there and
+  a desktop check can't reach it. Android's fires the real
+  `ACTION_VIEW` Intent the OS routes from a provider's 302, exercising
+  `SchemeRedirectReceiver` and the `app.openURL` chain — the half no desktop
+  check touches. iOS can't do that at all: the callback must travel through
+  `ASWebAuthenticationSession`'s *own* navigation, so the stand-in provider
+  gained an opt-in 302 and the probe registers the session as `ephemeral`, which
+  is what skips the cookie-sharing prompt nothing can tap. That run also asserts
+  the property the session is chosen for — **the callback never reaches the
+  `app.openURL` channel**, so nothing else listening there can see an
+  authorization code.
+
+  The cookie-sharing prompt itself and cancel-by-dismissal stay as two cases in
+  [docs/manual-test-cases.md](docs/manual-test-cases.md): no API observes a
+  system sheet, and `drive shot` captures the webview's renderer, not the
+  screen.
+
+  The loopback receiver's tests open **real sockets** rather than mocking
+  `LoopbackSocket`, since working across five platforms' socket APIs is the only
+  interesting thing about it. That is also what caught the bug this feature is
+  most likely to have shipped with: reading only the HTTP request line left the
+  browser's headers unread, and closing a socket with unread input sends an RST
+  that **discards the response already written** — so the user would have seen a
+  connection-reset page after a sign-in that actually succeeded.
+
+  **Four bugs the device runs found that nothing else could**, all on the Apple
+  path, none reachable from a unit test:
+
+  - `present` resumed its continuation **twice** — `start()` returning false and
+    the session's completion handler are not exclusive — which doesn't throw, it
+    traps: `SWIFT TASK CONTINUATION MISUSE`, signal 5, app gone.
+  - The presentation **anchor** took any window from any scene.
+    `ASWebAuthenticationSession` rejects one whose scene isn't
+    `.foregroundActive`, reporting only "The operation couldn't be completed.
+    (…error 3.)" — naming neither the window nor the reason. It now prefers
+    active scenes *and* says what it chose, because that message alone is
+    undiagnosable from a device.
+  - A freshly launched app is `.foregroundInactive` for a moment, so an
+    `auth.authorize` fired from a startup path or straight off a deep link hit
+    exactly that error. Measured: the call that failed at launch succeeded six
+    seconds later. `present` now waits briefly for a presentable scene.
+  - `timeoutMs` **hung the caller** on this path. A task group doesn't return
+    until every child finishes, and the presenter's continuation simply leaked
+    when cancelled — so a 6-second timeout produced a 180-second hang. The
+    continuation is now resumed by whichever of completion, refusal, or
+    cancellation arrives first.
+
+  That last one was a hole in a fix made the same day: `timeoutMs` was documented
+  for every platform and applied on three, because a presented session has no
+  deadline of its own — `ASWebAuthenticationSession` waits for the user forever.
+
+  Two Swift toolchains on Linux disagreed with the first version of the
+  custom-scheme receiver, which stashed a `CheckedContinuation` in a
+  lock-guarded property: 6.3.1 crashed *compiling* it (`swift-frontend` signal
+  11 in the `ClosureLifetimeFixup` SIL pass, no diagnostic), and where it did
+  compile the suite segfaulted inside `CheckedContinuation.resume(returning:)`
+  on the event bus's emit thread. It is an `AsyncStream` now — which is the type
+  built for "yield from any thread, possibly before anyone is awaiting", has no
+  continuation bookkeeping to get wrong, and is shorter. Neither failure
+  reproduced on macOS or Windows, which is the argument for running the suite on
+  a real box of each platform rather than generalising from one.
+
 - **An app can declare the directories its own vendored native libraries live
   in, per ABI** — `native_library_dirs` in `pwa.json`'s `android`, `linux` and
   `windows` sections (#220).

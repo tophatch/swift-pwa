@@ -97,12 +97,15 @@
         let dataBase64: String
     }
 
-    /// `{"size": Int64, "modified": Int64?, "isDir": Bool}` returned by
+    /// `{"size": Int64?, "modified": Int64?, "isDir": Bool}` returned by
     /// `fs.contentUriMetadata`. `modified` is millis since the Unix
-    /// epoch, or nil if the underlying `DocumentsContract` row had
-    /// no `LAST_MODIFIED` column.
+    /// epoch; both it and `size` are absent when the underlying
+    /// `DocumentsContract` row had no such column.
     struct ContentURIMetadataResult: Decodable {
-        let size: Int64
+        /// Absent when the provider omitted `COLUMN_SIZE` — which a
+        /// network-backed one (Drive, OneDrive, Dropbox) is entitled to do,
+        /// and does.
+        let size: Int64?
         let modified: Int64?
         /// Absent on a provider row with no MIME type; the caller reads that
         /// as a file, which is what every URI a picker hands back is.

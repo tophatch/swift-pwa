@@ -263,7 +263,11 @@ public final class SystemFs: Fs, @unchecked Sendable {
         // `typeRegular` is the canonical "plain file"; symlinks /
         // sockets / devices fall through and report `isFile: false`.
         let isFile = (kind == .typeRegular)
-        let size = (attrs[.size] as? Int64) ?? Int64((attrs[.size] as? Int) ?? 0)
+        // Nil rather than 0 when the attribute is absent: `size` means
+        // "unknown" now, and a real `stat` always has one — so this never
+        // reports nil for a path, which is what makes nil meaningful when a
+        // content provider does.
+        let size = (attrs[.size] as? Int64) ?? (attrs[.size] as? Int).map(Int64.init)
         let modified = (attrs[.modificationDate] as? Date)
             .map { Int64($0.timeIntervalSince1970 * 1000) }
         return FsMetadata(size: size, isDir: isDir, isFile: isFile, modified: modified)

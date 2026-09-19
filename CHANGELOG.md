@@ -97,6 +97,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type. It claimed every content URI was a file, which was only ever harmless
   because nothing could produce a directory one.
 
+### Changed
+
+- **`fs.metadata`'s `size` is optional, and absent means "unknown"** (#246).
+  It reported `0` for a file whose size the source didn't know, which is not
+  the same statement: "0 bytes" is a claim a caller acts on — it skips the
+  read, renders an empty row, or refuses to copy. The case is real rather than
+  theoretical, and arrived with SAF tree listing: an Android
+  `DocumentsProvider` backed by a network (Drive, OneDrive, Dropbox) is
+  entitled to omit `COLUMN_SIZE`, and does.
+
+  ```js
+  const m = await __SWIFT_PWA__.invoke('fs.metadata', { path });
+  if (m.size == null) { /* unknown — not empty */ }
+  ```
+
+  **A breaking change to a shipped shape**, deliberately: `size` is now absent
+  from the JSON rather than `0`, and `FsMetadata.size` is `Int64?` in Swift.
+  Page code that reads `m.size` for a filesystem path is unaffected — a `stat`
+  always knows, so nil never appears there — but code that branches on
+  `!m.size` should become `m.size == null`, which is what already had to be
+  written for `modified`. Zero remains expressible and now means an empty
+  file.
+
 ### Fixed
 
 - **The origin root (`/`) serves the app's entry, on Android too** (#242).

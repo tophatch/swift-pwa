@@ -190,6 +190,20 @@ struct SystemFsContentURITests {
     /// #246: a picked folder the app can never walk is a picker that returns
     /// nothing — the app holds a durable grant and can't learn the URIs of
     /// anything inside it, which is exactly the read path that does work.
+    /// The Android case this optionality exists for: a `DocumentsProvider`
+    /// backed by a network — Drive, OneDrive, Dropbox — is entitled to omit
+    /// `COLUMN_SIZE`, and does.
+    @Test("a provider that doesn't know the size reports nil, not zero")
+    func metadataUnknownSizeRoutes() async throws {
+        let r = RecordingResolver()
+        r.nextMeta = .success(FsMetadata(size: nil, isDir: false, isFile: true, modified: nil))
+        try await withResolver(r) {
+            let meta = try await SystemFs().metadata(path: "content://example/doc")
+            #expect(meta.size == nil)
+            #expect(meta.isFile)
+        }
+    }
+
     @Test("readDir on a content:// tree hits the resolver and keeps the entry shape")
     func readDirRoutes() async throws {
         let r = RecordingResolver()

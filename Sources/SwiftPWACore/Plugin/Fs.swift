@@ -188,13 +188,22 @@ public struct FsEntry: Sendable, Codable, Equatable {
 }
 
 public struct FsMetadata: Sendable, Codable, Equatable {
-    public var size: Int64
+    /// Size in bytes, or nil when the source genuinely doesn't know.
+    ///
+    /// Optional because a `DocumentsProvider` on Android is entitled to omit
+    /// `COLUMN_SIZE`, and a network-backed one — Drive, OneDrive, Dropbox —
+    /// does. Reporting `0` there says "this file is empty", which a caller
+    /// acts on: it skips the read, renders an empty row, or refuses to copy.
+    /// A filesystem path always knows, so this is nil only where the platform
+    /// is genuinely silent.
+    public var size: Int64?
     public var isDir: Bool
     public var isFile: Bool
-    /// Milliseconds since the Unix epoch.
+    /// Milliseconds since the Unix epoch, or nil where the source doesn't
+    /// record one — same reasoning as ``size``.
     public var modified: Int64?
 
-    public init(size: Int64, isDir: Bool, isFile: Bool, modified: Int64?) {
+    public init(size: Int64?, isDir: Bool, isFile: Bool, modified: Int64?) {
         self.size = size
         self.isDir = isDir
         self.isFile = isFile

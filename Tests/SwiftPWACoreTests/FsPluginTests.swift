@@ -135,6 +135,28 @@ struct FsPluginTests {
         #expect(out.size == 42)
         #expect(out.isFile == true)
         #expect(out.isDir == false)
+        // A known size is on the wire as a number, not as a nullable the page
+        // has to unwrap for the ordinary case.
+        let json = try #require(String(data: data, encoding: .utf8))
+        #expect(json.contains("\"size\":42"))
+    }
+
+    /// An unknown size is *absent* from the wire rather than `0`, because a
+    /// caller acts on "0 bytes": it skips the read, renders an empty row, or
+    /// refuses to copy. Only a content provider produces this — a filesystem
+    /// path always knows — which is what makes the absence meaningful.
+    @Test("an unknown size is omitted, not zeroed")
+    func metadataUnknownSize() throws {
+        let unknown = FsMetadata(size: nil, isDir: false, isFile: true, modified: nil)
+        let json = try #require(String(data: JSONEncoder().encode(unknown), encoding: .utf8))
+        #expect(!json.contains("size"))
+        // And it survives the round trip as nil rather than decoding to 0.
+        let back = try JSONDecoder().decode(FsMetadata.self, from: Data(json.utf8))
+        #expect(back.size == nil)
+        // A zero size is still expressible, and is a different statement.
+        let empty = FsMetadata(size: 0, isDir: false, isFile: true, modified: nil)
+        let emptyJSON = try #require(String(data: JSONEncoder().encode(empty), encoding: .utf8))
+        #expect(emptyJSON.contains("\"size\":0"))
     }
 }
 

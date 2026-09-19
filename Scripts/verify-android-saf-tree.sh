@@ -218,7 +218,12 @@ cat > "$APP_DIR/web/index.html" <<HTML
       return step('metadir', function () {
         var sub = window.__entries.filter(function (e) { return e.isDir; })[0];
         return __SWIFT_PWA__.invoke('fs.metadata', { path: sub.path })
-          .then(function (m) { return 'isDir=' + m.isDir + ' isFile=' + m.isFile; });
+          .then(function (m) {
+            // `size` is absent, not zero, where the provider doesn't say —
+            // reported here so the run pins what a real one actually does.
+            return 'isDir=' + m.isDir + ' isFile=' + m.isFile +
+                   ' size=' + (m.size == null ? 'unknown' : m.size);
+          });
       });
     }).then(function () {
       return step('metafile', function () {
@@ -226,7 +231,10 @@ cat > "$APP_DIR/web/index.html" <<HTML
           return e.name === 'one.txt';
         })[0];
         return __SWIFT_PWA__.invoke('fs.metadata', { path: book.path })
-          .then(function (m) { return 'isDir=' + m.isDir + ' size=' + m.size; });
+          .then(function (m) {
+            return 'isDir=' + m.isDir +
+                   ' size=' + (m.size == null ? 'unknown' : m.size);
+          });
       });
     });
   }).then(function () {

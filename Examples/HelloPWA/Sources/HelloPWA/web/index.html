@@ -1062,7 +1062,9 @@
                 if (!fsScratchPath) { log("nothing saved yet — Save first"); return; }
                 try {
                     const m = await __SWIFT_PWA__.invoke("fs.metadata", { path: fsScratchPath });
-                    log("fs.metadata → size=" + m.size + " modified=" +
+                    // Both are absent where the source doesn't know — a
+                    // network-backed Android provider omits either.
+                    log("fs.metadata → size=" + (m.size == null ? "?" : m.size) + " modified=" +
                         (m.modified ? new Date(m.modified).toLocaleTimeString() : "?"));
                 } catch (e) { log("fs.metadata failed: " + e.message); }
             },

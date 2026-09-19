@@ -819,6 +819,10 @@ struct AndroidBundlerUnitTests {
         // descending.
         #expect(kt.contains("DocumentsContract.Document.MIME_TYPE_DIR"))
         #expect(kt.contains("payload.put(\"isDir\", isDir)"))
+        // An unknown size is omitted rather than zeroed: "0 bytes" is a claim
+        // a caller acts on, and a network-backed provider legitimately has
+        // nothing to say.
+        #expect(kt.contains("if (size >= 0) payload.put(\"size\", size)"))
     }
 
     @Test("SwiftPWASystemPlugins pushes install events on the 'updater.install' channel")

@@ -414,7 +414,10 @@ that knows can offer an export instead. See
 
 `ctx.serveDirectory(_:at:)` mounts a directory on the **bundle origin**
 under an app-chosen path prefix, so page JS can reference it with an
-origin-relative URL that works unchanged on every backend:
+origin-relative URL that works unchanged on every backend. On Android the
+directory may be a **SAF tree URI** — what `dialog.openDirectory` returns — so
+a folder the user picked streams like any other mount; see
+[android-setup.md](android-setup.md#walking-a-folder-the-user-picked):
 
 ```swift
 @MainActor func configure(_ ctx: any AppContext) throws {

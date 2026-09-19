@@ -569,6 +569,79 @@ struct AndroidBundlerUnitTests {
         #expect(!on.contains("https://swift-pwa.local/web/"))
     }
 
+    /// Issue #244: Chromium applies the `Range` to whatever stream we hand
+    /// back — it skips to the start offset and reports `Content-Length` as the
+    /// requested length, then reads to EOF. Capping the stream is the half
+    /// that composes; skipping ourselves would deliver the wrong bytes.
+    @Test("a ranged response's body is capped at the end of the range")
+    func bridgeKtCapsRangedBodies() {
+        let kt = AndroidTemplates.swiftPWABridgeKt()
+        #expect(kt.contains("private fun capToRange("))
+        #expect(kt.contains("private class RangeCappedInputStream("))
+        // Every response path goes through the cap: the bundle, the SPA
+        // fallback document, and a runtime `ctx.serveDirectory` mount.
+        #expect(kt.contains("servedMountResponse(request)?.let { return capToRange(request, it) }"))
+        #expect(kt.contains("return capToRange(request, response)"))
+        #expect(kt.contains("capToRange(request, assetLoader.shouldInterceptRequest(entryUrl))"))
+        // A suffix range (`bytes=-50`) already agrees with itself; passing it
+        // to the cap as if `-50` were an end would truncate the body to zero.
+        #expect(kt.contains("if (spec.isEmpty() || spec.startsWith(\"-\")) return response"))
+        // `available()` must stay the full length — Chromium bounds the range
+        // against it before skipping.
+        #expect(kt.contains("override fun available(): Int = inner.available()"))
+        // The stream is swapped in place. Rebuilding the response instead
+        // throws `statusCode can't be less than 100` on Chromium's own thread
+        // — a response from the 3-argument constructor has no status — and
+        // that takes the app down, not just the request.
+        #expect(kt.contains("response.data = RangeCappedInputStream(stream, end + 1)"))
+        #expect(!kt.contains("response.reasonPhrase,"))
+        // The skip Chromium performs has to move our counter, or the cap
+        // measures from the offset rather than from the start of the file.
+        #expect(kt.contains("position += skipped"))
+    }
+
+    /// Issue #242, second half: a not-found came back as a response with a
+    /// null stream, which the WebView renders as `ERR_INVALID_RESPONSE` — a
+    /// protocol failure, not a missing file, and an hour of looking for the
+    /// wrong bug.
+    @Test("a missing bundle path 404s with a body that names it")
+    func bridgeKtNotFoundHasABody() {
+        let kt = AndroidTemplates.swiftPWABridgeKt()
+        #expect(kt.contains("private fun notFoundResponse(path: String): WebResourceResponse"))
+        #expect(kt.contains("404,"))
+        #expect(kt.contains("\"Not Found\","))
+        // Only for our own origin: inventing a 404 for a null response on any
+        // other host would break every outbound request the page makes.
+        #expect(kt.contains("request.url.host == \"swift-pwa.local\""))
+        // The path is escaped before it reaches the body.
+        #expect(kt.contains(".replace(\"<\", \"&lt;\")"))
+    }
+
+    /// #243: an app could declare All-files access and never request it —
+    /// the hand-off is `startActivity` on a Settings intent, which is JNI the
+    /// Swift side has no route to.
+    @Test("SwiftPWASystemPlugins can read and request All-files access")
+    func systemPluginsAllFilesAccess() {
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        // The two RPC names `AndroidPermissionAuthority` calls.
+        #expect(kt.contains("\"permissions.allFilesState\" -> done(allFilesState(), null)"))
+        #expect(kt.contains("\"permissions.requestAllFiles\" -> requestAllFiles(done)"))
+        // Undeclared is `unavailable`, and the check is the app's own manifest
+        // — a Settings screen shows nothing for an app that never asked, and
+        // Play may refuse the declaration outright.
+        #expect(kt.contains("private fun declaresPermission(name: String): Boolean"))
+        #expect(kt.contains("MANAGE_EXTERNAL_STORAGE"))
+        #expect(kt.contains("Environment.isExternalStorageManager()"))
+        // The hand-off is a Settings screen, not a dialog, and the answer is
+        // re-read when the user comes back.
+        #expect(kt.contains("ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION"))
+        #expect(kt.contains("ActivityResultContracts.StartActivityForResult()"))
+        // Below API 30 the broad grant was the ordinary runtime pair, so an
+        // app's Swift and JS don't branch on the OS version.
+        #expect(kt.contains("READ_EXTERNAL_STORAGE"))
+        #expect(kt.contains("legacyStoragePermLauncher.launch("))
+    }
+
     @Test("SwiftPWASystemPlugins maps PackageInstaller status codes to stable names")
     func systemPluginsMapsStatuses() {
         let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
@@ -641,7 +714,7 @@ struct AndroidBundlerUnitTests {
             ]
         )
         // Bundle handler is present.
-        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this))"))
+        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this, \"index.html\"))"))
         // Each declared mount maps to an internal-storage handler under the
         // right root, prefix normalized to end with "/".
         #expect(activity.contains(
@@ -671,12 +744,29 @@ struct AndroidBundlerUnitTests {
     @Test("the web bundle is served at the origin root, not under /web/")
     func mainActivityServesBundleAtRoot() {
         let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
-        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this))"))
+        #expect(activity.contains(".addPathHandler(\"/\", WebBundlePathHandler(this, \"index.html\"))"))
         #expect(activity.contains("private class WebBundlePathHandler"))
         // The prefix the delegate applies is what puts the bundle at the root.
-        #expect(activity.contains("assets.handle(\"web/\" + path.removePrefix(\"/\"))"))
+        #expect(activity.contains("assets.handle(\"web/\" + resolved)"))
         // And nothing navigates to the old location any more.
         #expect(!activity.contains("swift-pwa.local/web/"))
+    }
+
+    /// Issue #242: the bundle entry was served at `/index.html` and at no
+    /// other name, so `location.replace("/")` — the ordinary "go back to the
+    /// top" — hit `ERR_INVALID_RESPONSE` on Android and worked everywhere
+    /// else.
+    @Test("the bundle handler serves web.entry at the origin root")
+    func mainActivityServesEntryAtRoot() {
+        let activity = AndroidTemplates.mainActivityKt(
+            packageId: "com.example.hi", soBaseName: "Hi", entry: "app.html"
+        )
+        // The entry is baked into the handler, so an app whose entry isn't
+        // called index.html has a working root too.
+        #expect(activity.contains("WebBundlePathHandler(this, \"app.html\")"))
+        #expect(activity.contains("relative.isEmpty() -> entry"))
+        // A deeper directory has no entry of its own; it takes the web default.
+        #expect(activity.contains("relative.endsWith(\"/\") -> relative + \"index.html\""))
     }
 
     @Test("no build.serve mounts leaves the asset loader chain unchanged")

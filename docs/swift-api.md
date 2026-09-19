@@ -465,8 +465,22 @@ runtime, from **any** root the app can read — not only inside app storage, whi
 is all a `build.serve` mount can reach — and `unserveDirectory` takes it away
 again. The WebView asks the same `AssetProvider` the other four backends resolve
 against, so one mount table governs all five. Reading a folder the user picked
-by path additionally needs
-[`android.permissions`](android-setup.md#declaring-an-android-permission-androidpermissions).
+by path additionally needs All-files access, which the runtime can both read and
+ask for:
+
+```swift
+ctx.permissions.declare(.allFiles)                       // plus "permissions": { "device": ["allFiles"] }
+if await ctx.permissions.status(.allFiles) == .denied {
+    _ = await ctx.permissions.request(.allFiles)         // a Settings screen on Android; resolves on the way back
+}
+```
+
+`granted` is usable now, `denied` is worth offering a button for, and
+`unavailable` never becomes granted on this build — iOS, an undeclared or
+vetoed permission, or a store that refused the declaration — so the app needs
+its other route rather than a prompt. See
+[permissions.md](permissions.md#asking-for-the-capability-no-web-api-asks-for)
+and [android-setup.md](android-setup.md#all-files-access).
 See [docs/design/runtime-content-packs.md](design/runtime-content-packs.md).
 
 ## Window events

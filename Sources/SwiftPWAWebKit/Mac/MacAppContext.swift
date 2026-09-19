@@ -36,6 +36,7 @@
             use(PlatformInfoPlugin())
             use(SystemPlugin(urlOpener: AppleURLOpener()))
             use(AppPlugin())
+            use(PermissionsPlugin())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))
         }

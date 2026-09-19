@@ -24,6 +24,59 @@ struct AssetProviderTests {
         #expect(resolved?.mimeType == "text/html; charset=utf-8")
     }
 
+    /// #242: `/` dead-ended on Android because the bundle entry was served
+    /// at `/index.html` and nowhere else. The root has to be the entry
+    /// whatever the entry is called, or an app whose `web.entry` is
+    /// `app.html` has no working origin root on any platform.
+    @Test("a directory path serves its index, and the bundle root serves the entry")
+    func directoryIndex() throws {
+        let dir = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let docs = dir.appendingPathComponent("docs")
+        try FileManager.default.createDirectory(at: docs, withIntermediateDirectories: true)
+        try Data("<html>docs</html>".utf8).write(to: docs.appendingPathComponent("index.html"))
+        try Data("<html>app</html>".utf8).write(to: dir.appendingPathComponent("app.html"))
+
+        let provider = AssetProvider()
+        provider.setBundleRoot(dir, fallbackDocument: "app.html")
+
+        // The root is the entry, not the file literally named index.html.
+        let root = try provider.resolve(#require(URL(string: "pwa://localhost/")))
+        #expect(root?.fileURL.lastPathComponent == "app.html")
+        // A subdirectory has no entry of its own; it takes the web default.
+        let nested = try provider.resolve(#require(URL(string: "pwa://localhost/docs/")))
+        #expect(nested?.fileURL.lastPathComponent == "index.html")
+        #expect(nested?.fileURL.deletingLastPathComponent().lastPathComponent == "docs")
+        // Without the trailing slash it stays a 404: serving the index there
+        // would resolve the document's relative URLs one directory too high.
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/docs"))) == nil)
+        // A directory with no index is still a 404 rather than the bundle's.
+        let empty = dir.appendingPathComponent("empty")
+        try FileManager.default.createDirectory(at: empty, withIntermediateDirectories: true)
+        #expect(try provider.resolve(#require(URL(string: "pwa://localhost/empty/"))) == nil)
+    }
+
+    /// A served mount is a directory of the app's own files, not a second
+    /// bundle, so its index is the web default rather than `web.entry`.
+    @Test("a served mount's directory path serves index.html")
+    func directoryIndexUnderServedMount() throws {
+        let bundle = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let packs = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swift-pwa-packs-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: packs) }
+        try Data("<html>pack</html>".utf8).write(to: packs.appendingPathComponent("index.html"))
+
+        let provider = AssetProvider()
+        provider.setBundleRoot(bundle, fallbackDocument: "app.html")
+        provider.mount(packs, at: "/packs")
+
+        let resolved = try provider.resolve(#require(URL(string: "pwa://localhost/packs/")))
+        #expect(resolved?.fileURL.lastPathComponent == "index.html")
+        #expect(resolved?.fileURL.deletingLastPathComponent().lastPathComponent == packs.lastPathComponent)
+    }
+
     @Test("resolves explicit path")
     func resolvesExplicit() throws {
         let dir = try tempBundle()

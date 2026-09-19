@@ -72,6 +72,10 @@
             use(PlatformInfoPlugin())
             use(SystemPlugin(urlOpener: AppleURLOpener()))
             use(AppPlugin())
+            use(PermissionsPlugin())
+            // iOS has no All-files access to grant, and saying so up front is
+            // the whole point of the seam.
+            permissions.setAuthority(IOSPermissionAuthority())
             use(EventsPlugin())
             use(ClipboardPlugin(SystemClipboard()))
         }

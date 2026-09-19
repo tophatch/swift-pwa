@@ -56,7 +56,9 @@ struct PermissionCheckTests {
     func namesMatchRuntime() {
         // PermissionCheck duplicates these so it can validate a manifest for a
         // platform whose runtime it can't link. This is the guard on that copy.
-        #expect(PermissionCheck.knownNames == ["bluetooth", "camera", "geolocation", "microphone", "notifications"])
+        #expect(PermissionCheck.knownNames == [
+            "allFiles", "bluetooth", "camera", "geolocation", "microphone", "notifications"
+        ])
         // And each name sits in exactly one bucket, so `allDeclarations` can
         // merge the two without a name meaning different things per key.
         #expect(Set(PermissionCheck.webNames).isDisjoint(with: PermissionCheck.deviceNames))
@@ -67,6 +69,20 @@ struct PermissionCheckTests {
     @Test("bluetooth belongs under permissions.device")
     func bluetoothIsADevicePermission() throws {
         try PermissionCheck.validateNames(manifest(device: .init(names: ["bluetooth"])))
+    }
+
+    /// #243: All-files access reaches no web API — the web's answer is a
+    /// directory picker, and what this names is the app that walks folders it
+    /// was given a path to.
+    @Test("allFiles belongs under permissions.device")
+    func allFilesIsADevicePermission() throws {
+        try PermissionCheck.validateNames(manifest(device: .init(names: ["allFiles"])))
+        do {
+            try PermissionCheck.validateNames(manifest(web: .init(names: ["allFiles"])))
+            Issue.record("expected allFiles under permissions.web to be refused")
+        } catch let error as ValidationError {
+            #expect("\(error)".contains("permissions.device"))
+        }
     }
 
     @Test("a misfiled name says which key to move it to, not that it's a typo")

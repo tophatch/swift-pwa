@@ -21,7 +21,7 @@ enum PermissionCheck {
     /// to validate a manifest for a platform whose runtime it can't link — and
     /// a mismatch here is caught by `PermissionCheckTests`.
     static let webNames = ["camera", "geolocation", "microphone", "notifications"]
-    static let deviceNames = ["bluetooth"]
+    static let deviceNames = ["allFiles", "bluetooth"]
     static var knownNames: [String] {
         (webNames + deviceNames).sorted()
     }

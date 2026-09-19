@@ -445,6 +445,7 @@ enum AndroidTemplates {
                 AndroidUsesPermission(name: "android.permission.ACCESS_COARSE_LOCATION")
             ]
         case "bluetooth": bluetoothPermissions(minSdk: minSdk)
+        case "allFiles": allFilesPermissions(minSdk: minSdk)
         // `notifications` is already declared unconditionally above for the
         // native notifications plugin, so it adds nothing here.
         default: []
@@ -473,6 +474,29 @@ enum AndroidTemplates {
             AndroidUsesPermission(name: "android.permission.BLUETOOTH", maxSdkVersion: 30),
             AndroidUsesPermission(name: "android.permission.BLUETOOTH_ADMIN", maxSdkVersion: 30),
             AndroidUsesPermission(name: "android.permission.ACCESS_FINE_LOCATION", maxSdkVersion: 30)
+        ]
+        return permissions
+    }
+
+    /// All-files access changed shape at API 30, the way Bluetooth did at 31.
+    ///
+    /// From 30 it is a **special** permission: `MANAGE_EXTERNAL_STORAGE` can
+    /// only be granted from a Settings screen the app sends the user to
+    /// (`ctx.permissions.request(.allFiles)`), never from a dialog. Before 30
+    /// the broad grant was the ordinary runtime pair, which carries
+    /// `maxSdkVersion` so a modern device never sees it.
+    ///
+    /// Declaring it is a store-policy decision as well as a technical one:
+    /// Google Play restricts `MANAGE_EXTERNAL_STORAGE` to apps whose core
+    /// function needs it, and an app that ships without the declaration reads
+    /// `unavailable` at runtime rather than offering a hand-off to a Settings
+    /// screen that would show nothing. See docs/android-setup.md.
+    private static func allFilesPermissions(minSdk: Int) -> [AndroidUsesPermission] {
+        var permissions = [AndroidUsesPermission(name: "android.permission.MANAGE_EXTERNAL_STORAGE")]
+        guard minSdk < 30 else { return permissions }
+        permissions += [
+            AndroidUsesPermission(name: "android.permission.READ_EXTERNAL_STORAGE", maxSdkVersion: 29),
+            AndroidUsesPermission(name: "android.permission.WRITE_EXTERNAL_STORAGE", maxSdkVersion: 29)
         ]
         return permissions
     }
@@ -650,7 +674,8 @@ enum AndroidTemplates {
         packageId: String,
         soBaseName: String,
         serveMounts: [PWAManifest.ServeMount] = [],
-        background: WindowBackground? = nil
+        background: WindowBackground? = nil,
+        entry: String = "index.html"
     ) -> String {
         // `window.background_color` set → paint the WebView's own surface to
         // match before its first paint. The activity theme's windowBackground
@@ -781,7 +806,7 @@ enum AndroidTemplates {
                 // first.
                 val assetLoader = WebViewAssetLoader.Builder()
                     .setDomain("swift-pwa.local")\(serveHandlerLines(serveMounts))
-                    .addPathHandler("/", WebBundlePathHandler(this))
+                    .addPathHandler("/", WebBundlePathHandler(this, \(kotlinString(entry))))
                     .build()
 
                 bridge = SwiftPWABridge(this, webView, assetLoader)
@@ -987,12 +1012,27 @@ enum AndroidTemplates {
         /// reimplementing keeps its MIME guessing, its `..` containment check
         /// and its not-found shape (a response with a null stream, which the
         /// SPA fallback tests for).
-        private class WebBundlePathHandler(context: android.content.Context) :
-            WebViewAssetLoader.PathHandler {
+        private class WebBundlePathHandler(
+            context: android.content.Context,
+            private val entry: String
+        ) : WebViewAssetLoader.PathHandler {
             private val assets = WebViewAssetLoader.AssetsPathHandler(context)
 
-            override fun handle(path: String): android.webkit.WebResourceResponse? =
-                assets.handle("web/" + path.removePrefix("/"))
+            override fun handle(path: String): android.webkit.WebResourceResponse? {
+                val relative = path.removePrefix("/")
+                // A directory path names no file of its own, so serve its
+                // index — and at the origin root that index is the app's
+                // entry document. `location.replace("/")` is the ordinary
+                // way a page says "go back to the top", and without this it
+                // is the one navigation that works on the other four
+                // backends and dead-ends here.
+                val resolved = when {
+                    relative.isEmpty() -> entry
+                    relative.endsWith("/") -> relative + "index.html"
+                    else -> relative
+                }
+                return assets.handle("web/" + resolved)
+            }
         }
         """
     }
@@ -1189,7 +1229,7 @@ enum AndroidTemplates {
                         // the `/` root). Swift owns the table and answers here;
                         // null means "not mine", which is every request in an
                         // app that mounts nothing.
-                        servedMountResponse(request)?.let { return it }
+                        servedMountResponse(request)?.let { return capToRange(request, it) }
                         val response = assetLoader.shouldInterceptRequest(request.url)
                         // SPA history-routing fallback: a main-frame navigation to a
                         // client-side route with no file under assets/web/ (the loader
@@ -1203,10 +1243,22 @@ enum AndroidTemplates {
                                 val entryUrl = android.net.Uri.parse(
                                     "https://swift-pwa.local/" + spaEntry
                                 )
-                                return assetLoader.shouldInterceptRequest(entryUrl)
+                                return capToRange(request, assetLoader.shouldInterceptRequest(entryUrl))
                             }
                         }
-                        return response
+                        // A not-found from the asset loader is a response with
+                        // a null stream, and the WebView renders that as
+                        // `ERR_INVALID_RESPONSE` — which reads as a broken
+                        // protocol and sends you hunting for a corrupt mount
+                        // rather than for the path you never staged. Answer
+                        // with a real 404 that says which path it was. Only
+                        // for our own origin: a null response for any other
+                        // host means "not mine", and inventing a 404 there
+                        // would break every outbound request the page makes.
+                        if (response?.data == null && request.url.host == "swift-pwa.local") {
+                            return notFoundResponse(request.url.path ?: "/")
+                        }
+                        return capToRange(request, response)
                     }
                     // Without this, a main-frame navigation to another site
                     // loads in place — and an app window has no address bar
@@ -1490,7 +1542,75 @@ enum AndroidTemplates {
             /// checks (pdf.js does) would pick the range path over the
             /// whole-file one and be wrong about what it got. This is exactly
             /// what `InternalStoragePathHandler` does for a `build.serve` mount,
-            /// so both kinds of mount behave alike.
+            /// so both kinds of mount behave alike — including the cap
+            /// `capToRange` puts on the body, which every response here goes
+            /// through.
+            /// Stop a ranged response's body at the end of the range it was
+            /// asked for.
+            ///
+            /// **Chromium, not us, applies the range** to whatever stream
+            /// `shouldInterceptRequest` hands back: it parses the `Range`
+            /// header, calls `available()` to bound it, `skip()`s to the start
+            /// offset, and reports `Content-Length` as the *requested* length
+            /// — then reads our stream to EOF. So `bytes=100-199` over a
+            /// 12,270-byte file arrived as a header saying 100 and a body of
+            /// 12,170 (#244). Chromium tolerates the mismatch; a consumer that
+            /// trusts the header would truncate silently, and the whole tail is
+            /// read for nothing on every range of a large file.
+            ///
+            /// We must not skip ourselves — Chromium already does, and doing it
+            /// twice would deliver the wrong bytes. Capping is the half that
+            /// composes: `available()` still reports the full length so
+            /// Chromium's own bounds check is unchanged, and the stream ends
+            /// where the range does. A range with no explicit end (`bytes=500-`,
+            /// `bytes=-50`) already agrees with itself, so it passes through.
+            private fun capToRange(
+                request: WebResourceRequest,
+                response: WebResourceResponse?
+            ): WebResourceResponse? {
+                val stream = response?.data ?: return response
+                val header = request.requestHeaders?.entries
+                    ?.firstOrNull { it.key.equals("Range", ignoreCase = true) }
+                    ?.value ?: return response
+                // First range only, matching what Chromium honours.
+                val spec = header.substringAfter("bytes=", "").substringBefore(',').trim()
+                if (spec.isEmpty() || spec.startsWith("-")) return response
+                val end = spec.substringAfter('-', "").trim().toLongOrNull() ?: return response
+                // Swap the stream in place rather than building a replacement.
+                // A `WebResourceResponse` from the 3-argument constructor —
+                // which is what both the stock asset handlers and
+                // `servedMountResponse` use — carries statusCode 0 and a null
+                // reason phrase, and the 6-argument constructor rejects both
+                // with `IllegalArgumentException: statusCode can't be less
+                // than 100`. That throws on Chromium's own thread inside
+                // `shouldInterceptRequest`, which takes the whole app down.
+                response.data = RangeCappedInputStream(stream, end + 1)
+                return response
+            }
+
+            /// A 404 a human can read. `WebResourceResponse` insists on a
+            /// non-empty reason phrase and throws otherwise, and a body is
+            /// what turns the failure from `ERR_INVALID_RESPONSE` into a page
+            /// naming the missing file.
+            private fun notFoundResponse(path: String): WebResourceResponse {
+                val escaped = path
+                    .replace("&", "&amp;")
+                    .replace("<", "&lt;")
+                    .replace(">", "&gt;")
+                val body = "<!doctype html><html><head><meta charset=\"utf-8\">" +
+                    "<title>404</title></head><body><h1>404</h1>" +
+                    "<p>swift-pwa: nothing is served at <code>" + escaped + "</code>.</p>" +
+                    "</body></html>"
+                return WebResourceResponse(
+                    "text/html",
+                    "utf-8",
+                    404,
+                    "Not Found",
+                    mapOf("Cache-Control" to "no-store"),
+                    java.io.ByteArrayInputStream(body.toByteArray(Charsets.UTF_8))
+                )
+            }
+
             private fun servedMountResponse(request: WebResourceRequest): WebResourceResponse? {
                 // A mount is read-only; anything else belongs to `fs.*`.
                 if (!request.method.equals("GET", ignoreCase = true)) return null
@@ -1515,10 +1635,11 @@ enum AndroidTemplates {
                     WebResourceResponse(type, charset, FileInputStream(File(resolved.getString("path"))))
                 } catch (t: Throwable) {
                     // The file was there when Swift stat'd it and isn't now, or
-                    // can't be opened. A response with a null stream is the
-                    // shape the WebView reads as "not found".
+                    // can't be opened. Same legible 404 the bundle gives —
+                    // a response with a null stream would reach the page as
+                    // `ERR_INVALID_RESPONSE` instead.
                     android.util.Log.e("swift-pwa", "serving ${request.url} failed: ${t.message}", t)
-                    WebResourceResponse(null, null, null)
+                    notFoundResponse(request.url.path ?: "/")
                 }
             }
 
@@ -1595,6 +1716,51 @@ enum AndroidTemplates {
                 private const val NAV_OPEN_EXTERNALLY = 1
                 private const val NAV_BLOCK = 2
             }
+        }
+
+        /// A stream that ends at `limit` bytes, counting the bytes Chromium
+        /// itself skips to reach the start of a `Range`. See
+        /// `SwiftPWABridge.capToRange` for why the skipping is theirs and only
+        /// the capping is ours.
+        ///
+        /// `available()` deliberately reports the underlying stream's full
+        /// remaining length rather than what is left of the cap: Chromium calls
+        /// it to bound the requested range *before* skipping, and a short answer
+        /// there would make it reject a range it should satisfy.
+        private class RangeCappedInputStream(
+            private val inner: java.io.InputStream,
+            private val limit: Long
+        ) : java.io.InputStream() {
+            private var position = 0L
+
+            override fun read(): Int {
+                if (position >= limit) return -1
+                val byte = inner.read()
+                if (byte >= 0) position += 1
+                return byte
+            }
+
+            override fun read(b: ByteArray, off: Int, len: Int): Int {
+                if (position >= limit) return -1
+                val allowed = minOf(len.toLong(), limit - position).toInt()
+                if (allowed <= 0) return -1
+                val read = inner.read(b, off, allowed)
+                if (read > 0) position += read
+                return read
+            }
+
+            // Chromium's skip to the range's start offset comes through here,
+            // so it has to move the counter — otherwise the cap would be
+            // measured from the offset instead of from the start of the file.
+            override fun skip(n: Long): Long {
+                val skipped = inner.skip(n)
+                position += skipped
+                return skipped
+            }
+
+            override fun available(): Int = inner.available()
+
+            override fun close() = inner.close()
         }
         """#
     }
@@ -1703,6 +1869,12 @@ enum AndroidTemplates {
         private var pendingSaveFile: ((String) -> Unit)? = null
         private var pendingOpenDirectory: ((String) -> Unit)? = null
         private var pendingNotificationPerm: ((Boolean) -> Unit)? = null
+        // All-files access: the Settings round trip (API 30+) and the legacy
+        // runtime pair (below 30). Separate slots from the web-permission one
+        // because this request is the *app* asking, not a page, and the two
+        // can be in flight at once.
+        private var pendingAllFilesSettings: (() -> Unit)? = null
+        private var pendingLegacyStoragePerm: ((Boolean) -> Unit)? = null
         // Web permission requests (camera / microphone / location) waiting on
         // the Swift-side policy, keyed by the id sent with the host event.
         // A map rather than a single slot: a page may ask for the camera and
@@ -1797,6 +1969,31 @@ enum AndroidTemplates {
                 cb?.invoke(granted)
             }
 
+        // All-files access has no dialog: from API 30 it is a *special*
+        // permission granted only on a Settings screen. The launcher exists
+        // for the trip back — the result code is always CANCELED, so the
+        // answer is whatever `Environment.isExternalStorageManager()` says
+        // once the user returns.
+        private val allFilesSettingsLauncher: ActivityResultLauncher<Intent> =
+            appActivity.registerForActivityResult(
+                ActivityResultContracts.StartActivityForResult()
+            ) {
+                val cb = pendingAllFilesSettings
+                pendingAllFilesSettings = null
+                cb?.invoke()
+            }
+
+        // Below API 30 the broad grant was the ordinary runtime pair, so the
+        // app's Swift and JS don't branch on the OS version to ask for it.
+        private val legacyStoragePermLauncher: ActivityResultLauncher<Array<String>> =
+            appActivity.registerForActivityResult(
+                ActivityResultContracts.RequestMultiplePermissions()
+            ) { results ->
+                val cb = pendingLegacyStoragePerm
+                pendingLegacyStoragePerm = null
+                cb?.invoke(results.isNotEmpty() && results.values.all { it })
+            }
+
         // Camera / microphone / location, which the WebView cannot request
         // for itself: `onPermissionRequest` fires *after* Android has already
         // decided the app has no such permission, so the app has to ask.
@@ -1842,6 +2039,8 @@ enum AndroidTemplates {
                 }
                 "notifications.requestAuthorization" -> notificationsRequestAuth(done)
                 "permissions.resolve" -> permissionsResolve(json, done)
+                "permissions.allFilesState" -> done(allFilesState(), null)
+                "permissions.requestAllFiles" -> requestAllFiles(done)
                 "geo.current" -> geoCurrent(json, done)
                 "geo.watch.start" -> geoWatchStart(json, done)
                 "geo.watch.stop" -> geoWatchStop(json, done)
@@ -2303,6 +2502,100 @@ enum AndroidTemplates {
 
         private fun notificationsAuthorized(): Boolean {
             return NotificationManagerCompat.from(activity).areNotificationsEnabled()
+        }
+
+        // -----------------------------------------------------------
+        // All-files access (`ctx.permissions.status/request(.allFiles)`)
+        // -----------------------------------------------------------
+
+        /// Whether the app's own manifest requests `name`.
+        ///
+        /// Load-bearing for the `unavailable` answer: the Settings screen
+        /// shows nothing for an app that never declared the permission, and
+        /// Google Play restricts `MANAGE_EXTERNAL_STORAGE` to apps whose core
+        /// function needs it — so an app that shipped without the declaration
+        /// has to read as "this needs a different design", not as "offer the
+        /// user a button".
+        private fun declaresPermission(name: String): Boolean {
+            return try {
+                val info = activity.packageManager.getPackageInfo(
+                    activity.packageName,
+                    android.content.pm.PackageManager.GET_PERMISSIONS
+                )
+                info.requestedPermissions?.contains(name) == true
+            } catch (t: Throwable) {
+                android.util.Log.e("swift-pwa", "reading our own declared permissions failed: ${t.message}", t)
+                false
+            }
+        }
+
+        private fun allFilesStateName(): String {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+                if (!declaresPermission(android.Manifest.permission.MANAGE_EXTERNAL_STORAGE)) {
+                    return "unavailable"
+                }
+                return if (android.os.Environment.isExternalStorageManager()) "granted" else "denied"
+            }
+            val read = android.Manifest.permission.READ_EXTERNAL_STORAGE
+            if (!declaresPermission(read)) return "unavailable"
+            val granted = ContextCompat.checkSelfPermission(activity, read) ==
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+            return if (granted) "granted" else "denied"
+        }
+
+        private fun allFilesState(): String =
+            JSONObject().put("state", allFilesStateName()).toString()
+
+        private fun requestAllFiles(done: (String?, String?) -> Unit) {
+            val state = allFilesStateName()
+            // Already settled: granted needs no prompt, and unavailable has
+            // nothing to prompt with.
+            if (state != "denied") {
+                done(JSONObject().put("state", state).toString(), null)
+                return
+            }
+            if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                if (pendingLegacyStoragePerm != null) {
+                    done(null, "swift-pwa: an all-files access request is already in flight")
+                    return
+                }
+                pendingLegacyStoragePerm = {
+                    done(JSONObject().put("state", allFilesStateName()).toString(), null)
+                }
+                legacyStoragePermLauncher.launch(
+                    arrayOf(
+                        android.Manifest.permission.READ_EXTERNAL_STORAGE,
+                        android.Manifest.permission.WRITE_EXTERNAL_STORAGE
+                    )
+                )
+                return
+            }
+            if (pendingAllFilesSettings != null) {
+                done(null, "swift-pwa: an all-files access request is already in flight")
+                return
+            }
+            pendingAllFilesSettings = {
+                done(JSONObject().put("state", allFilesStateName()).toString(), null)
+            }
+            // The per-app screen first. Some builds don't ship it, in which
+            // case the all-apps list is still a way through; if neither resolves
+            // there is nothing to hand off to and the honest answer is that
+            // this device can't grant it.
+            val perApp = Intent(
+                android.provider.Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + activity.packageName)
+            )
+            val allApps = Intent(android.provider.Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION)
+            for (intent in listOf(perApp, allApps)) {
+                try {
+                    allFilesSettingsLauncher.launch(intent)
+                    return
+                } catch (t: Throwable) {
+                    android.util.Log.e("swift-pwa", "all-files Settings hand-off failed: ${t.message}", t)
+                }
+            }
+            pendingAllFilesSettings = null
+            done(JSONObject().put("state", "unavailable").toString(), null)
         }
 
         private fun notificationsRequestAuth(done: (String?, String?) -> Unit) {

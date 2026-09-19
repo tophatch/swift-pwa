@@ -102,7 +102,7 @@ of guessing:
 
 ```js
 const info = await __SWIFT_PWA__.invoke('__platform.info');
-// { os, commands, tempDir, physicalMemoryBytes, appMemoryLimitBytes }
+// { os, commands, tempDir, physicalMemoryBytes, appMemoryLimitBytes, deviceName }
 if (info.commands.includes('biometric.authenticate')) { /* show the unlock button */ }
 ```
 
@@ -112,6 +112,13 @@ and absent in WKWebView/iOS). `appMemoryLimitBytes` is the per-app ceiling where
 the OS defines one (Android's large-heap class), else `null`. Both are static
 for the session; for a live "available now" read and a memory-pressure event,
 see [`system.*`](#system).
+
+`deviceName` is what to call this device in something a person reads — a
+"continue reading on…" list, a sync sidecar, a bug report. Use it instead of a
+hostname: `ProcessInfo.hostName` is `localhost` on every Android device, which
+is how "continue reading from localhost" ends up in an app's UI. It's the model
+on Android, the device's own name on iOS, and the hostname on the three
+desktops, never empty.
 
 For a *typed* catalog rather than just names, `__bridge.describe` returns one
 `CommandDescriptor` (`{ name, kind, args, result, inbound? }`) per command
@@ -542,6 +549,27 @@ await __SWIFT_PWA__.invoke('clipboard.clear');
 
 `clear()` wipes on Apple; on X11 / Wayland it only relinquishes local
 ownership of the selection.
+
+### `permissions.*`
+
+Where a capability stands with the OS right now, and how to ask for it — for
+the one kind of permission no web API asks for.
+
+```js
+const { state } = await __SWIFT_PWA__.invoke('permissions.status', { name: 'allFiles' });
+// 'granted' | 'denied' | 'unavailable'
+if (state === 'denied') {
+    await __SWIFT_PWA__.invoke('permissions.request', { name: 'allFiles' });
+}
+```
+
+`granted` is usable now; `denied` is worth a button, because `request` reaches a
+prompt or a Settings screen; `unavailable` never becomes granted on this build,
+so the app needs its other route rather than a button. Camera, microphone,
+location and notifications keep asking through their own web APIs — this is for
+`allFiles`, and for the "should I even show this" read that comes first. Full
+story, including what each platform answers and what to do when a store won't
+approve the permission: [permissions.md](permissions.md).
 
 ### `events.*` — server-initiated push
 

@@ -91,6 +91,37 @@ struct WebPermissionDeclarationTests {
         ))
     }
 
+    /// #243: declaring `allFiles` is what makes the Settings hand-off
+    /// possible at all — the screen shows nothing for an app whose manifest
+    /// never asked, which is why the runtime reports `unavailable` rather
+    /// than offering a button.
+    @Test("allFiles emits MANAGE_EXTERNAL_STORAGE, plus the legacy pair below API 30")
+    func androidAllFiles() {
+        let modern = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.app", label: "App", hasIcon: false,
+            webPermissions: ["allFiles"], minSdk: 30
+        )
+        #expect(modern.contains(
+            #"<uses-permission android:name="android.permission.MANAGE_EXTERNAL_STORAGE"/>"#
+        ))
+        // An app that can't run below 30 shouldn't carry the superseded pair.
+        #expect(!modern.contains("READ_EXTERNAL_STORAGE"))
+
+        let legacy = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.app", label: "App", hasIcon: false,
+            webPermissions: ["allFiles"], minSdk: 28
+        )
+        // Capped at 29: from 30 the broad grant is the special permission, and
+        // an uncapped READ_EXTERNAL_STORAGE would ask a modern user for
+        // something that no longer means what it says.
+        #expect(legacy.contains(
+            #"<uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>"#
+        ))
+        #expect(legacy.contains(
+            #"<uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" android:maxSdkVersion="29"/>"#
+        ))
+    }
+
     @Test("declaring both bluetooth and geolocation doesn't cap location at API 30")
     func androidLocationNotCappedByBluetooth() {
         // `bluetooth` wants ACCESS_FINE_LOCATION only up to API 30 and

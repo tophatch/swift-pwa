@@ -96,6 +96,11 @@
             use(PlatformInfoPlugin(appMemoryLimit: { await memory.appMemoryLimit() }))
             use(SystemPlugin(memoryProvider, urlOpener: AndroidURLOpener()))
             use(AppPlugin())
+            use(PermissionsPlugin())
+            // The OS seam behind `ctx.permissions.status/request`. Android is
+            // the one backend where a declared permission still needs asking
+            // for outside a web API.
+            permissions.setAuthority(AndroidPermissionAuthority())
             use(EventsPlugin())
             // Backs the `navigator.audioSession` polyfill in bridge.js, which
             // installs itself only where the engine lacks the web API — this

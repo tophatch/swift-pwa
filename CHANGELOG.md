@@ -5,6 +5,115 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`ctx.permissions` can ask, not just declare — and All-files access is a
+  permission it knows by name** (#243). `android.permissions` (0.11.0, #214) got
+  `MANAGE_EXTERNAL_STORAGE` into the manifest; declaring it grants nothing, and
+  an app had no way to perform the `ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION`
+  hand-off that does. `AndroidURLOpener` is `ACTION_VIEW` on a URL — the wrong
+  action, and it won't take an `intent://` either — and `AndroidAppContext`
+  exposes no `JNIEnv`, correctly. So the only route was an app-side JNI shim
+  beside the generated Kotlin, which `swift-pwa build` regenerates around.
+
+  ```swift
+  ctx.permissions.declare(.allFiles)
+  if await ctx.permissions.status(.allFiles) == .denied {
+      _ = await ctx.permissions.request(.allFiles)   // resolves when the user is done
+  }
+  ```
+  ```json
+  "permissions": { "device": ["allFiles"] }
+  ```
+
+  Declaring the name emits the platform entries — `MANAGE_EXTERNAL_STORAGE`, plus
+  the legacy storage pair capped at API 29 for an app that still supports below
+  30 — so the request and the manifest can't drift apart. `permissions.status` /
+  `permissions.request` are the JS spellings.
+
+  **Three states, because "no" splits in two.** `granted` is usable now;
+  `denied` is worth a button, because asking is possible; `unavailable` never
+  becomes granted on this build, so the app needs a different design rather than
+  a button. `unavailable` is what an undeclared or vetoed permission reports,
+  what iOS reports for `allFiles` (a document picker or a scoped bookmark is the
+  design there, and no prompt will ever change that) — and what an app reports
+  when a store refused the declaration. Play restricts All-files access to apps
+  whose core function needs it, so that is a case to design the fallback around
+  rather than an error path; [docs/android-setup.md](docs/android-setup.md#all-files-access)
+  names it.
+
+  Linux, Windows and macOS answer `granted`: nothing stands between the app and
+  a path it can already open, and macOS raises its own prompt on the first read
+  of a protected folder. The seam is `DevicePermissionAuthority`, installed by a
+  backend's `AppContext`; a backend with nothing to ask abstains and the policy's
+  own two ceilings answer. This is deliberately *not* how the web APIs get their
+  consent — `getUserMedia` and friends still reach the platform's own prompt
+  through their own seam.
+
+- **`__platform.info` reports a `deviceName`** (#243). `ProcessInfo.hostName` is
+  `localhost` on every Android device, and that string is what an app writes
+  into a "which device is this" field — where it surfaces on another device as
+  "continue reading from localhost". `deviceName` is the model on Android (read
+  from Bionic's property store rather than a JNI hop to `Build.MODEL`), the
+  device's own name on iOS, and the hostname (minus a `.local` suffix) on the
+  three desktops. Never empty.
+
+### Fixed
+
+- **The origin root (`/`) serves the app's entry, on Android too** (#242).
+  #212 put the Android bundle at the origin root so every root-absolute asset
+  resolved; what didn't come with it was the directory index. `web.entry` was
+  served at `/index.html` and at no other name, so the one navigation an app
+  writes as "go back to the top" —
+
+  ```js
+  window.location.replace(`${location.origin}/`);
+  ```
+
+  — landed on Chrome's `net::ERR_INVALID_RESPONSE` with no back stack to
+  recover with, on Android alone. Measured on a Galaxy Z Fold7 (Android 16),
+  0.11.1. The bundle handler now resolves a directory path to its index: the
+  mount's own root serves the entry, a deeper directory (`/docs/`) serves its
+  `index.html`, and a path with no trailing slash still 404s, because serving
+  `/docs/index.html` for `/docs` would resolve that document's relative URLs
+  one directory too high.
+
+  The same resolution moved into Core's `AssetProvider`, which Apple, both GTK
+  backends, Windows' interception path and Android's runtime
+  (`ctx.serveDirectory`) mounts all share — so it now honours `web.entry`
+  rather than a hardcoded `index.html`. An app whose entry is `app.html` had no
+  working origin root anywhere.
+
+- **A ranged response's `Content-Length` and its body agree** (#244). Chromium
+  applies the `Range` to whatever stream `shouldInterceptRequest` returns: it
+  bounds the range with `available()`, `skip()`s to the start offset, reports
+  `Content-Length` as the length that was *asked for* — and then reads the
+  stream to EOF. Measured over a 12,270-byte file on a Fold7: `bytes=100-199`
+  announced 100 bytes and delivered 12,170. Chromium tolerates its own
+  mismatch, and no `Accept-Ranges: bytes` is advertised so nothing on Android
+  ranges by choice, but a consumer that trusted the header would truncate
+  silently — and every range of a large file was reading the whole tail for
+  nothing.
+
+  The runtime now caps the stream at the end of the range. It deliberately does
+  *not* skip to the start offset: Chromium already does, and doing it twice
+  would deliver the wrong bytes. `available()` still reports the full remaining
+  length, because that is what Chromium's bounds check runs against before it
+  skips. Applies to the bundle, `build.serve` mounts and runtime
+  `ctx.serveDirectory` mounts alike. A range with no explicit end (`bytes=500-`,
+  `bytes=-50`) already agreed with itself and passes through untouched.
+
+- **A missing file on Android says so** (#242). A not-found out of
+  `shouldInterceptRequest` was a response with a null stream, which the WebView
+  renders as `ERR_INVALID_RESPONSE` — a protocol failure, not a missing file,
+  which sends you looking for a corrupt mount rather than for the path you
+  never staged. It cost the reporter an hour. Both the bundle and a runtime
+  mount now answer a real `404` carrying a body that names the path. Only for
+  the app's own origin: a null response for any other host means "not mine",
+  and inventing a 404 there would break every outbound request the page makes.
+
 ## [0.11.1] - 2026-09-18
 
 ### Added

@@ -157,6 +157,7 @@ public final class HeadlessAppContext: AppContext {
         use(PlatformInfoPlugin())
         use(SystemPlugin())
         use(AppPlugin())
+        use(PermissionsPlugin())
         use(EventsPlugin())
         use(ClipboardPlugin(HeadlessClipboard()))
     }

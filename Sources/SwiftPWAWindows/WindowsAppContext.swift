@@ -46,6 +46,7 @@
             use(PlatformInfoPlugin())
             use(SystemPlugin(urlOpener: WindowsURLOpener()))
             use(AppPlugin())
+            use(PermissionsPlugin())
             use(EventsPlugin())
             // Backs the `navigator.audioSession` polyfill. Records the type and
             // reports it; it drives no platform mechanism, because this one has

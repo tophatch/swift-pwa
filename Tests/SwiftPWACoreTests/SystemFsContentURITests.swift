@@ -17,11 +17,13 @@ struct SystemFsContentURITests {
         var reads: [String] = []
         var writes: [(String, Data)] = []
         var metas: [String] = []
+        var lists: [String] = []
         var nextRead: Result<Data, any Error> = .success(Data())
         var nextWrite: (any Error)?
         var nextMeta: Result<FsMetadata, any Error> = .success(
             FsMetadata(size: 0, isDir: false, isFile: true, modified: nil)
         )
+        var nextList: Result<[FsEntry], any Error> = .success([])
 
         func readBinary(uri: String) async throws -> Data {
             reads.append(uri)
@@ -36,6 +38,23 @@ struct SystemFsContentURITests {
         func metadata(uri: String) async throws -> FsMetadata {
             metas.append(uri)
             return try nextMeta.get()
+        }
+
+        func readDir(uri: String) async throws -> [FsEntry] {
+            lists.append(uri)
+            return try nextList.get()
+        }
+    }
+
+    /// A resolver written before tree listing existed. The protocol's default
+    /// is what keeps it compiling; this pins that it refuses rather than
+    /// returning an empty listing, which an app would read as "the folder the
+    /// user picked is empty".
+    final class ListlessResolver: FsContentResolver, @unchecked Sendable {
+        func readBinary(uri _: String) async throws -> Data { Data() }
+        func writeBinary(uri _: String, data _: Data) async throws {}
+        func metadata(uri _: String) async throws -> FsMetadata {
+            FsMetadata(size: 0, isDir: false, isFile: true, modified: nil)
         }
     }
 
@@ -140,7 +159,7 @@ struct SystemFsContentURITests {
         }
     }
 
-    @Test("directory-style ops on content:// throw unsupported")
+    @Test("the remaining directory-style ops on content:// throw unsupported")
     func directoryOpsUnsupported() async throws {
         // These should fail regardless of whether a resolver is
         // installed — SAF doesn't expose directory-style operations
@@ -157,9 +176,6 @@ struct SystemFsContentURITests {
                 try await fs.remove(path: "content://example/dir", recursive: false)
             }
             await #expect(throws: BridgeError.self) {
-                _ = try await fs.readDir(path: "content://example/dir")
-            }
-            await #expect(throws: BridgeError.self) {
                 try await fs.copy(from: "content://example/a", to: "/tmp/b")
             }
             await #expect(throws: BridgeError.self) {
@@ -168,6 +184,46 @@ struct SystemFsContentURITests {
             // None of these should have called into the resolver.
             #expect(r.reads.isEmpty)
             #expect(r.writes.isEmpty)
+        }
+    }
+
+    /// #246: a picked folder the app can never walk is a picker that returns
+    /// nothing — the app holds a durable grant and can't learn the URIs of
+    /// anything inside it, which is exactly the read path that does work.
+    @Test("readDir on a content:// tree hits the resolver and keeps the entry shape")
+    func readDirRoutes() async throws {
+        let r = RecordingResolver()
+        r.nextList = .success([
+            FsEntry(name: "a.epub", path: "content://example/tree/doc%3Aa.epub", isDir: false, isFile: true),
+            FsEntry(name: "sub", path: "content://example/tree/doc%3Asub", isDir: true, isFile: false)
+        ])
+        try await withResolver(r) {
+            let fs = SystemFs()
+            let entries = try await fs.readDir(path: "content://example/tree/root")
+            #expect(r.lists == ["content://example/tree/root"])
+            #expect(entries.count == 2)
+            // Each entry's `path` is its own document URI, so the read that
+            // already works can open it and a subdirectory can be listed in
+            // turn.
+            #expect(entries[0].path.hasPrefix("content://"))
+            #expect(entries[1].isDir)
+        }
+    }
+
+    @Test("a resolver with no listing refuses rather than reporting an empty folder")
+    func readDirDefaultRefuses() async throws {
+        SystemFs.setContentResolver(ListlessResolver())
+        defer { SystemFs.setContentResolver(nil) }
+        await #expect(throws: BridgeError.self) {
+            _ = try await SystemFs().readDir(path: "content://example/tree/root")
+        }
+    }
+
+    @Test("readDir on content:// with no resolver at all still refuses")
+    func readDirWithoutResolver() async throws {
+        SystemFs.setContentResolver(nil)
+        await #expect(throws: BridgeError.self) {
+            _ = try await SystemFs().readDir(path: "content://example/tree/root")
         }
     }
 

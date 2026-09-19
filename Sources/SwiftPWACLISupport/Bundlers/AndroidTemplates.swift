@@ -2059,6 +2059,7 @@ enum AndroidTemplates {
                 "fs.readContentUri" -> fsReadContentUri(json, done)
                 "fs.writeContentUri" -> fsWriteContentUri(json, done)
                 "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
+                "fs.readDirContentUri" -> fsReadDirContentUri(json, done)
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
@@ -4012,6 +4013,83 @@ enum AndroidTemplates {
             }
         }
 
+        /// List the children of a SAF tree (#246).
+        ///
+        /// Two things the platform insists on, and both are easy to get wrong:
+        ///
+        /// - **A tree URI and a document URI are not interchangeable.**
+        ///   Children come from `buildChildDocumentsUriUsingTree(uri, id)`
+        ///   where `id` is the *tree* document id for a freshly picked tree and
+        ///   the *document* id once we are descending into a subdirectory —
+        ///   hence the `isDocumentUri` branch. A document URI built with
+        ///   `buildDocumentUriUsingTree` keeps the tree in its path, which is
+        ///   what lets the next level down be listed at all.
+        /// - **Each row's `COLUMN_DOCUMENT_ID` has to go back through
+        ///   `buildDocumentUriUsingTree`** before it can be opened or
+        ///   descended into. The raw id is not a URI and the child's "natural"
+        ///   URI (without the tree) carries no grant.
+        private fun fsReadDirContentUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uriString = json.optString("uri", "")
+            if (uriString.isEmpty()) {
+                done(null, "swift-pwa: fs.readDir: uri is empty")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val tree = Uri.parse(uriString)
+                    val documentId = if (DocumentsContract.isDocumentUri(activity, tree)) {
+                        DocumentsContract.getDocumentId(tree)
+                    } else {
+                        DocumentsContract.getTreeDocumentId(tree)
+                    }
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)
+                    val projection = arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                    )
+                    val rows = ArrayList<JSONObject>()
+                    val cursor = activity.contentResolver.query(children, projection, null, null, null)
+                    if (cursor == null) {
+                        done(null, "swift-pwa: fs.readDir: no provider answered for $uriString")
+                        return@execute
+                    }
+                    cursor.use {
+                        while (it.moveToNext()) {
+                            val id = it.getString(0) ?: continue
+                            // A provider may omit the display name; the
+                            // document id is the only thing guaranteed, and a
+                            // listing with a blank name is worse than one
+                            // showing the id.
+                            val name = it.getString(1) ?: id.substringAfterLast('/')
+                            val isDir = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
+                            rows.add(
+                                JSONObject()
+                                    .put("name", name)
+                                    .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
+                                    .put("isDir", isDir)
+                                    .put("isFile", !isDir)
+                            )
+                        }
+                    }
+                    // Sorted by name, because the path-backed `fs.readDir`
+                    // sorts and a page that renders a library shouldn't have to
+                    // care which one it got. A provider's own row order is
+                    // unspecified.
+                    rows.sortBy { it.getString("name") }
+                    val entries = JSONArray()
+                    rows.forEach { entries.put(it) }
+                    done(JSONObject().put("entries", entries).toString(), null)
+                } catch (t: Throwable) {
+                    done(
+                        null,
+                        "swift-pwa: fs.readDir failed for $uriString: " +
+                            "${t.javaClass.simpleName}: ${t.message}"
+                    )
+                }
+            }
+        }
+
         private fun fsContentUriMetadata(json: JSONObject, done: (String?, String?) -> Unit) {
             val uri = json.optString("uri", "")
             if (uri.isEmpty()) {
@@ -4029,10 +4107,12 @@ enum AndroidTemplates {
                     // are queried in one cursor pass.
                     val projection = arrayOf(
                         OpenableColumns.SIZE,
-                        DocumentsContract.Document.COLUMN_LAST_MODIFIED
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                        DocumentsContract.Document.COLUMN_MIME_TYPE
                     )
                     var size: Long = -1L
                     var modified: Long? = null
+                    var isDir = false
                     activity.contentResolver.query(parsed, projection, null, null, null)?.use { cursor ->
                         if (cursor.moveToFirst()) {
                             val sizeIdx = cursor.getColumnIndex(OpenableColumns.SIZE)
@@ -4043,9 +4123,19 @@ enum AndroidTemplates {
                             if (modIdx >= 0 && !cursor.isNull(modIdx)) {
                                 modified = cursor.getLong(modIdx)
                             }
+                            // Until #246 this always reported a file, on the
+                            // reasoning that a picked URI is always a document.
+                            // It isn't once a tree can be listed: every
+                            // subdirectory in that listing is a content URI an
+                            // app will ask about before descending.
+                            val mimeIdx = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE)
+                            if (mimeIdx >= 0 && !cursor.isNull(mimeIdx)) {
+                                isDir = cursor.getString(mimeIdx) == DocumentsContract.Document.MIME_TYPE_DIR
+                            }
                         }
                     }
                     val payload = JSONObject().put("size", if (size < 0) 0 else size)
+                    payload.put("isDir", isDir)
                     if (modified != null) payload.put("modified", modified)
                     done(payload.toString(), null)
                 } catch (t: Throwable) {

@@ -60,6 +60,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device's own name on iOS, and the hostname (minus a `.local` suffix) on the
   three desktops. Never empty.
 
+- **`fs.readDir` walks a SAF tree on Android, so a folder the user picked can
+  back a library** (#246). Everything around it already worked —
+  `dialog.openDirectory` opens `ACTION_OPEN_DOCUMENT_TREE`, the runtime takes a
+  **persistable** grant so the folder survives a relaunch, and
+  `fs.readBinary` / `writeBinary` / `metadata` have read a single document by
+  URI since 0.5. What nothing did was enumerate the tree, so an app held a
+  durable grant to a folder and could never learn the URIs of anything inside
+  it — the read path that worked was unreachable. A picker that returns
+  something you can't walk returns nothing.
+
+  ```js
+  const { path: tree } = await __SWIFT_PWA__.invoke('dialog.openDirectory', {});
+  const entries = await __SWIFT_PWA__.invoke('fs.readDir', { path: tree });
+  const book = await __SWIFT_PWA__.invoke('fs.readBinary', { path: entries[0].path });
+  ```
+
+  Same `FsEntry` shape a filesystem path returns, each entry's `path` being its
+  own document URI, and recursion is the caller's business exactly as it is for
+  a path. The two things `DocumentsContract` insists on are both in the
+  implementation: children come from the *tree* document id for a freshly
+  picked tree and the *document* id once descending, and each row's
+  `COLUMN_DOCUMENT_ID` goes back through `buildDocumentUriUsingTree` before it
+  can be opened or descended into — the raw id is not a URI, and a child's URI
+  without the tree carries no grant.
+
+  **It is the route when All-files access isn't available**, which is three
+  cases at once: an app the Play Store won't grant `MANAGE_EXTERNAL_STORAGE`,
+  an SD card or USB-OTG volume, and — the one worth knowing — **Drive, OneDrive
+  and Dropbox, which are `DocumentsProvider`s on Android rather than synced
+  folders**. A cloud folder picked through SAF is the same code path as an SD
+  card picked through SAF, so tree listing is also the cheapest possible
+  cloud-storage story: no OAuth, no API client, no per-provider adapter.
+
+  `fs.metadata` on a content URI now reports `isDir` from the document's MIME
+  type. It claimed every content URI was a file, which was only ever harmless
+  because nothing could produce a directory one.
+
 ### Fixed
 
 - **The origin root (`/`) serves the app's entry, on Android too** (#242).

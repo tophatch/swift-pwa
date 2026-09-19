@@ -17,12 +17,20 @@ public enum PlatformDirectories {
     public struct Hook: Sendable {
         public let dataDirectory: @Sendable () -> URL
         public let cacheDirectory: @Sendable () -> URL
+        /// The user-visible documents root — the *parent*, without the app's
+        /// own leaf. Nil leaves the platform default in place, which is what
+        /// every backend does today; it exists for a host whose documents
+        /// location isn't derivable from the environment.
+        public let documentsRoot: (@Sendable () -> URL)?
+
         public init(
             dataDirectory: @escaping @Sendable () -> URL,
-            cacheDirectory: @escaping @Sendable () -> URL
+            cacheDirectory: @escaping @Sendable () -> URL,
+            documentsRoot: (@Sendable () -> URL)? = nil
         ) {
             self.dataDirectory = dataDirectory
             self.cacheDirectory = cacheDirectory
+            self.documentsRoot = documentsRoot
         }
     }
 
@@ -56,7 +64,81 @@ public enum PlatformDirectories {
         return url
     }
 
+    /// The folder an app owns **that the user can see**, created if absent —
+    /// where content belongs when the user should keep it: books they added,
+    /// documents they authored, exports.
+    ///
+    /// Distinct from ``dataDirectory(appID:)`` in the way that matters to a
+    /// person rather than a program: the data directory is the app's private
+    /// container, invisible in a file manager and **deleted when the app is**.
+    /// This one is a real folder in Documents, and on four of the five
+    /// platforms its contents outlive the app — see ``documentsSurviveUninstall``.
+    ///
+    /// Takes the app's **display name**, not its bundle id, because this path
+    /// is one a person reads: `~/Documents/Reader`, not
+    /// `~/Documents/com.example.reader`.
+    ///
+    /// On Android this is `/sdcard/Documents/<App>` and **needs no
+    /// permission**: since Android 11 an app may create, list and read its
+    /// *own* files in shared storage by path. All-files access is only what
+    /// lets it see what everything *else* put there — see
+    /// docs/android-setup.md.
+    public static func documentsDirectory(appName: String) -> URL {
+        let url = documentsRoot().appendingPathComponent(appName, isDirectory: true)
+        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
+        return url
+    }
+
+    /// Whether the contents of ``documentsDirectory(appName:)`` outlive the
+    /// app being uninstalled.
+    ///
+    /// False on iOS alone, where the visible Documents folder is inside the
+    /// app container and goes with it. That is worth surfacing rather than
+    /// hiding: an app that knows can offer an export, instead of implying a
+    /// permanence the platform won't provide. (iCloud's
+    /// `NSUbiquitousContainers` is the iOS answer, and it needs an entitlement
+    /// a free team can't have, so it can't be the default.)
+    public static var documentsSurviveUninstall: Bool {
+        #if os(iOS)
+            false
+        #else
+            true
+        #endif
+    }
+
     // MARK: - Platform defaults
+
+    /// The *parent* documents folder, without the app's leaf.
+    private static func documentsRoot() -> URL {
+        if let hook = currentHook()?.documentsRoot { return hook() }
+        #if os(macOS) || os(iOS)
+            // On iOS this is the app's own Documents container, which is what
+            // `UIFileSharingEnabled` exposes in Files — already per-app, so
+            // the leaf below nests inside it rather than beside other apps.
+            return (try? FileManager.default.url(
+                for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+            )) ?? URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent("Documents", isDirectory: true)
+        #elseif os(Windows)
+            // Through Foundation first: `%USERPROFILE%\Documents` is wrong on a
+            // machine whose Documents folder is redirected, which OneDrive does
+            // by default on a consumer install.
+            if let known = try? FileManager.default.url(
+                for: .documentDirectory, in: .userDomainMask, appropriateFor: nil, create: true
+            ) {
+                return known
+            }
+            let profile = environmentDir("USERPROFILE") ?? NSHomeDirectory()
+            return URL(fileURLWithPath: profile).appendingPathComponent("Documents", isDirectory: true)
+        #elseif os(Android)
+            // `Environment.DIRECTORY_DOCUMENTS` is "Documents" by platform
+            // contract, and `$EXTERNAL_STORAGE` is set for every app process,
+            // so this needs no JNI hop on a path every app reads at startup.
+            let external = environmentDir("EXTERNAL_STORAGE") ?? "/sdcard"
+            return URL(fileURLWithPath: external).appendingPathComponent("Documents", isDirectory: true)
+        #else // Linux
+            return linuxDocumentsRoot()
+        #endif
+    }
 
     private static func defaultDataDirectory(appID: String) -> URL {
         #if os(macOS) || os(iOS)
@@ -103,6 +185,56 @@ public enum PlatformDirectories {
     private static func homeSubpath(_ sub: String) -> String {
         let home = environmentDir("HOME") ?? NSHomeDirectory()
         return home.hasSuffix("/") ? home + sub : home + "/" + sub
+    }
+
+    #if os(Linux)
+        /// `XDG_DOCUMENTS_DIR` is a *user-dirs* value, not an environment
+        /// variable — `xdg-user-dirs-update` writes it into
+        /// `~/.config/user-dirs.dirs` and only some session managers export it.
+        /// So: the env var if a session did export it, then the file, then the
+        /// English default. A headless SSH session has neither, which is
+        /// exactly where the last fallback earns its place.
+        private static func linuxDocumentsRoot() -> URL {
+            if let exported = environmentDir("XDG_DOCUMENTS_DIR") {
+                return URL(fileURLWithPath: exported)
+            }
+            let home = environmentDir("HOME") ?? NSHomeDirectory()
+            let configHome = environmentDir("XDG_CONFIG_HOME") ?? homeSubpath(".config")
+            let userDirs = URL(fileURLWithPath: configHome).appendingPathComponent("user-dirs.dirs")
+            if let text = try? String(contentsOf: userDirs, encoding: .utf8),
+               let parsed = documentsDirFromUserDirs(text, home: home)
+            {
+                return URL(fileURLWithPath: parsed)
+            }
+            return URL(fileURLWithPath: homeSubpath("Documents"))
+        }
+    #endif
+
+    /// Pull `XDG_DOCUMENTS_DIR` out of a `user-dirs.dirs` file.
+    ///
+    /// Not `#if os(Linux)`, so it can be tested on the machine anyone is
+    /// actually sitting at. The format is shell-ish: `KEY="$HOME/Name"`, with
+    /// `#` comments, and a localised install writes a localised folder name —
+    /// which is the whole reason for reading the file instead of assuming
+    /// `~/Documents`.
+    static func documentsDirFromUserDirs(_ text: String, home: String) -> String? {
+        for line in text.split(separator: "\n") {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("#"), trimmed.hasPrefix("XDG_DOCUMENTS_DIR=") else { continue }
+            var value = String(trimmed.dropFirst("XDG_DOCUMENTS_DIR=".count))
+            // Strip a trailing comment before the quotes, then the quotes.
+            if let hash = value.firstIndex(of: "#"), !value.hasPrefix("\"") {
+                value = String(value[value.startIndex ..< hash])
+            }
+            value = value.trimmingCharacters(in: .whitespaces)
+            value = value.trimmingCharacters(in: CharacterSet(charactersIn: "\""))
+            if value.hasPrefix("$HOME") {
+                value = home + String(value.dropFirst("$HOME".count))
+            }
+            guard !value.isEmpty else { continue }
+            return value
+        }
+        return nil
     }
 
     #if os(Android)

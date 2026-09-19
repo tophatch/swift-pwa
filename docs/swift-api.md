@@ -383,6 +383,33 @@ UIScene-aware: a single scene is polished, multi-scene scaffolded.
 The cross-platform `Window` protocol documents per-method support;
 unsupported operations log a one-shot warning rather than throwing.
 
+## Where an app's files go
+
+Three locations, and the third is the one a *person* sees:
+
+```swift
+ctx.dataDirectory()       // private, persistent — goes when the app does
+ctx.cacheDirectory()      // private, disposable — the OS may evict it
+ctx.documentsDirectory()  // the user's, visible in their file manager
+ctx.documentsSurviveUninstall   // false on iOS alone
+```
+
+`documentsDirectory()` is `~/Documents/<App>` on macOS, `$XDG_DOCUMENTS_DIR/<App>`
+on Linux, `Documents\<App>` on Windows, `/sdcard/Documents/<App>` on Android —
+where it needs **no permission**, because an app may always create and read its
+own files in shared storage — and the app's own `Documents` container on iOS.
+Created on first call, which means asking where it is makes it exist.
+
+Put things there when the user should keep them: books they added, documents
+they authored, exports. It is a real path on every platform, so it mounts with
+`serveDirectory` and streams with ranges, which is what makes it the natural
+default library location.
+
+Check `documentsSurviveUninstall` before promising permanence. It is `false` on
+iOS, where the visible Documents folder lives inside the app container — an app
+that knows can offer an export instead. See
+[ios-setup.md](ios-setup.md#icloud-is-the-upgrade-and-it-needs-a-paid-team).
+
 ## Serving extra directories (content packs)
 
 `ctx.serveDirectory(_:at:)` mounts a directory on the **bundle origin**

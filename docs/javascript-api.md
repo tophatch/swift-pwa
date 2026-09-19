@@ -224,6 +224,8 @@ const { value: version } = await __SWIFT_PWA__.invoke('app.version');
 
 const { value: dataDir }  = await __SWIFT_PWA__.invoke('app.dataDir');
 const { value: cacheDir } = await __SWIFT_PWA__.invoke('app.cacheDir');
+
+const { path, survivesUninstall } = await __SWIFT_PWA__.invoke('app.documentsDir');
 ```
 
 `app.name` / `app.version` read the bundle's `Info.plist`
@@ -238,6 +240,25 @@ on macOS, the XDG data/cache dirs on Linux, `%APPDATA%` / `%LOCALAPPDATA%`
 on Windows, the Activity `filesDir` / `cacheDir` on Android. `dataDir` is
 where you extract a downloaded content pack (see `fs.extractZip`); the OS
 may evict `cacheDir` at any time, so only put regenerable artifacts there.
+
+`app.documentsDir` is the third and the different one: the folder this app owns
+**that the user can see** — `~/Documents/<App>` on macOS, `$XDG_DOCUMENTS_DIR/<App>`
+on Linux, `Documents\<App>` on Windows, `/sdcard/Documents/<App>` on Android
+(which needs no permission), and the app's own `Documents` container on iOS.
+Created on first call. It is where content the *user* should keep belongs —
+books they added, documents they authored — as against the two above, which are
+the app's private containers and go when the app does.
+
+It's a real path everywhere, so it can be passed straight to
+[`serveDirectory`](swift-api.md#serving-extra-directories-content-packs) and
+streamed with ranges — which is what makes it the default library location.
+
+`survivesUninstall` is the one fact to branch on, and it is **false on iOS**,
+where the visible Documents folder lives inside the app container and is removed
+with the app. An app that knows can offer an export instead of implying a
+permanence the platform won't provide. (iCloud's `NSUbiquitousContainers` is the
+iOS answer and needs an entitlement a free team can't have, so it isn't the
+default — see [ios-setup.md](ios-setup.md).)
 
 #### `app.lastWindowClosed` — what closing the last window does
 

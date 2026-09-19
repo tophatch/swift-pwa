@@ -2074,6 +2074,7 @@ enum AndroidTemplates {
                 "secrets.get" -> secretsGet(json, done)
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
+                "app.label" -> done(appLabel(), null)
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)
                 "ble.availability" -> bleAvailability(done)
@@ -4028,6 +4029,20 @@ enum AndroidTemplates {
         ///   `buildDocumentUriUsingTree`** before it can be opened or
         ///   descended into. The raw id is not a URI and the child's "natural"
         ///   URI (without the tree) carries no grant.
+        /// The app's own display label, which is the only place Swift can get
+        /// it: there is no `Info.plist` on Android, and the process name is
+        /// `app_process64` — the zygote binary, not the app.
+        private fun appLabel(): String {
+            val label = try {
+                activity.applicationInfo.loadLabel(activity.packageManager).toString()
+            } catch (t: Throwable) {
+                ""
+            }
+            return JSONObject()
+                .put("label", if (label.isEmpty()) activity.packageName else label)
+                .toString()
+        }
+
         private fun fsReadDirContentUri(json: JSONObject, done: (String?, String?) -> Unit) {
             val uriString = json.optString("uri", "")
             if (uriString.isEmpty()) {

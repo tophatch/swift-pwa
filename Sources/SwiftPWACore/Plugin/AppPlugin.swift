@@ -50,6 +50,19 @@ public struct AppPlugin: Plugin {
             StringResult(value: PlatformDirectories.cacheDirectory(appID: Self.appID()).path)
         })
 
+        // The folder the *user* owns a view of, as against the two above,
+        // which are the app's own containers. It carries `survivesUninstall`
+        // rather than only a path because that is the one fact an app has to
+        // branch on: iOS is the platform where the honest answer is no, and an
+        // app that knows can offer an export instead of implying a permanence
+        // the platform won't provide.
+        registry.register("app.documentsDir", typed: { (_: EmptyArgs, _) -> DocumentsLocation in
+            DocumentsLocation(
+                path: PlatformDirectories.documentsDirectory(appName: Self.appName()).path,
+                survivesUninstall: PlatformDirectories.documentsSurviveUninstall
+            )
+        })
+
         // What happens when the last window closes, readable and settable
         // from the page so an app can put it behind a preference checkbox.
         // Both sites that consult it read it when they need it, so a change
@@ -77,11 +90,33 @@ public struct AppPlugin: Plugin {
         )
     }
 
-    /// The human-facing app name. Prefers the bundle's display name, then
-    /// its bundle name, falling back to the process name on hosts where
-    /// `Bundle.main.infoDictionary` isn't populated (corelibs-foundation
-    /// on Linux, the Android .so). Never empty.
+    private static let displayNameLock = NSLock()
+    private nonisolated(unsafe) static var installedDisplayName: String?
+
+    /// Install the app's display name on a host that has no bundle to read it
+    /// from. The Android backend calls this at startup with the Activity's
+    /// own label; nothing else does.
+    ///
+    /// Without it Android had no name at all: `Bundle.main.infoDictionary` is
+    /// empty there and the process name is **`app_process64`**, the zygote
+    /// binary. That reached `app.name`, and once a user-visible folder was
+    /// derived from it (#250) it reached the filesystem as
+    /// `/sdcard/Documents/app_process64`.
+    public static func setDisplayName(_ name: String) {
+        guard !name.isEmpty else { return }
+        displayNameLock.lock(); defer { displayNameLock.unlock() }
+        installedDisplayName = name
+    }
+
+    /// The human-facing app name. Prefers a name a backend installed, then the
+    /// bundle's display name, then its bundle name, falling back to the
+    /// process name on hosts where `Bundle.main.infoDictionary` isn't
+    /// populated (corelibs-foundation on Linux). Never empty.
     static func appName() -> String {
+        displayNameLock.lock()
+        let installed = installedDisplayName
+        displayNameLock.unlock()
+        if let installed, !installed.isEmpty { return installed }
         let info = Bundle.main.infoDictionary
         if let display = info?["CFBundleDisplayName"] as? String, !display.isEmpty { return display }
         if let name = info?["CFBundleName"] as? String, !name.isEmpty { return name }
@@ -135,6 +170,44 @@ public extension AppContext {
     /// side equivalent of `app.cacheDir`. The OS may evict its contents.
     func cacheDirectory() -> URL {
         PlatformDirectories.cacheDirectory(appID: AppPlugin.appID())
+    }
+
+    /// The user-visible folder this app owns (created if absent) — the Swift-
+    /// side equivalent of `app.documentsDir`, and the place for content the
+    /// user should keep rather than content the app can regenerate.
+    ///
+    /// A real path on every platform, so it can be passed straight to
+    /// ``serveDirectory(_:at:)`` and stream with ranges — which is what makes
+    /// it the default library location rather than a SAF tree.
+    ///
+    /// Pair it with ``documentsSurviveUninstall`` before promising the user
+    /// their files are safe.
+    func documentsDirectory() -> URL {
+        PlatformDirectories.documentsDirectory(appName: AppPlugin.appName())
+    }
+
+    /// Whether ``documentsDirectory()``'s contents outlive this app being
+    /// uninstalled. False on iOS, true everywhere else.
+    var documentsSurviveUninstall: Bool {
+        PlatformDirectories.documentsSurviveUninstall
+    }
+}
+
+// MARK: - Result types
+
+/// What `app.documentsDir` returns: where the app's user-visible folder is,
+/// and whether the user keeps what's in it.
+public struct DocumentsLocation: Sendable, Codable, Equatable {
+    /// Absolute path, created by the time this is returned.
+    public var path: String
+    /// False on iOS, where the visible Documents folder lives inside the app
+    /// container and is removed with the app. True on macOS, Linux, Windows
+    /// and Android, where the folder is a real place in the user's Documents.
+    public var survivesUninstall: Bool
+
+    public init(path: String, survivesUninstall: Bool) {
+        self.path = path
+        self.survivesUninstall = survivesUninstall
     }
 }
 

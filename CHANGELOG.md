@@ -97,6 +97,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   type. It claimed every content URI was a file, which was only ever harmless
   because nothing could produce a directory one.
 
+- **`app.documentsDir` — the folder an app owns that the *user* can see**
+  (#250). `dataDir` and `cacheDir` are the app's private containers and go when
+  the app does; there was no name for the third location every app actually
+  needs, so every app hardcoded one per platform.
+
+  ```js
+  const { path, survivesUninstall } = await __SWIFT_PWA__.invoke('app.documentsDir');
+  ```
+
+  `~/Documents/<App>` on macOS, `$XDG_DOCUMENTS_DIR/<App>` on Linux (read from
+  `user-dirs.dirs`, which is where the value actually lives), `Documents\<App>`
+  on Windows via the known folder rather than `%USERPROFILE%` (which OneDrive
+  redirects), `/sdcard/Documents/<App>` on Android, and the app's own
+  `Documents` container on iOS. Created on first call. `ctx.documentsDirectory()`
+  in Swift.
+
+  It carries `survivesUninstall` because that is the one fact an app has to
+  branch on, and it is **false on iOS** — the visible Documents folder is inside
+  the app container. An app that knows can offer an export rather than imply a
+  permanence the platform won't provide. iCloud is the iOS answer and needs an
+  entitlement a free team can't have, so it is
+  [documented](docs/ios-setup.md#icloud-is-the-upgrade-and-it-needs-a-paid-team)
+  rather than implemented.
+
+  **On Android this needs no permission**, which reframes what a default
+  install can do: since Android 11 an app may create, list and read its *own*
+  files in shared storage by path. All-files access is only what lets it see
+  what everything else put there — an upgrade, not the price of entry. Measured
+  on a Fold7 with the permission denied: the app wrote into
+  `/sdcard/Documents/<App>` and listed it back, the file survived
+  `adb uninstall` while `Android/data/<id>/files` did not, and the folder
+  served a `Range` request because it is an ordinary path.
+  `docs/android-setup.md` led with All-files access before this and sent an
+  implementer to the wrong design.
+
 ### Changed
 
 - **`fs.metadata`'s `size` is optional, and absent means "unknown"** (#246).

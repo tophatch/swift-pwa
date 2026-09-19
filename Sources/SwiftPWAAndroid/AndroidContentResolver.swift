@@ -56,20 +56,26 @@
                 ContentURIArgs(uri: uri),
                 as: ContentURIMetadataResult.self
             )
-            // SAF doesn't expose a "this URI is a directory" concept
-            // the way POSIX does — content URIs returned by
-            // `OpenDocument` / `CreateDocument` are always documents
-            // (files). `OpenDocumentTree` returns a tree URI, but
-            // those are handled separately (apps that need to walk a
-            // tree should use the SAF DocumentFile API; out of scope
-            // for v0.5.x). We therefore always report `isDir: false`,
-            // `isFile: true` for content URIs that resolve.
+            // `isDir` is the document's own MIME type being
+            // `vnd.android.document/directory`. Through 0.11.1 this reported
+            // `isFile` for everything, on the reasoning that a picked URI is
+            // always a document — which stopped being true the moment a tree
+            // could be listed (#246), because every subdirectory in that
+            // listing is a content URI an app asks about before descending.
             return FsMetadata(
                 size: result.size,
-                isDir: false,
-                isFile: true,
+                isDir: result.isDir ?? false,
+                isFile: !(result.isDir ?? false),
                 modified: result.modified
             )
+        }
+
+        public func readDir(uri: String) async throws -> [FsEntry] {
+            try await AndroidRPC.call(
+                "fs.readDirContentUri",
+                ContentURIArgs(uri: uri),
+                as: ContentURIEntriesResult.self
+            ).entries
         }
     }
 
@@ -91,12 +97,22 @@
         let dataBase64: String
     }
 
-    /// `{"size": Int64, "modified": Int64?}` returned by
+    /// `{"size": Int64, "modified": Int64?, "isDir": Bool}` returned by
     /// `fs.contentUriMetadata`. `modified` is millis since the Unix
     /// epoch, or nil if the underlying `DocumentsContract` row had
     /// no `LAST_MODIFIED` column.
     struct ContentURIMetadataResult: Decodable {
         let size: Int64
         let modified: Int64?
+        /// Absent on a provider row with no MIME type; the caller reads that
+        /// as a file, which is what every URI a picker hands back is.
+        let isDir: Bool?
+    }
+
+    /// `{"entries": [FsEntry]}` returned by `fs.readDirContentUri`. The Kotlin
+    /// side emits exactly `FsEntry`'s field names, so it decodes straight into
+    /// the shape a filesystem path returns.
+    struct ContentURIEntriesResult: Decodable {
+        let entries: [FsEntry]
     }
 #endif

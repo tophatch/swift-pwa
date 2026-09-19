@@ -713,13 +713,57 @@ for what the other four answer. Three Android-specific things:
   button that visibly does nothing.
 - **Play may refuse the declaration.** All-files access is restricted to apps
   whose core function needs it, and a rejected app ships without the permission
-  — where the runtime again reports `unavailable`. The fallback is a different
-  shape of app rather than a different call: copy or import the content into
-  `app.dataDir()` (through `dialog.openDirectory`, whose SAF grant persists
-  across launches) and serve it from a `build.serve` mount or
-  `ctx.serveDirectory`. It costs the property that the library *is* the user's
-  folders, which is why it's worth knowing before the store review rather than
-  after.
+  — where the runtime again reports `unavailable`. The fallback is a **SAF
+  tree**: `dialog.openDirectory` takes a grant that survives a relaunch, and
+  `fs.readDir` walks it in place, so the library is still the user's own folder
+  rather than a copy. See [Walking a folder the user
+  picked](#walking-a-folder-the-user-picked). What it costs is paths — every
+  file is a `content://` URI — and the ability to write beside the original
+  without asking again.
+
+### Walking a folder the user picked
+
+`dialog.openDirectory` opens `ACTION_OPEN_DOCUMENT_TREE` and the runtime takes
+a **persistable** grant, so the folder is still readable after a relaunch. The
+piece that used to be missing was the one that makes the grant worth anything:
+`fs.readDir` now answers for a `content://` tree, returning the same `FsEntry`
+shape a filesystem path does, each entry's `path` being its own document URI —
+which is exactly what `fs.readBinary` already accepts.
+
+```js
+const { path: tree } = await __SWIFT_PWA__.invoke('dialog.openDirectory', {});
+const entries = await __SWIFT_PWA__.invoke('fs.readDir', { path: tree });
+for (const entry of entries) {
+    if (entry.isDir) continue;                       // descend with the same call
+    const book = await __SWIFT_PWA__.invoke('fs.readBinary', { path: entry.path });
+}
+```
+
+Recursion is the caller's business, exactly as it is for a path. `fs.metadata`
+answers for these URIs too, and reports `isDir` honestly — through 0.11.1 it
+claimed every content URI was a file, which was harmless only while nothing
+could produce a directory one.
+
+**This is the route when All-files access isn't available**, and it covers
+three cases at once:
+
+- **The Play Store** restricts `MANAGE_EXTERNAL_STORAGE` to apps whose core
+  function needs it. A SAF tree needs no such approval.
+- **SD cards and USB-OTG**: everything outside the app-specific directory on a
+  removable volume needs All-files access or SAF, and SAF is the one a store
+  won't argue with.
+- **Google Drive, OneDrive and Dropbox are `DocumentsProvider`s on Android**,
+  not synced folders — so a Drive folder picked through SAF is the *same code
+  path* as an SD card picked through SAF. No OAuth, no API client, no
+  per-provider adapter. On desktop the equivalent is an ordinary filesystem
+  path, which is why the cross-platform shape holds.
+
+Two things to expect from the platform rather than from us. A network-backed
+provider is entitled to omit a row's size and modification time, so
+`fs.metadata` can report `size: 0` and no `modified` for a Drive file that is
+neither empty nor undated. And listing is a `ContentResolver.query` per
+directory — cheap locally, a network round trip on Drive — so walk lazily
+rather than eagerly for a deep tree.
 
 ### Which device is this?
 
@@ -1392,14 +1436,12 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   the `ContentResolver` (a `ZipInputStream`), so a user-picked pack imports
   directly with no `readBinary`→`writeBinary` materialize — though the
   extract **destination** must still be a real path (SAF exposes no writable
-  tree). `fs.mkdir` / `remove` / `readDir` / `copy` /
-  `rename` deliberately reject `content://` URIs with a clear error
-  (`SAF doesn't expose this operation`) rather than silently
-  misbehaving — SAF doesn't have directory-style POSIX semantics for
-  content providers. Apps that need to walk a tree URI from
-  `OpenDocumentTree` should drive the `DocumentFile` /
-  `DocumentsContract` API directly (out of scope for the cross-
-  platform `Fs` surface).
+  tree). `fs.mkdir` / `remove` / `copy` / `rename` deliberately reject
+  `content://` URIs with a clear error (`SAF doesn't expose this operation`)
+  rather than silently misbehaving — SAF doesn't have directory-style POSIX
+  semantics for content providers. **`fs.readDir` is the exception**, and the
+  reason it is has a section of its own: [Walking a folder the user
+  picked](#walking-a-folder-the-user-picked).
 - **A picked URI only survives a relaunch as a bookmark.** SAF's grant
   from a picker lasts as long as the task, so a `content://` URI stashed
   in `localStorage` throws the next time the app starts. The runtime asks

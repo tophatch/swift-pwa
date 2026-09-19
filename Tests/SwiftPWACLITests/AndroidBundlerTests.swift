@@ -778,16 +778,47 @@ struct AndroidBundlerUnitTests {
     @Test("SwiftPWASystemPlugins exposes fs.* content-URI RPC methods")
     func systemPluginsContentURIDispatch() {
         let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
-        // Three dispatch entries the Swift `AndroidContentResolver`
+        // Four dispatch entries the Swift `AndroidContentResolver`
         // calls into. Renaming either side silently breaks SAF I/O.
         #expect(kt.contains("\"fs.readContentUri\" ->"))
         #expect(kt.contains("\"fs.writeContentUri\" ->"))
         #expect(kt.contains("\"fs.contentUriMetadata\" ->"))
+        #expect(kt.contains("\"fs.readDirContentUri\" ->"))
         // Underlying calls into ContentResolver — pinning the API
         // surface so a SAF change doesn't go unnoticed.
         #expect(kt.contains("activity.contentResolver.openInputStream"))
         #expect(kt.contains("activity.contentResolver.openOutputStream"))
         #expect(kt.contains("activity.contentResolver.query"))
+    }
+
+    /// #246: a SAF tree could be picked and persisted but never listed, so an
+    /// app held a durable grant to a folder and could never learn the URIs of
+    /// anything in it.
+    @Test("SwiftPWASystemPlugins lists a SAF tree, tree-aware both ways")
+    func systemPluginsListsSAFTree() {
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        // A tree URI and a document URI are not interchangeable: children come
+        // from the tree document id for a freshly picked tree and from the
+        // document id once we're descending, so both spellings must be there.
+        #expect(kt.contains("DocumentsContract.getTreeDocumentId(tree)"))
+        #expect(kt.contains("DocumentsContract.isDocumentUri(activity, tree)"))
+        #expect(kt.contains("DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)"))
+        // Each row's document id has to go back through this before it can be
+        // opened or descended into; the raw id is not a URI, and the child's
+        // URI without the tree carries no grant.
+        #expect(kt.contains("DocumentsContract.buildDocumentUriUsingTree(tree, id)"))
+        // The entries decode straight into `FsEntry`.
+        for field in ["\"name\"", "\"path\"", "\"isDir\"", "\"isFile\""] {
+            #expect(kt.contains(".put(\(field)"))
+        }
+        // Sorted, because the path-backed `fs.readDir` sorts and a page
+        // rendering a library shouldn't have to care which one it got.
+        #expect(kt.contains("rows.sortBy { it.getString(\"name\") }"))
+        // And metadata stops claiming every content URI is a file — every
+        // subdirectory in that listing is one an app asks about before
+        // descending.
+        #expect(kt.contains("DocumentsContract.Document.MIME_TYPE_DIR"))
+        #expect(kt.contains("payload.put(\"isDir\", isDir)"))
     }
 
     @Test("SwiftPWASystemPlugins pushes install events on the 'updater.install' channel")

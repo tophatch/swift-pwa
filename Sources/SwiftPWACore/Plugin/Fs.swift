@@ -149,6 +149,26 @@ public protocol FsContentResolver: Sendable {
     func readBinary(uri: String) async throws -> Data
     func writeBinary(uri: String, data: Data) async throws
     func metadata(uri: String) async throws -> FsMetadata
+
+    /// List the children of a SAF *tree* URI, in the same shape a
+    /// filesystem path lists in — each entry's `path` being its own document
+    /// URI, which ``readBinary(uri:)`` and this call both accept.
+    ///
+    /// Without this a picked folder is a dead end: the app holds a durable
+    /// grant to it and can never learn the URIs of anything inside, which is
+    /// the whole of a library whose files are the user's own (#246).
+    func readDir(uri: String) async throws -> [FsEntry]
+}
+
+public extension FsContentResolver {
+    /// Default for a resolver written before tree listing existed: the
+    /// operation is refused rather than the type failing to compile.
+    func readDir(uri: String) async throws -> [FsEntry] {
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "fs.readDir: this content resolver cannot list \(uri)"
+        )
+    }
 }
 
 // MARK: - DTOs

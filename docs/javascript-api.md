@@ -888,6 +888,15 @@ const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
 should layer it themselves — typically by gating writes behind
 `dialog.openFile` so the user grants paths through the picker.
 
+On **Android**, a `path` can be a `content://` URI from a SAF picker as well as
+a filesystem path, and `fs.readDir` walks a **tree** URI from
+`dialog.openDirectory` — each entry's `path` is its own document URI, which
+`fs.readBinary` and `fs.readDir` both accept, so a folder the user picked is a
+library you can list, descend and read. See
+[android-setup.md](android-setup.md#walking-a-folder-the-user-picked); the
+remaining directory-style calls (`mkdir` / `remove` / `copy` / `rename`) still
+refuse a content URI, because SAF has no POSIX equivalent for them.
+
 **Zip extraction (content packs)** — available only when an archive
 extractor is injected: `ctx.use(FsPlugin(SystemFs(extractor: ZIPExtractor())))`
 (import `SwiftPWAArchive`). Bytes never cross the bridge — extraction is

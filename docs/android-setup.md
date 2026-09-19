@@ -760,10 +760,11 @@ three cases at once:
 
 Two things to expect from the platform rather than from us. A network-backed
 provider is entitled to omit a row's size and modification time, so
-`fs.metadata` can report `size: 0` and no `modified` for a Drive file that is
-neither empty nor undated. And listing is a `ContentResolver.query` per
-directory — cheap locally, a network round trip on Drive — so walk lazily
-rather than eagerly for a deep tree.
+`fs.metadata` reports **no `size` and no `modified`** for a Drive file that is
+neither empty nor undated — test with `m.size == null` rather than `!m.size`,
+or a genuinely empty file reads as unknown. And listing is a
+`ContentResolver.query` per directory — cheap locally, a network round trip on
+Drive — so walk lazily rather than eagerly for a deep tree.
 
 ### Which device is this?
 

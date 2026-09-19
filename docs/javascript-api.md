@@ -881,12 +881,22 @@ const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path });
 await __SWIFT_PWA__.invoke('fs.copy',     { from, to });
 await __SWIFT_PWA__.invoke('fs.rename',   { from, to });
 const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
-// → { size, isDir, isFile, modified }   // modified: ms since epoch, may be null
+// → { size, isDir, isFile, modified }
+// size: bytes, ABSENT when the source doesn't know
+// modified: ms since epoch, absent when the source doesn't record one
 ```
 
 `FsPlugin` does not enforce a path scope. Apps that need a sandbox
 should layer it themselves — typically by gating writes behind
 `dialog.openFile` so the user grants paths through the picker.
+
+`size` and `modified` are **absent rather than zero** when the source genuinely
+doesn't know — check with `m.size == null`, not `!m.size`, so a real empty file
+isn't mistaken for an unknown one. A filesystem path always knows both; the
+case this exists for is an Android `DocumentsProvider` backed by a network
+(Drive, OneDrive, Dropbox), which is entitled to omit either and does. Saying
+`0` there is a claim a caller acts on: it skips the read, renders an empty row,
+or refuses to copy.
 
 On **Android**, a `path` can be a `content://` URI from a SAF picker as well as
 a filesystem path, and `fs.readDir` walks a **tree** URI from

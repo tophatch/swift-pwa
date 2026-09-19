@@ -4134,7 +4134,13 @@ enum AndroidTemplates {
                             }
                         }
                     }
-                    val payload = JSONObject().put("size", if (size < 0) 0 else size)
+                    // Omitted rather than zeroed when the provider didn't say.
+                    // A network-backed provider (Drive, OneDrive, Dropbox) is
+                    // entitled to skip both columns, and "0 bytes" is a claim a
+                    // caller acts on — it skips the read or renders an empty
+                    // row for a file that is neither.
+                    val payload = JSONObject()
+                    if (size >= 0) payload.put("size", size)
                     payload.put("isDir", isDir)
                     if (modified != null) payload.put("modified", modified)
                     done(payload.toString(), null)

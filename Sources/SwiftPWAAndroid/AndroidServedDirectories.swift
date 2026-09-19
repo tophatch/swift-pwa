@@ -63,7 +63,19 @@
             /// mount. Hand-built rather than `JSONEncoder`d: three fields, and
             /// this runs once per resource request.
             func resolve(url: String) -> String? {
-                guard let parsed = URL(string: url), let hit = provider.resolve(parsed) else { return nil }
+                guard let parsed = URL(string: url) else { return nil }
+                // A SAF tree mount (#249). Answered as the tree plus the path
+                // within it, because turning that pair into a document URI is
+                // a `DocumentsContract` walk and belongs on the Kotlin side —
+                // a provider's document ids are its own business, not
+                // something to concatenate.
+                if let content = provider.contentMount(for: parsed) {
+                    return """
+                    {"tree":\(jsonString(content.tree)),\
+                    "relative":\(jsonString(content.relativePath))}
+                    """
+                }
+                guard let hit = provider.resolve(parsed) else { return nil }
                 return """
                 {"path":\(jsonString(hit.fileURL.path)),\
                 "mime":\(jsonString(hit.mimeType)),\

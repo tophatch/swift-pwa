@@ -13,6 +13,9 @@
 #   4. A subdirectory in that listing lists in turn (a tree URI and a document
 #      URI are not interchangeable, and this is where that bites).
 #   5. `fs.metadata` reports `isDir` honestly for a directory document.
+#   6. #249: the same tree **serves** — `ctx.serveDirectory` over a tree URI
+#      answers `/<mount>/<rel_path>` and honours a `Range`, which is what a
+#      reader needs to stream a book rather than load it whole.
 #
 # **The picker is driven, not tapped by a human.** `uiautomator dump` gives the
 # view hierarchy with bounds, so the folder row and the confirm buttons are
@@ -138,6 +141,14 @@ func registerProbes(_ ctx: any AppContext) {
         RuntimeDiagnostics.emit("SAFPROBE " + args.line)
         return ProbeAck(ok: true)
     })
+    // #249: mount the tree the user picked. One call, the same one a desktop
+    // app makes with a path — which is the whole point of taking a tree URI
+    // here rather than inventing a second API.
+    ctx.registry.register("probe.serveTree", typed: { (args: ProbeReport, _) async -> ProbeReport in
+        guard let tree = URL(string: args.line) else { return ProbeReport(line: "bad-uri") }
+        await MainThread.run { ctx.serveDirectory(tree, at: "/library") }
+        return ProbeReport(line: "mounted")
+    })
 }
 '''
 (app_dir / "Sources" / app_dir.name / "Probe.swift").write_text(probe)
@@ -224,6 +235,36 @@ cat > "$APP_DIR/web/index.html" <<HTML
             return 'isDir=' + m.isDir + ' isFile=' + m.isFile +
                    ' size=' + (m.size == null ? 'unknown' : m.size);
           });
+      });
+    }).then(function () {
+      // #249. Mount the very tree the picker returned, then stream out of it.
+      return step('serve', function () {
+        return __SWIFT_PWA__.invoke('probe.serveTree', { line: tree }).then(function () {
+          return fetch('/library/one.txt', { headers: { Range: 'bytes=4-8' } })
+            .then(function (res) {
+              return res.text().then(function (t) {
+                return 'status=' + res.status + ' len=' + t.length + ' body=' + JSON.stringify(t);
+              });
+            });
+        });
+      });
+    }).then(function () {
+      // A file one level down, which is where the walk has to descend — and
+      // the second request into that folder should come off the cache.
+      return step('servenested', function () {
+        return fetch('/library/chapters/nested.txt').then(function (res) {
+          return res.text().then(function (t) {
+            return 'status=' + res.status + ' body=' + JSON.stringify(t);
+          });
+        });
+      });
+    }).then(function () {
+      return step('servemissing', function () {
+        return fetch('/library/not-here.txt').then(function (res) {
+          return res.text().then(function (t) {
+            return 'status=' + res.status + ' body=' + t.length;
+          });
+        });
       });
     }).then(function () {
       return step('metafile', function () {
@@ -358,6 +399,15 @@ expect "metadata reports a directory as a directory" \
     'SAFPROBE metadir isDir=true isFile=false'
 expect "metadata still reports a file as a file, with its size" \
     'SAFPROBE metafile isDir=false size=14'
+
+# #249: the same tree, mounted and streamed from. "the first file"[4:9] is
+# "first".
+expect "a picked tree mounts and answers a Range" \
+    'SAFPROBE serve status=200 len=5 body="first"'
+expect "a file one directory down serves too, which is where the walk descends" \
+    'SAFPROBE servenested status=200 body="a chapter"'
+expect "a path that is not in the tree 404s with a body" \
+    'SAFPROBE servemissing status=404 body=[1-9][0-9]*'
 expect "the page ran to the end" 'SAFPROBE finished'
 
 echo

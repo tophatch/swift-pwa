@@ -60,6 +60,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   device's own name on iOS, and the hostname (minus a `.local` suffix) on the
   three desktops. Never empty.
 
+- **`serveDirectory` takes a SAF tree, so a picked folder can be streamed from**
+  (#249). #246 made a tree listable; this makes it *servable*, which is the
+  half a reader needs. A library folder is served, not read into memory —
+  `/library/<rel_path>` is what pdf.js and epub.js stream from, and a 400 MB
+  PDF is not a `readBinary`. Until now `AssetProvider.mount` took a filesystem
+  URL and a tree could only be enumerated, so an app could find every document
+  in a picked folder and had nowhere to point.
+
+  ```swift
+  ctx.serveDirectory(pickedTreeURL, at: "/library")   // the same call a path takes
+  ```
+
+  One API, not two: a path on desktop, a tree where that is what the user
+  picked. A `content://` URI names nothing on the other four platforms, so the
+  resolution is Android's — `AssetProvider` reports the mount as a tree plus
+  the path within it and the generated Kotlin does the `DocumentsContract`
+  walk, one segment at a time, because a provider's document ids are its own
+  business rather than something to concatenate. **Every intermediate
+  directory is cached**: a reader asks for neighbours in one folder over and
+  over, and on a network-backed provider each uncached level is a round trip.
+
+  No `Content-Length` of our own, matching the other mounts: Chromium bounds a
+  range with `available()` rather than that header, so setting one would only
+  risk contradicting the length it computes — and a network-backed provider
+  often has no size to give (#248). Ranges work through the same cap the #244
+  fix put in.
+
 - **`fs.readDir` walks a SAF tree on Android, so a folder the user picked can
   back a library** (#246). Everything around it already worked —
   `dialog.openDirectory` opens `ACTION_OPEN_DOCUMENT_TREE`, the runtime takes a

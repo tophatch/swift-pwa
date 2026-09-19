@@ -786,6 +786,25 @@ for (const entry of entries) {
 }
 ```
 
+The same tree can be **served**, which is what a reader actually needs — a
+library folder is streamed from, not read into memory:
+
+```swift
+ctx.serveDirectory(pickedTree, at: "/library")   // the same call a path takes
+```
+
+```js
+// /library/<rel_path> now streams, ranges included
+pdfViewer.open('/library/' + entry.name);
+```
+
+One API, not two: a path on desktop, a tree where that's what the user picked.
+Each request is turned into a document URI by walking the tree a segment at a
+time — a provider's document ids are its own business, so they can't be
+concatenated — and every intermediate directory is cached, because a reader
+asks for neighbours in one folder over and over and each uncached level is a
+`ContentResolver.query` (a network round trip on Drive).
+
 Recursion is the caller's business, exactly as it is for a path. `fs.metadata`
 answers for these URIs too, and reports `isDir` honestly — through 0.11.1 it
 claimed every content URI was a file, which was harmless only while nothing

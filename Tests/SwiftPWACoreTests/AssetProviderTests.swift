@@ -77,6 +77,59 @@ struct AssetProviderTests {
         #expect(resolved?.fileURL.deletingLastPathComponent().lastPathComponent == packs.lastPathComponent)
     }
 
+    /// #249: `dialog.openDirectory` hands an app a SAF tree URI, and until
+    /// now a mount had to be a filesystem path — so a picked library could be
+    /// listed but never *served*, and a reader had nowhere to point.
+    @Test("a SAF tree mounts, and resolves as tree-plus-path rather than a file")
+    func contentTreeMount() throws {
+        let bundle = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let tree = try #require(URL(string: "content://com.android.externalstorage.documents/tree/primary%3ABooks"))
+
+        let provider = AssetProvider()
+        provider.setBundleRoot(bundle)
+        provider.mount(tree, at: "/loc")
+
+        let request = try #require(URL(string: "pwa://localhost/loc/chapters/one.epub"))
+        let hit = try #require(provider.contentMount(for: request))
+        #expect(hit.tree == tree.absoluteString)
+        #expect(hit.relativePath == "chapters/one.epub")
+
+        // `resolve` must not answer for it: turning an opaque provider URI
+        // into a filesystem path would name nothing, on any platform.
+        #expect(provider.resolve(request) == nil)
+        // The bundle is untouched by a content mount sitting beside it.
+        let index = try #require(URL(string: "pwa://localhost/index.html"))
+        #expect(provider.resolve(index)?.fileURL.lastPathComponent == "index.html")
+    }
+
+    @Test("a filesystem mount is not mistaken for a content one, and traversal is refused")
+    func contentMountBoundaries() throws {
+        let bundle = try tempBundle()
+        defer { try? FileManager.default.removeItem(at: bundle) }
+        let packs = URL(fileURLWithPath: NSTemporaryDirectory())
+            .appendingPathComponent("swift-pwa-packs-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: packs) }
+        let tree = try #require(URL(string: "content://example/tree/primary%3ABooks"))
+
+        let provider = AssetProvider()
+        provider.setBundleRoot(bundle)
+        provider.mount(packs, at: "/packs")
+        provider.mount(tree, at: "/loc")
+
+        // An ordinary mount stays ordinary.
+        let underPacks = try #require(URL(string: "pwa://localhost/packs/a.png"))
+        #expect(provider.contentMount(for: underPacks) == nil)
+        // And a request under no mount at all is nobody's.
+        let unmounted = try #require(URL(string: "pwa://localhost/elsewhere/a"))
+        #expect(provider.contentMount(for: unmounted) == nil)
+        // `..` can't be laundered into a provider walk the way it can into a
+        // path, but refusing it keeps the two mount kinds honest alike.
+        let traversal = try #require(URL(string: "pwa://localhost/loc/../secret"))
+        #expect(provider.contentMount(for: traversal) == nil)
+    }
+
     @Test("resolves explicit path")
     func resolvesExplicit() throws {
         let dir = try tempBundle()

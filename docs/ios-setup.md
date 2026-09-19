@@ -498,6 +498,55 @@ Two iOS-specific things to expect:
   (`scenes=[…] windows=… key=…`) to the message, because Apple's own text names
   neither the window nor the reason.
 
+## The app's user-visible folder, and why it doesn't outlive the app
+
+`app.documentsDir` / `ctx.documentsDirectory()` resolve to the app's own
+`Documents` container on iOS, which is the folder `UIFileSharingEnabled` +
+`LSSupportsOpeningDocumentsInPlace` expose in the Files app. It is a real path,
+so it serves and streams like anywhere else.
+
+**It reports `survivesUninstall: false`, and that is the truth rather than a
+limitation we could code around.** On iOS the visible Documents folder is
+*inside* the app container, and deleting the app deletes it. Every other
+platform this runtime targets answers `true`. An app that reads the flag can
+offer an export before the user uninstalls, rather than implying a permanence
+the platform won't provide.
+
+### iCloud is the upgrade, and it needs a paid team
+
+The iOS answer to "files the user keeps" is an iCloud Drive folder, declared
+with `NSUbiquitousContainers`. **swift-pwa does not do this for you**, because
+it cannot be reached — let alone verified — from the free personal team the rest
+of this guide assumes: a free team cannot create an iCloud container at all.
+
+What it takes, so an app with a paid team can decide for itself:
+
+1. **An iCloud container identifier**, `iCloud.<bundle-id>`, created under
+   Identifiers → iCloud Containers in the developer portal, and associated with
+   the App ID. Note that **a container cannot be deleted once created** — Apple
+   keeps the identifier on the team permanently.
+2. **The iCloud capability on the App ID**, with *iCloud Documents* enabled.
+   This **invalidates existing provisioning profiles for that App ID**, which
+   have to be regenerated — so do it on a new App ID rather than on one a
+   shipping app uses.
+3. **Entitlements** in the signed app:
+   `com.apple.developer.icloud-container-identifiers` =
+   `["iCloud.$(CFBundleIdentifier)"]` and
+   `com.apple.developer.icloud-services` = `["CloudDocuments"]`.
+4. **`NSUbiquitousContainers` in `Info.plist`**, keyed by the container id,
+   with `NSUbiquitousContainerIsDocumentScopePublic` = `true`,
+   `NSUbiquitousContainerSupportedFolderLevels` = `Any`, and
+   `NSUbiquitousContainerName` set to the folder name to show in iCloud Drive.
+5. **At runtime**, `FileManager.url(forUbiquityContainerIdentifier:)` returns
+   the container — `nil` when the user isn't signed into iCloud, which is a
+   state to handle rather than an error — and its `Documents` subfolder is what
+   appears in iCloud Drive. The first call can be slow; keep it off the main
+   thread.
+
+Until someone runs that end to end, it stays documented rather than
+implemented: an untested signing path is the shape of bug this project has paid
+for before.
+
 ## Known limitations on iOS
 
 - **The app driver can't synthesize input on iOS.** `eval` / `shot` /

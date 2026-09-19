@@ -51,6 +51,41 @@
         /// hops; UI-bound work is routed to the Android UI thread
         /// explicitly through `MainThread.run` (which JNI-posts to
         /// `Handler(Looper.getMainLooper())`).
+        /// Ask the Activity for its label and install it into Core.
+        ///
+        /// Blocking, deliberately, and only on the runtime thread: the RPC
+        /// hops to the UI thread, which is free, and the alternative — filling
+        /// the name in later — means whatever asked first got the wrong
+        /// answer and, for a directory, made it real on disk. Bounded, so a
+        /// bridge that never attaches costs a moment rather than the launch;
+        /// the package name is a serviceable fallback where the label isn't.
+        private nonisolated func installAppDisplayName() {
+            struct Label: Decodable { let label: String }
+            final class Box: @unchecked Sendable { var value: String? }
+            let box = Box()
+            let done = DispatchSemaphore(value: 0)
+            Task {
+                defer { done.signal() }
+                box.value = try? await AndroidRPC.call(
+                    "app.label", EmptyArgs(), as: Label.self
+                ).label
+            }
+            if done.wait(timeout: .now() + 2) != .success {
+                RuntimeDiagnostics.emit("swift-pwa: the Activity didn't answer app.label in time")
+            }
+            if let label = box.value, !label.isEmpty {
+                AppPlugin.setDisplayName(label)
+                return
+            }
+            // `/proc/self/cmdline` is the package name on Android, because the
+            // platform renames the forked zygote to it. Not the label, but a
+            // great deal better than `app_process64`.
+            if let cmdline = try? String(contentsOfFile: "/proc/self/cmdline", encoding: .utf8) {
+                let name = cmdline.split(separator: "\0").first.map(String.init) ?? ""
+                if !name.isEmpty { AppPlugin.setDisplayName(name) }
+            }
+        }
+
         public nonisolated func run(
             _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) throws -> Never {
@@ -130,6 +165,15 @@
                 let prefix = "swift-pwa: "
                 swiftPWALog(message.hasPrefix(prefix) ? String(message.dropFirst(prefix.count)) : message)
             }
+
+            // The app's own name, which Android is the one platform to have no
+            // synchronous source for: there's no `Info.plist`, and the process
+            // name is `app_process64` — the zygote binary. Fetched here, before
+            // `configure`, because the app can ask for `app.name` or create its
+            // user-visible documents folder (#250) in its very first line, and
+            // a folder named after the zygote would then exist on the device
+            // for good.
+            installAppDisplayName()
 
             // After the sink, so a failure to install the watch reaches logcat
             // rather than the discarded stderr — the whole point of the change

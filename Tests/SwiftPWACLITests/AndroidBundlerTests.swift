@@ -791,6 +791,20 @@ struct AndroidBundlerUnitTests {
         #expect(kt.contains("activity.contentResolver.query"))
     }
 
+    /// #250: Android is the one platform with no synchronous source for the
+    /// app's own name — no `Info.plist`, and a process name of
+    /// `app_process64`, the zygote binary. That reached `app.name`, and a
+    /// user-visible folder derived from it would have been
+    /// `/sdcard/Documents/app_process64`.
+    @Test("SwiftPWASystemPlugins can report the Activity's own label")
+    func systemPluginsReportsAppLabel() {
+        let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(kt.contains("\"app.label\" -> done(appLabel(), null)"))
+        #expect(kt.contains("activity.applicationInfo.loadLabel(activity.packageManager)"))
+        // The package name where a label isn't readable — never empty.
+        #expect(kt.contains("if (label.isEmpty()) activity.packageName else label"))
+    }
+
     /// #246: a SAF tree could be picked and persisted but never listed, so an
     /// app held a durable grant to a folder and could never learn the URIs of
     /// anything in it.

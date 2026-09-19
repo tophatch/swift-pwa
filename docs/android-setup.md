@@ -679,12 +679,59 @@ request, and a *special* one like All-files access needs a hand-off to Settings
 carry store-policy consequences; that is the app's call to make, and not a
 reason the manifest can't express it.
 
+### Where an app's own files go, and what that needs (nothing)
+
+**Start here before reaching for All-files access.** Since Android 11 an app can
+create, list and read **its own** files in shared storage by path, with no
+permission at all. All-files access is only what lets it see what *everything
+else* put there. That changes the shape of a default install: the app's library
+can be an ordinary folder in Documents, needing no grant and surviving
+uninstall.
+
+`app.documentsDir` (`ctx.documentsDirectory()` in Swift) resolves to
+`/sdcard/Documents/<App>` and creates it:
+
+```js
+const { path, survivesUninstall } = await __SWIFT_PWA__.invoke('app.documentsDir');
+await __SWIFT_PWA__.invoke('fs.writeText', { path: path + '/book.txt', contents });
+```
+
+Because it is a **real path**, `ctx.serveDirectory(ctx.documentsDirectory(), at: "/library")`
+mounts it and a `Range` request streams from it — so a reader opens a 400 MB PDF
+without loading it. It is visible in the Files app, and its contents outlive the
+app: measured on a Fold7 (Android 16), the file was still there after
+`adb uninstall`, while `Android/data/<id>/files` was gone.
+
+> **A file the app may not read still answers `fs.exists`.** Measured on a
+> Fold7 with the permission denied, against a file another uid had put in the
+> app's *own* Documents folder, the three questions gave three different
+> answers:
+>
+> | | Result |
+> | --- | --- |
+> | `fs.readDir` on the folder | the file is **not in the listing** |
+> | `fs.exists` on its exact path | **`true`** |
+> | `fs.readBinary` / `readText` | **denied** |
+>
+> So an app that checks `exists` before reading gets a yes and then fails, and
+> an app that scans a folder it may not read draws an **empty shelf** rather
+> than an error and concludes the user has no books. Neither reads as a
+> permission problem. If a scan comes back empty, check whether the folder is
+> one the app itself wrote.
+
+Ownership goes with the uid, not the path: after an uninstall and reinstall the
+app sees none of its old files again, even though they are still on the device
+and still visible in Files. Treat the folder as the *user's*, and re-import
+rather than assuming continuity.
+
 ### All-files access
 
-An app whose library is the user's own folders needs *paths* — a `FileManager`
-walk, a rescan, a sidecar file beside the original — and on Android paths mean
-`MANAGE_EXTERNAL_STORAGE`. Declare it by name and the runtime handles both the
-manifest entry and the request:
+All-files access is the **upgrade**, not the price of entry: it is what lets an
+app read the books that were already on the device, in folders it didn't write.
+An app whose library is the user's own existing folders needs *paths* — a
+`FileManager` walk, a rescan, a sidecar file beside the original — and on
+Android those mean `MANAGE_EXTERNAL_STORAGE`. Declare it by name and the runtime
+handles both the manifest entry and the request:
 
 ```json
 "permissions": { "device": ["allFiles"] }

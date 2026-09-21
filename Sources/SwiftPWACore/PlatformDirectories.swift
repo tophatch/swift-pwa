@@ -84,9 +84,35 @@ public enum PlatformDirectories {
     /// lets it see what everything *else* put there — see
     /// docs/android-setup.md.
     public static func documentsDirectory(appName: String) -> URL {
-        let url = documentsRoot().appendingPathComponent(appName, isDirectory: true)
+        let url = documentsRoot().appendingPathComponent(documentsLeaf(appName), isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    /// Turn an app's display name into a single folder name.
+    ///
+    /// This is where a name stops being a label and becomes a path, so it is
+    /// the one place to stop a name changing the folder's *depth* — a name
+    /// carrying `/` or `..` would otherwise put the app's library somewhere
+    /// else entirely, and since the name can come from the environment
+    /// (``AppPlugin/displayNameEnvironmentVariable``) that is a boundary, not
+    /// a theoretical one.
+    ///
+    /// The Windows-reserved characters go the same way on **every** platform,
+    /// so an app named `Reader: Pro` owns one folder called `Reader- Pro`
+    /// rather than working on macOS and silently failing to create its
+    /// directory on Windows. Spaces are kept — they are the whole point.
+    static func documentsLeaf(_ appName: String) -> String {
+        let illegal = Set("/\\:*?\"<>|")
+        var leaf = String(appName.map { illegal.contains($0) ? "-" : $0 })
+        // Control characters (a newline among them) are dropped rather than
+        // substituted: they are never part of a name someone meant to type.
+        leaf = leaf.filter { !$0.unicodeScalars.contains { scalar in scalar.properties.generalCategory == .control } }
+        // Windows drops trailing dots and spaces from a directory name, which
+        // would make two names collide that don't look like they should.
+        while let last = leaf.last, last == "." || last == " " { leaf.removeLast() }
+        leaf = leaf.trimmingCharacters(in: .whitespaces)
+        return leaf.isEmpty ? "App" : leaf
     }
 
     /// Whether the contents of ``documentsDirectory(appName:)`` outlive the

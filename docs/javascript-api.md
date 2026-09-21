@@ -233,6 +233,35 @@ const { path, survivesUninstall } = await __SWIFT_PWA__.invoke('app.documentsDir
 to the process name when no bundle is present; `version` is the empty
 string on hosts without an `Info.plist` (Linux / Android).
 
+### What an app is called when there's no bundle
+
+`app.name` is not cosmetic: `app.documentsDir` is derived from it, so a name
+that changes moves the user's folder. There are three sources, in order — a
+name the backend installed (Android's Activity label), the name `pwa.json`
+gives, passed through by `swift-pwa dev` / `drive` / the catalog dump, and then
+the bundle, falling back to the executable.
+
+That middle source exists because a SwiftPM target name **can't contain a
+space**. Before it, an app whose `pwa.json` said `"Aether Reader"` answered
+`AetherReader` from a `swift build` binary and `Aether Reader` once bundled — so
+a development run created an empty `~/Documents/AetherReader` beside the user's
+real library and showed it as empty. The private `dataDir` / `cacheDir` still
+differ between the two on purpose: a driven run keeping its own state off the
+installed app's is useful, and a shipped app scopes them by bundle id anyway.
+
+**Known gap on Linux and Windows.** Neither platform gives a shipped binary an
+`Info.plist` to read — `Bundle.main.infoDictionary` is empty there (measured) —
+so an installed app answers its *executable* name, which is the SwiftPM target
+name. If your display name differs from your target name, say so yourself in
+`configure`:
+
+```swift
+AppPlugin.setDisplayName("Aether Reader")
+```
+
+That is the same seam Android's backend uses. macOS and iOS read the bundle,
+and Android reads the Activity label, so only these two need it.
+
 `app.dataDir` / `app.cacheDir` return the platform's per-app **persistent**
 and **disposable** writable directories (created on first call) —
 `~/Library/Application Support/<bundle-id>` and `~/Library/Caches/<bundle-id>`

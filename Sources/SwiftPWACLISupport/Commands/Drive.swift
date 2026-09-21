@@ -941,6 +941,7 @@ struct LaunchedApp {
             timeout: options.timeout,
             route: options.route,
             webRoot: webRoot,
+            displayName: pwa.name,
             background: options.background,
             runtimeEnvironment: NativeLibrarySearch.hostRuntimeEnvironment(manifest: pwa, projectRoot: cwd)
         )
@@ -1260,6 +1261,7 @@ struct LaunchedApp {
         timeout: TimeInterval,
         route: String?,
         webRoot: URL? = nil,
+        displayName: String? = nil,
         background: Bool = false,
         runtimeEnvironment: [String: String] = [:]
     ) throws -> LaunchedApp {
@@ -1281,6 +1283,13 @@ struct LaunchedApp {
         // declare as a SwiftPM resource.
         if let webRoot {
             env[WebRoot.environmentVariable] = webRoot.path
+        }
+        // A bare `swift build` binary has no bundle to take its name from, so
+        // it would answer the SwiftPM target name — and `app.documentsDir` is
+        // derived from that name, which would send a driven run to an empty
+        // folder beside the user's real one (#254).
+        if let displayName, !displayName.isEmpty {
+            env[AppPlugin.displayNameEnvironmentVariable] = displayName
         }
         // Off screen and never activated, so a suite can run while the machine
         // stays usable. The app decides whether it can honour that — the

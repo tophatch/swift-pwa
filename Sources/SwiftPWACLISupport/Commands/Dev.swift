@@ -1,5 +1,6 @@
 import ArgumentParser
 import Foundation
+import SwiftPWACore
 
 struct Dev: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
@@ -83,6 +84,10 @@ struct Dev: AsyncParsableCommand {
             + NativeLibrarySearch.hostCompilerArgs(manifest: devManifest, projectRoot: cwd)
         var env = ProcessInfo.processInfo.environment
         env["PWA_DEV_SERVER"] = devURL
+        // `swift run` produces a bare binary with no bundle, which would name
+        // the app after the SwiftPM target — and move `app.documentsDir` with
+        // it. The manifest is the name the bundled app will carry (#254).
+        env[AppPlugin.displayNameEnvironmentVariable] = devManifest.name
         // …and so the app can *load* them once it's running.
         for (key, value) in try NativeLibrarySearch.hostRuntimeEnvironment(
             manifest: devManifest, projectRoot: cwd

@@ -590,6 +590,23 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**A shipped app answers its *executable* name, not `pwa.json`'s.** There is no
+`Info.plist` here — `Bundle.main.infoDictionary` comes back empty on
+swift-corelibs-foundation (measured) — so `app.name` falls back to the process
+name, which is the SwiftPM target name, and a target name can't contain a space.
+`app.documentsDir` is derived from that name, so an app whose `pwa.json` says
+`"Aether Reader"` owns `~/Documents/AetherReader` here and `~/Documents/Aether Reader`
+on macOS. `swift-pwa dev` and `drive` pass the manifest name through the
+environment, so this shows up only once the app is installed. Until the bundler
+carries the name itself, declare it in `configure`:
+
+```swift
+AppPlugin.setDisplayName("Aether Reader")
+```
+
+Verified with `Scripts/verify-app-identity.sh`, which measures all four cases.
+See [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
+
 **No OS sign-in browser.** `auth.authorize` opens the *default* browser and
 catches the OAuth redirect on a loopback `127.0.0.1` listener. Apple has
 `ASWebAuthenticationSession` — one object for the browser, the callback and

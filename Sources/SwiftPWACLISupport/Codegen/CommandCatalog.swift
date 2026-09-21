@@ -89,10 +89,16 @@ enum CommandCatalog {
                 + NativeLibrarySearch.hostCompilerArgs(manifest: manifest, projectRoot: projectRoot)
                 + [exe],
             cwd: projectRoot,
-            envOverrides: [HeadlessDescribe.environmentVariable: catalogURL.path]
-                .merging(NativeLibrarySearch.hostRuntimeEnvironment(
-                    manifest: manifest, projectRoot: projectRoot, extra: nativeLibraryDirs
-                )) { current, _ in current }
+            envOverrides: [
+                HeadlessDescribe.environmentVariable: catalogURL.path,
+                // The dump runs an unbundled binary, and a `configure` that
+                // touches `app.documentsDir` would otherwise create a folder
+                // under the target's name in the user's Documents (#254).
+                AppPlugin.displayNameEnvironmentVariable: manifest.name
+            ]
+            .merging(NativeLibrarySearch.hostRuntimeEnvironment(
+                manifest: manifest, projectRoot: projectRoot, extra: nativeLibraryDirs
+            )) { current, _ in current }
         )
 
         guard fm.fileExists(atPath: catalogURL.path) else {

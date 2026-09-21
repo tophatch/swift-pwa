@@ -108,15 +108,54 @@ public struct AppPlugin: Plugin {
         installedDisplayName = name
     }
 
+    /// Names the app for a binary that has no bundle to carry the name.
+    ///
+    /// **Debug builds only**, for the same reason ``WebRoot/environmentVariable``
+    /// is: a shipped app that took its identity from its environment would let
+    /// whoever launched it choose which folder under Documents it adopts.
+    ///
+    /// `swift-pwa dev`, `drive` and the headless catalog dump set it from
+    /// `pwa.json`'s `name`. Without it a bare `swift build` binary falls back to
+    /// the executable, which is the SwiftPM target name — and a target name
+    /// can't contain a space, so an app called "Aether Reader" answered
+    /// `AetherReader` in development and `Aether Reader` once bundled. Private
+    /// containers can differ between the two harmlessly; ``documentsDirectory``
+    /// can't, because a debug run then creates an empty folder beside the
+    /// user's real library and adopts it (#254).
+    public static let displayNameEnvironmentVariable = "SWIFT_PWA_APP_NAME"
+
     /// The human-facing app name. Prefers a name a backend installed, then the
-    /// bundle's display name, then its bundle name, falling back to the
-    /// process name on hosts where `Bundle.main.infoDictionary` isn't
-    /// populated (corelibs-foundation on Linux). Never empty.
+    /// manifest name the tooling passed for an unbundled run, then the bundle's
+    /// display name, then its bundle name, falling back to the process name on
+    /// hosts where `Bundle.main.infoDictionary` isn't populated
+    /// (corelibs-foundation on Linux). Never empty.
     static func appName() -> String {
+        if let installed = installedName() { return installed }
+        if let fromTooling = environmentDisplayName() { return fromTooling }
+        return bundleOrProcessName()
+    }
+
+    private static func installedName() -> String? {
         displayNameLock.lock()
         let installed = installedDisplayName
         displayNameLock.unlock()
-        if let installed, !installed.isEmpty { return installed }
+        guard let installed, !installed.isEmpty else { return nil }
+        return installed
+    }
+
+    /// The tooling's answer, when this build is one the tooling can drive.
+    private static func environmentDisplayName() -> String? {
+        #if SWIFT_PWA_DRIVER
+            guard let value = ProcessInfo.processInfo.environment[displayNameEnvironmentVariable],
+                  !value.isEmpty
+            else { return nil }
+            return value
+        #else
+            return nil
+        #endif
+    }
+
+    private static func bundleOrProcessName() -> String {
         let info = Bundle.main.infoDictionary
         if let display = info?["CFBundleDisplayName"] as? String, !display.isEmpty { return display }
         if let name = info?["CFBundleName"] as? String, !name.isEmpty { return name }
@@ -154,7 +193,14 @@ public struct AppPlugin: Plugin {
     /// Windows WebView2 user-data folder).
     public static func appID() -> String {
         if let id = Bundle.main.bundleIdentifier, !id.isEmpty { return id }
-        return appName()
+        if let installed = installedName() { return installed }
+        // Deliberately *not* ``displayNameEnvironmentVariable``: the private
+        // containers are scoped by bundle id in a shipped app, so renaming the
+        // unbundled leaf wouldn't make a development run and an installed one
+        // agree — it would only move development state to a new folder and
+        // strand what was there. A driven run keeping its own data directory is
+        // the useful behaviour anyway.
+        return bundleOrProcessName()
     }
 }
 

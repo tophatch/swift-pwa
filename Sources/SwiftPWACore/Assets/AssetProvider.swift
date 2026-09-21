@@ -99,14 +99,59 @@ public final class AssetProvider: @unchecked Sendable {
     /// the same scheme/host as the bundle. Re-mounting the same prefix
     /// replaces it. `writable` is metadata for callers; the handler only
     /// ever reads.
+    ///
+    /// `root` may also be a **SAF tree URI** on Android — what
+    /// `dialog.openDirectory` hands back — so one call covers both: a path on
+    /// desktop, a tree where that's what the user picked (#249). A content
+    /// mount resolves through the Android backend rather than here, because a
+    /// `content://` URI names nothing on the other four platforms; ``resolve(_:)``
+    /// reports nil for one and ``contentMount(for:)`` is how Android asks.
     public func mount(_ root: URL, at prefix: String, writable: Bool = true) {
         let normalized = Self.normalize(prefix)
         // `/` is reserved for the bundle (use `setBundleRoot`); a served mount
         // must have its own non-root prefix so it can't shadow the whole app.
         guard normalized != "/" else { return }
+        // `standardizedFileURL` is a no-op on a non-file URL, but going
+        // through it would still imply this is a path; a tree URI is opaque
+        // and belongs to the provider that issued it.
+        let stored = Self.isContentURL(root) ? root : root.standardizedFileURL
         lock.lock(); defer { lock.unlock() }
         mounts.removeAll { $0.prefix == normalized }
-        mounts.append(Mount(prefix: normalized, root: root.standardizedFileURL, writable: writable))
+        mounts.append(Mount(prefix: normalized, root: stored, writable: writable))
+    }
+
+    /// Whether `url` is an Android SAF / content-provider URI rather than a
+    /// location on this filesystem.
+    static func isContentURL(_ url: URL) -> Bool {
+        url.scheme?.lowercased() == "content"
+    }
+
+    /// For a request under a **content** mount: the tree URI it was mounted
+    /// with, and the path within it, with no leading slash.
+    ///
+    /// The Android backend turns the pair into a document URI — a
+    /// `DocumentsContract` walk rather than string concatenation, because a
+    /// provider's document ids are its own business. Returns nil for a request
+    /// that falls under no mount, or under an ordinary filesystem one.
+    public func contentMount(for url: URL) -> (tree: String, relativePath: String)? {
+        guard url.scheme?.lowercased() == scheme else { return nil }
+        guard let urlHost = url.host?.lowercased(), urlHost == host else { return nil }
+        var path = url.path
+        if path.isEmpty { path = "/" }
+
+        let ordered: [Mount] = {
+            lock.lock(); defer { lock.unlock() }
+            return mounts.sorted { $0.prefix.count > $1.prefix.count }
+        }()
+        for mount in ordered where Self.isContentURL(mount.root) {
+            guard let relative = Self.relativePath(of: path, under: mount.prefix) else { continue }
+            // `..` can't be laundered into a provider walk the way it can into
+            // a path, but refusing it here keeps the two mount kinds honest
+            // about the same thing.
+            guard !relative.split(separator: "/").contains("..") else { return nil }
+            return (mount.root.absoluteString, relative)
+        }
+        return nil
     }
 
     /// Remove a previously-mounted prefix. The bundle `/` mount can't be
@@ -141,6 +186,10 @@ public final class AssetProvider: @unchecked Sendable {
         }()
 
         for mount in ordered {
+            // A content mount is the Android backend's to answer; resolving it
+            // here would turn an opaque provider URI into a filesystem path
+            // that names nothing.
+            if Self.isContentURL(mount.root) { continue }
             guard let relative = Self.relativePath(of: path, under: mount.prefix) else { continue }
             let candidate = mount.root.appendingPathComponent(relative).standardizedFileURL
             // Per-mount traversal guard: candidate must stay within root.

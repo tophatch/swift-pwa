@@ -31,6 +31,38 @@ struct AndroidServedMountTests {
         }
     }
 
+    /// #249: a picked SAF tree could be listed (#246) but not *served*, so a
+    /// reader could enumerate a library and had nowhere to point — the
+    /// alternative being `readBinary` into a blob, which is the whole file in
+    /// memory with no ranges.
+    @Test("a SAF tree mount is served by walking the tree, with the walk cached")
+    func servesASAFTree() {
+        // Swift answers with the tree plus the path inside it…
+        // The bridge file is a different file from the system plugins, with its
+        // own imports — the first device build failed on exactly this.
+        #expect(bridge.contains("import android.provider.DocumentsContract"))
+        #expect(bridge.contains("resolved.has(\"tree\")"))
+        #expect(bridge.contains("servedTreeResponse("))
+        // …and Kotlin turns that into a document URI a segment at a time. The
+        // tree-id-versus-document-id distinction bites here as it does in
+        // `fs.readDir`, and both spellings must be present.
+        #expect(bridge.contains("DocumentsContract.getTreeDocumentId(currentUri)"))
+        #expect(bridge.contains("DocumentsContract.isDocumentUri(activity, currentUri)"))
+        #expect(bridge.contains("DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)"))
+        #expect(bridge.contains("DocumentsContract.buildDocumentUriUsingTree(treeUri, id)"))
+        // Cached per intermediate directory: a reader asks for neighbours in
+        // one folder over and over, and on a network-backed provider each
+        // uncached level is a round trip.
+        #expect(bridge.contains("private val safDocuments = HashMap<String, String>()"))
+        #expect(bridge.contains("safDocuments[safCacheKey(tree, prefix)] = resolved.toString()"))
+        // No Content-Length of our own: Chromium bounds a range with
+        // `available()`, not with that header, and a network-backed provider
+        // may have no size to give.
+        #expect(!bridge.contains("headers[\"Content-Length\"]"))
+        // And a missing document is the same legible 404 everything else gives.
+        #expect(bridge.contains("?: return notFoundResponse(\"/$relative\")"))
+    }
+
     @Test("the resolver is a JNI call, not a Kotlin-side copy of the mount table")
     func resolutionIsOwnedBySwift() {
         // One mount table, in Core, shared with the other four backends. A

@@ -1101,8 +1101,10 @@ enum AndroidTemplates {
         package dev.swiftpwa.runtime
 
         import android.app.Activity
+        import android.net.Uri
         import android.os.Handler
         import android.os.Looper
+        import android.provider.DocumentsContract
         import android.webkit.GeolocationPermissions
         import android.webkit.JavascriptInterface
         import android.webkit.PermissionRequest
@@ -1588,6 +1590,123 @@ enum AndroidTemplates {
                 return response
             }
 
+            // -----------------------------------------------------------
+            // Serving a SAF tree (#249)
+            // -----------------------------------------------------------
+
+            /// Resolved document URIs, keyed by tree + path inside it.
+            ///
+            /// A walk costs one `ContentResolver.query` per path segment, and
+            /// a reader turning pages asks for neighbours in the same folder
+            /// over and over. Every intermediate directory is cached on the
+            /// way down, so the second file in a folder is one query rather
+            /// than the whole chain — and on a network-backed provider that is
+            /// the difference between a page turn and a round trip per level.
+            private val safDocuments = HashMap<String, String>()
+
+            private fun safCacheKey(tree: String, relative: String) = "$tree\u0000$relative"
+
+            /// The document URI for `relative` under `tree`, walking one
+            /// segment at a time from the deepest ancestor already known.
+            ///
+            /// A tree URI and a document URI are not interchangeable, and this
+            /// is the third place that bites: the children query needs the
+            /// *tree* document id at the root and the *document* id below it,
+            /// and each row's `COLUMN_DOCUMENT_ID` has to go back through
+            /// `buildDocumentUriUsingTree` before it can be descended into.
+            private fun safResolveDocument(tree: String, relative: String): Uri? {
+                val treeUri = Uri.parse(tree)
+                val segments = relative.split('/').filter { it.isNotEmpty() }
+                if (segments.isEmpty()) return null
+
+                // Start from the deepest cached prefix, so a sibling lookup
+                // doesn't re-walk what the last one already resolved.
+                var startIndex = 0
+                var currentUri = treeUri
+                for (depth in segments.size - 1 downTo 1) {
+                    val prefix = segments.subList(0, depth).joinToString("/")
+                    val cached = synchronized(safDocuments) { safDocuments[safCacheKey(tree, prefix)] }
+                    if (cached != null) {
+                        currentUri = Uri.parse(cached)
+                        startIndex = depth
+                        break
+                    }
+                }
+
+                for (index in startIndex until segments.size) {
+                    val name = segments[index]
+                    val documentId = if (DocumentsContract.isDocumentUri(activity, currentUri)) {
+                        DocumentsContract.getDocumentId(currentUri)
+                    } else {
+                        DocumentsContract.getTreeDocumentId(currentUri)
+                    }
+                    val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
+                    var found: Uri? = null
+                    val projection = arrayOf(
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                    )
+                    activity.contentResolver.query(children, projection, null, null, null)?.use { cursor ->
+                        while (cursor.moveToNext()) {
+                            val id = cursor.getString(0) ?: continue
+                            val displayName = cursor.getString(1) ?: id.substringAfterLast('/')
+                            if (displayName == name) {
+                                found = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
+                                break
+                            }
+                        }
+                    }
+                    val resolved = found ?: return null
+                    currentUri = resolved
+                    val prefix = segments.subList(0, index + 1).joinToString("/")
+                    synchronized(safDocuments) { safDocuments[safCacheKey(tree, prefix)] = resolved.toString() }
+                }
+                return currentUri
+            }
+
+            /// Serve one file out of a mounted SAF tree.
+            ///
+            /// **No `Content-Length` of our own**, deliberately, and the same
+            /// shape every other mount here returns. Chromium does not read
+            /// that header to bound a range — it calls `available()` on the
+            /// stream — so setting one would change nothing except to risk
+            /// contradicting the length it computes for itself. And a
+            /// network-backed provider is entitled to omit `COLUMN_SIZE`
+            /// (#248), so there is often nothing honest to put there anyway.
+            ///
+            /// 200 with the whole stream, like the rest: a 206 out of
+            /// `shouldInterceptRequest` is rejected before the page sees it,
+            /// Chromium ranges a 200 itself, and `capToRange` on the way out
+            /// stops the body running past the end of the range.
+            private fun servedTreeResponse(tree: String, relative: String): WebResourceResponse {
+                val document = safResolveDocument(tree, relative)
+                    ?: return notFoundResponse("/$relative")
+                var mime: String? = null
+                activity.contentResolver.query(
+                    document,
+                    arrayOf(DocumentsContract.Document.COLUMN_MIME_TYPE),
+                    null, null, null
+                )?.use { cursor ->
+                    if (cursor.moveToFirst() && !cursor.isNull(0)) mime = cursor.getString(0)
+                }
+                val stream = try {
+                    activity.contentResolver.openInputStream(document)
+                } catch (t: Throwable) {
+                    android.util.Log.e("swift-pwa", "opening $document failed: ${t.message}", t)
+                    null
+                } ?: return notFoundResponse("/$relative")
+
+                // Same split as a runtime mount: the WebView refuses a type
+                // that carries its charset along with it.
+                val full = mime ?: "application/octet-stream"
+                val semicolon = full.indexOf(';')
+                val type = if (semicolon < 0) full else full.substring(0, semicolon).trim()
+                val charset = if (semicolon < 0) null else {
+                    full.substring(semicolon + 1).trim().removePrefix("charset=").ifEmpty { null }
+                }
+                return WebResourceResponse(type, charset, stream)
+            }
+
             /// A 404 a human can read. `WebResourceResponse` insists on a
             /// non-empty reason phrase and throws otherwise, and a body is
             /// what turns the failure from `ERR_INVALID_RESPONSE` into a page
@@ -1622,6 +1741,15 @@ enum AndroidTemplates {
                 } ?: return null
                 return try {
                     val resolved = JSONObject(json)
+                    // A SAF tree mount (#249): Swift answers with the tree and
+                    // the path inside it, and turning that into a document URI
+                    // is a walk this side has to do.
+                    if (resolved.has("tree")) {
+                        return servedTreeResponse(
+                            resolved.getString("tree"),
+                            resolved.getString("relative")
+                        )
+                    }
                     // `WebResourceResponse` wants the type and the charset
                     // apart, and Core's MIME table spells them together
                     // ("text/css; charset=utf-8"). Passing the whole string as

@@ -1,0 +1,75 @@
+<!doctype html><meta charset="utf-8"><title>snapshot probe</title>
+<!-- Not decoration, and both halves earn their place on iOS. Without
+     `width=device-width` the page lays out in a 980 CSS-pixel viewport, so
+     `innerWidth * devicePixelRatio` is nearly three times the webview's real
+     pixel size. Without `viewport-fit=cover` the layout viewport is inset by
+     the status bar and home indicator while the webview still covers the whole
+     screen, so the snapshot is ~96pt taller than the page thinks it is. Both
+     made the size check fail against a snapshot that was right all along —
+     and the second is worth knowing for any app placing one: a page that is
+     not full-bleed has to account for that offset itself. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<style>
+  html, body { margin: 0; height: 100%; background: #0000ff; overflow: hidden;
+               font: 16px/1.5 Georgia, serif; }
+  #mark  { position: absolute; left: 0; top: 0; width: 50%; height: 50%; background: #ff0000; }
+  #text  { position: absolute; inset: 0; background: #fffdf8; color: #1a1a1a; padding: 24px;
+           column-count: 2; column-gap: 32px; display: none; }
+  /* Explicit, not `inset: 0`: a canvas is a *replaced* element, so with
+     left/right at 0 and width auto its box comes from its intrinsic size —
+     which two WebKit versions resolved differently, and a canvas covering
+     part of the window rather than all of it silently changed what was being
+     measured. */
+  #noise { position: absolute; left: 0; top: 0; display: none; }
+</style>
+<body>
+<div id="mark"></div>
+<div id="text"></div>
+<canvas id="noise"></canvas>
+<script>
+  const words = ("the quick brown fox jumps over a lazy dog while seventeen " +
+    "careful typographers argue about hyphenation and the margins of a page " +
+    "that nobody will ever print but everybody will scroll past in a hurry ").split(" ");
+  let prose = "";
+  for (let i = 0; i < 900; i++) prose += words[i % words.length] + " ";
+  document.getElementById("text").textContent = prose;
+
+  const noise = document.getElementById("noise");
+  function paintNoise() {
+    // Backing store in device pixels, CSS box in CSS pixels, both stated: the
+    // canvas then covers the window exactly and nothing is resampled.
+    noise.width = Math.floor(innerWidth * devicePixelRatio);
+    noise.height = Math.floor(innerHeight * devicePixelRatio);
+    noise.style.width = innerWidth + "px";
+    noise.style.height = innerHeight + "px";
+    const ctx = noise.getContext("2d");
+    const img = ctx.createImageData(noise.width, noise.height);
+    // `crypto.getRandomValues`, not a hand-rolled LCG: the low bits of a linear
+    // congruential generator are periodic — the first attempt here repeated
+    // every 256 pixels, which PNG compressed to a thirtieth of the size of the
+    // same picture on another engine, and read as a backend difference that
+    // was not there. Filled in 64 KiB chunks, which is the API's limit.
+    const chunk = new Uint8Array(65536);
+    for (let i = 0; i < img.data.length; i += chunk.length) {
+      crypto.getRandomValues(chunk);
+      img.data.set(chunk.subarray(0, Math.min(chunk.length, img.data.length - i)), i);
+    }
+    // Opaque: a random alpha would make the checks read through to whatever is
+    // behind the canvas.
+    for (let i = 3; i < img.data.length; i += 4) img.data[i] = 255;
+    ctx.putImageData(img, 0, 0);
+  }
+
+  window.__showVariant = function (name) {
+    document.getElementById("text").style.display = name === "text" ? "block" : "none";
+    noise.style.display = name === "noise" ? "block" : "none";
+    if (name === "noise") paintNoise();
+    // A timer, not requestAnimationFrame: the driven window is behind whatever
+    // launched it, and WebKit on macOS is the one engine that stops servicing
+    // rAF for an occluded window — so the obvious "wait two frames" spelling
+    // hangs forever here. The snapshot itself is unaffected: it renders through
+    // the compositor rather than reading the screen, which is the whole reason
+    // it can picture a window nobody can see.
+    return new Promise(function (r) { setTimeout(r, 150); });
+  };
+</script>

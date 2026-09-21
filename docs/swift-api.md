@@ -254,7 +254,8 @@ variant to include them.
 
 ## Built-in plugins
 
-`WindowPlugin`, `AppPlugin` (`app.quit` / `app.name` / `app.version`),
+`WindowPlugin` (including `window.snapshot`, below), `AppPlugin`
+(`app.quit` / `app.name` / `app.version`),
 `EventsPlugin` (the server-push bus, see below), and `ClipboardPlugin`
 are auto-installed on every backend — apps don't need to opt in.
 Everything else is à la carte so apps that don't need a tray / file

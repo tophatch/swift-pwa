@@ -199,6 +199,10 @@ await __SWIFT_PWA__.invoke('window.setFullscreen', { on: true });
 const { isFullscreen } = await __SWIFT_PWA__.invoke('window.isFullscreen');
 await __SWIFT_PWA__.invoke('window.close');
 
+const { value: canSnapshot } = await __SWIFT_PWA__.invoke('window.canSnapshot');
+const shot = await __SWIFT_PWA__.invoke('window.snapshot');
+// { pngBase64, width, height, bytes }
+
 // Streaming: didFocus / didBlur / didResize / didMove / didMinimize /
 // didDeminiaturize / didEnterFullscreen / didExitFullscreen / willClose.
 const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
@@ -208,6 +212,71 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
 
 `Window.position()` / `setPosition` / `.didMove` are no-ops on the GTK4
 backend (Wayland refuses to give apps their own position).
+
+#### A picture of your own content
+
+`window.snapshot` returns the webview's rendered pixels as a PNG. It exists
+because the web has no API that rasterises a DOM subtree: the libraries that
+fill that gap re-implement the renderer in JavaScript, which is slow and blind
+to shadow-root CSS and `@font-face` — and the engine already has the pixels.
+The use it was asked for is an app animating its own content: snapshot the
+outgoing page, jump the DOM to the next one, peel the snapshot away on a canvas
+overlay with the live page underneath.
+
+```js
+const { pngBase64, width, height } = await __SWIFT_PWA__.invoke('window.snapshot');
+const bitmap = await createImageBitmap(
+    await (await fetch(`data:image/png;base64,${pngBase64}`)).blob()
+);
+canvas.width = width;              // device pixels, not CSS pixels
+canvas.height = height;
+canvas.getContext('2d').drawImage(bitmap, 0, 0);
+```
+
+Three things worth knowing:
+
+- **`width` / `height` are device pixels.** On a Retina or high-DPI display
+  they are `devicePixelRatio` times the window's CSS size. Size the canvas in
+  device pixels and scale it down in CSS, or the picture is soft.
+- **Take it before you mutate the DOM.** Every backend flushes pending layout
+  first, so a snapshot taken *after* the change shows the change — which is the
+  opposite of what a transition wants.
+- **Ask `window.canSnapshot` first** rather than catching `E_UNIMPLEMENTED` per
+  call. It answers without rendering anything, so an app can offer the feature
+  or fall back once at startup.
+
+It is the webview's pixels, not the screen's, so it works while the window is
+occluded or in the background and needs no screen-recording permission
+anywhere. The cost is a full-window PNG encode plus base64 — `bytes` reports
+the PNG's own size before base64, which is the number to watch if you are
+driving an animation with it.
+
+**What it costs, measured.** A full-window PNG of a page of body text is ~60 ms
+on macOS, iOS and both Linux backends. **Windows (239 ms) and Android (406 ms)
+are four to seven times slower** — a bigger surface, PNG-encoded and, on
+Android, base64'd across the JNI boundary. Design for that: on those two,
+snapshot something smaller, or prepare the picture before the gesture starts
+rather than during it. The per-platform table is in the README's footnote 35.
+
+**Android captures the composited surface**, through `PixelCopy` rather than
+the view's own draw, because a software `View.draw` misses every GPU layer —
+a full-screen `<canvas>` came back as one flat colour while the DOM around it
+was perfect. The consequence: on Android the window has to be **on screen**
+for the best capture. A backgrounded window falls back to the view's draw,
+which still returns the DOM but not `<canvas>`, WebGL or video. The other four
+backends snapshot through their renderer and have neither limitation.
+
+**On Windows the pixels are colour-managed.** `CapturePreview` returns the
+display's colour space with that display's ICC profile embedded in the PNG, so
+on a wide-gamut monitor a page's `#0000ff` comes back as `#2200ff` — the same
+colour, different numbers. Drawing it renders correctly; sampling the bytes and
+expecting your own sRGB values back does not work there.
+
+**On iOS the picture can be taller than your page thinks.** A page that is not
+`viewport-fit=cover` has a layout viewport inset by the status bar and home
+indicator, while the webview covers the whole screen — so `height` exceeds
+`innerHeight * devicePixelRatio` and the content is offset within the picture.
+Use `viewport-fit=cover`, or account for `env(safe-area-inset-top)` yourself.
 
 ### `app.*`
 

@@ -1,12 +1,13 @@
 import CStbImage
 import Foundation
 @testable import SwiftPWACLISupport
+import SwiftPWACore
 import Testing
 
 @Suite("Windows icon resource building")
 struct WindowsIconTests {
     /// A minimal but valid PNG header: 8-byte signature + an IHDR chunk
-    /// declaring `width`×`height`. Only the bytes `pngDimensions` reads
+    /// declaring `width`×`height`. Only the bytes `PNGDimensions.read` reads
     /// need to be real.
     private func pngHeader(width: UInt32, height: UInt32) -> Data {
         var data = Data([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A])
@@ -20,15 +21,15 @@ struct WindowsIconTests {
 
     @Test("reads width and height from a PNG's IHDR")
     func readsDimensions() {
-        let dims = WindowsIcon.pngDimensions(pngHeader(width: 1024, height: 512))
+        let dims = PNGDimensions.read(pngHeader(width: 1024, height: 512))
         #expect(dims?.width == 1024)
         #expect(dims?.height == 512)
     }
 
     @Test("rejects bytes that aren't a PNG")
     func rejectsNonPNG() {
-        #expect(WindowsIcon.pngDimensions(Data([0x00, 0x01, 0x02, 0x03])) == nil)
-        #expect(WindowsIcon.pngDimensions(Data("GIF89a".utf8)) == nil)
+        #expect(PNGDimensions.read(Data([0x00, 0x01, 0x02, 0x03])) == nil)
+        #expect(PNGDimensions.read(Data("GIF89a".utf8)) == nil)
     }
 
     @Test("group directory has the icon header and a single 14-byte entry")

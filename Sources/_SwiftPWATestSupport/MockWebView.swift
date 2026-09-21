@@ -45,8 +45,18 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         lock.withLock { _receivedInput }
     }
 
+    /// PNG bytes ``captureSnapshot()`` returns, or `nil` for a backend that
+    /// can't snapshot — which is also the default, matching a real backend
+    /// that leaves the protocol's throwing implementation in place. Setting
+    /// this is what makes ``supportsSnapshot`` true.
+    public var stubbedSnapshot: Data? {
+        get { lock.withLock { _stubbedSnapshot } }
+        set { lock.withLock { _stubbedSnapshot = newValue } }
+    }
+
     private var _inputCapabilities: InputCapabilities = .none
     private var _receivedInput: [SyntheticInput] = []
+    private var _stubbedSnapshot: Data?
 
     private var inboundContinuation: AsyncStream<InboundMessage>.Continuation?
     private lazy var inboundStream: AsyncStream<InboundMessage> = AsyncStream { continuation in
@@ -121,6 +131,20 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
 
     public var inputCapabilities: InputCapabilities {
         stubbedInputCapabilities
+    }
+
+    public var supportsSnapshot: Bool {
+        lock.withLock { _stubbedSnapshot != nil }
+    }
+
+    public func captureSnapshot() async throws -> Data {
+        guard let png = lock.withLock({ _stubbedSnapshot }) else {
+            throw BridgeError(
+                code: BridgeError.unimplemented,
+                message: "this backend can't snapshot its webview contents"
+            )
+        }
+        return png
     }
 
     public func send(_ input: SyntheticInput) async throws {

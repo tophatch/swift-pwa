@@ -96,6 +96,52 @@ public struct WindowPlugin: Plugin {
             return EmptyResult()
         })
 
+        // A picture of what this window is showing, for the page that is
+        // showing it. The web has no API that rasterises a DOM subtree — the
+        // libraries that fill the gap re-implement the renderer in JavaScript,
+        // which is slow and blind to shadow-root CSS and `@font-face` — and the
+        // engine already holds the pixels. An app animating its own content (a
+        // page curl, a shared-element transition) needs exactly this.
+        //
+        // The snapshot is of the *webview*, not the screen: it works while the
+        // window is occluded or backgrounded, and it needs no screen-recording
+        // grant. Take it **before** mutating the DOM you want pictured — the
+        // backends flush pending layout first, so a snapshot taken after the
+        // mutation shows the new state, not the old one.
+        registry.register("window.snapshot", typed: { (args: TargetOnlyArgs, ctx) async throws -> WindowSnapshot in
+            // Out of the UI thread before encoding: `PWAWebView` is
+            // deliberately not main-actor isolated (each backend hops
+            // internally), so a full-window PNG doesn't hold up the frame the
+            // caller is about to animate.
+            let webView = try await onWindow(args.id, ctx: ctx, app: app) { $0.webView }
+            guard webView.supportsSnapshot else {
+                throw BridgeError(
+                    code: BridgeError.unimplemented,
+                    message: "this backend can't snapshot its webview contents — check window.canSnapshot"
+                )
+            }
+            let png = try await webView.captureSnapshot()
+            guard let size = PNGDimensions.read(png) else {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "the backend's snapshot wasn't a PNG we could read a size out of"
+                )
+            }
+            return WindowSnapshot(
+                pngBase64: png.base64EncodedString(),
+                width: size.width,
+                height: size.height,
+                bytes: png.count
+            )
+        })
+
+        // Asked separately rather than discovered by catching an error, so an
+        // app can offer the feature or not instead of rendering a snapshot to
+        // find out whether it can.
+        registry.register("window.canSnapshot", typed: { (args: TargetOnlyArgs, ctx) async throws -> BoolResult in
+            try await onWindow(args.id, ctx: ctx, app: app) { BoolResult(value: $0.webView.supportsSnapshot) }
+        })
+
         registry.registerStream(
             "window.subscribe",
             typed: { (args: TargetOnlyArgs, ctx) -> AsyncThrowingStream<WindowEvent, any Error> in
@@ -181,6 +227,28 @@ public struct StringResult: Sendable, Codable, Equatable {
 public struct BoolResult: Sendable, Codable, Equatable {
     public var value: Bool
     public init(value: Bool) { self.value = value }
+}
+
+/// What `window.snapshot` hands back: the picture, and the two numbers a page
+/// needs to put it on a canvas without guessing.
+///
+/// `width` / `height` are **device pixels**, which on a Retina or high-DPI
+/// display are not the window's CSS size — divide by `devicePixelRatio` to
+/// place it, or draw at the full size for a sharp result. `bytes` is the PNG's
+/// own length, before base64, so an app can tell a cheap snapshot from an
+/// expensive one without measuring the string.
+public struct WindowSnapshot: Sendable, Codable, Equatable {
+    public var pngBase64: String
+    public var width: Int
+    public var height: Int
+    public var bytes: Int
+
+    public init(pngBase64: String, width: Int, height: Int, bytes: Int) {
+        self.pngBase64 = pngBase64
+        self.width = width
+        self.height = height
+        self.bytes = bytes
+    }
 }
 
 // MARK: - helpers

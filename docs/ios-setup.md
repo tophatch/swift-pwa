@@ -549,6 +549,15 @@ for before.
 
 ## Known limitations on iOS
 
+- **`window.snapshot` can be taller than your page thinks it is.** A page that
+  is not `viewport-fit=cover` gets a layout viewport inset by the status bar
+  and home indicator, while the webview covers the whole screen — so the
+  snapshot's `height` exceeds `innerHeight * devicePixelRatio` and the content
+  sits offset inside the picture. Use `viewport-fit=cover`, or account for
+  `env(safe-area-inset-top)` yourself. The speed is Apple's best: a full-window
+  PNG of a page of body text measured ~60 ms at 1206×2622. See
+  [docs/javascript-api.md](javascript-api.md#a-picture-of-your-own-content).
+
 - **The app driver can't synthesize input on iOS.** `eval` / `shot` /
   `windows` / `--route` all work against a real iOS webview, on the simulator
   and on a device, but `click` / `type` / `scroll` are refused on both — iOS

@@ -78,6 +78,28 @@ struct PlatformDirectoriesTests {
         #expect(docs.path != PlatformDirectories.cacheDirectory(appID: name).path)
     }
 
+    /// The display name reaches the filesystem here, and since #254 it can come
+    /// from the environment — so a name has to stop being able to change the
+    /// folder's depth.
+    @Test("a name becomes exactly one folder, whatever is in it")
+    func documentsLeafIsOneComponent() {
+        #expect(PlatformDirectories.documentsLeaf("Aether Reader") == "Aether Reader")
+        // Separators would otherwise put the library somewhere else entirely.
+        #expect(PlatformDirectories.documentsLeaf("../../evil") == "..-..-evil")
+        #expect(PlatformDirectories.documentsLeaf("a\\b") == "a-b")
+        #expect(PlatformDirectories.documentsLeaf("..") == "App")
+        #expect(PlatformDirectories.documentsLeaf(".") == "App")
+        #expect(PlatformDirectories.documentsLeaf("   ") == "App")
+        #expect(PlatformDirectories.documentsLeaf("") == "App")
+        // Reserved on Windows, so they go the same way everywhere — one folder
+        // name per app, not one per platform.
+        #expect(PlatformDirectories.documentsLeaf("Reader: Pro") == "Reader- Pro")
+        #expect(PlatformDirectories.documentsLeaf("Who?") == "Who-")
+        // Windows strips a trailing dot, which would silently merge two names.
+        #expect(PlatformDirectories.documentsLeaf("Reader.") == "Reader")
+        #expect(PlatformDirectories.documentsLeaf("Reader\n") == "Reader")
+    }
+
     /// iOS is the one platform where the visible folder goes with the app, and
     /// an app that doesn't know will promise the user something false.
     @Test("survivesUninstall is false on iOS alone")

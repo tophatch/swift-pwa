@@ -835,6 +835,25 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**A shipped app answers its *executable* name, not `pwa.json`'s.** There is no
+`Info.plist` here — `Bundle.main.infoDictionary` comes back empty on
+swift-corelibs-foundation, measured on Linux and inferred here from the same
+Foundation — so `app.name` falls back to the process name, which is the SwiftPM
+target name (minus `.exe`), and a target name can't contain a space.
+`app.documentsDir` is derived from that name, so an app whose `pwa.json` says
+`"Aether Reader"` owns `~/Documents/AetherReader` here and `~/Documents/Aether Reader`
+on macOS. `swift-pwa dev` and `drive` pass the manifest name through the
+environment, so this shows up only once the app is installed. Until the bundler
+carries the name itself, declare it in `configure`:
+
+```swift
+AppPlugin.setDisplayName("Aether Reader")
+```
+
+`Scripts/verify-app-identity.sh` measures all four cases; it is bash, so it has
+run on macOS and Linux but not on a Windows box yet.
+See [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
+
 **Through 0.11.0, `swift-pwa build --target windows` could not complete on a
 Swift 6.4 box.** Every build runs a headless catalog dump to check `permissions`
 and `agent.expose` against the app, and that dump compiles `CWebView2Shim` like

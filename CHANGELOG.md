@@ -184,6 +184,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A development run and the shipped app agree on the app's name, and so on
+  the user's folder** (#254). `app.name` falls back to the executable when
+  there's no bundle to read, and the executable is the SwiftPM *target* name —
+  which can't contain a space. So an app whose `pwa.json` said `"Aether Reader"`
+  answered `AetherReader` from `swift-pwa drive` and `Aether Reader` from the
+  built `.app`. That was liveable while only `dataDir` and `cacheDir` hung off
+  it — a driven run keeping its own private state is closer to a feature — but
+  `app.documentsDir` (#250) is the *user's* folder, and an adopter using it as
+  their library root got an empty `~/Documents/AetherReader` created beside the
+  real `~/Documents/Aether Reader`, adopted, and shown as an empty library. A
+  silent failure that looks like data loss.
+
+  `swift-pwa dev`, `drive` and the headless catalog dump now pass the manifest's
+  name to the binary they launch (`SWIFT_PWA_APP_NAME`, read in debug builds
+  only for the same reason `SWIFT_PWA_WEB_ROOT` is: a shipped app that took its
+  identity from its environment would let whoever launched it choose which
+  folder under Documents it adopts). The private containers deliberately do not
+  move with it — a shipped app scopes them by bundle id, so renaming the
+  unbundled leaf would strand development state without making the two agree.
+
+  Two things found while fixing it. The display name reaches the filesystem, so
+  it is now reduced to exactly one path component — `/`, `\` and the
+  Windows-reserved set become `-` on *every* platform, so `Reader: Pro` owns one
+  folder everywhere rather than working on macOS and silently failing to create
+  its directory on Windows. And **the same gap is permanent on Linux and
+  Windows**: `Bundle.main.infoDictionary` is empty on swift-corelibs-foundation
+  (measured), so a *shipped* binary there answers its executable name too. Until
+  a bundler carries the name itself, an app whose display name differs from its
+  target name should call `AppPlugin.setDisplayName(_:)` in `configure` — the
+  seam Android's backend already uses. Both platforms' "Known limitations" say
+  so. `Scripts/verify-app-identity.sh` measures all four cases (driven, bare,
+  bundled, declared) against a freshly scaffolded app.
+
 - **The origin root (`/`) serves the app's entry, on Android too** (#242).
   #212 put the Android bundle at the origin root so every root-absolute asset
   resolved; what didn't come with it was the directory index. `web.entry` was

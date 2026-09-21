@@ -3,7 +3,11 @@ import Foundation
 @testable import SwiftPWACore
 import Testing
 
-@Suite("AppPlugin")
+/// `.serialized` because the display-name override (#254) is a process-global
+/// environment variable, and the tests below that resolve `app.documentsDir`
+/// would otherwise create a folder in the user's real Documents under whichever
+/// name happened to be set when they looked.
+@Suite("AppPlugin", .serialized)
 @MainActor
 struct AppPluginTests {
     private func makeApp() -> MockAppContext {
@@ -177,6 +181,34 @@ struct AppPluginTests {
     func pluginName() {
         let app = makeApp()
         #expect(app.installedPlugins.contains("app"))
+    }
+
+    /// #254: the same app answered `AetherReader` from `swift build` and
+    /// `Aether Reader` from the shipped `.app`, because an unbundled binary has
+    /// only its executable name — and a SwiftPM target name can't hold a space.
+    /// That moved `app.documentsDir`, so a driven run adopted an empty folder
+    /// beside the user's real library and showed it as empty.
+    @Test("the tooling's display name beats the executable name")
+    func displayNameFromEnvironment() {
+        let unset = withEnvironmentVariable(AppPlugin.displayNameEnvironmentVariable, nil) {
+            AppPlugin.appName()
+        }
+        withEnvironmentVariable(AppPlugin.displayNameEnvironmentVariable, "Aether Reader") {
+            #expect(AppPlugin.appName() == "Aether Reader")
+            // The private containers deliberately do *not* move with it: a
+            // shipped app scopes them by bundle id, so renaming the unbundled
+            // leaf would strand development state without making the two agree.
+            #expect(AppPlugin.appID() != "Aether Reader")
+        }
+        // And it is an override, not a default — removing it restores whatever
+        // the host would have answered on its own.
+        #expect(withEnvironmentVariable(AppPlugin.displayNameEnvironmentVariable, nil) {
+            AppPlugin.appName()
+        } == unset)
+        // Empty reads as unset rather than as an app with no name.
+        #expect(withEnvironmentVariable(AppPlugin.displayNameEnvironmentVariable, "") {
+            AppPlugin.appName()
+        } == unset)
     }
 
     @Test("strippingExeExtension drops a trailing .exe (Windows processName) but nothing else")

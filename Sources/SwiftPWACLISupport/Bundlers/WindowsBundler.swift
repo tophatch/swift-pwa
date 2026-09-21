@@ -586,7 +586,7 @@ struct WindowsBundler {
         guard let pngData = try? Data(contentsOf: src) else {
             return .notFound(source: icon, placeholder: false)
         }
-        guard let (width, height) = WindowsIcon.pngDimensions(pngData) else {
+        guard let (width, height) = PNGDimensions.read(pngData) else {
             // Extension says PNG but the bytes don't parse — treat as
             // not-a-PNG rather than claiming success.
             return .notPNG(source: icon, placeholder: false)

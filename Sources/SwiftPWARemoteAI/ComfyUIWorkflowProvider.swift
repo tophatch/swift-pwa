@@ -168,7 +168,7 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
                 bytes: bytes, mimeType: mime, seed: echoSeed,
                 outputDirectory: config.outputDirectory, index: index
             )
-            let dims = Self.pngDimensions(bytes)
+            let dims = PNGDimensions.read(bytes)
             emit(.image(image, width: dims?.width, height: dims?.height))
         }
         emit(.done)
@@ -554,18 +554,6 @@ public struct ComfyUIWorkflowProvider: AIWorkflowProvider {
         case .null: nil
         case .array, .object: value.foundationObject
         }
-    }
-
-    /// Read a PNG's pixel dimensions from its IHDR (bytes 16..24), for the
-    /// `.image` event's `width`/`height` echo. `nil` for non-PNG.
-    private static func pngDimensions(_ data: Data) -> (width: Int, height: Int)? {
-        let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47]
-        guard data.count >= 24, Array(data.prefix(4)) == signature else { return nil }
-        func be32(_ offset: Int) -> Int {
-            let bytes = data[data.startIndex.advanced(by: offset) ..< data.startIndex.advanced(by: offset + 4)]
-            return bytes.reduce(0) { ($0 << 8) | Int($1) }
-        }
-        return (be32(16), be32(20))
     }
 }
 

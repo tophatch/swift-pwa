@@ -1814,6 +1814,39 @@ enum AndroidTemplates {
             /// that has none.
             private external fun nativeResolveMount(url: String): String?
 
+            /// A PNG of what the WebView is currently showing, base64-encoded
+            /// (#255). The page asks for this to animate its own content — a
+            /// page curl, a shared-element transition — because the web has no
+            /// API that rasterises a DOM subtree and the engine already holds
+            /// the pixels.
+            ///
+            /// `View.draw` into a software Canvas rather than a screen capture,
+            /// for the same reason the other backends use their renderer's own
+            /// snapshot: it is the app's own pixels, it works while the window
+            /// is occluded, and it needs no capture permission. UI thread only
+            /// — every RPC already arrives there via `main.post`.
+            ///
+            /// Returns null before the view has been laid out, which is a real
+            /// state early in startup rather than an error.
+            fun snapshotPngBase64(): String? {
+                val width = webView.width
+                val height = webView.height
+                if (width <= 0 || height <= 0) return null
+                val bitmap = android.graphics.Bitmap.createBitmap(
+                    width, height, android.graphics.Bitmap.Config.ARGB_8888
+                )
+                try {
+                    webView.draw(android.graphics.Canvas(bitmap))
+                    val out = java.io.ByteArrayOutputStream()
+                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                    return android.util.Base64.encodeToString(
+                        out.toByteArray(), android.util.Base64.NO_WRAP
+                    )
+                } finally {
+                    bitmap.recycle()
+                }
+            }
+
             /// Hand a URL to whichever app claims it — the browser for
             /// http(s), a mail client for mailto, an app's own scheme. Shared
             /// by the navigation policy above and the `system.openURL`
@@ -2203,6 +2236,7 @@ enum AndroidTemplates {
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
                 "app.label" -> done(appLabel(), null)
+                "window.snapshot" -> windowSnapshot(done)
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)
                 "ble.availability" -> bleAvailability(done)
@@ -4169,6 +4203,19 @@ enum AndroidTemplates {
             return JSONObject()
                 .put("label", if (label.isEmpty()) activity.packageName else label)
                 .toString()
+        }
+
+        // `window.snapshot`: the bridge owns the WebView, so it takes the
+        // picture; this only shapes the reply. A view with no size yet is
+        // reported as such rather than as an empty image, which would reach the
+        // page as a transparent canvas and look like a rendering bug.
+        private fun windowSnapshot(done: (String?, String?) -> Unit) {
+            val encoded = bridge.snapshotPngBase64()
+            if (encoded == null) {
+                done(null, "swift-pwa: the webview has no size yet — nothing to snapshot")
+                return
+            }
+            done(JSONObject().put("pngBase64", encoded).toString(), null)
         }
 
         private fun fsReadDirContentUri(json: JSONObject, done: (String?, String?) -> Unit) {

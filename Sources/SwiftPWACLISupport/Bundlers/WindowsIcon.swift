@@ -47,24 +47,6 @@ enum WindowsIcon {
     /// exact size is embedded verbatim rather than re-encoded.
     static let renderedSizes: [Int] = [256, 48, 32, 16]
 
-    /// Width/height of the source PNG, read from its IHDR chunk (the
-    /// eight-byte signature is followed by a length + `IHDR` tag + the
-    /// 32-bit big-endian width and height). Returns `nil` if the bytes
-    /// aren't a PNG we can read.
-    static func pngDimensions(_ data: Data) -> (width: Int, height: Int)? {
-        let signature: [UInt8] = [0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]
-        guard data.count >= 24, Array(data.prefix(8)) == signature else { return nil }
-        /// IHDR width is bytes 16..<20, height 20..<24, both big-endian.
-        func be32(at offset: Int) -> Int {
-            let b = data[data.startIndex + offset ..< data.startIndex + offset + 4]
-            return b.reduce(0) { ($0 << 8) | Int($1) }
-        }
-        let width = be32(at: 16)
-        let height = be32(at: 20)
-        guard width > 0, height > 0 else { return nil }
-        return (width, height)
-    }
-
     /// One image in an icon group: the size the shell uses to pick it, the
     /// PNG bytes for the `RT_ICON` payload, and the `RT_ICON` resource id
     /// the group entry names.

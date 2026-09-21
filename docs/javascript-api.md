@@ -199,6 +199,10 @@ await __SWIFT_PWA__.invoke('window.setFullscreen', { on: true });
 const { isFullscreen } = await __SWIFT_PWA__.invoke('window.isFullscreen');
 await __SWIFT_PWA__.invoke('window.close');
 
+const { value: canSnapshot } = await __SWIFT_PWA__.invoke('window.canSnapshot');
+const shot = await __SWIFT_PWA__.invoke('window.snapshot');
+// { pngBase64, width, height, bytes }
+
 // Streaming: didFocus / didBlur / didResize / didMove / didMinimize /
 // didDeminiaturize / didEnterFullscreen / didExitFullscreen / willClose.
 const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
@@ -208,6 +212,44 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
 
 `Window.position()` / `setPosition` / `.didMove` are no-ops on the GTK4
 backend (Wayland refuses to give apps their own position).
+
+#### A picture of your own content
+
+`window.snapshot` returns the webview's rendered pixels as a PNG. It exists
+because the web has no API that rasterises a DOM subtree: the libraries that
+fill that gap re-implement the renderer in JavaScript, which is slow and blind
+to shadow-root CSS and `@font-face` — and the engine already has the pixels.
+The use it was asked for is an app animating its own content: snapshot the
+outgoing page, jump the DOM to the next one, peel the snapshot away on a canvas
+overlay with the live page underneath.
+
+```js
+const { pngBase64, width, height } = await __SWIFT_PWA__.invoke('window.snapshot');
+const bitmap = await createImageBitmap(
+    await (await fetch(`data:image/png;base64,${pngBase64}`)).blob()
+);
+canvas.width = width;              // device pixels, not CSS pixels
+canvas.height = height;
+canvas.getContext('2d').drawImage(bitmap, 0, 0);
+```
+
+Three things worth knowing:
+
+- **`width` / `height` are device pixels.** On a Retina or high-DPI display
+  they are `devicePixelRatio` times the window's CSS size. Size the canvas in
+  device pixels and scale it down in CSS, or the picture is soft.
+- **Take it before you mutate the DOM.** Every backend flushes pending layout
+  first, so a snapshot taken *after* the change shows the change — which is the
+  opposite of what a transition wants.
+- **Ask `window.canSnapshot` first** rather than catching `E_UNIMPLEMENTED` per
+  call. It answers without rendering anything, so an app can offer the feature
+  or fall back once at startup.
+
+It is the webview's pixels, not the screen's, so it works while the window is
+occluded or in the background and needs no screen-recording permission
+anywhere. The cost is a full-window PNG encode plus base64 — `bytes` reports
+the PNG's own size before base64, which is the number to watch if you are
+driving an animation with it.
 
 ### `app.*`
 

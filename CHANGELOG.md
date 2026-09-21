@@ -9,6 +9,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`window.snapshot` — a page can ask for a picture of itself** (#255). Every
+  backend could already render its webview's pixels; it had exactly one caller,
+  the app driver's `screenshot` verb, and the page couldn't reach it. An app
+  animating its own content — a page curl in a reader, a shared-element
+  transition — needs a picture of what it is showing, and the web has no API
+  that rasterises a DOM subtree. The libraries that fill that gap re-implement
+  the renderer in JavaScript: slow, and blind to shadow-root CSS and
+  `@font-face`.
+
+  ```js
+  const { value: can } = await __SWIFT_PWA__.invoke('window.canSnapshot');
+  const { pngBase64, width, height } = await __SWIFT_PWA__.invoke('window.snapshot');
+  ```
+
+  `width` / `height` are **device** pixels, so a page can size a canvas without
+  guessing at `devicePixelRatio`. `window.canSnapshot` answers without
+  rendering anything, so an app decides once at startup rather than catching
+  `E_UNIMPLEMENTED` per call. It is the webview's pixels rather than the
+  screen's, so it works while the window is occluded or in the background and
+  needs no screen-recording permission on any platform.
+
+  **Android had no snapshot at all** and now does — `View.draw` into a `Bitmap`,
+  implemented in the Kotlin bridge because `draw` is UI-thread-only and the
+  bridge is what owns the `WebView`.
+
+  No `rect` or JPEG option yet, deliberately: the cost is almost entirely how
+  well the picture compresses, and the measurement says a full-window PNG of a
+  page of **body text is ~60 ms and a few hundred KiB** — usable for a
+  transition as it stands. A flat page is ~30 ms and full noise is ~400 ms, so
+  the knobs have a clear case the day a page needs them and no case before.
+  The table is in the README's footnote 35; `Scripts/verify-window-snapshot.sh`
+  produces it, and checks correctness by reading pixels back out of the
+  returned image — a blank capture decodes, measures and reports a plausible
+  size exactly like a real one. Measured on macOS, the iOS Simulator and both
+  Linux backends. **Windows and Android are implemented but not yet measured.**
+
+  Two instrument faults found on the way, both of which had made the probe lie
+  rather than the product: a hand-rolled LCG's low bits are periodic, so the
+  "noise" page compressed thirtyfold better on one engine and read as a backend
+  difference that wasn't there; and on iOS a page without `viewport-fit=cover`
+  has a layout viewport inset by the status bar and home indicator while the
+  webview covers the whole screen — so the snapshot is legitimately taller than
+  `innerHeight * devicePixelRatio`, which any app placing one needs to know.
+
 - **`ctx.permissions` can ask, not just declare — and All-files access is a
   permission it knows by name** (#243). `android.permissions` (0.11.0, #214) got
   `MANAGE_EXTERNAL_STORAGE` into the manifest; declaring it grants nothing, and

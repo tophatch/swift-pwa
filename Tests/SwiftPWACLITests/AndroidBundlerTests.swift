@@ -839,6 +839,31 @@ struct AndroidBundlerUnitTests {
         #expect(kt.contains("if (size >= 0) payload.put(\"size\", size)"))
     }
 
+    /// #255: `window.snapshot` is the one page-facing capability whose Android
+    /// half is Kotlin — the WebView belongs to the bridge, and `View.draw` is
+    /// UI-thread-only, so the Swift adapter can only ask.
+    @Test("the bridge can snapshot its WebView, and the RPC reaches it")
+    func bridgeSnapshotsTheWebView() {
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        // Drawing the view, not capturing the screen: the app's own pixels,
+        // available while the window is occluded and with no permission.
+        #expect(bridge.contains("fun snapshotPngBase64(): String?"))
+        #expect(bridge.contains("webView.draw(android.graphics.Canvas(bitmap))"))
+        #expect(bridge.contains("android.graphics.Bitmap.CompressFormat.PNG"))
+        // NO_WRAP: a base64 string with newlines in it is not what
+        // `Data(base64Encoded:)` accepts on the Swift side by default.
+        #expect(bridge.contains("android.util.Base64.NO_WRAP"))
+        // A bitmap per snapshot is the largest allocation this bridge makes;
+        // leaking one per frame of an animation would be the whole feature's
+        // cost.
+        #expect(bridge.contains("bitmap.recycle()"))
+
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("\"window.snapshot\" -> windowSnapshot(done)"))
+        // The reply shape the Swift adapter decodes.
+        #expect(plugins.contains("JSONObject().put(\"pngBase64\", encoded)"))
+    }
+
     @Test("SwiftPWASystemPlugins pushes install events on the 'updater.install' channel")
     func systemPluginsPushesInstallChannel() {
         let kt = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)

@@ -1433,6 +1433,21 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
+- **`window.snapshot` needs the window on screen, and costs more here.** The
+  capture goes through `PixelCopy` against the window's composited surface,
+  because the obvious spelling — `View.draw` into a software `Canvas` —
+  silently misses every GPU layer: measured on a Fold7, a full-screen
+  `<canvas>` of random noise came back as **one flat colour** while the DOM
+  around it was captured perfectly, which is indistinguishable from a working
+  snapshot of a blank page. `PixelCopy` needs a window that is actually
+  displayed; a backgrounded one falls back to `View.draw`, which still returns
+  the DOM but not `<canvas>`, WebGL or video. It is also the slowest of the six
+  backends — a full-window PNG of a page of body text measured **406 ms** at
+  1968×2056, against ~60 ms on Apple and Linux, nearly all of it inside the
+  call (a four-megapixel surface, PNG-encoded and base64'd across JNI). Snapshot
+  something smaller, or take the picture when a gesture *begins* rather than
+  when the page flips. Measured by `Scripts/verify-android-window-snapshot.sh`.
+
 - **Camera, microphone and location need a declaration in two places.**
   `permissions.web` in `pwa.json` emits the `uses-permission` entries;
   `ctx.permissions.declare(…)` is the runtime ceiling. `swift-pwa build`

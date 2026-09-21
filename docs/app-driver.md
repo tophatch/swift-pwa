@@ -195,6 +195,12 @@ best-effort `setPosition`.
 | **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Verified against a running app on Windows 11 x64 — but the app has to be on an interactive desktop, see below |
 | **Android** | — | — | Already scriptable over CDP — see [android-on-device-testing.md](android-on-device-testing.md) |
 
+The same pixels are reachable from the **page**, as `window.snapshot` — an app
+animating its own content needs a picture of itself, and the web has no API
+that rasterises a DOM subtree. Android implements that one (through
+`PixelCopy`) even though it has no `screenshot` verb here. See
+[javascript-api.md](javascript-api.md#a-picture-of-your-own-content).
+
 > **Windows: the app needs an interactive desktop.** Driving over SSH is the
 > case that bites, because Windows OpenSSH puts your shell in **session 0**, the
 > non-interactive services session. WebView2 refuses to create a controller

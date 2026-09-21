@@ -279,7 +279,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | DevTools (`Cmd/Ctrl+Alt+J`)   | Yes                     | —                            | Yes                        | Yes                     | Yes                      | Remote⁸                  |
 | Per-Monitor V2 DPI            | —                       | —                            | —                          | —                       | Yes                      | —                        |
 | `WindowPlugin`                | Yes                     | Yes                          | Yes                        | Partial²                | Yes                      | Partial⁷                 |
-| `window.snapshot`³⁵           | Yes                     | Yes                          | Yes                        | Yes                     | Built³⁵                  | Built³⁵                  |
+| `window.snapshot`³⁵           | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | `AppPlugin` (`app.quit` …)    | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
 | User documents folder³⁴       | ~/Documents             | In-app                       | XDG                        | XDG                     | Documents                | /sdcard/Documents        |
 | `ClipboardPlugin`             | Yes                     | Yes                          | Yes                        | Yes                     | Yes                      | Yes                      |
@@ -358,8 +358,14 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
     | iOS Simulator, 1206×2622 | 32 ms / 72 KiB | **61 ms / 447 KiB** | 423 ms / 10.5 MiB |
     | Linux GTK3, 1024×768 | 28 ms / 4 KiB | **54 ms / 220 KiB** | 218 ms / 2.3 MiB |
     | Linux GTK4, 1024×768 | 36 ms / 5 KiB | **81 ms / 331 KiB** | 330 ms / 2.6 MiB |
+    | Windows, 2022×1466 | 70 ms / 12 KiB | **239 ms / 528 KiB** | 2135 ms / 8.5 MiB |
+    | Android (Fold7), 1968×2056 | 172 ms / 21 KiB | **406 ms / 989 KiB** | 2235 ms / 11.6 MiB |
 
-    So a full-window PNG of a page of text is ~60 ms and a few hundred KiB — usable for a transition, and the number to design against. `Scripts/verify-window-snapshot.sh` produces this table and checks correctness by reading pixels back out of the returned image, which is the part that matters: a blank capture decodes, measures and reports a plausible size exactly like a real one. **Windows and Android are implemented but not yet measured** — neither box was reachable when this landed. See [docs/javascript-api.md](docs/javascript-api.md#a-picture-of-your-own-content).
+    The engines split in two. On macOS, iOS and both Linux backends a full-window PNG of a page of text is **~60 ms** and a few hundred KiB — usable for a transition, and the number to design against. **Windows and Android are four to seven times slower** at 239 ms and 406 ms, nine tenths of it inside the call: a three-to-four-megapixel surface, PNG-encoded and (on Android) base64'd across the JNI boundary. A page curl can't start under the finger on those two, so the `rect` and JPEG options this shipped without have a measured case there and none yet on Apple or Linux.
+
+    **Windows returns colour-managed pixels.** `CapturePreview` hands back the *display's* colour space with that display's ICC profile embedded in the PNG, so on a wide-gamut monitor a page's `#0000ff` reads back as `#2200ff` — the same colour, different numbers. It renders correctly; a page that samples the bytes and expects its own sRGB values back will not get them.
+
+    Android also needed a different capture. `View.draw` into a software `Canvas` is the obvious spelling and it **silently misses every GPU layer**: a full-screen `<canvas>` of random noise came back as one flat colour while the DOM around it was captured perfectly. It now goes through `PixelCopy` against the window's composited surface, with `View.draw` kept only as the fallback for a window that isn't on screen — so a page using `<canvas>`, WebGL or video gets its real pixels. `Scripts/verify-window-snapshot.sh` (desktop) and `Scripts/verify-android-window-snapshot.sh` produce this table and check correctness by reading pixels back out of the returned image, which is the part that matters: a blank capture decodes, measures and reports a plausible size exactly like a real one. See [docs/javascript-api.md](docs/javascript-api.md#a-picture-of-your-own-content).
 
 The full per-plugin command surface lives in [docs/javascript-api.md](docs/javascript-api.md) (JS side) and [docs/swift-api.md](docs/swift-api.md) (Swift side). Per-platform setup, codesigning, and the long tail of known limitations live in the [Platform setup](#platform-setup) docs.
 

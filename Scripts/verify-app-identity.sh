@@ -73,6 +73,10 @@ rm -rf "$WORK"; mkdir -p "$WORK"
 (cd "$WORK" && "$CLI" init "$TARGET" >/dev/null)
 cd "$APP"
 sed -i.bak -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$REPO"'")|' Package.swift
+# SwiftPM names a path dependency after its *directory*, so a checkout that
+# isn't called `swift-pwa` leaves the target depending on a package name that
+# no longer exists.
+sed -i.bak -e "s|package: \"swift-pwa\"|package: \"$(basename "$REPO")\"|" Package.swift
 rm -f Package.swift.bak
 python3 - "$DISPLAY_NAME" <<'PY'
 import json, sys, pathlib

@@ -835,6 +835,17 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**`window.snapshot` returns colour-managed pixels, and is slower here.**
+`ICoreWebView2.CapturePreview` hands back the *display's* colour space with
+that display's ICC profile embedded in the PNG, so on a wide-gamut monitor a
+page's `#0000ff` reads back as `#2200ff` — the same colour, different numbers.
+Drawing the snapshot renders correctly; a page that samples the bytes expecting
+its own sRGB values will not get them. The cost is also four times Apple's or
+Linux's: a page of body text at 2022×1466 measured **239 ms** against ~60 ms
+there, nearly all of it inside the call. `Scripts\verify-window-snapshot.ps1`
+measures both (it needs `-PackagesDir` pointing at the WebView2 / WIL NuGet
+packages, since the probe app builds `CWebView2Shim` like any Windows app).
+
 **A shipped app answers its *executable* name, not `pwa.json`'s.** There is no
 `Info.plist` here — `Bundle.main.infoDictionary` comes back empty on
 swift-corelibs-foundation, measured on Linux and inferred here from the same

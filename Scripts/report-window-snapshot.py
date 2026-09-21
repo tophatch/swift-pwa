@@ -67,10 +67,26 @@ def main():
           "got=%dx%d expected~%dx%d" % (w, h, value["expectedWidth"], value["expectedHeight"]))
     # The control that gives the rest their meaning: a blank or black capture
     # decodes and measures perfectly well.
-    check("a pixel inside the mark is the mark's colour", value["inside"] == "#ff0000",
-          "inside=%s (wanted #ff0000)" % value["inside"])
-    check("a pixel outside it is the page behind", value["outside"] == "#0000ff",
-          "outside=%s (wanted #0000ff)" % value["outside"])
+    #
+    # Dominance rather than an exact match, because a snapshot is allowed to be
+    # colour-managed. WebView2's CapturePreview hands back pixels in the
+    # *display's* space with that display's ICC profile embedded, so on a
+    # wide-gamut monitor the page's #0000ff is stored as #2200ff — the same
+    # colour, different numbers. This still fails a blank, black, white or
+    # wrong-quadrant capture, which is what the check is for.
+    def dominant(hexstr, channel):
+        r, g, b = (int(hexstr[i:i + 2], 16) for i in (1, 3, 5))
+        want = {"r": (r, g, b), "b": (b, r, g)}[channel]
+        return want[0] > 200 and want[1] < 60 and want[2] < 60
+
+    check("a pixel inside the mark is the mark's colour", dominant(value["inside"], "r"),
+          "inside=%s (wanted a dominant red)" % value["inside"])
+    check("a pixel outside it is the page behind", dominant(value["outside"], "b"),
+          "outside=%s (wanted a dominant blue)" % value["outside"])
+    if value["inside"] != "#ff0000" or value["outside"] != "#0000ff":
+        print("      note: colour-managed capture - the page drew #ff0000/#0000ff and read back")
+        print("            %s/%s, which is the same colour in a different space."
+              % (value["inside"], value["outside"]))
 
     # Each variant has to have actually reached the picture. GTK3 handed back a
     # `noise` frame smaller than its `text` one, which is only possible if the
@@ -91,7 +107,7 @@ def main():
           % (detail, canvas_detail, variants["noise"]["kib"], variants["text"]["kib"]))
 
     print()
-    print("      round trip, page to page — snapshot, encode, bridge, decode, at %dx%d:" % (w, h))
+    print("      round trip, page to page: snapshot, encode, bridge, decode, at %dx%d:" % (w, h))
     print("      " + "content".ljust(12) + "total".rjust(8) + "bridge".rjust(9) + "PNG".rjust(11))
     for name, label in (("flat", "flat"), ("text", "body text"), ("noise", "noise")):
         v = value["variants"].get(name)

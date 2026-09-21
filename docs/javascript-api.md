@@ -251,6 +251,33 @@ anywhere. The cost is a full-window PNG encode plus base64 — `bytes` reports
 the PNG's own size before base64, which is the number to watch if you are
 driving an animation with it.
 
+**What it costs, measured.** A full-window PNG of a page of body text is ~60 ms
+on macOS, iOS and both Linux backends. **Windows (239 ms) and Android (406 ms)
+are four to seven times slower** — a bigger surface, PNG-encoded and, on
+Android, base64'd across the JNI boundary. Design for that: on those two,
+snapshot something smaller, or prepare the picture before the gesture starts
+rather than during it. The per-platform table is in the README's footnote 35.
+
+**Android captures the composited surface**, through `PixelCopy` rather than
+the view's own draw, because a software `View.draw` misses every GPU layer —
+a full-screen `<canvas>` came back as one flat colour while the DOM around it
+was perfect. The consequence: on Android the window has to be **on screen**
+for the best capture. A backgrounded window falls back to the view's draw,
+which still returns the DOM but not `<canvas>`, WebGL or video. The other four
+backends snapshot through their renderer and have neither limitation.
+
+**On Windows the pixels are colour-managed.** `CapturePreview` returns the
+display's colour space with that display's ICC profile embedded in the PNG, so
+on a wide-gamut monitor a page's `#0000ff` comes back as `#2200ff` — the same
+colour, different numbers. Drawing it renders correctly; sampling the bytes and
+expecting your own sRGB values back does not work there.
+
+**On iOS the picture can be taller than your page thinks.** A page that is not
+`viewport-fit=cover` has a layout viewport inset by the status bar and home
+indicator, while the webview covers the whole screen — so `height` exceeds
+`innerHeight * devicePixelRatio` and the content is offset within the picture.
+Use `viewport-fit=cover`, or account for `env(safe-area-inset-top)` yourself.
+
 ### `app.*`
 
 Process-level lifecycle and identity — the things `window.*` deliberately

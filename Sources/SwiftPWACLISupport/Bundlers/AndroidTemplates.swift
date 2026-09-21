@@ -1820,31 +1820,68 @@ enum AndroidTemplates {
             /// API that rasterises a DOM subtree and the engine already holds
             /// the pixels.
             ///
-            /// `View.draw` into a software Canvas rather than a screen capture,
-            /// for the same reason the other backends use their renderer's own
-            /// snapshot: it is the app's own pixels, it works while the window
-            /// is occluded, and it needs no capture permission. UI thread only
-            /// — every RPC already arrives there via `main.post`.
+            /// **`PixelCopy` first, `View.draw` only as a fallback**, and the
+            /// order was settled by measurement rather than preference. An
+            /// Android WebView composites `<canvas>`, WebGL and video on the
+            /// GPU, and `View.draw` into a software `Canvas` does not see those
+            /// layers: on a Galaxy Z Fold7 a full-screen canvas of random noise
+            /// came back as **one flat colour** while the DOM around it was
+            /// captured perfectly — a fault that looks exactly like a working
+            /// snapshot of a blank page. `PixelCopy` reads the window's real
+            /// composited surface, so it gets whatever is on it.
             ///
-            /// Returns null before the view has been laid out, which is a real
-            /// state early in startup rather than an error.
-            fun snapshotPngBase64(): String? {
+            /// The cost is that `PixelCopy` needs a window that is on screen;
+            /// it fails for a backgrounded or unattached one, and `View.draw`
+            /// then still returns the DOM. Either way the caller gets the best
+            /// picture available. The other four backends snapshot through
+            /// their renderer and have neither limitation.
+            ///
+            /// Asynchronous, because `PixelCopy` is. UI thread only — every RPC
+            /// already arrives there via `main.post`. Answers null before the
+            /// view has been laid out, which is a real state early in startup
+            /// rather than an error.
+            fun snapshotPngBase64(done: (String?) -> Unit) {
                 val width = webView.width
                 val height = webView.height
-                if (width <= 0 || height <= 0) return null
+                if (width <= 0 || height <= 0) { done(null); return }
                 val bitmap = android.graphics.Bitmap.createBitmap(
                     width, height, android.graphics.Bitmap.Config.ARGB_8888
                 )
-                try {
-                    webView.draw(android.graphics.Canvas(bitmap))
-                    val out = java.io.ByteArrayOutputStream()
-                    bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
-                    return android.util.Base64.encodeToString(
-                        out.toByteArray(), android.util.Base64.NO_WRAP
-                    )
-                } finally {
+                val finish = { copied: Boolean ->
+                    if (!copied) webView.draw(android.graphics.Canvas(bitmap))
+                    val encoded = encodeBitmapToPng(bitmap)
                     bitmap.recycle()
+                    done(encoded)
                 }
+                val window = activity.window
+                if (window == null || !webView.isAttachedToWindow) { finish(false); return }
+                // Window-space coordinates: PixelCopy reads the decor surface,
+                // and the WebView sits somewhere inside it.
+                val origin = IntArray(2)
+                webView.getLocationInWindow(origin)
+                val source = android.graphics.Rect(
+                    origin[0], origin[1], origin[0] + width, origin[1] + height
+                )
+                try {
+                    android.view.PixelCopy.request(
+                        window, source, bitmap,
+                        { result -> finish(result == android.view.PixelCopy.SUCCESS) },
+                        android.os.Handler(android.os.Looper.getMainLooper())
+                    )
+                } catch (t: Throwable) {
+                    // Thrown when the window has no surface yet — a state, not
+                    // a crash, and the fallback still has something to draw.
+                    android.util.Log.w("swift-pwa", "PixelCopy refused: ${t.message}")
+                    finish(false)
+                }
+            }
+
+            private fun encodeBitmapToPng(bitmap: android.graphics.Bitmap): String {
+                val out = java.io.ByteArrayOutputStream()
+                bitmap.compress(android.graphics.Bitmap.CompressFormat.PNG, 100, out)
+                return android.util.Base64.encodeToString(
+                    out.toByteArray(), android.util.Base64.NO_WRAP
+                )
             }
 
             /// Hand a URL to whichever app claims it — the browser for
@@ -4210,12 +4247,13 @@ enum AndroidTemplates {
         // reported as such rather than as an empty image, which would reach the
         // page as a transparent canvas and look like a rendering bug.
         private fun windowSnapshot(done: (String?, String?) -> Unit) {
-            val encoded = bridge.snapshotPngBase64()
-            if (encoded == null) {
-                done(null, "swift-pwa: the webview has no size yet — nothing to snapshot")
-                return
+            bridge.snapshotPngBase64 { encoded ->
+                if (encoded == null) {
+                    done(null, "swift-pwa: the webview has no size yet, nothing to snapshot")
+                } else {
+                    done(JSONObject().put("pngBase64", encoded).toString(), null)
+                }
             }
-            done(JSONObject().put("pngBase64", encoded).toString(), null)
         }
 
         private fun fsReadDirContentUri(json: JSONObject, done: (String?, String?) -> Unit) {

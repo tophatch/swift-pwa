@@ -1,12 +1,12 @@
 # Making it feel native
 
-**Who this is for:** your web app runs in a swift-pwa window and works great — but it still *feels* like a web page in a frame. This guide adds the touches that make it feel like a real desktop app: **window controls** (title, fullscreen, size, react to focus/resize), **native notifications**, and a **system tray icon** with a menu.
+**Who this is for:** your web app runs in a swift-pwa window and works great — but it still *feels* like a web page in a frame. This guide adds the touches that make it feel like a real desktop app: **window controls** (title, fullscreen, size, react to focus/resize), **animating a change** with a picture of the page, **native notifications**, and a **system tray icon** with a menu.
 
 Each is a plugin with a small JS surface. Window controls are already on; the other two are one line of Swift to enable. We'll note exactly where each works, because this is the area with the most per-platform variation.
 
 If the bridge is new to you, read [Talking to the native side](talking-to-the-native-side.md) first.
 
-> Uses swift-pwa **0.8+**.
+> Uses swift-pwa **0.8+**; `window.snapshot` needs **0.11.2+**.
 
 ---
 
@@ -74,6 +74,55 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (e) => {
 > **Per-platform reality:** on mobile, windows are full-screen and OS-managed, so `setSize`/`setPosition` are no-ops (Android) or moot (iOS). On the GTK4/Wayland backend, *position* specifically is a no-op — Wayland won't let apps place their own windows. And on both GTK backends, window changes the *user* makes (dragging, alt-tab) don't yet fire `window.subscribe` events — only your programmatic calls do. Everything else works across the board. (Full matrix in the [README](../../README.md#feature-matrix).)
 
 > **Tip:** you usually don't need `window.setSize` to *remember* a size across launches — set `window.remember_state` in `App.swift` and swift-pwa persists it for you (see [pwa.json config](../../README.md#configuring-pwajson)).
+
+### Animate a change with a picture of the page
+
+Native apps cross-fade, slide and peel between states. On the web you can't, because a transition needs the *old* content to still be on screen after you've replaced it — and there's no API that turns a DOM subtree into pixels. (The libraries that try re-implement the renderer in JavaScript: slow, and blind to shadow-root CSS and `@font-face`.)
+
+`window.snapshot` gives you the pixels the engine already has:
+
+```js
+// Freeze what's on screen right now into an <img> layered over the page.
+async function freezeScreen() {
+  const { pngBase64 } = await __SWIFT_PWA__.invoke('window.snapshot');
+  const frozen = new Image();
+  frozen.src = 'data:image/png;base64,' + pngBase64;
+  await frozen.decode();                       // don't animate a half-decoded image
+  Object.assign(frozen.style, {
+    position: 'fixed', inset: '0', width: '100%', height: '100%',
+    zIndex: '9999', pointerEvents: 'none'
+  });
+  document.body.appendChild(frozen);
+  return frozen;
+}
+
+// Change the page underneath the frozen copy, then fade the copy away.
+async function crossfade(change) {
+  const frozen = await freezeScreen();
+  change();                                    // the real DOM, now hidden behind it
+  await frozen.animate([{ opacity: 1 }, { opacity: 0 }],
+                       { duration: 250, easing: 'ease-out' }).finished;
+  frozen.remove();
+}
+```
+
+```js
+crossfade(() => showChapter(next));            // and that's the whole transition
+```
+
+The order is the thing to get right: **snapshot first, change second.** Every backend flushes pending layout before it captures, so a snapshot taken *after* your change pictures the new state — which is the opposite of what a transition needs.
+
+Ask once whether you can do this at all, rather than catching an error per call:
+
+```js
+const { value: canSnapshot } = await __SWIFT_PWA__.invoke('window.canSnapshot');
+```
+
+It's the *webview's* pixels, not the screen's, so it works while your window is behind something else and needs no screen-recording permission anywhere.
+
+> **Give your page the whole window.** Put `<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">` in your HTML. Without it, iOS lays the page out inside the safe area while the webview covers the whole screen — so the picture is taller than the page thinks it is and `inset: 0` lines it up wrong.
+
+> **Per-platform reality:** the snapshot comes back as `{ pngBase64, width, height, bytes }`, where `width`/`height` are **device** pixels — `devicePixelRatio` times the CSS size, which is what you want when drawing to a `<canvas>`. A full-window PNG of a page of text costs about **60 ms** on macOS, iOS and Linux, but **239 ms on Windows and 406 ms on Android** (a bigger surface and a slower encode). If you're animating on those two, take the picture when the *gesture starts* rather than when the change lands — a quarter of a second of slack is much easier to find before a finger moves than during. On Android the window also has to be on screen for `<canvas>`, WebGL and video to be captured. Numbers and the per-platform detail: [README footnote 35](../../README.md#feature-matrix).
 
 ---
 

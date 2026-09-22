@@ -215,7 +215,9 @@ backend (Wayland refuses to give apps their own position).
 
 #### A picture of your own content
 
-`window.snapshot` returns the webview's rendered pixels as a PNG. It exists
+`window.snapshot` returns the webview's rendered pixels as a PNG. For a
+worked crossfade, see
+[Making it feel native](tutorials/making-it-feel-native.md#animate-a-change-with-a-picture-of-the-page). It exists
 because the web has no API that rasterises a DOM subtree: the libraries that
 fill that gap re-implement the renderer in JavaScript, which is slow and blind
 to shadow-root CSS and `@font-face` — and the engine already has the pixels.

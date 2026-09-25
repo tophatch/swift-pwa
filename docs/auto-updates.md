@@ -275,10 +275,10 @@ it explicitly if you want the publication date pinned to your build's
 timestamp rather than the manifest's. Pass `--force` to overwrite an
 existing `manifest.json`.
 
-The CLI uses `swift-crypto`'s `Crypto` module rather than `CryptoKit`,
-so `keygen` and `sign` work on Linux and Windows release machines too;
-on Apple platforms `import Crypto` shadows CryptoKit so signatures
-produced under either toolchain are interchangeable.
+The CLI signs with CryptoKit on macOS and with `swift-crypto`'s `Crypto`
+module (the same API) on Linux and Windows, so `keygen` and `sign` work on
+any release machine. Both are standard Ed25519, so a key made on one host
+signs and verifies on the others.
 
 ## Per-platform notes
 

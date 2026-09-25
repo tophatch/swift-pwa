@@ -1,7 +1,12 @@
 import ArgumentParser
-import Crypto
 import Foundation
 import SwiftPWACore
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
 /// Top-level `swift-pwa updater` group. The three subcommands form the
 /// publishing pipeline that backs the runtime-side `Updater` protocol

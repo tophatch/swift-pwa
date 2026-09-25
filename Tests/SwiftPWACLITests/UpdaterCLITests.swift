@@ -1,8 +1,13 @@
-import Crypto
 import Foundation
 @testable import SwiftPWACLISupport
 import SwiftPWACore
 import Testing
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
 @Suite("Updater CLI helpers")
 struct UpdaterCLITests {

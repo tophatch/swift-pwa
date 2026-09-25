@@ -1,5 +1,10 @@
-import Crypto
 import Foundation
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
 #if canImport(FoundationNetworking)
     import FoundationNetworking // URLSession lives here on swift-corelibs-foundation

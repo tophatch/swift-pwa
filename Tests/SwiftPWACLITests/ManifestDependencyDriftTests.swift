@@ -33,19 +33,27 @@ struct ManifestDependencyDriftTests {
             .deletingLastPathComponent()
     }
 
-    /// Source-target directories under `Sources/`, skipping the C shims (which
-    /// have no Swift imports) and generated smoke targets.
+    /// Target directories under `Sources/` and `Tests/`, as `Sources/X` or
+    /// `Tests/X` paths.
+    ///
+    /// Test targets are here too. A test that imports an undeclared module
+    /// compiles only while some other edge happens to build that module for
+    /// the platform, which hides the gap until that edge changes (#270).
     private static func swiftTargets() throws -> [String] {
-        try FileManager.default
-            .contentsOfDirectory(atPath: repoRoot.appendingPathComponent("Sources").path)
-            .filter { !$0.hasPrefix(".") }
-            .sorted()
+        try ["Sources", "Tests"].flatMap { root in
+            try FileManager.default
+                .contentsOfDirectory(atPath: repoRoot.appendingPathComponent(root).path)
+                .filter { !$0.hasPrefix(".") }
+                .sorted()
+                .map { "\(root)/\($0)" }
+        }
     }
 
-    /// Every module in ``packageModules`` that `target` reaches for, by either
-    /// spelling: a plain `import X` or a `canImport(X)`-guarded one.
-    private static func modulesImported(by target: String) throws -> Set<String> {
-        let dir = repoRoot.appendingPathComponent("Sources/\(target)")
+    /// Every module in ``packageModules`` that the target at `path` reaches
+    /// for, by either spelling: a plain `import X` or a `canImport(X)`-guarded
+    /// one.
+    private static func modulesImported(at path: String) throws -> Set<String> {
+        let dir = repoRoot.appendingPathComponent(path)
         guard let walker = FileManager.default.enumerator(atPath: dir.path) else { return [] }
         var found: Set<String> = []
         for case let path as String in walker where path.hasSuffix(".swift") {
@@ -83,7 +91,9 @@ struct ManifestDependencyDriftTests {
             // `.target(`; a *reference* is `.target(name: "X", condition: …)`
             // all on one line. Requiring the newline is what separates them,
             // and references come first in this manifest.
-            guard let ctor = lookback.range(of: "target(", options: .backwards),
+            // Case-insensitive, so `.testTarget(` and `.executableTarget(`
+            // count as well as `.target(`.
+            guard let ctor = lookback.range(of: "target(", options: [.backwards, .caseInsensitive]),
                   lookback[ctor.upperBound...].contains("\n")
             else { continue }
             let rest = manifest[hit.upperBound...]
@@ -92,6 +102,22 @@ struct ManifestDependencyDriftTests {
             return String(rest[depsStart.upperBound ..< depsEnd.lowerBound])
         }
         return nil
+    }
+
+    /// The `dependencies:` list of the target declared with `path: "<path>"`.
+    ///
+    /// Needed where a directory isn't named after its target: the GTK4 backend
+    /// is `Sources/SwiftPWAGTK4` but declares itself `SwiftPWAGTK`, and the
+    /// GTK3 one shares that name, so a lookup by name reads the wrong one.
+    /// Those declarations list `dependencies:` before `path:`.
+    private static func declarationBlock(forPath path: String, in manifest: String) -> String? {
+        guard let pathHit = manifest.range(of: "path: \"\(path)\""),
+              let depsStart = manifest[..<pathHit.lowerBound].range(of: "dependencies: [", options: .backwards)
+        else { return nil }
+        let block = manifest[depsStart.upperBound ..< pathHit.lowerBound]
+        // Another `path:` in between means this declaration had no
+        // dependencies and the search ran into the previous one.
+        return block.contains("path: \"") ? nil : String(block)
     }
 
     // MARK: - One condition per target
@@ -192,18 +218,6 @@ struct ManifestDependencyDriftTests {
         return found
     }
 
-    /// The one product whose edges knowingly disagree, and why.
-    ///
-    /// `Crypto` is `cryptoPlatforms` from the runtime (Apple omitted — there
-    /// its consumers use CryptoKit, and an edge would compile BoringSSL into
-    /// every Apple app linking `SwiftPWACore`) and unconditional from the CLI,
-    /// which runs on macOS hosts and imports it outright. Neither side can
-    /// take the other's spelling. What makes it safe is that the two never
-    /// meet: no app graph contains `SwiftPWACLISupport`, and the CLI's own
-    /// edge is the one its product reaches first. Verified by building the
-    /// package and running this suite on macOS under 6.4.
-    private static let deliberatelyDivergent: Set<String> = ["Crypto"]
-
     /// Two edges onto one target with different platform conditions is a link
     /// failure waiting on declaration order — see the rule above
     /// `zstdPlatforms` in `Package.swift`. It shipped once (#229): a
@@ -212,7 +226,10 @@ struct ManifestDependencyDriftTests {
     ///
     /// An unconditional edge counts as its own spelling: it does *not* rescue a
     /// target some other edge has filtered out (measured on 6.4.0), so mixing
-    /// the two is the same bug.
+    /// the two is the same bug. No target is exempt, the CLI's included: it
+    /// depends on `SwiftPWACore`, so its graph and the runtime's are one, and
+    /// an unconditional CLI edge onto `Crypto` leaves a cold macOS build unable
+    /// to find the module (#270).
     @Test("every edge onto a target spells the same platform condition")
     func conditionsAgreePerTarget() throws {
         let manifest = try String(
@@ -223,9 +240,7 @@ struct ManifestDependencyDriftTests {
             byTarget[edge.target, default: []].append(edge)
         }
         var divergent: [String] = []
-        for (target, edges) in byTarget.sorted(by: { $0.key < $1.key })
-            where !Self.deliberatelyDivergent.contains(target)
-        {
+        for (target, edges) in byTarget.sorted(by: { $0.key < $1.key }) {
             let spellings = Set(edges.map { $0.condition ?? "<unconditional>" })
             guard spellings.count > 1 else { continue }
             let detail = edges
@@ -249,10 +264,18 @@ struct ManifestDependencyDriftTests {
             contentsOf: Self.repoRoot.appendingPathComponent("Package.swift"), encoding: .utf8
         )
         var undeclared: [String] = []
-        for target in try Self.swiftTargets() {
-            let imported = try Self.modulesImported(by: target)
+        for path in try Self.swiftTargets() {
+            let target = URL(fileURLWithPath: path).lastPathComponent
+            let imported = try Self.modulesImported(at: path)
             guard !imported.isEmpty else { continue }
-            guard let block = Self.declarationBlock(for: target, in: manifest) else { continue }
+            // A target this can't find is one it can't check, so it fails
+            // rather than passing the target by default.
+            guard let block = Self.declarationBlock(forPath: path, in: manifest)
+                ?? Self.declarationBlock(for: target, in: manifest)
+            else {
+                undeclared.append("\(target) imports \(imported.sorted()) but its declaration wasn't found")
+                continue
+            }
             for module in imported.sorted() where !block.contains("name: \"\(module)\"") {
                 undeclared.append("\(target) imports \(module) but does not declare it")
             }

@@ -307,10 +307,11 @@ string on hosts without an `Info.plist` (Linux / Android).
 ### What an app is called when there's no bundle
 
 `app.name` is not cosmetic: `app.documentsDir` is derived from it, so a name
-that changes moves the user's folder. There are three sources, in order — a
-name the backend installed (Android's Activity label), the name `pwa.json`
-gives, passed through by `swift-pwa dev` / `drive` / the catalog dump, and then
-the bundle, falling back to the executable.
+that changes moves the user's folder. The sources, in order — a name the
+backend installed (Android's Activity label, or `AppPlugin.setDisplayName`), the
+name the bundler embedded (below), the name `pwa.json` gives, passed through by
+`swift-pwa dev` / `drive` / the catalog dump, and then the bundle, falling back
+to the executable.
 
 That middle source exists because a SwiftPM target name **can't contain a
 space**. Before it, an app whose `pwa.json` said `"Aether Reader"` answered
@@ -320,18 +321,30 @@ real library and showed it as empty. The private `dataDir` / `cacheDir` still
 differ between the two on purpose: a driven run keeping its own state off the
 installed app's is useful, and a shipped app scopes them by bundle id anyway.
 
-**Known gap on Linux and Windows.** Neither platform gives a shipped binary an
-`Info.plist` to read — `Bundle.main.infoDictionary` is empty there (measured) —
-so an installed app answers its *executable* name, which is the SwiftPM target
-name. If your display name differs from your target name, say so yourself in
-`configure`:
+**Linux and Windows have no `Info.plist`, so the bundler writes the name where
+each platform keeps one** (#263). `Bundle.main.infoDictionary` is empty there
+(measured), so before this an installed app answered its executable name — the
+target name — and put the user's folder in `Documents\ExampleReader`. Now:
 
-```swift
-AppPlugin.setDisplayName("Aether Reader")
-```
+- **Windows**: `swift-pwa build --target windows` writes a version resource into
+  the `.exe` — `ProductName` and `FileDescription` from `pwa.json`'s `name`, the
+  version from `version` — and the runtime reads `ProductName` back. It is also
+  what Explorer and Task Manager show. Single-file builds included.
+- **Linux**: the runtime reads `Name=` from the `.desktop` entry installed at
+  `<prefix>/share/applications/<exe>.desktop` beside `<prefix>/bin/<exe>` —
+  where the AppImage bundler puts it, and where a distro package would.
 
-That is the same seam Android's backend uses. macOS and iOS read the bundle,
-and Android reads the Activity label, so only these two need it.
+**This name does not move `app.dataDir`, `app.cacheDir` or the webview's
+storage.** Those were scoped by executable name on these two platforms in every
+earlier release; renaming them would strand each user's `localStorage` and
+IndexedDB to tidy a folder name. Only `app.name` and `app.documentsDir` follow
+it. A bare `swift build` binary has no resource and no `.desktop` entry, so it
+keeps answering its executable name outside the tooling.
+
+`AppPlugin.setDisplayName` still overrides all of this, and is what Android's
+backend calls with the Activity label — but unlike the bundled name it *does*
+feed the private containers, so calling it on a shipped Linux or Windows app
+moves `dataDir` too.
 
 `app.dataDir` / `app.cacheDir` return the platform's per-app **persistent**
 and **disposable** writable directories (created on first call) —

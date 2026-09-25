@@ -39,6 +39,11 @@
             // normally.
             HeadlessDescribe.dumpIfRequested(configure)
 
+            // The name the bundler embedded, before anything asks for
+            // `app.name` or `app.documentsDir`. A bare `swift build` binary
+            // has no version resource and keeps its executable name.
+            AppPlugin.setBundledDisplayName(executableProductName())
+
             // Per-Monitor V2 DPI awareness. Has to fire before any
             // window is created, before any HDC is queried — Windows
             // latches the awareness once the process becomes
@@ -337,6 +342,46 @@
                 _ = WaitForSingleObject(proc, INFINITE)
                 CloseHandle(proc)
             }
+        }
+    }
+
+    // MARK: - Embedded name
+
+    /// `ProductName` from this executable's version resource, which the
+    /// Windows bundler writes from `pwa.json`'s `name` — the Windows analogue
+    /// of reading `CFBundleDisplayName` out of an Info.plist. Read through
+    /// `VerQueryValueW`, following `\VarFileInfo\Translation` to whichever
+    /// string table the file declares rather than assuming one.
+    func executableProductName() -> String? {
+        var pathBuffer = [WCHAR](repeating: 0, count: 32768)
+        let length = GetModuleFileNameW(nil, &pathBuffer, DWORD(pathBuffer.count))
+        guard length > 0 else { return nil }
+
+        var ignored: DWORD = 0
+        let size = GetFileVersionInfoSizeW(pathBuffer, &ignored)
+        guard size > 0 else { return nil }
+        var info = [UInt8](repeating: 0, count: Int(size))
+        guard GetFileVersionInfoW(pathBuffer, 0, size, &info) else { return nil }
+
+        return info.withUnsafeMutableBytes { raw -> String? in
+            func query(_ subBlock: String) -> (UnsafeMutableRawPointer, UInt32)? {
+                var value: UnsafeMutableRawPointer?
+                var valueLength: UINT = 0
+                let found = subBlock.withCString(encodedAs: UTF16.self) {
+                    VerQueryValueW(raw.baseAddress, $0, &value, &valueLength)
+                }
+                guard found, let value, valueLength > 0 else { return nil }
+                return (value, valueLength)
+            }
+            guard let (translation, bytes) = query("\\VarFileInfo\\Translation"), bytes >= 4 else { return nil }
+            let language = translation.load(as: UInt16.self)
+            let codePage = translation.load(fromByteOffset: 2, as: UInt16.self)
+            let table = String(format: "%04x%04x", language, codePage)
+            guard let (text, characters) = query("\\StringFileInfo\\\(table)\\ProductName") else { return nil }
+            // `valueLength` counts WCHARs here, including the terminator.
+            let units = UnsafeBufferPointer(start: text.assumingMemoryBound(to: UInt16.self), count: Int(characters))
+            let name = String(decoding: units.prefix { $0 != 0 }, as: UTF16.self)
+            return name.isEmpty ? nil : name
         }
     }
 

@@ -211,6 +211,34 @@ struct AppPluginTests {
         } == unset)
     }
 
+    /// #263: the Windows twin of the above, for a *shipped* binary. A bundled
+    /// `.exe` has no Info.plist, so it answered its executable name and
+    /// `documentsDir` became `Documents\ExampleReader` while the `.app` used
+    /// `Documents/Example Reader`. The bundler now embeds the manifest name and
+    /// the backend installs it at startup.
+    @Test("a bundler-embedded name names the app but leaves its containers alone")
+    func bundledDisplayName() {
+        let before = (name: AppPlugin.appName(), id: AppPlugin.appID())
+        defer { AppPlugin.setBundledDisplayName(nil) }
+
+        // documentsDir follows appName(); asking for it would create the
+        // folder in the real Documents, so the name is what's asserted.
+        AppPlugin.setBundledDisplayName("Example Reader")
+        #expect(AppPlugin.appName() == "Example Reader")
+        // The data directory and the webview's storage were scoped by the
+        // executable name in every release before this; moving them would
+        // strand each user's localStorage and IndexedDB.
+        #expect(AppPlugin.appID() == before.id)
+        // It outranks the tooling's name too: a bundled binary is the shipped
+        // answer, and the two only differ if pwa.json changed after bundling.
+        withEnvironmentVariable(AppPlugin.displayNameEnvironmentVariable, "Something Else") {
+            #expect(AppPlugin.appName() == "Example Reader")
+        }
+
+        AppPlugin.setBundledDisplayName("")
+        #expect(AppPlugin.appName() == before.name)
+    }
+
     @Test("strippingExeExtension drops a trailing .exe (Windows processName) but nothing else")
     func stripExeExtension() {
         // Windows `ProcessInfo.processName` includes `.exe`; it must not leak

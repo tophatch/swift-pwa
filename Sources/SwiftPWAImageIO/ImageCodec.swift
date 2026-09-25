@@ -34,9 +34,10 @@ package enum ImageCodecError: Error, Equatable {
 /// `StableDiffusionBackend` text→image) need that the ONNX Runtime tier itself
 /// doesn't provide. A shared, package-internal target so both reuse one
 /// implementation. Platform-specific, same shape everywhere: Apple uses
-/// CoreGraphics/ImageIO (`ImageCodec+Apple.swift`); Linux/Windows use the
-/// vendored stb_image / stb_image_write; Android decodes/encodes over the
-/// Kotlin `BitmapFactory` RPC. This is deliberately separate from
+/// CoreGraphics/ImageIO (`ImageCodec+Apple.swift`); Windows uses WIC
+/// (`ImageCodec+Windows.swift`); Linux uses the vendored stb_image /
+/// stb_image_write plus libheif when installed (`ImageCodec+Desktop.swift`);
+/// Android decodes/encodes over the Kotlin `BitmapFactory` RPC. This is deliberately separate from
 /// `SwiftPWASegmentation`'s `ImagePreprocessing`, which is SAM-specific
 /// (resize-longest-side, HWC `0…255`, and no encode path — segmentation only
 /// ever emits RLE).

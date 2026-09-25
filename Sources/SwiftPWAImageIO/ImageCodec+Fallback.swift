@@ -3,7 +3,7 @@
 
     /// Fallback `ImageCodec` for any platform without a real implementation —
     /// none of the ones this package targets (Apple uses CoreGraphics,
-    /// Linux/Windows use stb_image via `CStbImage`, Android uses BitmapFactory
+    /// Windows uses WIC, Linux uses stb_image via `CStbImage`, Android uses BitmapFactory
     /// over the Kotlin RPC). Kept as a safety stub so the target still compiles
     /// on an unexpected destination, throwing a clear `E_AI_GENERATION` rather
     /// than mis-decoding.

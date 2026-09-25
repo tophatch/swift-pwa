@@ -286,8 +286,13 @@
     // codec, so they are the only place its decode/encode path runs at all —
     // the swift-testing suites that cover it elsewhere cannot run on Windows.
 
-    /// A tiny PNG, built by hand so the runner needs no fixture file.
-    func makeTestPNG(width: Int, height: Int) -> Data {
+    /// A tiny PNG, built by hand so the runner needs no fixture file. The
+    /// default fill is a gradient; pass `pixel` for anything else.
+    func makeTestPNG(
+        width: Int,
+        height: Int,
+        pixel: ((Int, Int) -> (UInt8, UInt8, UInt8))? = nil
+    ) -> Data {
         func crc32(_ bytes: [UInt8]) -> UInt32 {
             var table = [UInt32](repeating: 0, count: 256)
             for i in 0 ..< 256 {
@@ -310,9 +315,9 @@
         for y in 0 ..< height {
             raw.append(0)
             for x in 0 ..< width {
-                raw.append(UInt8((x * 255) / max(width - 1, 1)))
-                raw.append(UInt8((y * 255) / max(height - 1, 1)))
-                raw.append(120)
+                let (r, g, b) = pixel?(x, y)
+                    ?? (UInt8((x * 255) / max(width - 1, 1)), UInt8((y * 255) / max(height - 1, 1)), 120)
+                raw += [r, g, b]
             }
         }
         var deflated: [UInt8] = [0x78, 0x01]
@@ -389,6 +394,33 @@
         try expect(result.height == 25, "expected height 25, got \(result.height)")
     }
 
+    /// Encodes a colour whose red and blue differ widely and reads it back.
+    /// WIC's encoders negotiate their own pixel format — PNG and JPEG both
+    /// answer `24bppBGR` to a request for `24bppRGB` — so a channel-order slip
+    /// survives every size and byte-count check above and only shows as a
+    /// wrong colour. The decode of the hand-authored source is checked first,
+    /// so a swap can't hide behind a matching one on the way in.
+    func wicPreservesChannelOrder() async throws {
+        let colour: (UInt8, UInt8, UInt8) = (220, 60, 30)
+        let source = makeTestPNG(width: 16, height: 16) { _, _ in colour }
+        let decoded = try await ImageCodec.decodeRGB(path: nil, dataBase64: source.base64EncodedString(), size: nil)
+        try expect(
+            Array(decoded.pixels[0 ..< 3]) == [colour.0, colour.1, colour.2],
+            "decode of a known PNG gave \(Array(decoded.pixels[0 ..< 3]))"
+        )
+        let transcoder = PlatformImageTranscoder()
+        for (format, tolerance) in [(ImageOutputFormat.png, 0), (.jpeg, 12)] {
+            let result = try await transcoder.transcode(
+                ImageTranscodeRequest(dataBase64: source.base64EncodedString(), format: format, quality: 0.95)
+            )
+            let out = try await ImageCodec.decodeRGB(path: nil, dataBase64: result.dataBase64, size: nil)
+            let centre = ((out.height / 2) * out.width + out.width / 2) * 3
+            let got = Array(out.pixels[centre ..< centre + 3])
+            let close = zip(got, [colour.0, colour.1, colour.2]).allSatisfy { abs(Int($0) - Int($1)) <= tolerance }
+            try expect(close, "\(format) round trip of (220, 60, 30) came back \(got)")
+        }
+    }
+
     func wicRejectsNonImageData() async throws {
         do {
             _ = try await PlatformImageTranscoder().transcode(
@@ -418,6 +450,7 @@
         ("image.transcode round-trips a PNG through WIC", wicRoundTripsPNG),
         ("WIC JPEG output differs from PNG (format is not dropped)", wicEncodesJPEGDistinctFromPNG),
         ("WIC scales during decode when maxSide is set", wicScalesDuringDecode),
+        ("WIC encode keeps red and blue where they were (PNG + JPEG)", wicPreservesChannelOrder),
         ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData)
     ]
 

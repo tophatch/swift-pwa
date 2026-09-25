@@ -7,8 +7,10 @@ import SwiftPWAImageIO
 ///
 /// It adds no codec of its own. All it does is expose one an app's build
 /// already contains — ImageIO on Apple, `BitmapFactory` over the JNI RPC on
-/// Android, the vendored stb_image on Linux/Windows — because the webview in
-/// front of it is frequently the least capable decoder on the device.
+/// Android, WIC on Windows (whatever codecs the machine has installed), and
+/// the vendored stb_image plus libheif, when present, on Linux — because the
+/// webview in front of it is frequently the least capable decoder on the
+/// device.
 ///
 /// ```swift
 /// ctx.use(ImagePlugin(PlatformImageTranscoder()))
@@ -16,8 +18,10 @@ import SwiftPWAImageIO
 ///
 /// **What it can convert is not uniform, and is not guessed.** Apple enumerates
 /// ImageIO's actual type list, Android asks the device (HEIF needs API 28, AVIF
-/// API 31), and desktop reports the two formats stb is compiled for. `image.info`
-/// returns that answer; a page that needs HEIC should check rather than assume.
+/// API 31), Windows enumerates the WIC decoders registered on the machine, and
+/// Linux reports stb's PNG + JPEG plus whatever libheif can read at runtime.
+/// `image.info` returns that answer; a page that needs HEIC should check rather
+/// than assume.
 public struct PlatformImageTranscoder: ImageTranscoder {
     /// Bounds the decode when a request names no `maxSide`. A camera image is
     /// ~72 MB of RGB at full size and on Android that has to cross a JNI RPC as

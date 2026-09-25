@@ -10,7 +10,8 @@ import Testing
 /// encoded PNG are all **top-row-first** — row 0 is the visual top.
 ///
 /// These run against whichever codec is active on the build platform — Apple
-/// (CoreGraphics/ImageIO) or desktop (stb_image). The **Android** codec runs
+/// (CoreGraphics/ImageIO) or Linux (stb_image). Windows can't run swift-testing
+/// suites, so WIC's equivalents live in `SwiftPWAWindowsTestRunner`. The **Android** codec runs
 /// through the Kotlin JNI RPC and can't execute in a host unit test; its
 /// orientation is verified on-device (CritterFacts), and BitmapFactory /
 /// `Bitmap.compress` are top-row-first by contract.

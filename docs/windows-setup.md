@@ -808,6 +808,30 @@ handler.
 
 Try it with `start myapp://hello`.
 
+## Driving a Windows box from a non-Windows dev machine
+
+The Windows targets never compile on macOS or Linux, and CI can build them but
+has no desktop to run an app on. `Scripts/remote-windows.sh` copies the working
+tree to a box over SSH, loads the Visual Studio dev environment there, and
+builds with the WebView2 / WIL headers passed as flags — each of which fails in
+its own way when done by hand (AppleDouble files from macOS `tar`, a bare SSH
+shell with no MSVC, `INCLUDE` ignored since Swift 6.4, cmd quoting over ssh):
+
+```bash
+# The Windows test runner — the stand-in for `swift test`, which finds no tests here.
+Scripts/remote-windows.sh --host <ssh-host> runner
+
+# Build a product, or run any PowerShell inside the primed checkout.
+Scripts/remote-windows.sh --host <ssh-host> build -- --product swift-pwa
+Scripts/remote-windows.sh --host <ssh-host> run -- 'swift build @SwiftFlags -c release'
+```
+
+The host comes from `--host` or `$SWIFT_PWA_WINDOWS_HOST`. It syncs into
+`~\swift-pwa-remote` rather than any checkout already on the box, copies the
+NuGet `packages\` in from one on first use (`--packages-from` names it), and
+picks the x64 or arm64 toolchain and loader from the box itself. `--clean`
+after a C-shim header change, as on Linux.
+
 ## Verifying that the bundle origin actually serves
 
 CI builds this target but never launches it -- `swift test` can't run on
@@ -1144,9 +1168,10 @@ same file served out of a mount.
   zero tests because the discovery sections aren't populated.
   Windows test coverage therefore lives in
   [Sources/SwiftPWAWindowsTestRunner/main.swift](../Sources/SwiftPWAWindowsTestRunner/main.swift),
-  a plain executable that re-expresses the `WindowsUpdater` assertions
-  with a small harness. Run it with `swift run SwiftPWAWindowsTestRunner`;
-  CI does the same. The other suites (`SwiftPWACoreTests` etc.) get
+  a plain executable that re-expresses the `WindowsUpdater` and WIC
+  (`image.*`) assertions with a small harness. Run it with
+  `swift run SwiftPWAWindowsTestRunner` (or `Scripts/remote-windows.sh
+  runner` from another machine); CI does the same. The other suites (`SwiftPWACoreTests` etc.) get
   compile-checked on Windows via `swift build --build-tests` but can't
   be *run* until SwiftPM's Windows discovery is fixed upstream.
 - **Content packs: extraction/creation are `tar.exe`, served mounts use

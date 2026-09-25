@@ -5,8 +5,8 @@
     import UniformTypeIdentifiers
 
     /// Apple `ImageCodec` — decode/resize via CoreGraphics, encode PNG via
-    /// ImageIO. The desktop (stb_image) and Android (RPC) counterparts produce
-    /// the same `RawImage` / PNG bytes.
+    /// ImageIO. The Windows (WIC), Linux (stb_image) and Android (RPC)
+    /// counterparts produce the same `RawImage` / PNG bytes.
     package extension ImageCodec {
         /// Decode an image file / base64 blob to RGB (`channels == 3`),
         /// resized to `size` when given (nearest-fit exact `width × height`).

@@ -11,7 +11,7 @@
 # real `~/Documents/Aether Reader`, adopted it, and showed an empty library.
 # (The probe below uses a name of its own — see TARGET.)
 #
-# Three legs, and the middle one is the control that gives the other two their
+# Four legs, and the second is the control that gives the others their
 # meaning:
 #
 #   1. driven      `swift-pwa drive` passes pwa.json's name through the
@@ -21,14 +21,14 @@
 #                  it is what a Linux or Windows app still gets when it is run
 #                  outside the tooling, and it proves leg 1 measured the
 #                  override rather than something baked in.
-#   3. bundled     a debug `.app` — an Info.plist, and the driver compiled in,
-#                  so the bundled answer can be measured rather than inferred.
-#                  macOS only; no other platform this project targets gives an
-#                  unbundled binary a manifest to read.
-#   4. declared    `AppPlugin.setDisplayName` from `configure`, which is what
-#                  docs/javascript-api.md tells a Linux or Windows app to do —
-#                  those two never get an Info.plist, so a *shipped* binary
-#                  there still answers its executable name.
+#   3. bundled     a debug bundle, with the driver compiled in so the bundled
+#                  answer can be measured rather than inferred: the `.app` on
+#                  macOS (an Info.plist), the AppImage on Linux (the `.desktop`
+#                  entry beside the binary, #263). Windows has its own script,
+#                  Scripts/verify-app-identity.ps1.
+#   4. declared    `AppPlugin.setDisplayName` from `configure` — the seam
+#                  Android's backend uses, and the way an app overrides the
+#                  bundled name.
 #
 # Usage: verify-app-identity.sh [--repo <dir>] [--keep]
 set -euo pipefail
@@ -217,16 +217,24 @@ if [[ "$(uname)" == "Darwin" ]]; then
     "$CLI" build --target macos --configuration debug >/dev/null 2>"$WORK/bundle.err" \
         || { tail -20 "$WORK/bundle.err" >&2; exit 1; }
     BUNDLE="$APP/build/macos/$DISPLAY_NAME.app/Contents/MacOS/$TARGET"
-    [[ -x "$BUNDLE" ]] || { echo "no bundled binary at $BUNDLE" >&2; exit 1; }
-    read -r PORT TOKEN < <(launch_and_wait "$BUNDLE" "$WORK/bundled.log")
-    PID=$(cat "$WORK/app.pid")
-    IFS=$'\t' read -r NAME DOCS < <(identity_from "$PORT" "$TOKEN" "$WORK/bundled.log")
-    kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
-    check "bundled .app (Info.plist)" "$NAME" "$DOCS" "$DISPLAY_NAME"
+    LABEL="bundled .app (Info.plist)"
 else
     echo
-    echo "SKIP  bundled .app — macOS only"
+    echo "-- 3. bundled: a debug AppImage, which has a .desktop entry --"
+    # linuxdeploy is itself an AppImage, and FUSE mounting it wedges on a box
+    # without FUSE; extract-and-run avoids that for it and for our AppImage.
+    export APPIMAGE_EXTRACT_AND_RUN=1
+    "$CLI" build --target linux --configuration debug >/dev/null 2>"$WORK/bundle.err" \
+        || { tail -20 "$WORK/bundle.err" >&2; exit 1; }
+    BUNDLE=$(find "$APP/build/linux" -maxdepth 1 -name '*.AppImage' | head -1)
+    LABEL="bundled AppImage (.desktop)"
 fi
+[[ -n "$BUNDLE" && -x "$BUNDLE" ]] || { echo "no bundled binary at ${BUNDLE:-build/}" >&2; exit 1; }
+read -r PORT TOKEN < <(launch_and_wait "$BUNDLE" "$WORK/bundled.log")
+PID=$(cat "$WORK/app.pid")
+IFS=$'\t' read -r NAME DOCS < <(identity_from "$PORT" "$TOKEN" "$WORK/bundled.log")
+kill "$PID" 2>/dev/null || true; wait "$PID" 2>/dev/null || true; PID=""
+check "$LABEL" "$NAME" "$DOCS" "$DISPLAY_NAME"
 
 echo
 echo "-- 4. declared: AppPlugin.setDisplayName from configure --"

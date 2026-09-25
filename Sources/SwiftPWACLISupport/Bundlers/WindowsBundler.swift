@@ -183,6 +183,16 @@ struct WindowsBundler {
             // would corrupt or drop that trailing data.
             await IconOutcome.report(embedPortableIcon(at: bundledExe))
 
+            // Name and version, where Windows keeps them. Also what the
+            // runtime reads `app.name` from, so it can't be best-effort like
+            // the icon: without it `app.documentsDir` is named after the
+            // executable. Same before-the-overlay constraint as the icon.
+            try WindowsResources.update(bundledExe, with: [.init(
+                type: WindowsResources.rtVersion,
+                id: 1,
+                data: WindowsVersionInfo.build(name: manifest.name, version: manifest.version, exeName: exeName)
+            )])
+
             // Single-file: embed web/ as an exe overlay and emit one `.exe`,
             // no sibling web/ or pwa.json. The runtime reads its own overlay
             // and serves the bundle from memory (EmbeddedWebAssets).

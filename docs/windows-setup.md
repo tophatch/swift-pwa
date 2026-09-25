@@ -407,6 +407,19 @@ looks on Windows. Until 0.9.10 neither happened, so a bundle read its
 runtime out of the build machine's `.build/` directory and crashed on
 launch on any other box.
 
+**A bundled app takes its name from the `.exe`'s version resource; a bare
+binary doesn't have one.** There is no `Info.plist` here, so `swift-pwa build
+--target windows` writes `pwa.json`'s `name` and `version` into the exe's
+`VS_VERSIONINFO` (`ProductName`, `FileDescription`, `ProductVersion`) and the
+runtime reads `ProductName` back, so `app.documentsDir` is `Documents\Example
+Reader` rather than `Documents\ExampleReader` (#263). Folder and single-file
+builds both carry it. A `swift build` binary run outside `swift-pwa dev` /
+`drive` has no resource and answers its executable name. `app.dataDir` and the
+WebView2 profile stay scoped by executable name either way, as they always were.
+`Scripts\verify-app-identity.ps1` measures the bare, folder and single-file
+cases against a fresh scaffold.
+See [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
+
 ### Vendoring a native library (`windows.native_library_dirs`)
 
 If your app links a native library Windows doesn't ship — a SQLite build of
@@ -869,25 +882,6 @@ Linux's: a page of body text at 2022×1466 measured **239 ms** against ~60 ms
 there, nearly all of it inside the call. `Scripts\verify-window-snapshot.ps1`
 measures both (it needs `-PackagesDir` pointing at the WebView2 / WIL NuGet
 packages, since the probe app builds `CWebView2Shim` like any Windows app).
-
-**A shipped app answers its *executable* name, not `pwa.json`'s.** There is no
-`Info.plist` here — `Bundle.main.infoDictionary` comes back empty on
-swift-corelibs-foundation, measured on Linux and inferred here from the same
-Foundation — so `app.name` falls back to the process name, which is the SwiftPM
-target name (minus `.exe`), and a target name can't contain a space.
-`app.documentsDir` is derived from that name, so an app whose `pwa.json` says
-`"Aether Reader"` owns `~/Documents/AetherReader` here and `~/Documents/Aether Reader`
-on macOS. `swift-pwa dev` and `drive` pass the manifest name through the
-environment, so this shows up only once the app is installed. Until the bundler
-carries the name itself, declare it in `configure`:
-
-```swift
-AppPlugin.setDisplayName("Aether Reader")
-```
-
-`Scripts/verify-app-identity.sh` measures all four cases; it is bash, so it has
-run on macOS and Linux but not on a Windows box yet.
-See [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
 
 **Through 0.11.0, `swift-pwa build --target windows` could not complete on a
 Swift 6.4 box.** Every build runs a headless catalog dump to check `permissions`

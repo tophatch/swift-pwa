@@ -1,7 +1,5 @@
 import Foundation
-#if os(Windows)
-    import WinSDK // BeginUpdateResourceW / UpdateResourceW / EndUpdateResourceW
-#endif
+
 // stb-based PNG decode/encode (Linux + Windows; no CoreGraphics there). Present
 // only on those hosts — see the `.when(platforms:)` gate in Package.swift — so
 // the resize path is `#if canImport(CStbImage)`. In practice it's only ever
@@ -224,22 +222,6 @@ enum WindowsIcon {
         return images
     }
 
-    enum EmbedError: Error, CustomStringConvertible {
-        case notSupportedOnHost
-        case beginFailed(UInt32)
-        case updateFailed(UInt32)
-        case endFailed(UInt32)
-
-        var description: String {
-            switch self {
-            case .notSupportedOnHost: "icon embedding requires a Windows host"
-            case let .beginFailed(code): "BeginUpdateResource failed (error \(code))"
-            case let .updateFailed(code): "UpdateResource failed (error \(code))"
-            case let .endFailed(code): "EndUpdateResource failed (error \(code))"
-            }
-        }
-    }
-
     /// Inject each image in `images` as an `RT_ICON` at its `id`, plus the
     /// `groupDirectory` as `RT_GROUP_ICON` at `groupID`, into `exe`,
     /// preserving any resources already there (e.g. the Common Controls
@@ -247,42 +229,10 @@ enum WindowsIcon {
     /// portable Windows build only runs on Windows, so this branch is never
     /// hit in practice).
     static func embed(images: [IconImage], groupDirectory: Data, groupID: UInt16, into exe: URL) throws {
-        #if os(Windows)
-            // RT_ICON = 3, RT_GROUP_ICON = 14, passed as MAKEINTRESOURCE
-            // (an integer-valued LPWSTR). The resource *name* is the id,
-            // encoded the same way.
-            let RT_ICON = UnsafePointer<WCHAR>(bitPattern: 3)
-            let RT_GROUP_ICON = UnsafePointer<WCHAR>(bitPattern: 14)
-
-            let handle = exe.path.withCString(encodedAs: UTF16.self) { BeginUpdateResourceW($0, false) }
-            guard let handle else { throw EmbedError.beginFailed(GetLastError()) }
-
-            func put(_ type: UnsafePointer<WCHAR>?, _ id: UInt16, _ bytes: Data) throws {
-                let name = UnsafePointer<WCHAR>(bitPattern: Int(id))
-                let ok = bytes.withUnsafeBytes { raw in
-                    UpdateResourceW(
-                        handle, type, name, 0,
-                        UnsafeMutableRawPointer(mutating: raw.baseAddress), DWORD(raw.count)
-                    )
-                }
-                if ok == false {
-                    let code = GetLastError()
-                    _ = EndUpdateResourceW(handle, true) // discard
-                    throw EmbedError.updateFailed(code)
-                }
-            }
-
-            for image in images {
-                try put(RT_ICON, image.id, image.png)
-            }
-            try put(RT_GROUP_ICON, groupID, groupDirectory)
-
-            if EndUpdateResourceW(handle, false) == false {
-                throw EmbedError.endFailed(GetLastError())
-            }
-        #else
-            _ = (images, groupDirectory, groupID, exe)
-            throw EmbedError.notSupportedOnHost
-        #endif
+        let icons = images.map { WindowsResources.Entry(type: WindowsResources.rtIcon, id: $0.id, data: $0.png) }
+        try WindowsResources.update(
+            exe,
+            with: icons + [.init(type: WindowsResources.rtGroupIcon, id: groupID, data: groupDirectory)]
+        )
     }
 }

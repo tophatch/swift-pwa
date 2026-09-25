@@ -5,6 +5,7 @@ import Foundation
     import FoundationXML
 #endif
 @testable import SwiftPWACLISupport
+import SwiftPWACore
 import Testing
 
 @Suite("File-type association declaration")
@@ -29,6 +30,14 @@ struct FileAssociationTests {
     }
 
     // MARK: - Linux .desktop
+
+    /// #263: the runtime names a bundled Linux app from this entry, so the
+    /// writer and the reader have to agree on a name with a space in it.
+    @Test("the runtime reads back the manifest name the entry was written with")
+    func desktopNameRoundTrips() {
+        let entry = AppImageBundler.desktopEntry(manifest: manifest(), exeName: "myapp")
+        #expect(DesktopEntry.name(in: entry) == "My App")
+    }
 
     @Test("no doc types → bare Exec, no MimeType (unchanged)")
     func desktopNoDocTypes() {

@@ -92,6 +92,7 @@ public struct AppPlugin: Plugin {
 
     private static let displayNameLock = NSLock()
     private nonisolated(unsafe) static var installedDisplayName: String?
+    private nonisolated(unsafe) static var bundledDisplayName: String?
 
     /// Install the app's display name on a host that has no bundle to read it
     /// from. The Android backend calls this at startup with the Activity's
@@ -106,6 +107,23 @@ public struct AppPlugin: Plugin {
         guard !name.isEmpty else { return }
         displayNameLock.lock(); defer { displayNameLock.unlock() }
         installedDisplayName = name
+    }
+
+    /// The name a bundler embedded in a binary that has no `Info.plist` — the
+    /// version resource's `ProductName` on Windows, the `.desktop` entry
+    /// installed beside the binary on Linux. Backends call this at startup.
+    ///
+    /// It names the app and nothing else. Unlike ``setDisplayName(_:)`` it
+    /// does **not** feed ``appID()``: on these two platforms every release so
+    /// far scoped the data directory and the webview's storage by the
+    /// executable name, and moving them now would strand each existing user's
+    /// `localStorage` and IndexedDB to rename a folder. `documentsDir` is the
+    /// user's own folder, which is why it has to follow the name (#263).
+    ///
+    /// `nil` or empty clears it.
+    package static func setBundledDisplayName(_ name: String?) {
+        displayNameLock.lock(); defer { displayNameLock.unlock() }
+        bundledDisplayName = name?.isEmpty == false ? name : nil
     }
 
     /// Names the app for a binary that has no bundle to carry the name.
@@ -125,14 +143,21 @@ public struct AppPlugin: Plugin {
     public static let displayNameEnvironmentVariable = "SWIFT_PWA_APP_NAME"
 
     /// The human-facing app name. Prefers a name a backend installed, then the
-    /// manifest name the tooling passed for an unbundled run, then the bundle's
-    /// display name, then its bundle name, falling back to the process name on
-    /// hosts where `Bundle.main.infoDictionary` isn't populated
-    /// (corelibs-foundation on Linux). Never empty.
+    /// one a bundler embedded, then the manifest name the tooling passed for
+    /// an unbundled run, then the bundle's display name, then its bundle name,
+    /// falling back to the process name on hosts where
+    /// `Bundle.main.infoDictionary` isn't populated (corelibs-foundation on
+    /// Linux and Windows). Never empty.
     static func appName() -> String {
         if let installed = installedName() { return installed }
+        if let bundled = embeddedName() { return bundled }
         if let fromTooling = environmentDisplayName() { return fromTooling }
         return bundleOrProcessName()
+    }
+
+    private static func embeddedName() -> String? {
+        displayNameLock.lock(); defer { displayNameLock.unlock() }
+        return bundledDisplayName
     }
 
     private static func installedName() -> String? {

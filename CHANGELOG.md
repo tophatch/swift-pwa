@@ -22,10 +22,50 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the way out. Measured failing (`(220, 60, 30)` came back `[30, 60, 220]`)
   and then passing on x64; passing on arm64, where the report measured the
   same swap byte for byte.
+
 - **Comments that said Windows decodes images with stb_image** (#265). It has
   used WIC since `image.*` shipped; the `PlatformImageTranscoder` doc comment
   told a reader deciding whether to rely on HEIC that they couldn't, which the
   code and `docs/javascript-api.md` both contradict.
+
+- **A bundled Windows or Linux app named its Documents folder after its
+  executable, not `pwa.json`'s `name`** (#263). Neither platform gives a
+  shipped binary an `Info.plist`, so `app.name` fell back to the process name —
+  the SwiftPM target, which can't hold a space — and an app called "Example
+  Reader" put its user's library in `Documents\ExampleReader` on Windows and
+  Linux, and in `Documents/Example Reader` on macOS. #254 fixed the same split
+  for `dev` and `drive`; this is the shipped half. The bundler now writes the
+  name where each platform keeps one, and the runtime reads it back:
+
+  - **Windows**: a `VS_VERSIONINFO` resource in the `.exe` — `ProductName` and
+    `FileDescription` from `name`, the version from `version`. A resource rather
+    than the `pwa.json` staged beside the exe, because a single-file build has
+    no `pwa.json` beside it. It is also what Explorer's Details tab and Task
+    Manager show, which until now was nothing.
+  - **Linux**: `Name=` from the `.desktop` entry at
+    `<prefix>/share/applications/<exe>.desktop` beside `<prefix>/bin/<exe>`.
+    The AppImage bundler already wrote it there, and a distro package would.
+
+  **The data directory and the webview's storage deliberately do not move.**
+  Both were scoped by executable name on these platforms in every earlier
+  release, and following the new name would strand each existing user's
+  `localStorage` and IndexedDB to rename a folder they never see. So the
+  embedded name feeds `app.name` and `app.documentsDir` only — which is why it
+  isn't `AppPlugin.setDisplayName`, the seam Android uses, since that one feeds
+  `appID()` too. An app that already shipped 0.11.2 on Windows or Linux created
+  `Documents\<Target>`; it will now use `Documents\<Name>`, and any files
+  there need moving by the app.
+
+  Verified against a fresh scaffold whose target is `SwiftPWAIdentityProbe` and
+  whose `pwa.json` says "SwiftPWA Identity Probe". On Windows x64 and arm64,
+  `Scripts/verify-app-identity.ps1` (new) checks the bare binary, the folder
+  bundle and the single-file build, reading `ProductName` back through
+  PowerShell's own `VersionInfo` as well as the runtime (the arm64 box's
+  Documents is redirected into OneDrive, which `documentsDir` follows). On Linux
+  GTK3 and GTK4, `Scripts/verify-app-identity.sh` gains an AppImage leg. Run
+  against unmodified `main`, both harnesses fail exactly the bundled legs
+  (Windows x64, Linux GTK3), so they measure the fix rather than pass
+  regardless.
 
 ### Added
 

@@ -414,17 +414,10 @@ that knows can offer an export instead. See
 The `<App>` leaf is the app's display name, so it is worth knowing where that
 comes from — `swift-pwa dev` / `drive` pass `pwa.json`'s name to an unbundled
 binary, which otherwise has only its executable name and so would put the user's
-folder somewhere else in development than in the shipped app. On **Linux and
-Windows** a shipped binary has no `Info.plist` either, so if your display name
-differs from your SwiftPM target name, name the app yourself:
-
-```swift
-AppPlugin.setDisplayName("Aether Reader")   // in configure, before anything reads it
-```
-
-macOS and iOS read the bundle and Android reads the Activity label, so the call
-is a no-op there — but it is harmless, and it is the only way those two
-platforms learn a name with a space in it. See
+folder somewhere else in development than in the shipped app. A shipped app
+reads its bundle on macOS and iOS, its Activity label on Android, the `.exe`'s
+version resource on Windows and the installed `.desktop` entry on Linux — the
+last two written by `swift-pwa build` from `pwa.json`. See
 [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
 
 ## Serving extra directories (content packs)

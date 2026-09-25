@@ -590,21 +590,16 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
-**A shipped app answers its *executable* name, not `pwa.json`'s.** There is no
-`Info.plist` here — `Bundle.main.infoDictionary` comes back empty on
-swift-corelibs-foundation (measured) — so `app.name` falls back to the process
-name, which is the SwiftPM target name, and a target name can't contain a space.
-`app.documentsDir` is derived from that name, so an app whose `pwa.json` says
-`"Aether Reader"` owns `~/Documents/AetherReader` here and `~/Documents/Aether Reader`
-on macOS. `swift-pwa dev` and `drive` pass the manifest name through the
-environment, so this shows up only once the app is installed. Until the bundler
-carries the name itself, declare it in `configure`:
-
-```swift
-AppPlugin.setDisplayName("Aether Reader")
-```
-
-Verified with `Scripts/verify-app-identity.sh`, which measures all four cases.
+**An installed app takes its name from its `.desktop` entry; a bare binary
+doesn't have one.** There is no `Info.plist` here, so the runtime reads `Name=`
+from `<prefix>/share/applications/<exe>.desktop` beside `<prefix>/bin/<exe>` —
+where the AppImage bundler writes it from `pwa.json`, and where a distro package
+puts it — and `app.documentsDir` follows (#263). A `swift build` binary run
+outside `swift-pwa dev` / `drive` has no entry and answers its executable name,
+the SwiftPM target, which can't contain a space. `app.dataDir` and the
+WebKitGTK storage stay scoped by executable name either way, as they always
+were. `Scripts/verify-app-identity.sh` measures the driven, bare, bundled and
+declared cases.
 See [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
 
 **No OS sign-in browser.** `auth.authorize` opens the *default* browser and

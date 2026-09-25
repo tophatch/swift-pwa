@@ -32,6 +32,14 @@
             // is set, this writes the command catalog and exits before we touch
             // GTK; otherwise it returns and we launch normally.
             HeadlessDescribe.dumpIfRequested(configure)
+            // The name the bundler wrote into the `.desktop` entry beside this
+            // binary, before anything asks for `app.name` or
+            // `app.documentsDir`. A `swift build` binary has none.
+            if let executable = try? FileManager.default.destinationOfSymbolicLink(atPath: "/proc/self/exe") {
+                AppPlugin.setBundledDisplayName(
+                    DesktopEntry.installedName(forExecutable: URL(fileURLWithPath: executable))
+                )
+            }
             swiftpwa_gtk_init()
             installMainThreadHook()
             attachMainQueueToGTKLoop()

@@ -440,9 +440,17 @@ struct Deploy: AsyncParsableCommand {
         }
 
         print("→ installing to \(target.name) (\(target.udid))")
-        try await Shell.run(
-            "/usr/bin/env", ["xcrun", "devicectl", "device", "install", "app", "--device", target.udid, app.path]
-        )
+        do {
+            try await DeviceInstall.install(app: app, on: target)
+        } catch var failure as DeviceInstall.Failure {
+            // The build and the signing both succeeded, and a failed install
+            // reads as though they hadn't. Say so, and name the way to finish.
+            failure.recovery = """
+            The build is intact at \(app.path). Once the device is reachable, re-run the same command \
+            with --no-build to install it without rebuilding.
+            """
+            throw failure
+        }
 
         var running = false
         if launch {

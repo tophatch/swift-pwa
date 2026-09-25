@@ -180,4 +180,85 @@ struct DeviceCtlErrorTests {
         """.utf8)
         #expect(DeviceCtlError.reason(DeviceCtlError.chain(fromJSON: json)) == "plain")
     }
+
+    // MARK: - A dropped connection (#260)
+
+    /// Measured: `devicectl device install app` to a network-paired iPad after
+    /// five idle minutes; one and three minutes installed. A single link, and
+    /// the whole reason is in it.
+    static let disconnectedAfterConnecting = Data("""
+    {
+      "error": {
+        "code": 4000,
+        "domain": "com.apple.dt.CoreDeviceError",
+        "userInfo": {
+          "DeviceIdentifier": { "string": "00000000-0000-0000-0000-000000000000" },
+          "NSLocalizedDescription": { "string": "The device disconnected immediately after connecting." }
+        }
+      },
+      "info": { "outcome": "failed" }
+    }
+    """.utf8)
+
+    /// Reported: the same install on two other network-paired devices after a
+    /// long build, rebuilt here from `devicectl`'s rendering of the chain. The
+    /// same outer code as the one above, with different words and three more
+    /// links under it.
+    static let connectionReset = Data("""
+    {
+      "error": {
+        "code": 4000,
+        "domain": "com.apple.dt.CoreDeviceError",
+        "userInfo": {
+          "NSLocalizedDescription": { "string": "A connection to this device could not be established." },
+          "NSUnderlyingError": { "error": {
+            "code": 1,
+            "domain": "com.apple.CoreDevice.ControlChannelConnectionError",
+            "userInfo": {
+              "NSLocalizedDescription": { "string": "Internal logic error: Connection was invalidated" },
+              "NSUnderlyingError": { "error": {
+                "code": 0,
+                "domain": "com.apple.CoreDevice.ControlChannelConnectionError",
+                "userInfo": {
+                  "NSLocalizedDescription": { "string": "Transport error" },
+                  "NSUnderlyingError": { "error": {
+                    "code": 54,
+                    "domain": "Network.NWError",
+                    "userInfo": {
+                      "NSLocalizedDescription": { "string": "The operation couldn't be completed. (Network.NWError error 54 - Connection reset by peer)" }
+                    }
+                  } }
+                }
+              } }
+            }
+          } }
+        }
+      },
+      "info": { "outcome": "failed" }
+    }
+    """.utf8)
+
+    @Test("both measured spellings of a dropped connection are retried")
+    func droppedConnectionIsRetried() {
+        #expect(DeviceCtlError.isDroppedConnection(DeviceCtlError.chain(fromJSON: Self.disconnectedAfterConnecting)))
+        #expect(DeviceCtlError.isDroppedConnection(DeviceCtlError.chain(fromJSON: Self.connectionReset)))
+    }
+
+    @Test("a failure the device has to fix is not retried")
+    func otherFailuresAreNotRetried() {
+        for fixture in [Self.lockedTunnel, Self.lockedScreen, Self.notInstalled, Data()] {
+            #expect(!DeviceCtlError.isDroppedConnection(DeviceCtlError.chain(fromJSON: fixture)))
+        }
+    }
+
+    @Test("an install failure says what went wrong, and what to do when the caller knows")
+    func failureDescription() {
+        let chain = DeviceCtlError.chain(fromJSON: Self.disconnectedAfterConnecting)
+        var failure = DeviceInstall.Failure(device: "iPad", reason: DeviceCtlError.reason(chain), retried: true)
+        #expect(failure.description == """
+        couldn't install on iPad — The device disconnected immediately after connecting. (after one retry)
+        """)
+        failure.recovery = "Re-run with --no-build."
+        #expect(failure.description.hasSuffix("(after one retry)\nRe-run with --no-build."))
+    }
 }

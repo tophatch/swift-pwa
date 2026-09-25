@@ -249,6 +249,27 @@ For TestFlight / App Store distribution, `xcodebuild archive` →
 `xcodebuild -exportArchive -exportOptionsPlist ...` is still the canonical
 chain (a CLI wrapper is a later follow-up).
 
+### When the install itself fails
+
+A device paired over the network can drop its connection while the signed build
+runs, and the install that follows fails with CoreDeviceError 4000 — "The device
+disconnected immediately after connecting", or "A connection to this device
+could not be established". Running the same install again straight away
+succeeds, so `deploy` and `drive` retry it once, printing:
+
+```text
+swift-pwa: the connection to <device> dropped; retrying the install once.
+```
+
+It's intermittent rather than a timeout: on an idle network-paired iPad, one
+install in 18 failed this way, after five idle minutes, while others after five,
+seven and ten went through.
+
+Any other install failure, or a second drop, stops the deploy with `devicectl`'s
+own reason and says the build is intact. Nothing needs rebuilding: fix the
+device side, then re-run the same command with `--no-build`. A USB cable avoids
+the network transport altogether.
+
 ### When `deploy` installs but the app doesn't launch
 
 `swift-pwa deploy --target ios` installs and then launches. A refused *launch*

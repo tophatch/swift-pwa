@@ -34,6 +34,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the `.sh` asks SwiftPM for the binary's path instead of searching a layout
   6.4 moved.
 
+- **`deploy --target ios` could fail at the install after a good build** (#260).
+  A device paired over the network can drop its connection while the signed
+  build runs, and `devicectl device install app` then fails with CoreDeviceError
+  4000, although running the same install again straight away succeeds.
+  Reproduced on an idle network-paired iPad, but rarely: one install in 18
+  failed, after five idle minutes, while others after five, seven and ten went
+  through — intermittent, not a timeout. It didn't recur to be retried here, so
+  that a retry succeeds rests on the report (two of two by hand); the retry
+  logic is tested against a scripted `devicectl`. `deploy` and `drive` now share
+  one install step that retries once when `devicectl`'s error document says the
+  connection dropped (both wordings of 4000 seen so far — one measured, one
+  reported), and reports anything else on the first attempt with `devicectl`'s
+  own reason. When the
+  install does fail, `deploy` says the build is intact and to re-run the same
+  command with `--no-build`, where it used to read as the build failing.
+
+  **A piped log now keeps the order things happened in.** The CLI's own lines
+  sat in C's stdout buffer while the tools it runs wrote straight through, so in
+  a captured log the install's error came about ten lines above the
+  `→ installing` step it belonged to. The CLI now flushes before starting any
+  child; measured before and after against the same device with stdout piped.
+
 - **`image.transcode` on Windows swapped red and blue — in PNG as well as
   JPEG** (#266). `IWICBitmapFrameEncode::SetPixelFormat` is in/out: asked for
   `24bppRGB`, WIC's PNG and JPEG encoders both write back `24bppBGR` and return

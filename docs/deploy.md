@@ -146,7 +146,10 @@ deploy then:
 2. Runs the signed `build` (with `--allow-provisioning-registration`, it first
    **mints a profile** for a free personal team against the resolved device —
    see [ios-setup.md](ios-setup.md)), then **installs** the resulting `.app`
-   with `xcrun devicectl device install app`.
+   with `xcrun devicectl device install app`. A connection that dropped during
+   the build (CoreDeviceError 4000, seen on network-paired devices) is retried
+   once; any other failure says the build is intact and to re-run with
+   `--no-build` (see [ios-setup.md](ios-setup.md#when-the-install-itself-fails)).
 3. **Launches** it with `xcrun devicectl device process launch
    --terminate-existing` (unless `--no-launch`).
 

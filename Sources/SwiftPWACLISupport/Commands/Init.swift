@@ -757,12 +757,17 @@ enum Templates {
               # here on INCLUDE / LIB as well; Swift 6.4's build engine passes
               # neither to the tasks that need them, so that advice would stop
               # working the day this runner's toolchain moves.
+              #
+              # The CLI comes as a zip that carries the Swift runtime beside the
+              # exe, so it runs whatever toolchain the runner has; the bare .exe
+              # needs a matching one on PATH.
               - name: Install the swift-pwa CLI
                 shell: pwsh
                 run: |
-                  curl.exe -fsSL "\(cliBase)/$env:SWIFT_PWA_CLI_VERSION/swift-pwa-windows-x86_64.exe" -o swift-pwa.exe
+                  curl.exe -fsSL "\(cliBase)/$env:SWIFT_PWA_CLI_VERSION/swift-pwa-windows-x86_64.zip" -o cli.zip
+                  Expand-Archive cli.zip -DestinationPath swift-pwa-cli
               - name: Build the Windows bundle
-                run: .\\swift-pwa.exe build --target windows
+                run: .\\swift-pwa-cli\\swift-pwa.exe build --target windows
               - name: Zip the portable bundle
                 shell: pwsh
                 run: Get-ChildItem build/windows -Directory | ForEach-Object { Compress-Archive -Path $_.FullName -DestinationPath "build/windows/$($_.Name)-windows.zip" -Force }

@@ -76,7 +76,10 @@ struct InitTests {
         // three download URLs reference — not hardcoded three times.
         #expect(yml.contains("SWIFT_PWA_CLI_VERSION: \"v\(SwiftPWAVersion.current)\""))
         #expect(yml.contains("$SWIFT_PWA_CLI_VERSION/swift-pwa-macos-arm64"))
-        #expect(yml.contains("$env:SWIFT_PWA_CLI_VERSION/swift-pwa-windows-x86_64.exe"))
+        // The zip, not the bare .exe: only the zip runs without a matching
+        // Swift runtime on the runner (#261).
+        #expect(yml.contains("$env:SWIFT_PWA_CLI_VERSION/swift-pwa-windows-x86_64.zip"))
+        #expect(yml.contains("swift-pwa-cli\\swift-pwa.exe build --target windows"))
 
         let noCI = parent.appendingPathComponent("NoCI")
         try await Init.parse(["NoCI", "--path", noCI.path, "--no-ci-workflow"]).run()

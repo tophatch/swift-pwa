@@ -15,11 +15,15 @@
 #
 # Usage:
 #   Scripts/verify-driven-input.sh [--app-dir <dir>] [--keep] [--only <name>]
+#                                  [--background]
 #
 #   --app-dir <dir>  where to build the probe app. Default: a temp dir.
 #   --keep           don't delete the probe app afterwards (for iterating).
 #   --only <name>    run one check: control | editing | undo | preventdefault |
-#                    focus | drag
+#                    focus | drag | wheel
+#   --background     launch with SWIFT_PWA_DRIVE_BACKGROUND=1 — the parked,
+#                    never-activated window an e2e suite runs in (#208). Input
+#                    has to reach it too, and wheel once didn't (#264).
 #
 # Two traps this is written around, both of which produce a green run that
 # proves nothing (see #164):
@@ -40,12 +44,14 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 APP_DIR=""
 KEEP=0
 ONLY=""
+BACKGROUND=0
 
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --app-dir) APP_DIR="$2"; shift 2 ;;
         --keep) KEEP=1; shift ;;
         --only) ONLY="$2"; shift 2 ;;
+        --background) BACKGROUND=1; shift ;;
         -h|--help) sed -n '2,40p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'; exit 0 ;;
         *) echo "unknown argument: $1" >&2; exit 2 ;;
     esac
@@ -114,7 +120,10 @@ echo "→ building the probe app"
 # --- Launch and attach ------------------------------------------------------
 # One long-lived app for every check: `drive` owns the app's lifecycle by
 # default, which would mean a fresh window (and a fresh page) per assertion.
-BINARY="$(find "$APP_DIR/.build" -maxdepth 3 -name "$(basename "$APP_DIR")" -type f -perm -u+x | head -1)"
+# Ask SwiftPM where it put the binary: the layout moved under Swift 6.4's
+# build engine (`.build/out/Products/Debug`, behind a `debug` symlink), and a
+# search written for the old one finds nothing.
+BINARY="$(cd "$APP_DIR" && swift build --show-bin-path)/$(basename "$APP_DIR")"
 [[ -x "$BINARY" ]] || { echo "::error::couldn't find the built probe binary"; exit 1; }
 
 LOG="$(mktemp)"
@@ -139,7 +148,8 @@ command -v setsid >/dev/null 2>&1 && SETSID=(setsid)
 
 # The `[@]+` form because macOS ships bash 3.2, where expanding an empty array
 # under `set -u` is an unbound-variable error.
-${SETSID[@]+"${SETSID[@]}"} env SWIFT_PWA_WEB_ROOT="$APP_DIR/web" SWIFT_PWA_DRIVE=0 "${LAUNCH[@]}" >"$LOG" 2>&1 &
+${SETSID[@]+"${SETSID[@]}"} env SWIFT_PWA_WEB_ROOT="$APP_DIR/web" SWIFT_PWA_DRIVE=0 \
+    SWIFT_PWA_DRIVE_BACKGROUND="$BACKGROUND" "${LAUNCH[@]}" >"$LOG" 2>&1 &
 APP_PID=$!
 # Off the job table, so tearing it down doesn't print bash's own
 # "Terminated: 15" line over the results.
@@ -173,7 +183,7 @@ drive() { "$CLI" drive "$@" --attach "$PORT" --token "$TOKEN"; }
 # `drive eval` prints a JSON document; strip the quotes off a bare string.
 evaljs() { drive eval "$1" | sed 's/^"//; s/"$//'; }
 
-echo "→ driving $(basename "$BINARY") on $PLATFORM (port $PORT)"
+echo "→ driving $(basename "$BINARY") on $PLATFORM (port $PORT)$([[ $BACKGROUND == 1 ]] && echo ', backgrounded')"
 
 # --- What can this backend actually do? -------------------------------------
 CAPS="$(drive info)"
@@ -230,7 +240,9 @@ fi
 # login). Typing still works in both, so the control above can't tell them
 # apart; `document.hasFocus()` after an --activate keystroke can.
 CAN_ACTIVATE=1
-if [[ "$PLATFORM" == "macos" && "$HAS_KEY" == 1 ]]; then
+# Only for the checks that need it: activating takes over the screen, which a
+# `--only wheel` or `--background` run exists to avoid.
+if [[ "$PLATFORM" == "macos" && "$HAS_KEY" == 1 ]] && { wanted editing || wanted undo || wanted preventdefault; }; then
     drive type --key a --modifiers command --activate >/dev/null
     if [[ "$(drive eval "document.hasFocus()")" != "true" ]]; then
         CAN_ACTIVATE=0
@@ -386,6 +398,52 @@ print('; '.join(problems))
         fi
     else
         skip "drag" "this backend can't synthesize pointer events"
+    fi
+fi
+
+# --- 7. Wheel ---------------------------------------------------------------
+# Two facts, checked separately: the event reached the page, trusted, and it
+# scrolled the element under it. A wheel that returns success and delivers
+# nothing (#264) reads as a scroll-chaining bug in whatever test used it.
+if wanted wheel; then
+    HAS_WHEEL="$(python3 -c "
+import json,sys
+print('1' if (json.loads(sys.stdin.read()).get('input') or {}).get('wheel') else '0')
+" <<<"$CAPS" 2>/dev/null || echo 0)"
+    if [[ "$HAS_WHEEL" == 1 ]]; then
+        evaljs "__reset()" >/dev/null
+        drive scroll 120 --selector "#scroller" >/dev/null
+        REPORT="$(drive eval "JSON.stringify({ wheels: __probe.wheels, top: document.getElementById('scroller').scrollTop })")"
+        OK="$(python3 -c "
+import json,sys
+raw = sys.stdin.read().strip()
+r = json.loads(json.loads(raw)) if raw.startswith('\"') else json.loads(raw)
+w = r.get('wheels') or []
+problems = []
+if not w: problems.append('no wheel event reached the page')
+elif not all(e[2] for e in w): problems.append('wheel events were not trusted')
+elif not any(e[1] == 'scroller' for e in w): problems.append('no wheel event targeted #scroller')
+if not r.get('top'): problems.append('#scroller did not scroll')
+print('; '.join(problems))
+" <<<"$REPORT" 2>/dev/null)"
+        if [[ -z "$OK" ]]; then
+            pass "wheel: a scroll reaches the page trusted and scrolls the element under it"
+        else
+            fail "wheel: a scroll reaches the page trusted and scrolls the element under it" "$OK ($REPORT)"
+        fi
+    elif [[ "$BACKGROUND" == 1 ]]; then
+        # A backend that can't reach a parked window must say so when asked,
+        # not return success for a scroll that never happened (#264).
+        if OUT="$("$CLI" drive scroll 120 --selector "#scroller" --attach "$PORT" --token "$TOKEN" 2>&1)"; then
+            fail "wheel: refused, not dropped, in a backgrounded run" \
+                 "drive info reports no wheel, yet drive scroll succeeded: $OUT"
+        elif grep -q "background" <<<"$OUT"; then
+            pass "wheel: refused, not dropped, in a backgrounded run"
+        else
+            fail "wheel: refused, not dropped, in a backgrounded run" "failed without naming --background: $OUT"
+        fi
+    else
+        skip "wheel" "this backend can't synthesize wheel events"
     fi
 fi
 

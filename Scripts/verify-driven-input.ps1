@@ -29,11 +29,22 @@
 
 .PARAMETER Keep
     Don't delete the probe app afterwards.
+
+.PARAMETER Packages
+    The `packages\` folder holding the WebView2 and WIL NuGet packages.
+    Defaults to `<repo>\packages`. Swift 6.4 no longer passes `INCLUDE` / `LIB`
+    on, so the probe app gets them as flags (#219).
+
+.PARAMETER Background
+    Launch with SWIFT_PWA_DRIVE_BACKGROUND=1 — the parked, never-activated
+    window an e2e suite runs in (#208). Input has to reach it too.
 #>
 [CmdletBinding()]
 param(
     [string]$AppDir = "",
-    [switch]$Keep
+    [switch]$Keep,
+    [string]$Packages = "",
+    [switch]$Background
 )
 
 $ErrorActionPreference = "Continue"
@@ -53,10 +64,17 @@ if (-not $AppDir) {
     if (-not $Keep) { $cleanupApp = $true }
 }
 $cli = Join-Path $repo ".build\debug\swift-pwa.exe"
+if (-not $Packages) { $Packages = Join-Path $repo "packages" }
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+$buildFlags = @(
+    '-Xcc', "-I$Packages\Microsoft.Web.WebView2\build\native\include",
+    '-Xcc', "-I$Packages\Microsoft.Windows.ImplementationLibrary\include",
+    '-Xlinker', "/LIBPATH:$Packages\Microsoft.Web.WebView2\build\native\$arch"
+)
 
 Write-Output "-> building the CLI"
 Push-Location $repo
-swift build --product swift-pwa 2>&1 | Out-Null
+swift build --product swift-pwa @buildFlags 2>&1 | Out-Null
 Pop-Location
 if (-not (Test-Path $cli)) { Write-Error "couldn't build swift-pwa.exe"; exit 1 }
 
@@ -76,6 +94,9 @@ $manifest = Join-Path $AppDir "Package.swift"
 $source = Get-Content $manifest -Raw
 $escaped = $repo -replace '\\', '\\'
 $patched = [regex]::Replace($source, '\.package\(url: "[^"]*swift-pwa"[^)]*\)', ".package(path: `"$escaped`")")
+# A path dependency is named after its directory, so a checkout not called
+# swift-pwa leaves the product pointing at a package that no longer exists.
+$patched = $patched -replace 'package: "swift-pwa"', "package: `"$(Split-Path -Leaf $repo)`""
 if ($patched -ne $source) {
     Set-Content -Path $manifest -Value $patched
     Write-Output "    repointed Package.swift at the working tree"
@@ -85,10 +106,13 @@ Copy-Item (Join-Path $repo "Scripts\driver-probe\index.html") (Join-Path $AppDir
 
 Write-Output "-> building the probe app"
 Push-Location $AppDir
-swift build 2>&1 | Out-Null
+$buildOutput = swift build @buildFlags 2>&1 | ForEach-Object { "$_" }
 $built = $LASTEXITCODE
 Pop-Location
-if ($built -ne 0) { Write-Error "the probe app didn't build"; exit 1 }
+if ($built -ne 0) {
+    $buildOutput | Where-Object { $_ -match 'error:' } | Select-Object -First 10 | ForEach-Object { Write-Output $_ }
+    Write-Error "the probe app didn't build"; exit 1
+}
 
 $binary = Get-ChildItem (Join-Path $AppDir ".build") -Recurse -Filter "$(Split-Path -Leaf $AppDir).exe" |
     Select-Object -First 1 -ExpandProperty FullName
@@ -106,6 +130,7 @@ if ($sessionId -eq 0) {
     @"
 @echo off
 set SWIFT_PWA_DRIVE=0
+set SWIFT_PWA_DRIVE_BACKGROUND=$(if ($Background) { '1' } else { '0' })
 set SWIFT_PWA_WEB_ROOT=$AppDir\web
 "$binary" > "$log" 2>&1
 "@ | Set-Content -Path $launcher -Encoding ASCII
@@ -113,6 +138,7 @@ set SWIFT_PWA_WEB_ROOT=$AppDir\web
     schtasks /run /tn $taskName | Out-Null
 } else {
     $env:SWIFT_PWA_DRIVE = "0"
+    $env:SWIFT_PWA_DRIVE_BACKGROUND = $(if ($Background) { '1' } else { '0' })
     $env:SWIFT_PWA_WEB_ROOT = (Join-Path $AppDir "web")
     Start-Process -FilePath $binary -RedirectStandardOutput $log -NoNewWindow
 }
@@ -148,14 +174,15 @@ if (-not $port -or -not $token) {
 function Drive { & $cli drive @args --attach $port --token $token 2>$null }
 function EvalJs($js) { (Drive eval $js) -replace '^"', '' -replace '"$', '' }
 
-Write-Output "-> driving $(Split-Path -Leaf $binary) on windows (port $port)"
+Write-Output "-> driving $(Split-Path -Leaf $binary) on windows (port $port)$(if ($Background) { ', backgrounded' })"
 
 $caps = (Drive info) -join "`n"
-$hasKey = $false; $hasPointer = $false; $delivery = "?"
+$hasKey = $false; $hasPointer = $false; $hasWheel = $false; $delivery = "?"
 try {
     $parsed = $caps | ConvertFrom-Json
     $hasKey = [bool]$parsed.input.key
     $hasPointer = [bool]$parsed.input.pointer
+    $hasWheel = [bool]$parsed.input.wheel
     $delivery = $parsed.input.delivery
 } catch { }
 Write-Output "   input: key=$hasKey pointer=$hasPointer delivery=$delivery"
@@ -296,6 +323,41 @@ if ($hasPointer) {
     }
 } else {
     Skip "drag" "this backend reports no pointer input"
+}
+
+# --- 7. Wheel ---------------------------------------------------------------
+# Two facts, checked separately: the event reached the page, trusted, and it
+# scrolled the element under it. A wheel that returns success and delivers
+# nothing (#264) reads as a scroll-chaining bug in whatever test used it.
+if ($hasWheel) {
+    EvalJs "__reset()" | Out-Null
+    Drive scroll 120 --selector "#scroller" | Out-Null
+    $reportRaw = EvalJs "JSON.stringify({wheels:__probe.wheels,top:document.getElementById('scroller').scrollTop})"
+    $problems = @()
+    try {
+        $r = ($reportRaw -replace '\\"', '"') | ConvertFrom-Json
+        $w = @($r.wheels)
+        if ($w.Count -eq 0) { $problems += "no wheel event reached the page" }
+        elseif (@($w | Where-Object { -not $_[2] }).Count -gt 0) { $problems += "wheel events were not trusted" }
+        elseif (@($w | Where-Object { $_[1] -eq 'scroller' }).Count -eq 0) { $problems += "no wheel event targeted #scroller" }
+        if (-not $r.top) { $problems += "#scroller did not scroll" }
+    } catch { $problems += "couldn't read the probe back: $reportRaw" }
+    if ($problems.Count -eq 0) {
+        Pass "wheel: a scroll reaches the page trusted and scrolls the element under it"
+    } else {
+        Fail "wheel: a scroll reaches the page trusted and scrolls the element under it" (($problems -join "; ") + " ($reportRaw)")
+    }
+} elseif ($Background) {
+    $out = (& $cli drive scroll 120 --selector "#scroller" --attach $port --token $token 2>&1) -join " "
+    if ($LASTEXITCODE -eq 0) {
+        Fail "wheel: refused, not dropped, in a backgrounded run" "drive info reports no wheel, yet drive scroll succeeded: $out"
+    } elseif ($out -match "background") {
+        Pass "wheel: refused, not dropped, in a backgrounded run"
+    } else {
+        Fail "wheel: refused, not dropped, in a backgrounded run" "failed without naming --background: $out"
+    }
+} else {
+    Skip "wheel" "this backend reports no wheel input"
 }
 
 Write-Output ""

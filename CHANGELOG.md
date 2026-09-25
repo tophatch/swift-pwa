@@ -9,6 +9,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`drive scroll` could return success and deliver nothing on macOS** (#264).
+  `NSEvent(cgEvent:)` takes a scroll event's window from the window server —
+  what is on top at that screen point — rather than from the window it is sent
+  to. When that isn't ours the event comes out with no window and a screen
+  position where its window position should be, and is hit-tested into
+  nothing. It was always the case for a `--background` run's off-screen window,
+  and instrumenting it showed the same on a foreground run on a working desktop.
+  The adapter now builds the event the way AppKit addresses its own mouse
+  events, for this window and point; measured delivering to a foreground window
+  and to one whose app had been deactivated. The documented "window under
+  pointer" CGEvent fields turn out to have no effect; AppKit reads an
+  undocumented one, which a retyped mouse event carries.
+
+  **A backgrounded macOS run still can't take a wheel, and now says so.** WebKit
+  drops a wheel event for a window parked off every display even when it is
+  handed straight to the webview — while the same event lands in an inactive
+  window on screen. So `drive info` reports `input.wheel: false` there and the
+  verb fails naming `--background`, rather than letting a scroll test pass
+  having scrolled nothing. GTK3 and Windows deliver the wheel backgrounded
+  (measured). `Scripts/verify-driven-input.sh` and its `.ps1` gain a wheel check
+  and a `--background` / `-Background` mode; the `.ps1` also gets the WebView2 /
+  WIL flags Swift 6.4 needs and follows a checkout not named `swift-pwa`, and
+  the `.sh` asks SwiftPM for the binary's path instead of searching a layout
+  6.4 moved.
+
 - **`image.transcode` on Windows swapped red and blue — in PNG as well as
   JPEG** (#266). `IWICBitmapFrameEncode::SetPixelFormat` is in/out: asked for
   `24bppRGB`, WIC's PNG and JPEG encoders both write back `24bppBGR` and return

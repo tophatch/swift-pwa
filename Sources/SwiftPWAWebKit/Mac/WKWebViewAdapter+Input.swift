@@ -24,11 +24,19 @@
         /// Pressure *is* real — `NSEvent.mouseEvent` takes it — but WebKit
         /// clamps a non-tablet event's `PointerEvent.pressure` to the spec's
         /// 0.5/0, so the page never observes the value. Reported as `false`.
+        ///
+        /// **No wheel in a backgrounded run.** WebKit drops a wheel event for a
+        /// window parked off every display — measured: correctly addressed,
+        /// hit-tested to the webview, even handed to `scrollWheel(with:)`
+        /// directly, and still nothing reaches the page, while the same event
+        /// lands in an inactive window that is on screen (#264). Pointer and
+        /// key events are unaffected. Reporting it lets the verb fail instead
+        /// of returning success for a scroll that never happened.
         public nonisolated var inputCapabilities: InputCapabilities {
             InputCapabilities(
                 pointer: true,
                 key: true,
-                wheel: true,
+                wheel: !DriverBackground.isRequested,
                 pointerTypes: [.mouse],
                 pressure: false,
                 tilt: false
@@ -203,19 +211,54 @@
             ) else {
                 throw BridgeError(code: BridgeError.handler, message: "couldn't build a scroll event")
             }
-            scroll.flags = Self.cgFlags(wheel.modifiers)
-            // `NSEvent(cgEvent:)` derives its window from the event location,
-            // which is in *screen* coordinates with a flipped origin.
+            // Address it to *this* window. `NSEvent(cgEvent:)` on a bare scroll
+            // event takes its window from the window server — what is on top at
+            // that screen point — and when that isn't ours (always, for a
+            // backgrounded run's off-screen window) the event came out with no
+            // window, a `locationInWindow` that was really a screen position,
+            // and `sendEvent` hit-tested it into nothing (#264). A mouse event built for this window and point
+            // carries both the way AppKit itself encodes them (the window number
+            // travels in an undocumented CGEvent field, 51; the documented
+            // "window under pointer" fields, 91 and 92, have no effect here —
+            // measured). So build one, retype it, and move the scroll fields
+            // across: giving the scroll event the same location and field 51
+            // alone still left it off-window, so the template carries more.
             let inWindow = windowPoint(x: wheel.x, y: wheel.y)
-            let onScreen = window.convertPoint(toScreen: inWindow)
-            let flippedY = (NSScreen.screens.first?.frame.height ?? onScreen.y) - onScreen.y
-            scroll.location = CGPoint(x: onScreen.x, y: flippedY)
+            guard let addressed = NSEvent.mouseEvent(
+                with: .mouseMoved,
+                location: inWindow,
+                modifierFlags: [],
+                timestamp: 0,
+                windowNumber: window.windowNumber,
+                context: nil,
+                eventNumber: 0,
+                clickCount: 0,
+                pressure: 0
+            )?.cgEvent?.copy() else {
+                throw BridgeError(code: BridgeError.handler, message: "couldn't address the scroll event")
+            }
+            addressed.type = .scrollWheel
+            addressed.flags = Self.cgFlags(wheel.modifiers)
+            for field in Self.scrollFields {
+                addressed.setIntegerValueField(field, value: scroll.getIntegerValueField(field))
+                addressed.setDoubleValueField(field, value: scroll.getDoubleValueField(field))
+            }
 
-            guard let event = NSEvent(cgEvent: scroll) else {
+            guard let event = NSEvent(cgEvent: addressed) else {
                 throw BridgeError(code: BridgeError.handler, message: "couldn't wrap the scroll event")
             }
             send(event, to: window)
         }
+
+        /// Every field `CGEvent(scrollWheelEvent2Source:…)` sets that makes it a
+        /// scroll: the three delta encodings per axis, continuity and phase.
+        private static let scrollFields: [CGEventField] = [
+            .scrollWheelEventDeltaAxis1, .scrollWheelEventDeltaAxis2, .scrollWheelEventDeltaAxis3,
+            .scrollWheelEventFixedPtDeltaAxis1, .scrollWheelEventFixedPtDeltaAxis2, .scrollWheelEventFixedPtDeltaAxis3,
+            .scrollWheelEventPointDeltaAxis1, .scrollWheelEventPointDeltaAxis2, .scrollWheelEventPointDeltaAxis3,
+            .scrollWheelEventIsContinuous, .scrollWheelEventScrollPhase, .scrollWheelEventMomentumPhase,
+            .scrollWheelEventScrollCount
+        ]
 
         // MARK: - Delivery
 

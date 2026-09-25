@@ -414,6 +414,14 @@
             capabilities: InputCapabilities
         ) throws -> WheelInput {
             guard capabilities.wheel else {
+                if DriverBackground.isRequested {
+                    // Returning success here would make a scroll test pass
+                    // having scrolled nothing (#264).
+                    throw DriverError.unsupported(
+                        "wheel events can't reach a backgrounded window on this backend — "
+                            + "run this without --background"
+                    )
+                }
                 throw DriverError.unsupported("this backend can't synthesize wheel events")
             }
             guard case let .number(x)? = payload?["x"], case let .number(y)? = payload?["y"] else {

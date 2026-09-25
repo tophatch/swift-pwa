@@ -502,6 +502,19 @@ neither ever needed the window on screen. Verified in this mode on all three:
 `drive click` and `drive type` landing on macOS, and a screenshot of live content
 everywhere (macOS, GTK3, Windows), with the frontmost application never changing.
 
+**Except the wheel, on macOS.** WebKit there drops a wheel event for a window
+parked off every display — correctly addressed, hit-tested to the webview, even
+handed to `scrollWheel(with:)` directly, and nothing reaches the page — while
+the same event lands in an *inactive* window that is on screen, so it is the
+position and not the focus (#264). Pointer and key events are unaffected. So on
+macOS `drive info` reports `input.wheel: false` in a backgrounded run and
+`drive scroll` fails, naming `--background`, instead of returning success for a
+scroll that never happened. Run a test that needs a real wheel — scroll
+chaining, `overscroll-behavior`, a wheel-driven page turn — without
+`--background` there. GTK3 and Windows deliver it backgrounded
+(`Scripts/verify-driven-input.sh --background --only wheel`, and the `.ps1` with
+`-Background`).
+
 GTK4's synthetic input is the exception, and for an unrelated reason: it goes
 through XTEST, which needs the window focused — so it can't be driven under
 `--background` in any case. `drive info` reports that as `input.delivery:

@@ -14,17 +14,22 @@
   #field { position: absolute; left: 20px; top: 20px; width: 320px; font-size: 16px; }
   #pad { position: absolute; left: 0; top: 80px; right: 0; bottom: 0; background: #f4f4f5; touch-action: none; }
   #box { position: absolute; left: 40px; top: 40px; width: 60px; height: 60px; background: #2563eb; }
+  #scroller { position: absolute; left: 360px; top: 10px; width: 200px; height: 60px; overflow-y: auto; }
+  #scroller div { height: 600px; background: linear-gradient(#e4e4e7, #a1a1aa); }
 </style>
 
 <input id="field" value="">
 <div id="pad"><div id="box"></div></div>
+<div id="scroller"><div></div></div>
 
 <script>
   const probe = {
     // Drag
     down: null, up: null, moves: [], endSpeed: null, trusted: null, captured: null,
     // Keyboard
-    sawUndoKey: 0, swallowUndo: false
+    sawUndoKey: 0, swallowUndo: false,
+    // Wheel: [deltaY, target id, isTrusted] per event reaching the page
+    wheels: []
   };
   window.__probe = probe;
 
@@ -76,11 +81,21 @@
     }
   });
 
+  // --- Wheel --------------------------------------------------------------
+  // Capture phase on window, so an event is seen wherever it lands. The check
+  // also reads the scroller's scrollTop: the event arriving and it doing what a
+  // wheel does are separate facts.
+  window.addEventListener('wheel', (e) => {
+    probe.wheels.push([Math.round(e.deltaY), e.target.id || e.target.parentElement?.id || e.target.tagName, e.isTrusted]);
+  }, { capture: true, passive: true });
+
   // --- Helpers the script calls through `drive eval` -----------------------
   window.__reset = () => {
     probe.down = probe.up = probe.endSpeed = null;
     probe.moves.length = 0;
     probe.sawUndoKey = 0;
+    probe.wheels.length = 0;
+    document.getElementById('scroller').scrollTop = 0;
     return 'ok';
   };
   window.__setField = (value) => { field.value = value; field.focus(); return field.value; };

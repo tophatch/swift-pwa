@@ -143,7 +143,7 @@ struct SelfUpdate: AsyncParsableCommand {
                 return nil
             #endif
         #elseif os(Windows)
-            return "swift-pwa-windows-x86_64.exe"
+            return "swift-pwa-windows-x86_64.zip"
         #else
             return nil
         #endif
@@ -204,8 +204,9 @@ struct SelfUpdate: AsyncParsableCommand {
     static func windowsGuidance(current: String) -> String {
         """
         self-update can't replace a running .exe on Windows (the file is locked while it runs).
-        To update from v\(current): download swift-pwa-windows-x86_64.exe from
-        https://github.com/\(repo)/releases/latest and replace your swift-pwa.exe with it.
+        To update from v\(current): download swift-pwa-windows-x86_64.zip from
+        https://github.com/\(repo)/releases/latest and extract it over the folder that holds
+        your swift-pwa.exe. It carries the Swift runtime beside the exe, so keep the DLLs with it.
         """
     }
 }

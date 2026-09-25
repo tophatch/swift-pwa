@@ -286,23 +286,41 @@ Caveats specific to ARM:
 
 ## 3. Build & run
 
-Easiest is to grab the prebuilt CLI from the latest GitHub release
-(added to the matrix in v0.3) and put it on your PATH:
+Easiest on x64 is the prebuilt CLI from the latest GitHub release. It is a
+zip, not a bare `.exe`: the Swift runtime DLLs travel beside `swift-pwa.exe`,
+and Windows loads them from the exe's own folder before `PATH`, so the CLI runs
+whatever Swift the box has installed, or none. Keep the folder together.
 
 ```powershell
 Invoke-WebRequest `
-    -Uri https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-windows-x86_64.exe `
-    -OutFile $env:USERPROFILE\bin\swift-pwa.exe
-# Make sure $env:USERPROFILE\bin is on $env:Path.
+    -Uri https://github.com/tophatch/swift-pwa/releases/latest/download/swift-pwa-windows-x86_64.zip `
+    -OutFile $env:TEMP\swift-pwa-cli.zip
+Expand-Archive $env:TEMP\swift-pwa-cli.zip -DestinationPath $env:USERPROFILE\swift-pwa-cli -Force
+# Put $env:USERPROFILE\swift-pwa-cli on $env:Path.
 
 swift-pwa init MyApp
 cd MyApp
 swift-pwa build --target windows                       # → build\MyApp\MyApp.exe (+ web/, pwa.json)
 ```
 
-To update the CLI later, re-run the `Invoke-WebRequest` above with the
-new release. (`swift-pwa self-update` is macOS / Linux only — Windows
-can't replace a running `.exe`, so it just prints these manual steps.)
+To update the CLI later, re-run both lines above with the new release.
+(`swift-pwa self-update` is macOS / Linux only — Windows can't replace a
+running `.exe`, so it just prints these manual steps.)
+
+**Through v0.11.2 the Windows asset was a bare `.exe`,** which loads the Swift
+runtime from `PATH`. Built with 6.3.1, it exited `0xC0000139`
+(`STATUS_ENTRYPOINT_NOT_FOUND`) without printing anything on a box whose only
+runtime was 6.4 (#261). The `.exe` is still published beside the zip for older
+scripts that name it, and works only where a matching runtime is on `PATH`.
+
+**On arm64, build the CLI rather than using the x64 zip.** It would run under
+emulation, but the CLI decides the WebView2 loader and ONNX Runtime
+architecture from its *own* build, so an x64 CLI picks x64 libraries for the
+native arm64 toolchain and the link fails. GitHub's arm64 runners can't host a
+usable Swift toolchain yet, so there's no published arm64 asset; on the box,
+`swift build -c release --product swift-pwa` in a checkout of the release tag,
+then `Scripts\package-windows-cli.ps1 -Exe .build\release\swift-pwa.exe -Out
+swift-pwa-windows-arm64.zip -Verify` makes the same self-contained zip.
 
 Or build the CLI from a swift-pwa checkout (useful when you're
 hacking on the bundler itself — same dance as the iOS / macOS docs):

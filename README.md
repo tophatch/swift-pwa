@@ -69,7 +69,7 @@ swift-pwa init MyApp
 cd MyApp
 ```
 
-Other available assets: `swift-pwa-macos-x86_64`, `swift-pwa-linux-x86_64`, `swift-pwa-windows-x86_64.exe` (added to the release matrix in v0.3). See [docs/windows-setup.md](docs/windows-setup.md) for the Windows toolchain.
+Other available assets: `swift-pwa-macos-x86_64`, `swift-pwa-linux-x86_64`, and `swift-pwa-windows-x86_64.zip`, which carries the Swift runtime so it runs whatever toolchain the box has. See [docs/windows-setup.md](docs/windows-setup.md) for the Windows toolchain, and for arm64.
 
 Once it's on your `PATH`, update in place anytime with **`swift-pwa self-update`** (macOS / Linux) — it resolves the latest release, verifies the download, and installs it with an atomic rename, which sidesteps a macOS code-signing-cache quirk that makes a plain `cp` overwrite crash with `Killed: 9`. Pin a version with `--version vX.Y.Z`.
 

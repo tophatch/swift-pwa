@@ -4,6 +4,11 @@ on:
   push:
     tags:
       - "v*"
+  # Builds, packages and smoke-tests every asset without publishing anything —
+  # the `release` job below only runs for a tag. Run it from `main` after a
+  # change to how an asset is built or packaged, before a tag depends on it.
+  # (GitHub only dispatches a workflow whose trigger is on the default branch.)
+  workflow_dispatch:
 
 jobs:
   cli-binaries:
@@ -174,6 +179,9 @@ jobs:
           $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
           swift build -c release --product swift-pwa @flags
       - name: Stage binary
+        # The bare .exe stays published beside the zip for older generated CI
+        # workflows and install instructions that name it. It only runs where a
+        # matching Swift runtime is on PATH, which is what the zip fixes (#261).
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
@@ -212,13 +220,30 @@ jobs:
             Write-Host ("ok  {0,-34} {1} bytes" -f $rel, $len)
           }
           Write-Host "staged CLI runs and writes files correctly"
+      - name: Package with the Swift runtime, and prove it needs no toolchain
+        # A Swift executable on Windows loads swiftCore.dll / Foundation.dll
+        # from PATH. v0.11.2's, built here with 6.3.1, exited 0xC0000139
+        # before printing anything on a box whose only runtime was 6.4 (#261),
+        # and `--static-swift-stdlib` is silently ignored on Windows. So the
+        # zip carries the runtime beside the exe, and -Verify runs it with no
+        # Swift on PATH at all — after checking the bare exe *fails* that way,
+        # so the pass means something.
+        #
+        # x64 only: GitHub's windows-11-arm runner can't host a usable Swift
+        # toolchain yet (see the `windows-llama` job in ci.yml). The script
+        # works on an arm64 box; `docs/windows-setup.md` says how.
+        shell: pwsh
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File Scripts\package-windows-cli.ps1 -Exe .build\release\swift-pwa.exe -Out dist\swift-pwa-windows-x86_64.zip -Verify
       - uses: actions/upload-artifact@v7
         with:
           name: swift-pwa-windows-x86_64
-          path: dist/swift-pwa-windows-x86_64.exe
+          path: |
+            dist/swift-pwa-windows-x86_64.zip
+            dist/swift-pwa-windows-x86_64.exe
 
   release:
     needs: [cli-binaries, cli-binary-windows]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:
       contents: write

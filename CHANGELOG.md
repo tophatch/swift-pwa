@@ -116,6 +116,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   step of that had been rediscovered by hand, trap by trap, on each Windows
   change. See `docs/windows-setup.md`.
 
+### Changed
+
+- **The released Windows CLI couldn't start on a box with a different Swift
+  runtime** (#261). A Swift executable on Windows loads `swiftCore.dll`,
+  `Foundation.dll` and the rest from `PATH`, and v0.11.2's, built with 6.3.1,
+  exited `0xC0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`) before printing anything
+  on a box whose only runtime was 6.4 — even for `--version`. Static linking
+  would be the tidy fix, and `--static-swift-stdlib` is silently ignored on
+  Windows (measured on 6.4 with both build systems: the exe still imports
+  `swiftCore.dll`). So the release now publishes
+  **`swift-pwa-windows-x86_64.zip`**: the exe plus its Swift runtime closure,
+  which Windows loads from the exe's folder ahead of `PATH`. The generated CI
+  workflow and the install docs use it; the bare `.exe` stays published for
+  scripts that name it.
+
+  `Scripts/package-windows-cli.ps1` builds the zip by walking the exe's imports
+  with `dumpbin` (19 DLLs from the runtime folder, VC++ runtime included; 31 MB)
+  rather than keeping a list that would go stale, and `-Verify` runs the
+  packaged CLI's `--version` and `init` with **no Swift on `PATH` at all** —
+  after checking the bare exe fails that way (`0xC0000135`), so the pass means
+  something. The release job runs it, and `workflow_dispatch` now builds and
+  smoke-tests every asset without publishing, so a packaging change can be
+  proven before a tag depends on it.
+
+  Measured on Windows x64 (Swift 6.4) and arm64 (6.3.1); on arm64 the unpacked
+  CLI also scaffolded and bundled an app using the generated workflow's own
+  steps.
+
+  **Still no arm64 asset.** GitHub's arm64 Windows runners can't host a usable
+  Swift toolchain yet, and the x64 zip is the wrong answer there: the CLI picks
+  the WebView2 loader and ONNX Runtime architecture from its own build. The
+  docs say how to build and package it on the box.
+
 ## [0.11.2] - 2026-09-21
 
 ### Added

@@ -37,7 +37,7 @@ struct SelfUpdateTests {
     @Test("Windows guidance names the asset and repo")
     func windowsGuidanceIsActionable() {
         let text = SelfUpdate.windowsGuidance(current: "0.6.1")
-        #expect(text.contains("swift-pwa-windows-x86_64.exe"))
+        #expect(text.contains("swift-pwa-windows-x86_64.zip"))
         #expect(text.contains("tophatch/swift-pwa"))
     }
 }

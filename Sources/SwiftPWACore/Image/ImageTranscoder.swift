@@ -5,8 +5,9 @@ import Foundation
 ///
 /// This is reported rather than assumed because the honest answer varies by
 /// platform and, on some platforms, by machine: Apple's ImageIO reads HEIC and
-/// AVIF, the desktop `stb_image` decoder reads neither, and a Windows box only
-/// decodes HEIC when the (paid/OEM-supplied) HEVC codec extension is installed.
+/// AVIF, Linux's `stb_image` reads neither unless libheif is installed, and a
+/// Windows box only decodes HEIC when the (paid/OEM-supplied) HEVC codec
+/// extension is installed.
 /// A page that needs a format should ask before relying on it.
 public struct ImageCodecCapabilities: Sendable, Codable, Equatable {
     /// Extensions this build can decode, lowercase and without a dot.

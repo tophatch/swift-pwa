@@ -403,8 +403,8 @@ let package = Package(
         // Shared image decode/encode (`ImageCodec` / `RawImage`), `package`-
         // internal — reused by `SwiftPWAImageEdit` (LaMa) and
         // `SwiftPWAStableDiffusion` so both share one platform implementation
-        // (CoreGraphics on Apple, stb_image on desktop, BitmapFactory-over-RPC
-        // on Android) rather than duplicating it. Declared unconditionally
+        // (CoreGraphics on Apple, WIC on Windows, stb_image + libheif on Linux,
+        // BitmapFactory-over-RPC on Android) rather than duplicating it. Declared unconditionally
         // rather than under the ONNX gate it used to sit in: it has no ONNX
         // dependency, and `SwiftPWAImage` (the `image.*` plugin's backend)
         // needs it in builds that want nothing to do with the AI tier.

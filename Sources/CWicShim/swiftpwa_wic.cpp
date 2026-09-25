@@ -156,6 +156,8 @@ unsigned char *encode_rgb_impl(const unsigned char *pixels, int width, int heigh
     IWICBitmapEncoder *encoder = nullptr;
     IWICBitmapFrameEncode *frame = nullptr;
     IPropertyBag2 *props = nullptr;
+    IWICBitmap *bitmap = nullptr;
+    IWICFormatConverter *converter = nullptr;
     unsigned char *result = nullptr;
 
     do {
@@ -179,14 +181,32 @@ unsigned char *encode_rgb_impl(const unsigned char *pixels, int width, int heigh
         if (FAILED(frame->Initialize(props))) break;
         if (FAILED(frame->SetSize(static_cast<UINT>(width), static_cast<UINT>(height)))) break;
 
+        // SetPixelFormat is in/out: an encoder that can't take the requested
+        // format writes back the nearest one it can and still returns S_OK.
+        // WIC's PNG and JPEG encoders both answer 24bppBGR, so writing our RGB
+        // bytes straight in swaps red and blue. Whatever comes back, convert
+        // to it rather than assume.
         WICPixelFormatGUID format = GUID_WICPixelFormat24bppRGB;
         if (FAILED(frame->SetPixelFormat(&format))) break;
 
         const UINT stride = static_cast<UINT>(width) * 3;
         const UINT total = stride * static_cast<UINT>(height);
-        if (FAILED(frame->WritePixels(static_cast<UINT>(height), stride, total,
-                                      const_cast<BYTE *>(pixels))))
-            break;
+        if (IsEqualGUID(format, GUID_WICPixelFormat24bppRGB)) {
+            if (FAILED(frame->WritePixels(static_cast<UINT>(height), stride, total,
+                                          const_cast<BYTE *>(pixels))))
+                break;
+        } else {
+            if (FAILED(factory->CreateBitmapFromMemory(
+                    static_cast<UINT>(width), static_cast<UINT>(height),
+                    GUID_WICPixelFormat24bppRGB, stride, total,
+                    const_cast<BYTE *>(pixels), &bitmap)))
+                break;
+            if (FAILED(factory->CreateFormatConverter(&converter))) break;
+            if (FAILED(converter->Initialize(bitmap, format, WICBitmapDitherTypeNone,
+                                             nullptr, 0.0, WICBitmapPaletteTypeCustom)))
+                break;
+            if (FAILED(frame->WriteSource(converter, nullptr))) break;
+        }
         if (FAILED(frame->Commit())) break;
         if (FAILED(encoder->Commit())) break;
 
@@ -205,6 +225,8 @@ unsigned char *encode_rgb_impl(const unsigned char *pixels, int width, int heigh
         GlobalUnlock(handle);
     } while (false);
 
+    release(converter);
+    release(bitmap);
     release(props);
     release(frame);
     release(encoder);

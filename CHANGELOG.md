@@ -5,6 +5,36 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **`image.transcode` on Windows swapped red and blue — in PNG as well as
+  JPEG** (#266). `IWICBitmapFrameEncode::SetPixelFormat` is in/out: asked for
+  `24bppRGB`, WIC's PNG and JPEG encoders both write back `24bppBGR` and return
+  `S_OK`, and the shim wrote its RGB buffer into the frame regardless. The
+  encode now converts to whatever format the encoder negotiated. It went
+  unnoticed because every WIC check measured size, byte count or that a decode
+  succeeded — never a colour — and the swift-testing round trip that would
+  have caught it can't run on Windows. `SwiftPWAWindowsTestRunner` now encodes a
+  known colour through both formats and reads it back, after first checking the
+  decode of a hand-built PNG, so a matching swap on the way in can't hide one on
+  the way out. Measured failing (`(220, 60, 30)` came back `[30, 60, 220]`)
+  and then passing on x64; passing on arm64, where the report measured the
+  same swap byte for byte.
+- **Comments that said Windows decodes images with stb_image** (#265). It has
+  used WIC since `image.*` shipped; the `PlatformImageTranscoder` doc comment
+  told a reader deciding whether to rely on HEIC that they couldn't, which the
+  code and `docs/javascript-api.md` both contradict.
+
+### Added
+
+- **`Scripts/remote-windows.sh`** — the Windows twin of `remote-linux.sh`:
+  copies the tree to a box over SSH, loads the MSVC environment and builds or
+  runs the Windows test runner with the NuGet headers passed as flags. Every
+  step of that had been rediscovered by hand, trap by trap, on each Windows
+  change. See `docs/windows-setup.md`.
+
 ## [0.11.2] - 2026-09-21
 
 ### Added

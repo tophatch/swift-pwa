@@ -5,9 +5,11 @@ import Foundation
     import FoundationNetworking // URLSession lives here on swift-corelibs-foundation
 #endif
 
-/// Resolves the prebuilt ONNX Runtime **Windows x64** libraries that
+/// Resolves the prebuilt ONNX Runtime **Windows** libraries that
 /// `SwiftPWASegmentation` links when `ai.local_onnx_runtime` is set for a
-/// `--target windows` build — Microsoft's CPU build. The Windows analogue of
+/// `--target windows` build — Microsoft's CPU build, for the host's
+/// architecture (x64 or arm64; a Windows build never cross-compiles, so the
+/// host is the target). The Windows analogue of
 /// `OnnxRuntimeLinuxArtifact`, but two files: the import lib `onnxruntime.lib`
 /// (staged on `LIB` for the link step, the same trick `LlamaWindowsArtifact`
 /// uses) and the runtime `onnxruntime.dll` (staged next to the built `.exe` —
@@ -18,25 +20,63 @@ import Foundation
 /// Resolution order:
 ///   1. `SWIFT_PWA_ONNXRUNTIME_WINDOWS_LIB_DIR` env — a directory containing
 ///      both `onnxruntime.lib` and `onnxruntime.dll`. Used verbatim.
-///   2. `<projectRoot>\Vendor\onnxruntime-desktop\windows-x86_64\` — present
-///      after `Scripts/vendor-onnxruntime-windows.sh` inside the repo.
+///   2. `<projectRoot>\Vendor\onnxruntime-desktop\windows-<arch>\` — present
+///      after `ARCH=<x64|arm64> Scripts/vendor-onnxruntime-windows.sh` inside
+///      the repo.
 ///   3. download the pinned release assets to a content-addressed cache.
 enum OnnxRuntimeWindowsArtifact {
     /// The vendored ONNX Runtime version, carried in the asset names so a
     /// bump adds assets rather than replacing the bytes older swift-pwa
     /// releases pin by checksum.
     static let version = "1.29.0"
-    static let libURL =
-        "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/" +
-        "onnxruntime-\(version).lib"
-    static let dllURL =
-        "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/" +
-        "onnxruntime-\(version).dll"
+    static let releaseBase = "https://github.com/tophatch/swift-pwa/releases/download/onnxruntime-vendor-windows/"
 
-    /// SHA-256 of Microsoft's ONNX Runtime Windows x64 files (see
-    /// `Scripts/vendor-onnxruntime-windows.sh`).
-    static let libSha256 = "b9fc3cd678257d88a111b0773ede4bfceaf0fe95daab4379f2b2b37348a68781"
-    static let dllSha256 = "69d8e6d3879a3b4001cdc74c8ed9ccc7e7f799a5b847059738323404519ec471"
+    /// One architecture's pair: where it's vendored locally, the release asset
+    /// names, and the SHA-256 of Microsoft's files (see
+    /// `Scripts/vendor-onnxruntime-windows.sh`). x64 keeps the unsuffixed names
+    /// it shipped under, which older swift-pwa releases pin.
+    struct Pair {
+        let vendorDir: String
+        let libAsset: String
+        let dllAsset: String
+        let libSha256: String
+        let dllSha256: String
+
+        var libURL: String {
+            releaseBase + libAsset
+        }
+
+        var dllURL: String {
+            releaseBase + dllAsset
+        }
+    }
+
+    static let x64 = Pair(
+        vendorDir: "windows-x86_64",
+        libAsset: "onnxruntime-\(version).lib",
+        dllAsset: "onnxruntime-\(version).dll",
+        libSha256: "b9fc3cd678257d88a111b0773ede4bfceaf0fe95daab4379f2b2b37348a68781",
+        dllSha256: "69d8e6d3879a3b4001cdc74c8ed9ccc7e7f799a5b847059738323404519ec471"
+    )
+
+    static let arm64 = Pair(
+        vendorDir: "windows-arm64",
+        libAsset: "onnxruntime-\(version)-arm64.lib",
+        dllAsset: "onnxruntime-\(version)-arm64.dll",
+        libSha256: "9c2733702690024427ca55ccbd6792cd19f44503d8a2c04dd68b6af83225de84",
+        dllSha256: "7c7df2cefd6910f50f44792e8f8f71b371bf9675f9273e70a9277eb92e4d75ed"
+    )
+
+    /// The pair for the machine this CLI runs on. Without this an arm64 host
+    /// downloaded the x64 files and the link failed with `machine type x64
+    /// conflicts with arm64`, which names no fix (#262).
+    static var host: Pair {
+        #if arch(arm64)
+            arm64
+        #else
+            x64
+        #endif
+    }
 
     struct ArtifactError: Error, CustomStringConvertible {
         let description: String
@@ -57,26 +97,28 @@ enum OnnxRuntimeWindowsArtifact {
             return url
         }
 
-        let local = projectRoot.appendingPathComponent("Vendor/onnxruntime-desktop/windows-x86_64")
+        let pair = host
+        let local = projectRoot.appendingPathComponent("Vendor/onnxruntime-desktop/\(pair.vendorDir)")
         if fm.fileExists(atPath: local.appendingPathComponent("onnxruntime.lib").path),
            fm.fileExists(atPath: local.appendingPathComponent("onnxruntime.dll").path)
         {
             return local
         }
 
-        // Cache key over both checksums so a re-pin invalidates cleanly.
-        let cacheDir = cacheRoot().appendingPathComponent("\(libSha256)-\(dllSha256)", isDirectory: true)
+        // Cache key over both checksums, so a re-pin invalidates cleanly and
+        // the two architectures never share a directory.
+        let cacheDir = cacheRoot().appendingPathComponent("\(pair.libSha256)-\(pair.dllSha256)", isDirectory: true)
         let lib = cacheDir.appendingPathComponent("onnxruntime.lib")
         let dll = cacheDir.appendingPathComponent("onnxruntime.dll")
-        if fm.fileExists(atPath: lib.path), (try? sha256Hex(ofFileAt: lib)) == libSha256,
-           fm.fileExists(atPath: dll.path), (try? sha256Hex(ofFileAt: dll)) == dllSha256
+        if fm.fileExists(atPath: lib.path), (try? sha256Hex(ofFileAt: lib)) == pair.libSha256,
+           fm.fileExists(atPath: dll.path), (try? sha256Hex(ofFileAt: dll)) == pair.dllSha256
         {
             return cacheDir
         }
 
         try fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        try await download(libURL, to: lib, expecting: libSha256)
-        try await download(dllURL, to: dll, expecting: dllSha256)
+        try await download(pair.libURL, to: lib, expecting: pair.libSha256)
+        try await download(pair.dllURL, to: dll, expecting: pair.dllSha256)
         return cacheDir
     }
 

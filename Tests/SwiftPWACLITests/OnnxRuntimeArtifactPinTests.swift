@@ -17,8 +17,10 @@ struct OnnxRuntimeArtifactPinTests {
     func assetNamesAreVersioned() {
         let urls = [
             OnnxRuntimeLinuxArtifact.url,
-            OnnxRuntimeWindowsArtifact.libURL,
-            OnnxRuntimeWindowsArtifact.dllURL,
+            OnnxRuntimeWindowsArtifact.x64.libURL,
+            OnnxRuntimeWindowsArtifact.x64.dllURL,
+            OnnxRuntimeWindowsArtifact.arm64.libURL,
+            OnnxRuntimeWindowsArtifact.arm64.dllURL,
             OnnxRuntimeAndroidArtifact.urlTemplate,
             OnnxRuntimeLinuxGpuArtifact.runtimeURL,
             OnnxRuntimeLinuxGpuArtifact.providersSharedURL,
@@ -31,6 +33,16 @@ struct OnnxRuntimeArtifactPinTests {
                 "\(asset) doesn't name a version — a bump would overwrite the asset older releases pin"
             )
         }
+    }
+
+    /// #262: an arm64 host downloaded the x64 pair into the same cache and the
+    /// link failed. The two must be distinct files, cached apart.
+    @Test("the Windows architectures never share an asset, a checksum or a cache key")
+    func windowsArchitecturesAreDistinct() {
+        let x64 = OnnxRuntimeWindowsArtifact.x64, arm64 = OnnxRuntimeWindowsArtifact.arm64
+        #expect(Set([x64.libAsset, x64.dllAsset, arm64.libAsset, arm64.dllAsset]).count == 4)
+        #expect(Set([x64.libSha256, x64.dllSha256, arm64.libSha256, arm64.dllSha256]).count == 4)
+        #expect(x64.vendorDir != arm64.vendorDir)
     }
 
     /// The CPU and CUDA desktop builds share one committed header set, and

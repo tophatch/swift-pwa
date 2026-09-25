@@ -92,6 +92,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (Windows x64, Linux GTK3), so they measure the fix rather than pass
   regardless.
 
+- **`ai.local_onnx_runtime` couldn't link on an arm64 Windows host** (#262). The
+  resolver pinned one pair of files, Microsoft's x64 build, and an arm64 host
+  downloaded them into the same cache and failed at the linker with `machine
+  type x64 conflicts with arm64` — an error that names no fix. It now picks the
+  pair for the host's architecture: x64 keeps its existing assets, and the
+  win-arm64 build of the same 1.29.0 release is re-hosted beside them as
+  `onnxruntime-1.29.0-arm64.{lib,dll}`, so older tags' checksum pins are
+  untouched. The headers are byte-identical between the two, so the committed
+  set doesn't change. `ai.onnx_gpu` (DirectML) has no arm64 pair pinned, so an
+  arm64 host now fails that build up front with a message naming the override,
+  instead of at the link. New `Scripts/verify-windows-onnxruntime.ps1` scaffolds
+  an app that links `SwiftPWAONNX`, bundles it and checks the staged DLL's
+  machine type (dumpbin's reading) and that `OrtRuntime.shared` loads: arm64
+  passes both through the download and through the local-vendor path, and x64
+  is unchanged.
+
 ### Added
 
 - **`Scripts/remote-windows.sh`** — the Windows twin of `remote-linux.sh`:

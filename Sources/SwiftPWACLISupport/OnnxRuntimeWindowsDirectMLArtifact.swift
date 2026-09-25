@@ -75,30 +75,42 @@ enum OnnxRuntimeWindowsDirectMLArtifact {
             return url
         }
 
-        let local = projectRoot.appendingPathComponent("Vendor/onnxruntime-desktop-gpu/windows-x86_64")
-        if files.allSatisfy({ fm.fileExists(atPath: local.appendingPathComponent($0.name).path) }) {
-            return local
-        }
+        #if os(Windows) && arch(arm64)
+            // Everything below is the x64 build, and on an arm64 host it fails
+            // at the link as `machine type x64 conflicts with arm64`, which
+            // names no fix (#262). Say what does.
+            throw ArtifactError(description: """
+            ai.onnx_gpu has no pinned arm64 DirectML build. Point \
+            SWIFT_PWA_ONNXRUNTIME_WINDOWS_DIRECTML_LIB_DIR at the win-arm64 native folder of \
+            Microsoft's Microsoft.ML.OnnxRuntime.DirectML NuGet package plus DirectML.dll, \
+            or drop ai.onnx_gpu to use the CPU runtime, which does have an arm64 build.
+            """)
+        #else
+            let local = projectRoot.appendingPathComponent("Vendor/onnxruntime-desktop-gpu/windows-x86_64")
+            if files.allSatisfy({ fm.fileExists(atPath: local.appendingPathComponent($0.name).path) }) {
+                return local
+            }
 
-        // Cache key over all four checksums so a re-pin invalidates cleanly.
-        let cacheKey = files.map(\.sha256).joined(separator: "-")
-        let cacheDir = cacheRoot().appendingPathComponent(cacheKey, isDirectory: true)
-        if files.allSatisfy({ file in
-            let path = cacheDir.appendingPathComponent(file.name)
-            return fm.fileExists(atPath: path.path) && (try? sha256Hex(ofFileAt: path)) == file.sha256
-        }) {
+            // Cache key over all four checksums so a re-pin invalidates cleanly.
+            let cacheKey = files.map(\.sha256).joined(separator: "-")
+            let cacheDir = cacheRoot().appendingPathComponent(cacheKey, isDirectory: true)
+            if files.allSatisfy({ file in
+                let path = cacheDir.appendingPathComponent(file.name)
+                return fm.fileExists(atPath: path.path) && (try? sha256Hex(ofFileAt: path)) == file.sha256
+            }) {
+                return cacheDir
+            }
+
+            try fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
+            for file in files {
+                try await download(
+                    releaseBase + file.name,
+                    to: cacheDir.appendingPathComponent(file.name),
+                    expecting: file.sha256
+                )
+            }
             return cacheDir
-        }
-
-        try fm.createDirectory(at: cacheDir, withIntermediateDirectories: true)
-        for file in files {
-            try await download(
-                releaseBase + file.name,
-                to: cacheDir.appendingPathComponent(file.name),
-                expecting: file.sha256
-            )
-        }
-        return cacheDir
+        #endif
     }
 
     private static func download(_ urlString: String, to dest: URL, expecting sha: String) async throws {

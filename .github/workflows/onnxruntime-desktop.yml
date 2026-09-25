@@ -47,30 +47,35 @@ jobs:
           prerelease: true
           files: ${{ steps.linux.outputs.asset }}
 
-      - name: Vendor Windows x64 onnxruntime.dll + onnxruntime.lib
+      # arm64 before x64: both write the committed headers (byte-identical
+      # today), and x64 is the set this workflow has always left behind.
+      - name: Vendor Windows arm64 + x64 onnxruntime.dll + onnxruntime.lib
         id: windows
-        run: bash Scripts/vendor-onnxruntime-windows.sh
+        run: |
+          ARCH=arm64 bash Scripts/vendor-onnxruntime-windows.sh
+          ARCH=x64 bash Scripts/vendor-onnxruntime-windows.sh
       - name: Publish to onnxruntime-vendor-windows
         uses: softprops/action-gh-release@v2
         with:
           tag_name: onnxruntime-vendor-windows
-          name: ONNX Runtime Windows x64 onnxruntime.dll + .lib (vendored, CPU)
+          name: ONNX Runtime Windows x64 + arm64 onnxruntime.dll + .lib (vendored, CPU)
           prerelease: true
           files: |
             Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime-*.dll
             Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime-*.lib
+            Vendor/onnxruntime-desktop/windows-arm64/onnxruntime-*.dll
+            Vendor/onnxruntime-desktop/windows-arm64/onnxruntime-*.lib
 
       - name: Report checksums to pin into the CLI resolvers
         run: |
           lin="$(ls Vendor/onnxruntime-desktop/linux-x86_64/libonnxruntime-linux-x86_64-*.so)"
-          wdll="$(ls Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime-*.dll)"
-          wlib="$(ls Vendor/onnxruntime-desktop/windows-x86_64/onnxruntime-*.lib)"
+          wfiles="$(ls Vendor/onnxruntime-desktop/windows-{x86_64,arm64}/onnxruntime-*.{dll,lib})"
           {
             echo "### ONNX Runtime desktop artifacts published"
             echo
             echo "Pin these into OnnxRuntimeLinuxArtifact.swift / OnnxRuntimeWindowsArtifact.swift:"
             echo
-            for f in "$lin" "$wdll" "$wlib"; do
+            for f in "$lin" $wfiles; do
               echo "- \`$(basename "$f")\`: \`$(sha256sum "$f" | awk '{print $1}')\`"
             done
           } >> "$GITHUB_STEP_SUMMARY"

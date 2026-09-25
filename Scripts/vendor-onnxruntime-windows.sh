@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Vendor the ONNX Runtime **Windows x64** C API from Microsoft's official
+# Vendor the ONNX Runtime **Windows** (x64 or arm64) C API from Microsoft's official
 # prebuilt release for the desktop `MobileSAMBackend` (ai.vision.*). The
 # Windows analogue of Scripts/vendor-onnxruntime-linux.sh — same CPU build,
 # same committed-headers + fetched-lib split. Windows needs **two** files
@@ -12,18 +12,27 @@
 # against `onnxruntime.lib` needs a Windows host.
 #
 # Usage:
-#   Scripts/vendor-onnxruntime-windows.sh [version]
+#   [ARCH=x64|arm64] Scripts/vendor-onnxruntime-windows.sh [version]
+#
+# arm64's publishable assets carry an `-arm64` suffix; x64's keep the plain
+# names they first shipped under, which older swift-pwa releases pin.
 #
 # Requires: curl, unzip, shasum.
 set -euo pipefail
 
 ONNXRUNTIME_VERSION="${1:-1.29.0}"
-SLUG="onnxruntime-win-x64-${ONNXRUNTIME_VERSION}"
+ARCH="${ARCH:-x64}"
+case "$ARCH" in
+    x64) ARCH_DIR="windows-x86_64"; ASSET_SUFFIX="" ;;
+    arm64) ARCH_DIR="windows-arm64"; ASSET_SUFFIX="-arm64" ;;
+    *) echo "unknown arch '$ARCH' (x64 or arm64)" >&2; exit 2 ;;
+esac
+SLUG="onnxruntime-win-${ARCH}-${ONNXRUNTIME_VERSION}"
 URL="https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/${SLUG}.zip"
 
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-WORK="${WORK:-$ROOT/.build/onnxruntime-windows}"
-OUT="${OUT:-$ROOT/Vendor/onnxruntime-desktop/windows-x86_64}"          # gitignored; dll/lib land here
+WORK="${WORK:-$ROOT/.build/onnxruntime-windows-$ARCH}"
+OUT="${OUT:-$ROOT/Vendor/onnxruntime-desktop/$ARCH_DIR}"          # gitignored; dll/lib land here
 HEADERS_OUT="${HEADERS_OUT:-$ROOT/Vendor/onnxruntime-desktop-headers}" # COMMITTED (shared with the linux script)
 
 mkdir -p "$WORK" "$OUT"
@@ -67,13 +76,13 @@ done
 # versions pin by checksum. The local (unversioned) copies above are what the
 # linker and the bundler consume.
 for ext in lib dll; do
-    cp -f "$OUT/onnxruntime.$ext" "$OUT/onnxruntime-${ONNXRUNTIME_VERSION}.$ext"
+    cp -f "$OUT/onnxruntime.$ext" "$OUT/onnxruntime-${ONNXRUNTIME_VERSION}${ASSET_SUFFIX}.$ext"
 done
 
 echo
 echo "=== publishable asset checksums (sha256; pin into OnnxRuntimeWindowsArtifact.swift) ==="
 for ext in lib dll; do
-    f="onnxruntime-${ONNXRUNTIME_VERSION}.$ext"
+    f="onnxruntime-${ONNXRUNTIME_VERSION}${ASSET_SUFFIX}.$ext"
     printf '%s: ' "$f"
     shasum -a 256 "$OUT/$f" | awk '{print $1}'
 done

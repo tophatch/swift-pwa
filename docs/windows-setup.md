@@ -539,7 +539,8 @@ then point the build at the result with
 ### On-device segmentation (`ai.vision.*`, ONNX Runtime)
 
 Promptable image segmentation (`MobileSAMBackend`, SAM-family) runs on Windows
-x64 via Microsoft's prebuilt **CPU** ONNX Runtime. Opt in exactly like llama:
+x64 and arm64 via Microsoft's prebuilt **CPU** ONNX Runtime. Opt in exactly like
+llama:
 
 ```json
 {
@@ -548,7 +549,7 @@ x64 via Microsoft's prebuilt **CPU** ONNX Runtime. Opt in exactly like llama:
 ```
 
 `swift-pwa build --target windows` then downloads the checksum-pinned
-`onnxruntime.lib` + `onnxruntime.dll` (cached under
+`onnxruntime.lib` + `onnxruntime.dll` for the host's architecture (cached under
 `%LOCALAPPDATA%\swift-pwa\onnxruntime-windows\`), puts the lib dir on `LIB` for
 the link step, and **stages `onnxruntime.dll` next to the built `.exe`** so it
 loads at launch (even for a `--single-file` build — a shared lib can't live in
@@ -558,7 +559,9 @@ any Windows imaging API). See [docs/ai-plugin.md](ai-plugin.md) and the
 
 Building/publishing the vendored libs yourself uses
 [`Scripts/vendor-onnxruntime-windows.sh`](../Scripts/vendor-onnxruntime-windows.sh)
-(then `$env:SWIFT_PWA_ONNXRUNTIME_WINDOWS_LIB_DIR='…\Vendor\onnxruntime-desktop\windows-x86_64'`).
+(`ARCH=arm64` for the arm64 pair; then
+`$env:SWIFT_PWA_ONNXRUNTIME_WINDOWS_LIB_DIR='…\Vendor\onnxruntime-desktop\windows-x86_64'`,
+or `windows-arm64`).
 
 #### GPU acceleration (`ai.onnx_gpu`, DirectML)
 
@@ -585,6 +588,13 @@ reports the active `provider` (`"directml"` or `"cpu"`).
 > CPU build (1.29.0), so it links against its own pinned header set — an
 > internal detail that doesn't affect the `pwa.json` opt-in. See
 > [docs/proposals/onnx-gpu-execution-providers.md](proposals/onnx-gpu-execution-providers.md).
+
+**DirectML is x64-only here.** Its pinned build has no arm64 pair, so on an
+arm64 host `ai.onnx_gpu` fails the build with a message saying so rather than at
+the linker. Microsoft's `Microsoft.ML.OnnxRuntime.DirectML` NuGet package does
+carry `runtimes\win-arm64\native`; point
+`SWIFT_PWA_ONNXRUNTIME_WINDOWS_DIRECTML_LIB_DIR` at that plus `DirectML.dll` to
+try it, unmeasured.
 
 Vendoring the GPU libs yourself uses
 [`Scripts/vendor-onnxruntime-windows-directml.sh`](../Scripts/vendor-onnxruntime-windows-directml.sh)

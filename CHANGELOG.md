@@ -108,6 +108,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   passes both through the download and through the local-vendor path, and x64
   is unchanged.
 
+- **A fresh clone couldn't build the CLI on macOS with Swift 6.4** (#270). It
+  failed at `unable to resolve module dependency: 'Crypto'`, and a checkout with
+  a warm `.build` kept building, which is how it went unnoticed. It is #229's
+  rule again: swiftbuild takes a shared target's platform filter from the first
+  edge it reaches, and `SwiftPWACore`'s `Crypto` edge leaves out Apple while the
+  CLI's was unconditional, so `Crypto` was never built for macOS. The CLI now
+  spells its edge like the runtime and imports CryptoKit on Apple, which is
+  exactly what swift-crypto's `Crypto` re-exports there, so the macOS CLI's
+  crypto is unchanged and every edge onto `Crypto` agrees.
+  `ManifestDependencyDriftTests` carried an exemption for this edge, on the
+  belief that the CLI's graph and the runtime's never meet; it's gone. Its
+  import check also never
+  looked at test targets or executable targets (a `.testTarget(` didn't match
+  its `target(` lookup, and a miss was skipped rather than failed), which hid
+  two more undeclared imports: `SwiftPWAWebKitTests` used `Crypto` and
+  `SwiftPWACLITests` used `ArgumentParser` with no edge of their own. Both
+  targets are checked now, and a declaration the check can't find fails it.
+
 ### Added
 
 - **`Scripts/remote-windows.sh`** — the Windows twin of `remote-linux.sh`:

@@ -67,13 +67,15 @@ FileHandle.standardError.write(
 /// and Android through the Play Store, so neither compiles its ~900 KB of C.
 let zstdPlatforms: [Platform] = [.macOS, .linux, .windows]
 
-/// Where the *runtime* links swift-crypto. Apple is absent on purpose: there
-/// `Crypto`'s consumers use CryptoKit through `canImport`, and an edge here
-/// would compile BoringSSL into every Apple app that links `SwiftPWACore`.
+/// Where swift-crypto is linked. Apple is absent: there every consumer
+/// imports CryptoKit directly through `canImport`, which is all swift-crypto's
+/// `Crypto` module would be on Apple anyway (it only re-exports CryptoKit
+/// there), so an edge would add a package to every Apple build for nothing.
 ///
-/// The CLI's own edges are unconditional instead — it runs on macOS hosts and
-/// imports `Crypto` outright — which is the one place this file knowingly
-/// breaks the rule above. See `ManifestDependencyDriftTests`, which names it.
+/// The CLI takes the same spelling. It depends on `SwiftPWACore`, so its edge
+/// and Core's meet in one product graph; an unconditional CLI edge loses to
+/// Core's Apple-excluding one, and a cold macOS build under 6.4 can't find
+/// `Crypto` at all (#270).
 let cryptoPlatforms: [Platform] = [.linux, .windows, .android]
 
 /// Where ZIPFoundation builds: not Windows (its CZLib shim uses
@@ -188,8 +190,7 @@ let optionalLinuxTrayTargets: [Target] =
 
 /// swift-crypto's `Crypto` module is API-compatible with CryptoKit and is
 /// what `LinuxAppImageUpdater` uses for Ed25519 verification (CryptoKit
-/// itself is Apple-only). On Apple it shadows CryptoKit; on Linux it
-/// links against BoringSSL.
+/// itself is Apple-only). On Linux it links against BoringSSL.
 ///
 /// `cryptoPlatforms`, not `.linux`: `SwiftPWACore` and `SwiftPWAModelStore`
 /// reach the same product, and every runtime edge onto it has to agree (see
@@ -285,12 +286,9 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser", from: "1.5.0"),
-        // swift-crypto gives the `swift-pwa updater` CLI subcommands an
-        // Ed25519 implementation that works on Linux and Windows hosts
-        // too — CryptoKit is Apple-only, but `import Crypto` from
-        // swift-crypto presents an API-compatible surface across
-        // platforms (and on Apple it just shadows CryptoKit). The CLI
-        // is the only consumer; the runtime side stays on CryptoKit.
+        // swift-crypto is CryptoKit's API off Apple: Ed25519 for the
+        // updaters and `swift-pwa updater`, SHA-256 for artifact pins and
+        // PKCE. Linked only on `cryptoPlatforms`; Apple uses CryptoKit.
         .package(url: "https://github.com/apple/swift-crypto", "3.0.0" ..< "5.0.0"),
         // ZIPFoundation backs the optional `SwiftPWAArchive` target (the
         // `fs.extractZip` engine). It's isolated in its own target so apps
@@ -703,7 +701,7 @@ let package = Package(
             dependencies: [
                 "SwiftPWACore",
                 .product(name: "ArgumentParser", package: "swift-argument-parser"),
-                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
                 // Vendored stb (portable public-domain C) for the multi-size
                 // Windows `.exe` icon builder's PNG decode/re-encode. Linked on
                 // every host so the resize path (`WindowsIcon.resizePNG`) is
@@ -806,7 +804,8 @@ let package = Package(
             name: "SwiftPWAModelStoreTests",
             dependencies: [
                 "SwiftPWAModelStore",
-                "SwiftPWACore"
+                "SwiftPWACore",
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms))
             ],
             swiftSettings: swiftSettings
         ),
@@ -828,7 +827,8 @@ let package = Package(
             dependencies: [
                 "SwiftPWACLISupport",
                 "SwiftPWACore",
-                .product(name: "Crypto", package: "swift-crypto"),
+                .product(name: "ArgumentParser", package: "swift-argument-parser"),
+                .product(name: "Crypto", package: "swift-crypto", condition: .when(platforms: cryptoPlatforms)),
                 // For the multi-size icon resize round-trip test: build a source
                 // PNG and re-decode the resized output to check dimensions/colour.
                 .target(name: "CStbImage")

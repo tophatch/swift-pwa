@@ -1,6 +1,11 @@
 import ArgumentParser
-import Crypto
 import Foundation
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
 /// Publish-side binary-diff helper for the auto-updater's **delta**
 /// (binary-patch) support. Shells out to the `zstd` CLI's

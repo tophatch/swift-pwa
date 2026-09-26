@@ -1,5 +1,5 @@
 #if os(macOS)
-    import Crypto
+    import CryptoKit
     import Foundation
     import SwiftPWACore
     @testable import SwiftPWAWebKit

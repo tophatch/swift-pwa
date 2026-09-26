@@ -1,5 +1,10 @@
-import Crypto
 import Foundation
+
+#if canImport(CryptoKit)
+    import CryptoKit
+#else
+    import Crypto
+#endif
 
 /// Converts a 1024x1024 source PNG into platform-appropriate icon
 /// containers. Best-effort: silently no-ops if the host doesn't have

@@ -1086,11 +1086,7 @@ struct LaunchedApp {
                 try await build.run()
 
                 sink.writeQuietly(Data("→ installing \(app.lastPathComponent) to \(target.name)\n".utf8))
-                try await Shell.run(
-                    "/usr/bin/env",
-                    ["xcrun", "devicectl", "device", "install", "app", "--device", target.udid, app.path],
-                    stdoutTo: sink
-                )
+                try await DeviceInstall.install(app: app, on: target, stdoutTo: sink)
                 sink.writeQuietly(Data("→ launching \(bundleID)\n".utf8))
             }
 

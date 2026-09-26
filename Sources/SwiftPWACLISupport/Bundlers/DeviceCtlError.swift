@@ -73,6 +73,21 @@ enum DeviceCtlError {
         }
     }
 
+    /// Whether the device's connection went away under the command, the one
+    /// failure worth running the same command again for.
+    ///
+    /// Keyed on the two outer links of the chain reported in #260 —
+    /// CoreDeviceError 4000 ("A connection to this device could not be
+    /// established") over a `ControlChannelConnectionError` — rather than on
+    /// the network leaf (`NWError 54`, connection reset), which a different
+    /// transport would spell differently.
+    static func isDroppedConnection(_ chain: [DeviceCtlFailure]) -> Bool {
+        chain.contains {
+            ($0.domain == "com.apple.dt.CoreDeviceError" && $0.code == 4000)
+                || $0.domain == "com.apple.CoreDevice.ControlChannelConnectionError"
+        }
+    }
+
     /// `userInfo` values arrive type-tagged (`{"string": "…"}`) in the
     /// document's own schema. A bare string is accepted too, so a schema
     /// revision that drops the tag degrades to working rather than to silence.

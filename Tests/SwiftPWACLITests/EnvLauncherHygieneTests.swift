@@ -39,6 +39,7 @@ struct EnvLauncherHygieneTests {
         "PersonalTeamProfileMinter.swift",
         "IOSSigning.swift",
         "IOSDeviceResolver.swift",
+        "DeviceInstall.swift",
         "Deploy.swift",
         // simctl, and only reachable behind `#if os(macOS)` / --simulator.
         "SimulatorControl.swift",

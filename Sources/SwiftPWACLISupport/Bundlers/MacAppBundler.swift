@@ -313,6 +313,7 @@ enum Shell {
             task.environment = mergeEnv(envOverrides)
         }
         // Inherit stdout/stderr — pass through to the user.
+        flushOwnOutput()
         try task.run()
         let timedOut = TimeoutFlag()
         if let timeout {
@@ -333,6 +334,20 @@ enum Shell {
                 ([executable] + arguments).joined(separator: " ")
             )
         }
+    }
+
+    /// Write out whatever the CLI has printed before a child writes anything.
+    ///
+    /// `print` goes through C's stdout buffer, which holds a whole block when
+    /// stdout is a pipe; the child writes to the inherited descriptor directly,
+    /// and its stderr and ArgumentParser's `Error:` line aren't buffered at
+    /// all. Without this, a piped `deploy` log showed a failed install about
+    /// ten lines above the `→ installing` line it belonged to, which read as
+    /// the build failing (#260). `fflush(nil)` rather than `fflush(stdout)`:
+    /// it flushes every stream, and glibc's `stdout` is a mutable global that
+    /// strict concurrency won't let this read.
+    private static func flushOwnOutput() {
+        fflush(nil)
     }
 
     /// One-bit box so the timeout timer and the waiting thread can agree on
@@ -415,6 +430,7 @@ enum Shell {
         // them (it only wants the probe's success / stdout, not noisy
         // banners from a half-configured toolchain).
         task.standardError = discardStderr ? FileHandle.nullDevice : FileHandle.standardError
+        flushOwnOutput()
         try task.run()
         let command = ([executable] + arguments).joined(separator: " ")
 

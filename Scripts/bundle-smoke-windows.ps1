@@ -200,6 +200,30 @@ Remove-Tree "$appDir\.build"
 Remove-Tree "$appDir\out"
 Write-Host "folder bundle: $((Get-ChildItem "$relocated\folder" | ForEach-Object Name) -join ', ')"
 
+# A GUI-subsystem exe that can't load a DLL doesn't exit: Windows shows "The
+# code execution cannot proceed" and waits for a click, which on a runner is a
+# hang (measured - the first run timed out instead of failing). A child
+# inherits its parent's error mode, so turning the dialog off here makes the
+# loader fail the launch with its status code instead.
+Add-Type -Namespace SmokeNative -Name Kernel32 -MemberDefinition `
+    '[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint mode);'
+[SmokeNative.Kernel32]::SetErrorMode(0x0001 -bor 0x0002) | Out-Null  # FAILCRITICALERRORS | NOGPFAULTERRORBOX
+
+# The DLLs `$Exe` imports that neither its own folder nor Windows provides -
+# what a machine without a Swift toolchain would be missing. Direct imports
+# only, which is enough to name the gap.
+function Get-MissingImports([string]$Exe) {
+    if (-not (Get-Command dumpbin -ErrorAction SilentlyContinue)) { return @("(dumpbin not on PATH)") }
+    $dir = Split-Path $Exe
+    dumpbin /nologo /dependents $Exe | ForEach-Object { $_.Trim() } |
+        Where-Object { $_ -match '^[\w.-]+\.dll$' } |
+        Where-Object {
+            -not (Test-Path (Join-Path $dir $_)) -and
+            -not (Test-Path (Join-Path "$env:SystemRoot\System32" $_)) -and
+            $_ -notmatch '^(api|ext)-ms-'
+        }
+}
+
 # Only Windows itself: every Swift, Visual Studio and user entry is gone.
 $windowsOnly = @("$env:SystemRoot\System32", "$env:SystemRoot", "$env:SystemRoot\System32\Wbem") -join ';'
 
@@ -212,5 +236,12 @@ $results = @(
 )
 $results | ForEach-Object {
     Write-Host $_ -ForegroundColor $(if ($_ -like "PASS*") { "Green" } else { "Red" })
+}
+if ($results | Where-Object { $_ -like "FAIL*portable*" }) {
+    foreach ($exe in "$relocated\folder\$target.exe", "$relocated\single\$target.exe") {
+        $missing = @(Get-MissingImports $exe)
+        Write-Host ("imports of {0} found in neither its folder nor Windows: {1}" -f `
+            (Split-Path (Split-Path $exe) -Leaf), $(if ($missing) { $missing -join ', ' } else { 'none' }))
+    }
 }
 if ($results | Where-Object { $_ -like "FAIL*" }) { exit 1 }

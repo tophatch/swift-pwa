@@ -164,10 +164,10 @@ swift-pwa build --target windows                 # → build\MyApp\  (a folder y
 swift-pwa build --target windows --single-file   # → build\MyApp.exe  (one file, web assets embedded)
 ```
 
-The portable build runs on any Windows 10 21H2+/Windows 11 box — **as long as the WebView2 Runtime is installed** (it ships with recent Windows and Edge, so most machines have it). To be safe, bundle a self-installer:
+The portable folder runs on any Windows 10 21H2+/Windows 11 box — **as long as the WebView2 Runtime is installed** (it ships with recent Windows and Edge, so most machines have it). It carries the Swift runtime beside the `.exe`, so the machine needs no Swift. The single-file `.exe` can't carry it, so it only starts where Swift is installed: hand people the folder. To be safe about WebView2, bundle a self-installer:
 
 ```powershell
-swift-pwa build --target windows --single-file --bootstrap-webview2
+swift-pwa build --target windows --bootstrap-webview2
 ```
 
 `--bootstrap-webview2` embeds Microsoft's ~1.7 MB Evergreen Bootstrapper, which fetches the runtime on first launch if it's missing.

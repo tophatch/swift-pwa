@@ -382,7 +382,9 @@ range-aware off disk), the overlay is uncompressed, and there's no SPA
 deep-link fallback (a request for an unknown path 404s rather than returning
 `index.html`). Not combinable with `--package-format msix` (MSIX already
 packages everything into one installable). Code-signing a single-file exe
-(Authenticode over the overlay) isn't wired yet.
+(Authenticode over the overlay) isn't wired yet. And it doesn't carry the
+Swift runtime, so it starts only where Swift is installed; see
+[What travels in the bundle](#what-travels-in-the-bundle).
 
 For an MSIX/Appx package instead of a portable folder:
 
@@ -417,13 +419,33 @@ via a MessageBox before `ShellExecuteEx`-ing it with elevation.
 
 ### What travels in the bundle
 
-The portable folder (and the single-file `.exe`) is self-contained:
-`bridge.js` is compiled into the binary rather than shipped as a SwiftPM
-resource bundle, and any resource bundle your own target or a dependency
-produces is staged next to the `.exe`, which is where `Bundle.module`
-looks on Windows. Until 0.9.10 neither happened, so a bundle read its
-runtime out of the build machine's `.build/` directory and crashed on
-launch on any other box.
+The portable folder is self-contained: it runs on a machine with no Swift
+toolchain. Three things make that true:
+
+- **The Swift runtime travels beside the `.exe`.** A Swift executable on
+  Windows loads `swiftCore.dll`, `Foundation.dll` and the rest at launch, and
+  `--static-swift-stdlib` is silently ignored on Windows. So the bundler walks
+  the exe's DLL imports and copies every one it finds in the toolchain's
+  runtime folder (which also carries the matching VC++ runtime); Windows looks
+  in the exe's own folder before `PATH`. Until 0.11.3 it didn't, and a bundle
+  only started where a Swift toolchain was on `PATH`; elsewhere it stopped at
+  "FoundationNetworking.dll was not found". The folder is larger for it, by
+  the size of the runtime.
+- **`bridge.js` is compiled into the binary** rather than shipped as a SwiftPM
+  resource bundle.
+- **Resource bundles are staged next to the `.exe`**, which is where
+  `Bundle.module` looks on Windows. Until 0.9.10 neither this nor `bridge.js`
+  happened, so a bundle read its runtime out of the build machine's `.build/`
+  directory and crashed on launch on any other box.
+
+**A single-file `.exe` doesn't carry the Swift runtime**, because the loader
+can't take a DLL from inside the exe. It starts only where a Swift toolchain
+or runtime is installed, and the build says so. To hand an app to someone,
+ship the folder (zipped) or an MSIX, which packages the same folder.
+
+`Scripts/bundle-smoke-windows.ps1` (and CI's `bundle-smoke-windows` job) checks
+this: it bundles a fresh `init` app, moves the bundle away from the build,
+and launches it with only Windows on `PATH`.
 
 **A bundled app takes its name from the `.exe`'s version resource; a bare
 binary doesn't have one.** There is no `Info.plist` here, so `swift-pwa build

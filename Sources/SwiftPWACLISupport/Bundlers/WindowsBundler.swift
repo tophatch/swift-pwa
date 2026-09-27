@@ -149,6 +149,10 @@ struct WindowsBundler {
             let bundledExe = bundleDir.appendingPathComponent(exeName)
             try FileManager.default.copyItem(at: binary, to: bundledExe)
 
+            // Walked from the exe the build produced, not the copy the
+            // resource edits below rewrite.
+            let runtimeDLLs = try swiftRuntimeDLLs(for: binary)
+
             // Any SwiftPM resource bundles the build produced go beside the exe
             // — which on Windows *is* where `Bundle.module` looks, so an app
             // with resource-carrying dependencies works off the build machine.
@@ -213,6 +217,16 @@ struct WindowsBundler {
                 try writeFileAssociationScripts(into: outputDir, exeName: exeName)
                 try writeURLSchemeScripts(into: outputDir, exeName: exeName)
                 print("swift-pwa: single-file build — web/ embedded into \(exeName)")
+                // The loader can't take a DLL from inside the exe, so the
+                // runtime can't travel in one file. Said at build time, since
+                // on the developer's own machine it starts either way.
+                if !runtimeDLLs.isEmpty {
+                    print("""
+                    swift-pwa: warning — a single-file exe can't carry the Swift runtime \
+                    (\(runtimeDLLs.count) DLLs), so it starts only where a Swift toolchain or runtime \
+                    is installed. Build without --single-file for a folder that runs on any machine.
+                    """)
+                }
                 return singleExe
             }
 
@@ -235,6 +249,14 @@ struct WindowsBundler {
                     at: manifestSrc,
                     to: bundleDir.appendingPathComponent("pwa.json")
                 )
+            }
+
+            let runtimeBytes = try SwiftRuntimeStaging.copy(runtimeDLLs, into: bundleDir)
+            if !runtimeDLLs.isEmpty {
+                print(String(
+                    format: "swift-pwa: staged the Swift runtime next to the app (%d DLLs, %.1f MB)",
+                    runtimeDLLs.count, Double(runtimeBytes) / 1_048_576
+                ))
             }
 
             // Stage onnxruntime.dll next to the exe so the segmentation
@@ -345,6 +367,24 @@ struct WindowsBundler {
     /// the exe, which is where Windows' loader looks first. Without this the
     /// build links cleanly against the import lib and the app dies at launch on
     /// the user's machine with a missing-DLL dialog naming no fix.
+    /// The Swift runtime DLLs `binary` needs, from the toolchain it was built
+    /// with. See ``SwiftRuntimeStaging``.
+    private func swiftRuntimeDLLs(for binary: URL) throws -> [URL] {
+        // Windows spells it `Path`, and compares the two spellings equal.
+        let path = ProcessInfo.processInfo.environment
+            .first { $0.key.caseInsensitiveCompare("PATH") == .orderedSame }?.value
+        guard let runtimeDir = SwiftRuntimeStaging.runtimeDirectory(path: path) else {
+            print("""
+            swift-pwa: warning — swiftCore.dll isn't on PATH, so the Swift runtime can't be staged, \
+            and the bundle will start only where a Swift toolchain is on PATH.
+            """)
+            return []
+        }
+        return try SwiftRuntimeStaging.closure(
+            of: binary, searchDirs: [runtimeDir, binary.deletingLastPathComponent()]
+        )
+    }
+
     private func stageDeclaredNativeLibraries(nextTo dir: URL) throws {
         for src in try NativeLibrarySearch.declaredDirs(
             manifest: manifest, target: .windows, projectRoot: projectRoot

@@ -200,6 +200,60 @@ jobs:
           echo "$OUT" | grep -q awaited
           pkill -x BundleSmoke || true
 
+  bundle-smoke-windows:
+    # The third of the set, and the one that was missing (#239): nothing in CI
+    # ran `swift-pwa build --target windows`, and two faults shipped through
+    # that gap — under 6.4 no Windows build could complete at all (#238).
+    #
+    # Weaker than the other two, and deliberately so: they drive their app,
+    # this launches each bundle with SWIFT_PWA_DESCRIBE, which runs the app's
+    # `configure` and exits before any window. WebView2 won't create a
+    # controller without an interactive desktop, so a driven check isn't
+    # available here; this still catches a bundle that can't load, can't find
+    # what it staged, or didn't build. It also launches each bundle with only
+    # Windows on PATH, because the docs promise it runs on a machine with no
+    # Swift toolchain. See Scripts/bundle-smoke-windows.ps1.
+    #
+    # Swift 6.4, where the gating `windows` job stays on its 6.3.1 floor: both
+    # faults were 6.4-only, and 6.4 is what an adopter installs today. Same
+    # install as next-toolchain-windows — keep the two in step.
+    #
+    # Not a required check yet: it runs on every PR so its duration and flake
+    # rate can be measured before it's allowed to block a merge. It has no
+    # paths filter, and must not get one once it is required — a required check
+    # that never runs leaves a PR waiting forever.
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - name: Set up MSVC environment (x64)
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Install Swift 6.4
+        uses: compnerd/gha-setup-swift@main
+        with:
+          # The patch component is required: see next-toolchain-windows.
+          swift-version: swift-6.4.0-release
+          swift-build: 6.4.0-RELEASE
+      - name: Report the toolchain
+        run: swift --version
+      - name: Install WebView2 SDK + WIL (NuGet)
+        shell: pwsh
+        run: |
+          nuget install Microsoft.Web.WebView2 -OutputDirectory packages -ExcludeVersion
+          nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
+      - name: Bundle a fresh app, relocate it, launch it
+        shell: pwsh
+        run: ./Scripts/bundle-smoke-windows.ps1 -Packages "$pwd\packages" -WorkDir "$env:RUNNER_TEMP\bundle-smoke"
+      - name: Upload what was on screen when a launch hung
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-smoke-windows-hang
+          path: ${{ runner.temp }}/bundle-smoke/hang-*.png
+          if-no-files-found: ignore
+
   # `drive --simulator`, on demand (workflow_dispatch) or weekly — NOT on every
   # PR. Not because it's broken any more (the stall was an undrained pipe in the
   # CLI, fixed, and it passes in ~5 minutes now) but because it isn't where the

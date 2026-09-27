@@ -246,6 +246,13 @@ jobs:
       - name: Bundle a fresh app, relocate it, launch it
         shell: pwsh
         run: ./Scripts/bundle-smoke-windows.ps1 -Packages "$pwd\packages" -WorkDir "$env:RUNNER_TEMP\bundle-smoke"
+      - name: Upload what was on screen when a launch hung
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-smoke-windows-hang
+          path: ${{ runner.temp }}/bundle-smoke/hang-*.png
+          if-no-files-found: ignore
 
   # `drive --simulator`, on demand (workflow_dispatch) or weekly — NOT on every
   # PR. Not because it's broken any more (the stall was an undrained pipe in the

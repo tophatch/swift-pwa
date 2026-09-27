@@ -107,6 +107,26 @@ function Invoke-Native([string]$Label, [scriptblock]$Command) {
 # binary, so PowerShell wouldn't wait for it: Start-Process -Wait does, and
 # hands back the exit code. It inherits this process's environment, which is
 # how PATH and SWIFT_PWA_DESCRIBE reach it.
+# What is on screen while a launch hangs: every top-level window's owner and
+# title (a loader or CRT dialog would show here), and a screenshot of the
+# desktop, which also answers whether this machine has one to draw on.
+function Save-HangEvidence([string]$Label) {
+    Get-Process | Where-Object { $_.MainWindowTitle } |
+        ForEach-Object { Write-Host ("  window: {0} (pid {1}): {2}" -f $_.ProcessName, $_.Id, $_.MainWindowTitle) }
+    try {
+        Add-Type -AssemblyName System.Windows.Forms, System.Drawing
+        $bounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
+        $bitmap = New-Object System.Drawing.Bitmap $bounds.Width, $bounds.Height
+        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+        $graphics.CopyFromScreen($bounds.Location, [System.Drawing.Point]::Empty, $bounds.Size)
+        $shot = Join-Path $WorkDir "hang-$Label.png"
+        $bitmap.Save($shot)
+        Write-Host "  screenshot: $shot ($($bounds.Width)x$($bounds.Height))"
+    } catch {
+        Write-Host "  screenshot failed: $($_.Exception.Message)"
+    }
+}
+
 function Test-Launch([string]$Label, [string]$Exe, [string]$PathValue) {
     $catalog = Join-Path $WorkDir "catalog-$Label.json"
     Remove-Item $catalog -ErrorAction SilentlyContinue
@@ -116,6 +136,7 @@ function Test-Launch([string]$Label, [string]$Exe, [string]$PathValue) {
     try {
         $process = Start-Process -FilePath $Exe -WorkingDirectory $WorkDir -PassThru -WindowStyle Hidden
         if (-not $process.WaitForExit(120000)) {
+            Save-HangEvidence $Label
             $process.Kill()
             return "FAIL  $Label - still running after 120 s"
         }
@@ -238,6 +259,30 @@ $results | ForEach-Object {
     Write-Host $_ -ForegroundColor $(if ($_ -like "PASS*") { "Green" } else { "Red" })
 }
 if ($results | Where-Object { $_ -like "FAIL*portable*" }) {
+    $folderApp = "$relocated\folder\$target.exe"
+    Write-Host "dumpbin /dependents of the folder bundle's exe:"
+    dumpbin /nologo /dependents $folderApp | Where-Object { $_.Trim() } | ForEach-Object { Write-Host "  $_" }
+    # The bundled exe is a GUI app, so whatever it prints is lost. A copy
+    # switched back to the console subsystem shows it.
+    $console = "$relocated\folder\$target-console.exe"
+    Copy-Item $folderApp $console
+    editbin /nologo /SUBSYSTEM:CONSOLE $console | Out-Null
+    $savedPath = $env:Path
+    $env:Path = $windowsOnly
+    $env:SWIFT_PWA_DESCRIBE = Join-Path $WorkDir "catalog-console.json"
+    try {
+        $p = Start-Process -FilePath $console -WorkingDirectory $WorkDir -PassThru -NoNewWindow `
+            -RedirectStandardOutput "$WorkDir\console.out" -RedirectStandardError "$WorkDir\console.err"
+        $finished = $p.WaitForExit(60000)
+        if (-not $finished) { $p.Kill() }
+        Write-Host ("console copy with only Windows on PATH: {0}" -f `
+            $(if ($finished) { "exited 0x{0:X8}" -f $p.ExitCode } else { "still running after 60 s" }))
+    } finally {
+        $env:Path = $savedPath
+        Remove-Item Env:SWIFT_PWA_DESCRIBE
+    }
+    Get-Content "$WorkDir\console.out", "$WorkDir\console.err" -ErrorAction SilentlyContinue |
+        Select-Object -First 40 | ForEach-Object { Write-Host "  | $_" }
     foreach ($exe in "$relocated\folder\$target.exe", "$relocated\single\$target.exe") {
         $missing = @(Get-MissingImports $exe)
         Write-Host ("imports of {0} found in neither its folder nor Windows: {1}" -f `

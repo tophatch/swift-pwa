@@ -9,6 +9,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A Windows app bundle didn't start on a machine without Swift** (#239). The
+  portable folder carried no Swift runtime, and `--static-swift-stdlib` is
+  silently ignored on Windows, so a bundle started only where a Swift toolchain
+  happened to be on `PATH`. With only Windows on `PATH` it stopped at "The code
+  execution cannot proceed because FoundationNetworking.dll was not found", on
+  every adopter's app, since the bundler was written; the docs said it ran on
+  any box with the WebView2 Runtime. The bundler now walks the exe's DLL imports
+  and copies every one it finds in the toolchain's runtime folder (which also
+  carries the VC++ runtime) beside the `.exe`, where Windows looks first; an
+  MSIX is packaged from that same folder. For a fresh `init` app that is 19
+  DLLs and 58.3 MB on x64 with Swift 6.4, and 16 and 56.7 MB on arm64 with
+  6.3.1 — what a portable folder now weighs on top of the app; both start with
+  only Windows on `PATH`. The imports are read out of the PE image by the CLI rather than
+  asked of `dumpbin`, which can't open a bundled exe once its resources are
+  rewritten, and which an import check built on it read as "imports nothing".
+  **A `--single-file` exe
+  still can't carry the runtime** — the loader can't take a DLL from inside
+  the exe — so it starts only where Swift is installed; the build now says so,
+  and the docs point at the folder for handing an app to someone.
+
 - **`drive scroll` could return success and deliver nothing on macOS** (#264).
   `NSEvent(cgEvent:)` takes a scroll event's window from the window server —
   what is on top at that screen point — rather than from the window it is sent
@@ -149,6 +169,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   targets are checked now, and a declaration the check can't find fails it.
 
 ### Added
+
+- **`bundle-smoke-windows` in CI, and `Scripts/bundle-smoke-windows.ps1`**
+  (#239). Nothing in CI ran `swift-pwa build --target windows`, and two faults
+  shipped through that gap (#238). The job scaffolds a fresh app against the
+  checkout, bundles it (folder and `--single-file`) on Swift 6.4, moves both out
+  of the project, deletes `.build`, and launches each with `SWIFT_PWA_DESCRIBE`,
+  which runs the app's `configure` and exits before any window: once with `PATH`
+  as it is, as the control, and the folder once more with only Windows on
+  `PATH`. That second launch is what found the fix above. It doesn't drive the
+  app, so nothing in WebView2 or the page is checked. It runs on every PR but
+  isn't a required check until its duration and flake rate are known (15 to 33
+  minutes over its first runs). The script runs the same way on a box through
+  `Scripts/remote-windows.sh`. A GUI-subsystem exe that can't load a DLL doesn't
+  exit (csrss shows a dialog and waits), so a hung launch saves a screenshot and
+  the window titles on screen, and a failed portable launch reruns a
+  console-subsystem copy for the loader's status code.
 
 - **`Scripts/remote-windows.sh`** — the Windows twin of `remote-linux.sh`:
   copies the tree to a box over SSH, loads the MSVC environment and builds or

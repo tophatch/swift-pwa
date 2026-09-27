@@ -19,13 +19,22 @@
   bundle that can't load (a missing DLL), can't find what it staged, or
   whose build broke; it can't catch anything in WebView2 or the page.
 
-  Two legs, the folder bundle and `--single-file`, each launched twice:
+  Three launches:
 
-    control      with PATH as it is. Has to pass, or the second launch
-                 proves nothing.
-    portable     with only Windows on PATH, as on a user's machine with no
-                 Swift toolchain. The docs promise the bundle runs anywhere
-                 the WebView2 Runtime does.
+    folder-control   the folder bundle with PATH as it is. Has to pass, or
+                     the portable launch proves nothing.
+    folder-portable  the same with only Windows on PATH, as on a user's
+                     machine with no Swift toolchain: the bundle has to carry
+                     the Swift runtime itself. Without it, this died
+                     "FoundationNetworking.dll was not found".
+    single-control   the `--single-file` exe with PATH as it is. There is no
+                     portable leg for it: the loader can't take a DLL from
+                     inside the exe, so a single file can't carry the runtime.
+
+  A GUI-subsystem exe that can't load a DLL doesn't exit - csrss shows a
+  "System Error" dialog and waits for a click - so a launch that hangs lists
+  the windows on screen and saves a screenshot, and a failed portable launch
+  reruns a console-subsystem copy, which does exit, with the loader's status.
 
   The app is scaffolded against this checkout (the examples are not the
   scaffold), and the bundles are moved out of the project and its .build
@@ -221,30 +230,6 @@ Remove-Tree "$appDir\.build"
 Remove-Tree "$appDir\out"
 Write-Host "folder bundle: $((Get-ChildItem "$relocated\folder" | ForEach-Object Name) -join ', ')"
 
-# A GUI-subsystem exe that can't load a DLL doesn't exit: Windows shows "The
-# code execution cannot proceed" and waits for a click, which on a runner is a
-# hang (measured - the first run timed out instead of failing). A child
-# inherits its parent's error mode, so turning the dialog off here makes the
-# loader fail the launch with its status code instead.
-Add-Type -Namespace SmokeNative -Name Kernel32 -MemberDefinition `
-    '[System.Runtime.InteropServices.DllImport("kernel32.dll")] public static extern uint SetErrorMode(uint mode);'
-[SmokeNative.Kernel32]::SetErrorMode(0x0001 -bor 0x0002) | Out-Null  # FAILCRITICALERRORS | NOGPFAULTERRORBOX
-
-# The DLLs `$Exe` imports that neither its own folder nor Windows provides -
-# what a machine without a Swift toolchain would be missing. Direct imports
-# only, which is enough to name the gap.
-function Get-MissingImports([string]$Exe) {
-    if (-not (Get-Command dumpbin -ErrorAction SilentlyContinue)) { return @("(dumpbin not on PATH)") }
-    $dir = Split-Path $Exe
-    dumpbin /nologo /dependents $Exe | ForEach-Object { $_.Trim() } |
-        Where-Object { $_ -match '^[\w.-]+\.dll$' } |
-        Where-Object {
-            -not (Test-Path (Join-Path $dir $_)) -and
-            -not (Test-Path (Join-Path "$env:SystemRoot\System32" $_)) -and
-            $_ -notmatch '^(api|ext)-ms-'
-        }
-}
-
 # Only Windows itself: every Swift, Visual Studio and user entry is gone.
 $windowsOnly = @("$env:SystemRoot\System32", "$env:SystemRoot", "$env:SystemRoot\System32\Wbem") -join ';'
 
@@ -252,16 +237,16 @@ Write-Host "== launching each bundle headlessly (SWIFT_PWA_DESCRIBE) ==" -Foregr
 $results = @(
     (Test-Launch "folder-control" "$relocated\folder\$target.exe" $env:Path),
     (Test-Launch "folder-portable" "$relocated\folder\$target.exe" $windowsOnly),
-    (Test-Launch "single-control" "$relocated\single\$target.exe" $env:Path),
-    (Test-Launch "single-portable" "$relocated\single\$target.exe" $windowsOnly)
+    # No single-file portable leg: the loader can't take a DLL from inside the
+    # exe, so a single-file build can't carry the Swift runtime, and the build
+    # says so. What's checked is that it starts.
+    (Test-Launch "single-control" "$relocated\single\$target.exe" $env:Path)
 )
 $results | ForEach-Object {
     Write-Host $_ -ForegroundColor $(if ($_ -like "PASS*") { "Green" } else { "Red" })
 }
 if ($results | Where-Object { $_ -like "FAIL*portable*" }) {
     $folderApp = "$relocated\folder\$target.exe"
-    Write-Host "dumpbin /dependents of the folder bundle's exe:"
-    dumpbin /nologo /dependents $folderApp | Where-Object { $_.Trim() } | ForEach-Object { Write-Host "  $_" }
     # The bundled exe is a GUI app, so whatever it prints is lost. A copy
     # switched back to the console subsystem shows it.
     $console = "$relocated\folder\$target-console.exe"
@@ -283,10 +268,5 @@ if ($results | Where-Object { $_ -like "FAIL*portable*" }) {
     }
     Get-Content "$WorkDir\console.out", "$WorkDir\console.err" -ErrorAction SilentlyContinue |
         Select-Object -First 40 | ForEach-Object { Write-Host "  | $_" }
-    foreach ($exe in "$relocated\folder\$target.exe", "$relocated\single\$target.exe") {
-        $missing = @(Get-MissingImports $exe)
-        Write-Host ("imports of {0} found in neither its folder nor Windows: {1}" -f `
-            (Split-Path (Split-Path $exe) -Leaf), $(if ($missing) { $missing -join ', ' } else { 'none' }))
-    }
 }
 if ($results | Where-Object { $_ -like "FAIL*" }) { exit 1 }

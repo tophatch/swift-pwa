@@ -68,12 +68,25 @@ struct SwiftRuntimeStagingTests {
         #expect(throws: PEImports.ReadError.self) { try PEImports.dllNames(in: Data(truncated)) }
     }
 
-    @Test("finds the runtime folder on a Windows PATH")
-    func runtimeDirectory() {
-        let path = #"C:\Windows\system32;C:\Swift\Runtimes\6.4.0\usr\bin;C:\tools"#
-        let found = SwiftRuntimeStaging.runtimeDirectory(path: path) { $0.contains("Runtimes") }
-        #expect(found?.path.contains("Runtimes") == true)
-        #expect(SwiftRuntimeStaging.runtimeDirectory(path: path) { _ in false } == nil)
+    /// Real directories rather than Windows-style strings: how a host's
+    /// Foundation reads `C:\…` differs between toolchains, and that isn't
+    /// what's under test.
+    @Test("finds the runtime folder on a semicolon-separated PATH")
+    func runtimeDirectory() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("swift-pwa-path-\(UUID().uuidString)")
+        let system = root.appendingPathComponent("system32")
+        let runtime = root.appendingPathComponent("Runtimes")
+        for dir in [system, runtime] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data().write(to: runtime.appendingPathComponent("swiftCore.dll"))
+
+        let path = [system.path, "", runtime.path, root.appendingPathComponent("missing").path]
+            .joined(separator: ";")
+        #expect(SwiftRuntimeStaging.runtimeDirectory(path: path)?.lastPathComponent == "Runtimes")
+        #expect(SwiftRuntimeStaging.runtimeDirectory(path: system.path) == nil)
         #expect(SwiftRuntimeStaging.runtimeDirectory(path: nil) == nil)
     }
 

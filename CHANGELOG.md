@@ -5,7 +5,7 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.11.3] - 2026-09-27
 
 ### Fixed
 
@@ -27,7 +27,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   **A `--single-file` exe
   still can't carry the runtime** — the loader can't take a DLL from inside
   the exe — so it starts only where Swift is installed; the build now says so,
-  and the docs point at the folder for handing an app to someone.
+  and the docs point at the folder for handing an app to someone. **And the
+  portable auto-updater still replaces only the EXE**, so an update has to be
+  built with the same Swift toolchain as the version it replaces, or the new
+  EXE loads the older runtime beside it and fails to start; move toolchains
+  with a fresh folder or MSIX (see `docs/auto-updates.md`).
 
 - **`drive scroll` could return success and deliver nothing on macOS** (#264).
   `NSEvent(cgEvent:)` takes a scroll event's window from the window server —
@@ -1563,8 +1567,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   SPA history routing still loads the entry for `/library/shelf/42` — with that
   entry's own root-absolute script resolving from the nested route, which is the
   case relative URLs cannot express.
-
-[Unreleased]: https://github.com/tophatch/swift-pwa/compare/v0.10.7...HEAD
 
 ## [0.10.7] - 2026-09-14
 

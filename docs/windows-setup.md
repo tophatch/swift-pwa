@@ -443,6 +443,10 @@ can't take a DLL from inside the exe. It starts only where a Swift toolchain
 or runtime is installed, and the build says so. To hand an app to someone,
 ship the folder (zipped) or an MSIX, which packages the same folder.
 
+The portable auto-updater replaces only the `.exe`, so an update must be
+built with the same Swift toolchain as the version it replaces — see
+[auto-updates.md](auto-updates.md#windows-portable--msix).
+
 `Scripts/bundle-smoke-windows.ps1` (and CI's `bundle-smoke-windows` job) checks
 this: it bundles a fresh `init` app, moves the bundle away from the build,
 and launches it with only Windows on `PATH`.

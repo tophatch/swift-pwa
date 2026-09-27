@@ -378,6 +378,16 @@ updated app via `Start-Process shell:AppsFolder\<family>!<app-id>` ~500
 ms after the install completes. Without `msixIdentityName:` the helper
 skips the relaunch line and the user re-launches from Start manually.
 
+> **A portable update must be built with the same Swift toolchain as the
+> version it replaces.** Since 0.11.3 a portable folder carries the Swift
+> runtime DLLs beside the EXE, and the portable updater replaces only the EXE.
+> An update built with a different Swift would load the older runtime still in
+> the folder, and fails to start with `0xC0000139` (an entry point it expects
+> isn't there) — and an app that can't start can't update itself out of it.
+> When you move to a new Swift release, ship that version as a fresh folder or
+> as MSIX, which replaces the whole package. Updates built with the same
+> toolchain carry identical DLLs and are unaffected.
+
 For the public-key argument: `.portable` requires it (a swappable EXE
 is full code execution; verifying signatures is non-negotiable);
 `.msix` accepts `nil` if you want to trust Authenticode unconditionally

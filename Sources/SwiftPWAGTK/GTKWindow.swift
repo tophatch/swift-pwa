@@ -54,6 +54,12 @@
         /// changes aren't observed — consistent with the backend's stance
         /// on WM-driven state (see `handleConfigure`).
         private var fullscreenOn = false
+        /// The page's departure, started by the first of a close or a quit to
+        /// reach this window; the other one awaits the same work.
+        private var preparation: Task<Void, Never>?
+        private var closeRequested = false
+        private var didEmitWillClose = false
+        private var destroyed = false
 
         /// Cast our owned widget back to `GtkWindow*` for `gtk_window_*` calls.
         private var window: UnsafeMutablePointer<GtkWindow> {
@@ -307,11 +313,70 @@
             g_object_unref(UnsafeMutableRawPointer(group))
         }
 
-        /// Called from the `delete-event` trampoline when the user
-        /// closes via the WM. GTK is about to destroy the widget; we
-        /// run the same teardown as `close()` minus the destroy call.
-        func handleDeleteEvent() {
+        /// Called from the `delete-event` trampoline when the user closes via
+        /// the WM. Returns whether to stop GTK destroying the widget: while
+        /// the page finishes it does, and the window destroys itself after.
+        func handleDeleteEvent() -> Bool {
+            guard GTKAppContext.isLoopRunning else {
+                // Nothing would run the deferred close; let GTK destroy now.
+                emitWillCloseOnce()
+                destroyed = true
+                emit(.didClose)
+                cleanupAfterClose()
+                return false
+            }
+            requestClose()
+            return true
+        }
+
+        /// Close after the page has finished and the app's `beforeClose`
+        /// handlers have run (#281). Without a running main loop — a GUI test
+        /// that never entered one — there is nothing to wait with, so the
+        /// window goes at once, as it always did.
+        private func requestClose() {
+            guard GTKAppContext.isLoopRunning else {
+                destroyNow()
+                return
+            }
+            guard !closeRequested else { return }
+            closeRequested = true
+            let deadline = ContinuousClock.now + CloseBudget.window
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await prepareToClose(until: deadline)
+                await CloseHandlers.shared.run(.window(id), until: deadline)
+                destroyNow()
+            }
+        }
+
+        public func prepareToClose(until deadline: ContinuousClock.Instant) async {
+            if preparation == nil, !destroyed {
+                emitWillCloseOnce()
+                gtk_widget_hide(widget)
+                preparation = Task { @MainActor [bridge, adapter] in
+                    await bridge.letDocumentFinish(until: deadline) {
+                        adapter.load(.remote(Closing.departureURL))
+                    }
+                }
+            }
+            await preparation?.value
+        }
+
+        private func emitWillCloseOnce() {
+            guard !didEmitWillClose else { return }
+            didEmitWillClose = true
             emit(.willClose)
+        }
+
+        private func destroyNow() {
+            guard !destroyed else { return }
+            destroyed = true
+            emitWillCloseOnce()
+            // Before the widget goes: anything the adapter still has queued for
+            // the GTK main thread has to learn the view is gone, or it runs
+            // against freed memory (#187).
+            adapter.invalidate()
+            gtk_widget_destroy(widget)
             emit(.didClose)
             cleanupAfterClose()
         }
@@ -399,14 +464,7 @@
         public func isFullscreen() -> Bool { fullscreenOn }
 
         public func close() {
-            emit(.willClose)
-            // Before the widget goes: anything the adapter still has queued for
-            // the GTK main thread has to learn the view is gone, or it runs
-            // against freed memory (#187).
-            adapter.invalidate()
-            gtk_widget_destroy(widget)
-            emit(.didClose)
-            cleanupAfterClose()
+            requestClose()
         }
     }
 
@@ -471,8 +529,9 @@
         Unmanaged<GTKWindowBox>.fromOpaque(userData).release()
     }
 
-    /// `@convention(c)` trampoline for `delete-event`. Returns FALSE so
-    /// GTK's default handler proceeds with `gtk_widget_destroy`.
+    /// `@convention(c)` trampoline for `delete-event`. Returns TRUE to keep
+    /// GTK from destroying the widget while the page finishes; the window
+    /// destroys itself afterwards.
     let deleteEventTrampoline: @convention(c) (
         UnsafeMutablePointer<GtkWidget>?,
         gpointer?,
@@ -480,12 +539,12 @@
     ) -> gboolean = { _, _, userData in
         guard let userData else { return gboolean(0) }
         let userDataRaw = UInt(bitPattern: userData)
-        MainActor.assumeIsolated {
-            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return }
+        let stop = MainActor.assumeIsolated {
+            guard let opaque = UnsafeMutableRawPointer(bitPattern: userDataRaw) else { return false }
             let box = Unmanaged<GTKWindowBox>.fromOpaque(opaque).takeUnretainedValue()
-            box.window?.handleDeleteEvent()
+            return box.window?.handleDeleteEvent() ?? false
         }
-        return gboolean(0)
+        return gboolean(stop ? 1 : 0)
     }
 
     /// `@convention(c)` callback wired to Ctrl+Q via the accel group.

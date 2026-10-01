@@ -45,6 +45,11 @@
         private var fullscreen = false
         private var savedPlacement: WINDOWPLACEMENT?
         private var savedStyle: LONG_PTR = 0
+        /// The page's departure, started by the first of a close or a quit to
+        /// reach this window; the other one awaits the same work.
+        private var preparation: Task<Void, Never>?
+        private var closeRequested = false
+        private var didEmitWillClose = false
 
         // Window class atom — registered lazily on first window. The
         // class holds the wndProc that routes messages back into Swift.
@@ -288,8 +293,17 @@
                 emit(.didBlur)
                 return true
             case WM_CLOSE:
-                emit(.willClose)
-                DestroyWindow(hwnd)
+                // The close button, Alt+F4 and `window.close` all arrive here.
+                // The window goes once the page has finished and the app's
+                // `beforeClose` handlers have run (#281).
+                requestClose()
+                return true
+            case WM_QUERYENDSESSION:
+                // Nothing here vetoes a logoff or shutdown; the flush happens
+                // in WM_ENDSESSION, once the session is really ending.
+                return false
+            case WM_ENDSESSION:
+                if wParam != 0 { app?.endSession() }
                 return true
             case WM_DESTROY:
                 emit(.didClose)
@@ -316,7 +330,40 @@
             }
         }
 
+        private func requestClose() {
+            guard !closeRequested else { return }
+            closeRequested = true
+            let deadline = ContinuousClock.now + CloseBudget.window
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await prepareToClose(until: deadline)
+                await CloseHandlers.shared.run(.window(id), until: deadline)
+                // WM_DESTROY emits `didClose` and cleans up.
+                DestroyWindow(hwnd)
+            }
+        }
+
+        public func prepareToClose(until deadline: ContinuousClock.Instant) async {
+            if preparation == nil {
+                emitWillCloseOnce()
+                ShowWindow(hwnd, SW_HIDE)
+                preparation = Task { @MainActor [bridge, adapter] in
+                    await bridge.letDocumentFinish(until: deadline) {
+                        adapter.load(.remote(Closing.departureURL))
+                    }
+                }
+            }
+            await preparation?.value
+        }
+
+        private func emitWillCloseOnce() {
+            guard !didEmitWillClose else { return }
+            didEmitWillClose = true
+            emit(.willClose)
+        }
+
         private func cleanupAfterClose() {
+            emitWillCloseOnce()
             for c in continuations.values { c.finish() }
             continuations.removeAll()
             bridge.stop()

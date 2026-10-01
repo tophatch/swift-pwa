@@ -926,6 +926,13 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**A logoff or shutdown gets at most 4.5 s.** Windows ends the process as soon
+as `WM_ENDSESSION` returns, so the runtime pumps messages and the main queue
+inside that handler until every page's teardown and `ctx.beforeClose` (reason
+`.system`) have finished — 4 s for the work itself, under the roughly 5 s
+Windows allows before it calls the app hung. Nothing here vetoes the session
+ending (`WM_QUERYENDSESSION` always answers yes).
+
 **`window.snapshot` returns colour-managed pixels, and is slower here.**
 `ICoreWebView2.CapturePreview` hands back the *display's* colour space with
 that display's ICC profile embedded in the PNG, so on a wide-gamut monitor a

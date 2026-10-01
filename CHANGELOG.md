@@ -7,6 +7,67 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **A page and the app get to finish before a window closes or the app quits**
+  (#281). Nothing ran between "the app is going away" and the process exiting,
+  on any backend. A quit never closed a window at all: the page got neither
+  `pagehide` nor `visibilitychange`, and `willClose` was never emitted. A
+  closing window stopped its bridge in the same turn it emitted `willClose`, so
+  an invoke posted in response never got through, and on four backends
+  `willClose` itself couldn't reach the page. So anything an app batched was
+  lost at quit: a debounced reading-position save in the page, and a
+  timer-batched sync write in Swift.
+
+  Now a closing window is taken off screen and delivers `willClose` while its
+  bridge is up. It navigates to a blank document, so the page runs its genuine
+  unload (`visibilitychange` to `hidden`, then `pagehide`). The bridge waits
+  for the invokes that posted, which an ordinary navigation would cancel; the
+  next document's `hello` is the marker that the old one has gone. Then the new
+  **`ctx.beforeClose { reason in … }`** handlers run, with `.window(id)`,
+  `.quit`, `.system` (logout, shutdown, SIGTERM) or `.backgrounded`. A quit
+  does all of this for every window. It's bounded by fixed budgets: 1 s for a
+  window, 3 s for a quit or backgrounding. A handler still running at the
+  deadline is logged and abandoned, so a hung flush can't hold the app open.
+  The budgets are fixed because the OS sets the real ceiling on the paths that
+  matter (iOS background tasks, Windows' ~5 s at session end, Android after
+  `onStop`), so a knob would hold on some platforms and silently not on
+  others. Cancelling a close isn't offered.
+
+  Per backend:
+  - **macOS:** `windowShouldClose` defers the close. `applicationShouldTerminate`
+    holds the quit (`.terminateLater`) for ⌘Q, `app.quit`, the last window and
+    logout. SIGTERM is a `.system` quit.
+  - **GTK3 / GTK4:** the window manager's close is stopped and finished by the
+    window itself. SIGTERM is handled.
+  - **Windows:** `WM_CLOSE` is deferred, and `WM_ENDSESSION` pumps the thread
+    until the flush is done (4.5 s at most).
+  - **iOS / Android:** there's no quit, so the app gets a background task
+    (iOS) or flushes on `onStop` (Android), with `.backgrounded`. `app.quit`
+    and closing the primary window on Android get the full teardown.
+
+  An Android page departs to an empty page served on the app's own origin
+  rather than `about:blank`, because the bridge is only injected there.
+
+  Measured with a probe that writes a marker from every place a page or an app
+  can hear it's going, read back after the window or process has gone:
+  - **Before (from #281):** 0 of 2 writes landed on `window.close` and 0 of 2
+    on `app.quit`.
+  - **After:** macOS 7/7 rows and GTK3 7/7 (including Alt+F4 through a real
+    window manager, and SIGTERM). GTK4 6/6, with Ctrl+Q skipped because
+    XTEST needs a focused window. iPhone 17 Pro 3/3 and Tab S10+ 3/3.
+    Windows 6/6 on both x64 (Swift 6.4) and arm64 (6.3.1), including
+    `WM_CLOSE` and `WM_ENDSESSION` sent from the console session. A handler
+    that never returns still lets the app quit at 3.1 s.
+  - Windows also caught a compiler crash nothing else would have. Swift 6.4's
+    assertions build there aborts emitting debug info for a function-local
+    enum used as `AsyncStream`'s element (`getMangledName`), so that type
+    lives at file scope.
+
+  The scripts are `Scripts/verify-close-flush.sh` (macOS and Linux),
+  `verify-close-flush.ps1`, `verify-close-flush-ios.sh` and
+  `verify-close-flush-android.sh`.
+
 ### Fixed
 
 - **A backgrounded driver run still took the front on macOS** (#283). Under
@@ -53,6 +114,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Found by the reporting app's bisect, which narrowed it to a first document
   taller than the screen. `Scripts/verify-ios-safe-area.sh` sweeps it, and the
   `tall` variant is the one that sticks without the fix.
+
+- **`app.quit`'s exit code was always 0 on macOS.** `NSApp.terminate` calls
+  `exit(0)` itself, so the code stashed for after `NSApp.run()` returned was
+  never used. Measured: `exitCode: 3` exited 0. It now exits from
+  `applicationWillTerminate` with the code asked for.
+- **A ⌘Q / Ctrl+Q inside `remember_state`'s debounce lost the window size the
+  user just set.** Geometry was flushed only when the last window closed; every
+  quit flushes it now.
+- **The minimize-to-tray recipe in `making-it-feel-native.md` couldn't be
+  done.** It said to cancel the close on `willClose`, and nothing can cancel a
+  close. Rewritten around a "Hide to tray" control and `keep-running`.
+  `docs/swift-api.md`'s window-events example called a `subscribe` method that
+  doesn't exist; it uses `eventStream()` now.
 
 ## [0.11.3] - 2026-09-27
 

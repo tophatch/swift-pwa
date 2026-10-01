@@ -220,14 +220,35 @@
 
         public func window(_ id: WindowID) -> (any Window)? { windows[id] }
 
+        /// Quit once the page has finished and the app's `beforeClose`
+        /// handlers have run, within ``CloseBudget/quit`` (#281).
         public func quit(exitCode: Int32) {
             pendingExitCode = exitCode
-            // Tell the JNI side first so Kotlin can finish() the
-            // Activity, then unblock `run`. Order matters: if we
-            // signaled the semaphore first, the worker would
-            // `exit()` before the Activity got a chance to clean
-            // up its UI state.
-            swiftpwa_android_dispatch_quit(exitCode)
+            guard !quitting else { return }
+            quitting = true
+            Task { @MainActor [self] in
+                await Closing.beforeQuit(self, reason: .quit)
+                swiftpwa_android_dispatch_quit(exitCode)
+            }
+        }
+
+        private nonisolated(unsafe) var quitting = false
+
+        /// The Activity stopped. A stopped app can be killed without being
+        /// told, so this is the last moment it is sure to run: let each page
+        /// finish what it posted on going hidden, and run the app's
+        /// `beforeClose` handlers with reason `.backgrounded`.
+        func flushForBackground() {
+            let windows = windows.values.compactMap { $0 as? AndroidWindow }
+            let deadline = ContinuousClock.now + CloseBudget.backgrounded
+            Task { @MainActor in
+                await withTaskGroup(of: Void.self) { group in
+                    for window in windows {
+                        group.addTask { await window.finishPageForBackground(until: deadline) }
+                    }
+                    group.addTask { await CloseHandlers.shared.run(.backgrounded, until: deadline) }
+                }
+            }
         }
 
         /// Called from the JNI quit trampoline (binder thread) or

@@ -46,6 +46,14 @@ public final class BridgeRuntime: @unchecked Sendable {
     /// Measured: with three documents loaded in turn, an emit reached the live
     /// one zero times.
     private var generation: UInt64 = 0
+    /// Set while a closing window's document is on its way out (see
+    /// ``letDocumentFinish(until:navigateAway:)``): the next `hello` then marks
+    /// that document gone instead of cancelling what it started.
+    private var departure: Departure?
+
+    private struct Departure {
+        var documentLeft = false
+    }
 
     /// Default bound on buffered client frames per session when a
     /// `registerSession` command doesn't specify one — drops oldest on overflow
@@ -102,6 +110,65 @@ public final class BridgeRuntime: @unchecked Sendable {
         cancelDocumentWork()
     }
 
+    /// Let the window's document finish before the window goes: navigate it
+    /// away, so the page runs its own teardown (`visibilitychange` → `hidden`,
+    /// then `pagehide`), and wait for the invokes that teardown posted.
+    ///
+    /// The navigation is what makes the page's teardown real rather than
+    /// simulated, and the next document's `hello` is the marker that it's
+    /// over: frames from one document arrive in order, so everything the old
+    /// one posted on its way out is already in hand when `hello` is. Unlike an
+    /// ordinary navigation, that `hello` doesn't cancel the old document's
+    /// in-flight invokes — finishing them is the point.
+    ///
+    /// Returns when the document has gone and its invokes are done, or at
+    /// `deadline`, whichever is first. Call ``stop()`` afterwards as usual.
+    public func letDocumentFinish(
+        until deadline: ContinuousClock.Instant,
+        navigateAway: @MainActor @Sendable () -> Void
+    ) async {
+        let hasDocument = lock.withLock {
+            departure = Departure()
+            return currentEpoch != nil
+        }
+        await navigateAway()
+        while ContinuousClock.now < deadline {
+            let finished = lock.withLock {
+                (!hasDocument || departure?.documentLeft == true) && invocations.isEmpty
+            }
+            if finished { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+        lock.withLock { departure = nil }
+    }
+
+    /// Wait for the document's in-flight invokes to finish, or `deadline` —
+    /// for a page that is staying put but may not run again, such as a mobile
+    /// app going to the background.
+    public func finishInFlightInvokes(until deadline: ContinuousClock.Instant) async {
+        while ContinuousClock.now < deadline {
+            if lock.withLock({ invocations.isEmpty }) { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// The app is going to the background and the page is staying put: let
+    /// what the page posted on going hidden finish. The page gets its own
+    /// signal (`visibilitychange` to `hidden`); this waits for it — first for
+    /// the page to report `hidden`, which means its handlers have run and
+    /// what they posted is on its way, then for those invokes.
+    public func finishGoingHidden(until deadline: ContinuousClock.Instant) async {
+        while ContinuousClock.now < deadline {
+            let state = try? await webView.evaluateJavaScript("document.visibilityState")
+            if state?.contains("hidden") == true { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        // The invoke the handler posted crosses one more hop to reach this
+        // bridge after the page answers.
+        try? await Task.sleep(for: .milliseconds(50))
+        await finishInFlightInvokes(until: deadline)
+    }
+
     /// Cancel everything the current document opened, leaving the pump running.
     ///
     /// Used both by ``stop()`` (window teardown) and by a navigation, where the
@@ -125,6 +192,11 @@ public final class BridgeRuntime: @unchecked Sendable {
 
     /// Test hook: returns whether a streaming subscription is currently
     /// active for the given correlation id.
+    /// Test hook: the epoch of the document this window has adopted.
+    var documentEpoch: String? {
+        lock.withLock { currentEpoch }
+    }
+
     public func hasActiveSubscription(id: UInt64) -> Bool {
         lock.withLock { subscriptions[id] != nil }
     }
@@ -211,12 +283,16 @@ public final class BridgeRuntime: @unchecked Sendable {
     /// makes a navigation behave like a window close and reopen, which is what
     /// the per-window `BridgeRuntime` lifetime otherwise hides.
     private func adoptDocument(_ epoch: String) {
-        let isNewDocument = lock.withLock {
+        let shouldCancel = lock.withLock {
             guard currentEpoch != epoch else { return false }
             currentEpoch = epoch
+            guard departure == nil else {
+                departure?.documentLeft = true
+                return false
+            }
             return true
         }
-        guard isNewDocument else { return }
+        guard shouldCancel else { return }
         cancelDocumentWork()
     }
 

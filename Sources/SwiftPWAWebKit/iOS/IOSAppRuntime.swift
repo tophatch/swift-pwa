@@ -34,6 +34,7 @@
                 }
             }
             pendingConfigure = configure
+            context.observeBackgrounding()
         }
 
         public func runForever() -> Never {
@@ -105,6 +106,43 @@
         }
 
         func windowDidClose(_ id: WindowID) { windows.removeValue(forKey: id) }
+
+        private var backgroundObserver: (any NSObjectProtocol)?
+
+        /// iOS has no quit: an app that goes to the background is suspended,
+        /// and a suspended app can be killed without being told. Going to the
+        /// background is therefore the last moment it is sure to run, and gets
+        /// a background task long enough for each page to finish what it
+        /// posted on going hidden and for the app's `beforeClose` handlers
+        /// (reason `.backgrounded`) to run (#281).
+        func observeBackgrounding() {
+            backgroundObserver = NotificationCenter.default.addObserver(
+                forName: UIApplication.didEnterBackgroundNotification, object: nil, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.flushForBackground() }
+            }
+        }
+
+        private func flushForBackground() {
+            final class BackgroundTask: @unchecked Sendable {
+                var id = UIBackgroundTaskIdentifier.invalid
+            }
+            let task = BackgroundTask()
+            task.id = UIApplication.shared.beginBackgroundTask(withName: "swift-pwa beforeClose") {
+                UIApplication.shared.endBackgroundTask(task.id)
+            }
+            let deadline = ContinuousClock.now + CloseBudget.backgrounded
+            let windows = windows.values.compactMap { $0 as? IOSWindow }
+            Task { @MainActor in
+                await withTaskGroup(of: Void.self) { group in
+                    for window in windows {
+                        group.addTask { await window.finishPageForBackground(until: deadline) }
+                    }
+                    group.addTask { await CloseHandlers.shared.run(.backgrounded, until: deadline) }
+                }
+                UIApplication.shared.endBackgroundTask(task.id)
+            }
+        }
     }
 
     public final class SwiftPWAAppDelegate: UIResponder, UIApplicationDelegate {

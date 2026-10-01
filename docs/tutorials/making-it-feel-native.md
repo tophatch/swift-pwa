@@ -193,9 +193,9 @@ if (!trayLikelyWorks) {
 
 ## Putting it together
 
-A common desktop pattern, now in reach: minimize-to-tray. Listen for the window closing, cancel it, hide instead, and let the tray bring it back — with notifications for background events:
+A common desktop pattern, now in reach: minimize-to-tray. A close can't be cancelled, so give the page its own way to step aside, and let the tray bring it back — with notifications for background events:
 
-- Window: `window.subscribe` → on `willClose`, hide the window and keep running.
+- Window: a "Hide to tray" control calls `window.minimize`. The close button still closes. On macOS, `app.lastWindowClosed` set to `keep-running` keeps the app (and its tray item) alive after its last window goes; on Linux and Windows closing the last window quits.
 - Tray: a "Show window" menu item calls `window.focus`; "Quit" calls `app.quit`.
 - Notifications: `notifications.send` when a background job finishes so the user knows to reopen.
 

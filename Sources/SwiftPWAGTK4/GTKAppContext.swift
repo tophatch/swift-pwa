@@ -69,8 +69,47 @@
         public func window(_ id: WindowID) -> (any Window)? { windows[id] }
 
         public func quit(exitCode: Int32) {
+            quit(exitCode: exitCode, reason: .quit)
+        }
+
+        /// Quit once every window's page has finished and the app's
+        /// `beforeClose` handlers have run, within ``CloseBudget/quit`` (#281).
+        func quit(exitCode: Int32, reason: CloseReason) {
             pendingExitCode = exitCode
-            if let loop = mainLoop { g_main_loop_quit(loop) }
+            guard Self.isLoopRunning else {
+                if let loop = mainLoop { g_main_loop_quit(loop) }
+                return
+            }
+            guard !quitting else { return }
+            quitting = true
+            Task { @MainActor in
+                await Closing.beforeQuit(self, reason: reason)
+                if let loop = mainLoop { g_main_loop_quit(loop) }
+            }
+        }
+
+        private var quitting = false
+        private var terminationSource: (any DispatchSourceSignal)?
+
+        /// Whether the GMainLoop is running, which is what any deferred close
+        /// or quit needs: the work it waits on is scheduled onto that loop.
+        static var isLoopRunning: Bool {
+            guard let loop = shared.mainLoop else { return false }
+            return g_main_loop_is_running(loop) != 0
+        }
+
+        /// SIGTERM — a session ending, `systemd` stopping a unit, `kill` — goes
+        /// through the same quit as Ctrl+Q, with reason `.system`, instead of
+        /// ending the process where it stands. Delivered on the main queue,
+        /// which the GMainLoop drains.
+        func installTerminationHandler() {
+            signal(SIGTERM, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+            source.setEventHandler { [weak self] in
+                MainActor.assumeIsolated { self?.quit(exitCode: 0, reason: .system) }
+            }
+            source.resume()
+            terminationSource = source
         }
 
         func windowDidClose(_ id: WindowID) {

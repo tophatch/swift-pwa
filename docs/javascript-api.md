@@ -67,7 +67,9 @@ Everything a page subscribes belongs to *that document*, not to the window.
 Navigate the window — a link, `location.assign`, a router that does a real page
 load — and the runtime cancels every stream, session, and in-flight `invoke`
 the old document opened, before the new document's scripts run. Nothing to
-unsubscribe on the way out, and no need for a `pagehide` handler.
+unsubscribe on the way out, and no need for a `pagehide` handler to clean up.
+(Saving data on the way out is a different matter — see
+[Closing and quitting](#closing-and-quitting).)
 
 That works because `bridge.js` mints an **epoch** per document and announces it
 on the channel at document start; `ep` on every frame in both directions is the
@@ -133,6 +135,37 @@ const catalog = await __SWIFT_PWA__.invoke('__bridge.describe');
 need to capture `__bridge.describe` by hand: run `swift-pwa codegen` in your
 app's directory and it builds the app, dumps the catalog headlessly, and writes
 `bridge.ts` in one step — see [docs/swift-api.md](swift-api.md#typed-client-codegen).
+
+## Closing and quitting
+
+A page hears it's going the way it would in a browser — `visibilitychange` to
+`hidden`, then `pagehide` — whether its window is closing or the app is
+quitting, on every backend. Flush there, and nothing else is needed:
+
+```js
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "hidden") __SWIFT_PWA__.invoke("prefs.save", pending);
+});
+```
+
+The runtime makes that true rather than leaving it to the platform, which
+otherwise gave the page nothing: a quit never closed a window at all, and a
+closing window stopped its bridge in the same turn it said `willClose`. Now a
+closing window is taken off screen, `willClose` is delivered to
+`window.subscribe` while the bridge is still up, and the page is navigated to a
+blank document so it runs its genuine unload. The invokes its handlers post are
+**allowed to finish** — unlike an ordinary navigation, which cancels them —
+before the window goes or the process exits. It's bounded: 1 s for a window, 3 s
+for a quit. The Swift half, `ctx.beforeClose`, runs after the page; see
+[swift-api.md](swift-api.md#before-a-window-closes-or-the-app-quits).
+
+On **iOS and Android** there is no quit: going to the background is the last
+moment an app is sure to run, and the page gets `visibilitychange` to `hidden`
+there. The runtime keeps the app running until the invokes that handler posted
+have finished. `pagehide` doesn't fire, because the page isn't leaving.
+
+Handle `visibilitychange`, not only `pagehide`: it's the one signal that covers
+backgrounding too, and it's what web guidance recommends for the same reason.
 
 ## Duplex sessions (`session`)
 

@@ -82,9 +82,39 @@
             windows[id]
         }
 
+        /// Why the quit in progress was started, when it wasn't by AppKit —
+        /// SIGTERM, which reaches `applicationShouldTerminate` looking like any
+        /// other quit.
+        var pendingCloseReason: CloseReason?
+        private var terminationSource: (any DispatchSourceSignal)?
+
+        /// SIGTERM — `kill`, launchd stopping a job — goes through the same
+        /// quit as ⌘Q, with reason `.system`, instead of ending the process
+        /// where it stands.
+        func installTerminationHandler() {
+            signal(SIGTERM, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+            source.setEventHandler { [weak self] in
+                MainActor.assumeIsolated {
+                    self?.pendingCloseReason = .system
+                    self?.quit(exitCode: 0)
+                }
+            }
+            source.resume()
+            terminationSource = source
+        }
+
         public func quit(exitCode: Int32) {
             pendingExitCode = exitCode
-            NSApp.terminate(nil)
+            // From the run loop, not from here. A quit is held open while every
+            // page finishes (`applicationShouldTerminate` → `.terminateLater`),
+            // and AppKit holds it by spinning a nested run loop inside
+            // `terminate`. Called from a main-queue block — which is where
+            // `app.quit` and a window's close land — that nested loop can't
+            // drain the main queue, so the work it is waiting for never runs.
+            RunLoop.main.perform(inModes: [.default]) {
+                MainActor.assumeIsolated { NSApp.terminate(nil) }
+            }
         }
 
         /// Called by `MacWindow` when its NSWindow finishes closing.

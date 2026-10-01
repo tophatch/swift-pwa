@@ -107,8 +107,7 @@
         func endSession() {
             guard !quitting else { return }
             quitting = true
-            final class Progress { var finished = false }
-            let progress = Progress()
+            let progress = EndSessionProgress()
             Task { @MainActor in
                 await Closing.beforeQuit(self, reason: .system, budget: .milliseconds(4000))
                 progress.finished = true
@@ -147,5 +146,14 @@
                 quit(exitCode: pendingExitCode ?? 0)
             }
         }
+    }
+
+    /// Whether `endSession`'s quit has finished. At file scope rather than
+    /// local to `endSession`: a function-local type used from a task is the
+    /// shape that crashed Swift 6.4's Windows compiler in Core (see
+    /// `HandlerOutcome`).
+    @MainActor
+    private final class EndSessionProgress {
+        var finished = false
     }
 #endif

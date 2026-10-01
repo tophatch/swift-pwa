@@ -121,11 +121,20 @@ function Invoke-InConsole($name, $commandLine) {
 
 function Stop-Probe {
     Get-Process -Name $appName -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+    # Until it has really gone: a process still exiting holds its log open, and
+    # the next launch would read the old one's driver port.
+    foreach ($_ in 1..50) {
+        if (-not (Get-Process -Name $appName -ErrorAction SilentlyContinue)) { break }
+        Start-Sleep -Milliseconds 100
+    }
 }
 
 function Start-Probe([switch]$Hang) {
     Stop-Probe
-    Remove-Item $markers, $out -ErrorAction SilentlyContinue
+    Remove-Item $markers -ErrorAction SilentlyContinue
+    # A fresh log per launch, so a port read from it can only be this launch's.
+    $script:out = Join-Path $tmp "close-flush-app-$([guid]::NewGuid().ToString('N')).log"
+    $out = $script:out
     $env_ = "set SWIFT_PWA_DRIVE=0`r`nset SWIFT_PWA_DRIVE_BACKGROUND=1`r`nset SWIFT_PWA_WEB_ROOT=$AppDir\web`r`nset CLOSE_PROBE_LOG=$markers`r`n"
     if ($Hang) { $env_ += "set CLOSE_PROBE_HANG=1`r`n" }
     Invoke-InConsole "SwiftPWACloseFlushProbe" "$env_`"$binary`" > `"$out`" 2>&1"
@@ -145,7 +154,10 @@ function Start-Probe([switch]$Hang) {
     return $false
 }
 
-function Drive { & $cli drive @args --attach $script:port --token $script:token 2>$null | Out-Null }
+function Drive {
+    $output = & $cli drive @args --attach $script:port --token $script:token 2>&1 | ForEach-Object { "$_" }
+    if ($LASTEXITCODE -ne 0) { Write-Output "        drive $($args[0]) failed: $($output -join ' ')" }
+}
 
 # Seconds until the probe exits, or "running".
 function Wait-Exit($seconds) {
@@ -187,7 +199,12 @@ Write-Output "-> running on windows"
 
 if ((Wanted "navigate") -and (Start-Probe)) {
     Drive eval "location.href = 'second.html'; 1"
-    Start-Sleep -Milliseconds 1500
+    # Until the second document says it's there; WebView2 here takes longer
+    # than the other engines to get through a navigation.
+    $watch = [System.Diagnostics.Stopwatch]::StartNew()
+    while ($watch.Elapsed.TotalSeconds -lt 5 -and -not ((Test-Path $markers) -and (Select-String -Path $markers -Pattern '^second$' -Quiet))) {
+        Start-Sleep -Milliseconds 100
+    }
     # Not pagehide-slow: an ordinary navigation cancels the old document's
     # in-flight invokes once the next one arrives, by design.
     Check "navigate (control)" (Wait-Exit 0) "stays" @("pagehide", "second")

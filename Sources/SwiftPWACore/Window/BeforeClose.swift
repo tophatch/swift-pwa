@@ -99,8 +99,7 @@ public final class CloseHandlers: @unchecked Sendable {
         let handlers = lock.withLock { self.handlers }
         guard !handlers.isEmpty else { return }
 
-        enum Outcome: Sendable { case finished(Int), deadline }
-        let (outcomes, continuation) = AsyncStream.makeStream(of: Outcome.self)
+        let (outcomes, continuation) = AsyncStream.makeStream(of: HandlerOutcome.self)
         for (index, handler) in handlers.enumerated() {
             Task {
                 await handler(reason)
@@ -133,4 +132,12 @@ public final class CloseHandlers: @unchecked Sendable {
     func removeAll() {
         lock.withLock { handlers.removeAll() }
     }
+}
+
+/// At file scope rather than inside `run`: Swift 6.4's assertions build on
+/// Windows aborts emitting debug info for a function-local type used as
+/// `AsyncStream`'s element ("Failed to reconstruct type … getMangledName").
+private enum HandlerOutcome {
+    case finished(Int)
+    case deadline
 }

@@ -55,10 +55,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     on `app.quit`.
   - **After:** macOS 7/7 rows and GTK3 7/7 (including Alt+F4 through a real
     window manager, and SIGTERM). GTK4 6/6, with Ctrl+Q skipped because
-    XTEST needs a focused window. iPhone 17 Pro 3/3 and Tab S10+ 3/3. A
-    handler that never returns still lets the app quit at 3.1 s.
-  - **Windows** is implemented but **not yet run on hardware**; both boxes
-    were unreachable. `Scripts/verify-close-flush.ps1` is the check.
+    XTEST needs a focused window. iPhone 17 Pro 3/3 and Tab S10+ 3/3.
+    Windows 6/6 on both x64 (Swift 6.4) and arm64 (6.3.1), including
+    `WM_CLOSE` and `WM_ENDSESSION` sent from the console session. A handler
+    that never returns still lets the app quit at 3.1 s.
+  - Windows also caught a compiler crash nothing else would have. Swift 6.4's
+    assertions build there aborts emitting debug info for a function-local
+    enum used as `AsyncStream`'s element (`getMangledName`), so that type
+    lives at file scope.
 
   The scripts are `Scripts/verify-close-flush.sh` (macOS and Linux),
   `verify-close-flush.ps1`, `verify-close-flush-ios.sh` and

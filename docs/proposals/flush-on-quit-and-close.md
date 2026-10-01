@@ -1,7 +1,7 @@
 # Proposal: a chance to flush on quit and close
 
-> **Status: implemented** (#281) on all five backends; Windows is written but
-> not yet run on hardware. Decisions from 2026-10-01 are under
+> **Status: implemented** (#281) on all five backends, verified on each.
+> Decisions from 2026-10-01 are under
 > [Decisions](#decisions); what measuring changed is under
 > [What measuring changed](#what-measuring-changed).
 
@@ -154,6 +154,11 @@ Settled 2026-10-01:
 
 ## What measuring changed
 
+- **Swift 6.4's Windows compiler crashed on the handler budget.** Its
+  assertions build aborts emitting debug info for a function-local enum used
+  as `AsyncStream`'s element; the type moved to file scope. Only a Windows
+  build could have shown it.
+
 - **`terminate` from a main-queue block deadlocks a held quit.** With
   `.terminateLater`, AppKit holds the quit by spinning a nested run loop inside
   `terminate`; called from a main-queue block — where `app.quit` and a window's
@@ -181,7 +186,7 @@ As built: `Scripts/verify-close-flush.sh` (macOS 7/7; GTK3 7/7 including
 Alt+F4 through xfwm4 and SIGTERM; GTK4 6/6 and Ctrl+Q skipped, because XTEST
 needs a window manager to focus the window), `verify-close-flush-ios.sh`
 (iPhone 17 Pro, 3/3), `verify-close-flush-android.sh` (Tab S10+, 3/3) and
-`verify-close-flush.ps1` (not yet run). As proposed: #281's probe, made a
+`verify-close-flush.ps1` (x64 and arm64 Windows, 6/6 each). As proposed: #281's probe, made a
 persistent script per platform: a page that writes a
 marker through a synchronous command in `willClose`, `visibilitychange`, and
 `pagehide`; plus an async command that sleeps 300ms before writing, which

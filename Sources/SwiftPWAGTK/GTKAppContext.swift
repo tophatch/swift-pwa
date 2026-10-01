@@ -61,12 +61,46 @@
         public func window(_ id: WindowID) -> (any Window)? { windows[id] }
 
         public func quit(exitCode: Int32) {
+            quit(exitCode: exitCode, reason: .quit)
+        }
+
+        /// Quit once every window's page has finished and the app's
+        /// `beforeClose` handlers have run, within ``CloseBudget/quit`` (#281).
+        func quit(exitCode: Int32, reason: CloseReason) {
             pendingExitCode = exitCode
             // There is no loop to quit when a GUI-gated test closes a window:
             // `initGTKForTesting` initializes GTK without entering `gtk_main`,
             // and quitting anyway is a GTK CRITICAL rather than a no-op.
-            guard gtk_main_level() > 0 else { return }
-            gtk_main_quit()
+            guard Self.isLoopRunning else { return }
+            guard !quitting else { return }
+            quitting = true
+            Task { @MainActor in
+                await Closing.beforeQuit(self, reason: reason)
+                gtk_main_quit()
+            }
+        }
+
+        private var quitting = false
+        private var terminationSource: (any DispatchSourceSignal)?
+
+        /// Whether `gtk_main` is running, which is what any deferred close or
+        /// quit needs: the work it waits on is scheduled onto that loop.
+        static var isLoopRunning: Bool {
+            gtk_main_level() > 0
+        }
+
+        /// SIGTERM — a session ending, `systemd` stopping a unit, `kill` — goes
+        /// through the same quit as Ctrl+Q, with reason `.system`, instead of
+        /// ending the process where it stands. Delivered on the main queue,
+        /// which the GTK loop drains.
+        func installTerminationHandler() {
+            signal(SIGTERM, SIG_IGN)
+            let source = DispatchSource.makeSignalSource(signal: SIGTERM, queue: .main)
+            source.setEventHandler { [weak self] in
+                MainActor.assumeIsolated { self?.quit(exitCode: 0, reason: .system) }
+            }
+            source.resume()
+            terminationSource = source
         }
 
         func windowDidClose(_ id: WindowID) {

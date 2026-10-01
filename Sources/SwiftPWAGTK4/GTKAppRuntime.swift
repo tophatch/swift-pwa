@@ -85,6 +85,7 @@
                 """.utf8))
             }
             AppDriver.startIfRequested(context, backend: "gtk4")
+            context.installTerminationHandler()
             context.runMainLoop()
             exit(context.pendingExitCode ?? 0)
         }

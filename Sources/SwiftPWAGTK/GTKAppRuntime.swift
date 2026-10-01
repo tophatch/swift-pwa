@@ -68,6 +68,7 @@
             // reports what actually happened rather than what was asked for.
             if DriverBackground.isRequested { DriverBackground.markHonoured() }
             AppDriver.startIfRequested(context, backend: "gtk3")
+            context.installTerminationHandler()
             gtk_main()
             exit(context.pendingExitCode ?? 0)
         }

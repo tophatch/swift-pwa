@@ -1,0 +1,33 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>close flush check</title>
+<body style="font:17px system-ui;padding:24px">
+Close-flush check (#281). The script drives this page.
+<script>
+const bridge = window.__SWIFT_PWA__;
+const mark = (value) => bridge.invoke("probe.write", { value });
+
+// Every way a page can hear it is going. A marker on disk from one of these
+// is the only proof the page got to run.
+bridge.subscribe("window.subscribe", {}, (event) => {
+    if (event && event.type === "willClose") mark("willClose");
+    if (event && event.type === "didResize" && !window.ready) {
+        window.ready = true;
+        mark("ready");
+    }
+});
+document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "hidden") mark("hidden");
+});
+addEventListener("pagehide", () => {
+    mark("pagehide");
+    bridge.invoke("probe.slowWrite", { value: "pagehide-slow" });
+});
+
+// `ready` once a resize has come back through the subscription, so a missing
+// `willClose` can't be a subscription that never went live.
+addEventListener("load", () => {
+    bridge.invoke("window.setSize", { width: 640, height: 480 }).catch(() => {});
+    setTimeout(() => { if (!window.ready) { window.ready = true; mark("ready-no-resize"); } }, 2000);
+});
+</script>

@@ -22,6 +22,13 @@
         /// snapshot of one appearance, so the webview layer's fill is the one
         /// place AppKit can't re-resolve for us.
         private var appearanceObservation: NSKeyValueObservation?
+        /// The page's departure, started by the first of a close or a quit to
+        /// reach this window; the other one awaits the same work.
+        private var preparation: Task<Void, Never>?
+        /// Set once the page has finished and the window may really close.
+        private var mayClose = false
+        private var closeRequested = false
+        private var didEmitWillClose = false
 
         public init(config: WindowConfig, app: MacAppContext) throws {
             // Configure WKWebView with pwa:// scheme handler if we'll
@@ -273,13 +280,51 @@
 
         public func close() { nsWindow.performClose(nil) }
 
+        public func prepareToClose(until deadline: ContinuousClock.Instant) async {
+            if preparation == nil {
+                emitWillCloseOnce()
+                nsWindow.orderOut(nil)
+                preparation = Task { @MainActor [bridge, adapter] in
+                    await bridge.letDocumentFinish(until: deadline) {
+                        adapter.load(.remote(Closing.departureURL))
+                    }
+                }
+            }
+            await preparation?.value
+        }
+
+        private func emitWillCloseOnce() {
+            guard !didEmitWillClose else { return }
+            didEmitWillClose = true
+            emit(.willClose)
+        }
+
         // MARK: - NSWindowDelegate
+
+        /// The close button, ⌘W and `window.close` all arrive here. The first
+        /// time, the window is taken off screen and the close deferred until
+        /// the page has finished and the app's `beforeClose` handlers have
+        /// run; then it closes for real, without asking again.
+        public func windowShouldClose(_: NSWindow) -> Bool {
+            guard !mayClose else { return true }
+            guard !closeRequested else { return false }
+            closeRequested = true
+            let deadline = ContinuousClock.now + CloseBudget.window
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await prepareToClose(until: deadline)
+                await CloseHandlers.shared.run(.window(id), until: deadline)
+                mayClose = true
+                nsWindow.close()
+            }
+            return false
+        }
 
         public func windowWillClose(_ notification: Notification) {
             // A window closed during `configure` must not be ordered back in
             // when launch finishes.
             Self.windowsAwaitingLaunch.removeAll { $0 === nsWindow }
-            emit(.willClose)
+            emitWillCloseOnce()
             // NSWindow has no `didClose` delegate hook — post a tick later
             // so observers see willClose before didClose.
             Task { @MainActor [weak self] in
@@ -323,7 +368,5 @@
         public nonisolated func windowDidDeminiaturize(_ notification: Notification) {
             Task { @MainActor [weak self] in self?.emit(.didDeminiaturize) }
         }
-
-        public func windowShouldClose(_ sender: NSWindow) -> Bool { true }
     }
 #endif

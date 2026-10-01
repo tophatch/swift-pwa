@@ -85,9 +85,53 @@
 
         public func window(_ id: WindowID) -> (any Window)? { windows[id] }
 
+        /// Quit once every window's page has finished and the app's
+        /// `beforeClose` handlers have run, within ``CloseBudget/quit`` (#281).
         public func quit(exitCode: Int32) {
             pendingExitCode = exitCode
-            PostQuitMessage(exitCode)
+            guard !quitting else { return }
+            quitting = true
+            Task { @MainActor in
+                await Closing.beforeQuit(self, reason: .quit)
+                PostQuitMessage(pendingExitCode ?? exitCode)
+            }
+        }
+
+        private var quitting = false
+
+        /// The session is ending (logoff, restart, shutdown). Windows ends the
+        /// process as soon as WM_ENDSESSION returns, so the whole quit has to
+        /// happen inside it: pump the thread here — messages and the main
+        /// queue both, as the main loop does — until it's done, or until just
+        /// under the five seconds Windows allows before it calls the app hung.
+        func endSession() {
+            guard !quitting else { return }
+            quitting = true
+            final class Progress { var finished = false }
+            let progress = Progress()
+            Task { @MainActor in
+                await Closing.beforeQuit(self, reason: .system, budget: .milliseconds(4000))
+                progress.finished = true
+            }
+            let giveUpAt = GetTickCount64() + 4500
+            var handles: [HANDLE?] = PlatformMainQueue.handle.map { [$0] } ?? []
+            var msg = MSG()
+            while !progress.finished, GetTickCount64() < giveUpAt {
+                let signalled = handles.withUnsafeMutableBufferPointer { buffer in
+                    MsgWaitForMultipleObjectsEx(
+                        DWORD(buffer.count), buffer.baseAddress, 50, DWORD(QS_ALLINPUT), DWORD(MWMO_INPUTAVAILABLE)
+                    )
+                }
+                if !handles.isEmpty, signalled == WAIT_OBJECT_0 {
+                    PlatformMainQueue.drain()
+                    continue
+                }
+                while PeekMessageW(&msg, nil, 0, 0, UINT(PM_REMOVE)) {
+                    if msg.message == UINT(WM_QUIT) { continue }
+                    TranslateMessage(&msg)
+                    DispatchMessageW(&msg)
+                }
+            }
         }
 
         func windowDidClose(_ id: WindowID) {

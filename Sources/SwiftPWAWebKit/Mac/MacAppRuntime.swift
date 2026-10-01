@@ -73,6 +73,7 @@
             // can see access is open (and close it) without the app's cooperation.
             AgentIndicator.installTray { SystemTray() }
             AppDriver.startIfRequested(context, backend: "macos")
+            context.installTerminationHandler()
 
             // Coming to the front is right for an app a person launched and
             // wrong for the thirty-seventh app a test runner launched. A
@@ -287,6 +288,40 @@
                 guard context.lastWindowClosed == .reopen else { return false }
                 return !context.reopenLastWindow()
             }
+        }
+
+        /// ⌘Q, `app.quit`, the last window closing under `.quit`, and the
+        /// system's own quit at logout, restart or shutdown all come through
+        /// here, which is the one place a quit can be held while every window's
+        /// page finishes and the app's `beforeClose` handlers run. Without it
+        /// AppKit exits about 50ms after `terminate`, and nothing in the page
+        /// or the app gets to run first (#281).
+        func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+            let reason: CloseReason = MainActor.assumeIsolated { context.pendingCloseReason }
+                ?? (Self.isSystemQuit ? .system : .quit)
+            Task { @MainActor [context] in
+                await Closing.beforeQuit(context, reason: reason)
+                sender.reply(toApplicationShouldTerminate: true)
+            }
+            return .terminateLater
+        }
+
+        /// `terminate` ends the process with `exit(0)` itself once this returns,
+        /// so `NSApp.run()` never returns to `runForever` and the code an app
+        /// passed to `app.quit` would be lost. Exit with it here instead.
+        func applicationWillTerminate(_: Notification) {
+            let code = MainActor.assumeIsolated { context.pendingExitCode }
+            if let code, code != 0 { exit(code) }
+        }
+
+        /// Whether the quit in progress is the system's: the `quit` Apple event
+        /// carries a reason (`kAELogOut`, `kAEShutDown`, …) only when logout,
+        /// restart or shutdown sent it.
+        private static var isSystemQuit: Bool {
+            guard let event = NSAppleEventManager.shared().currentAppleEvent,
+                  event.eventClass == kCoreEventClass, event.eventID == kAEQuitApplication
+            else { return false }
+            return event.attributeDescriptor(forKeyword: kAEQuitReason) != nil
         }
 
         /// Launch Services routes both kinds of open through here: a document

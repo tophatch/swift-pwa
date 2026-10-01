@@ -49,10 +49,22 @@ public protocol Window: AnyObject, Sendable {
     func visibility() -> WindowVisibility
 
     func close()
+
+    /// Get this window ready to go without closing it: emit `willClose`, take
+    /// it off the screen, and let its document finish — its own teardown,
+    /// and the invokes that posted — by `deadline` at the latest.
+    ///
+    /// A quit calls this on every window before the process exits, which is
+    /// the only way a page hears that it's going: quitting never closed a
+    /// window. Backends call it from their own close path too, before the
+    /// window is destroyed.
+    func prepareToClose(until deadline: ContinuousClock.Instant) async
 }
 
 public extension Window {
     func visibility() -> WindowVisibility { .unknown }
+
+    func prepareToClose(until _: ContinuousClock.Instant) async {}
 }
 
 /// Whether a window is on screen, per the platform's own answer.

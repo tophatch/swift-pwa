@@ -570,6 +570,17 @@ for before.
 
 ## Known limitations on iOS
 
+- **WebKit can lose a page's safe-area insets, and the runtime puts them
+  back.** A `viewport-fit=cover` page taller than the screen that navigates in
+  its first few tens of milliseconds can leave the next document full-screen
+  with every `env(safe-area-inset-*)` at 0 (#282). 150ms after each load the
+  runtime compares the page's insets with the web view's own, and if a `cover`
+  page reads all zero while the view's aren't, it takes `viewport-fit=cover`
+  off the meta tag and puts it back, which makes WebKit send them again. So a
+  page that lost them is wrong for about 200ms instead of for good, and an app
+  needs no workaround of its own. A page whose insets are genuinely 0, or that
+  isn't `cover`, is never touched.
+
 - **`window.snapshot` can be taller than your page thinks it is.** A page that
   is not `viewport-fit=cover` gets a layout viewport inset by the status bar
   and home indicator, while the webview covers the whole screen — so the

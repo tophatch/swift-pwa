@@ -84,6 +84,72 @@
             }
         }
 
+        #if os(iOS)
+            /// A document that should have safe-area insets and was never sent
+            /// them gets them sent again (#282).
+            ///
+            /// WebKit can lose the update: a `viewport-fit=cover` page that
+            /// navigates in its first few tens of milliseconds, while it is
+            /// taller than the screen, leaves the next document laid out
+            /// full-screen with every `env(safe-area-inset-*)` at 0 for good —
+            /// measured 7 of 16 launches on an iPhone 17 Pro, with a header
+            /// sitting under the Dynamic Island. Nothing native recovers it:
+            /// re-running the web view's layout left 5 of 16 stuck, and
+            /// `contentInsetAdjustmentBehavior = .never` made it worse. What
+            /// does is the page's viewport changing, so WebKit recomputes: take
+            /// `viewport-fit=cover` off the meta tag and put it back.
+            ///
+            /// Swift can tell a lost update from a real zero, which the page
+            /// can't: the web view's own `safeAreaInsets` say what the page
+            /// should have. So this only acts on a `cover` page reading all
+            /// zero while the view's insets aren't, after the update has had
+            /// time to arrive (it takes 25–60ms; this looks at 150ms).
+            func webView(_ webView: WKWebView, didFinish _: WKNavigation!) {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { [weak webView] in
+                    guard let webView else { return }
+                    let expected = webView.safeAreaInsets
+                    guard expected.top > 0 || expected.bottom > 0 else { return }
+                    webView.evaluateJavaScript(Self.lostSafeAreaRepair) { result, _ in
+                        if (result as? String) == "repaired" {
+                            RuntimeDiagnostics.emit(
+                                "swift-pwa: the page lost its safe-area insets (WebKit, #282); sent them again"
+                            )
+                        }
+                    }
+                }
+            }
+        #endif
+
+        /// The repair `webView(_:didFinish:)` runs on iOS: answers `repaired`
+        /// when it found a `viewport-fit=cover` page with every inset at 0 and
+        /// nudged it, `ok` or `not-cover` otherwise. Outside the `#if` so the
+        /// script itself can be tested on macOS, where every inset is 0.
+        static let lostSafeAreaRepair = """
+        (() => {
+          const meta = document.querySelector('meta[name="viewport"]');
+          const content = meta && meta.getAttribute("content");
+          if (!content || !/viewport-fit\\s*=\\s*cover/.test(content)) return "not-cover";
+          const box = document.createElement("div");
+          box.style.cssText = "position:fixed;top:0;left:0;visibility:hidden;pointer-events:none;"
+            + "padding:env(safe-area-inset-top) env(safe-area-inset-right) "
+            + "env(safe-area-inset-bottom) env(safe-area-inset-left)";
+          document.documentElement.appendChild(box);
+          const s = getComputedStyle(box);
+          const zero = [s.paddingTop, s.paddingRight, s.paddingBottom, s.paddingLeft]
+            .every((v) => parseFloat(v) === 0);
+          box.remove();
+          if (!zero) return "ok";
+          meta.setAttribute("content", content.replace(/,?\\s*viewport-fit\\s*=\\s*cover/, ""));
+          // Two frames later, so WebKit sees the change — or 100ms, if the
+          // page isn't rendering frames, so it is never left without `cover`.
+          let restored = false;
+          const restore = () => { if (!restored) { restored = true; meta.setAttribute("content", content); } };
+          requestAnimationFrame(() => requestAnimationFrame(restore));
+          setTimeout(restore, 100);
+          return "repaired";
+        })()
+        """
+
         // MARK: - WKUIDelegate
 
         /// `target="_blank"` and `window.open`. There is no second webview to

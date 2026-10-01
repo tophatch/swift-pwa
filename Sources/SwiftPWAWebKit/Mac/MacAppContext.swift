@@ -113,7 +113,7 @@
             // `app.quit` and a window's close land — that nested loop can't
             // drain the main queue, so the work it is waiting for never runs.
             RunLoop.main.perform(inModes: [.default]) {
-                NSApp.terminate(nil)
+                MainActor.assumeIsolated { NSApp.terminate(nil) }
             }
         }
 

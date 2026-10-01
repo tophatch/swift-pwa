@@ -21,24 +21,29 @@
 # any Face ID iPhone; an iPad's top inset is 0 in portrait on some models.
 #
 # **It doesn't reproduce the bug yet.** On an iPhone 17 Pro and an iPad Pro
-# (iOS 27) every navigated document got its insets — 0 of 152 stuck across
-# delays 0–70ms and four ways of navigating (replace, push, a second document
-# whose head blocks 150ms, the app's main thread held as it navigates) — while
-# the adopter's app sticks in about two launches of three. Whatever their launch
-# has that this scaffold doesn't is the missing piece; until a variant here
-# sticks, a PASS is not evidence a fix works.
+# (iOS 27): 0 of 238 navigated documents stuck, across delays 0–70ms and
+# navigations by replace, push, a second document whose head blocks 150ms, the
+# app's main thread held as it navigates, the reporting app's apple-mobile-web-
+# app / theme-color metas, five render-blocking stylesheets, and a coloured
+# launch screen. The reporting app sticks in about two launches of three, and
+# its log has a shape this probe reproduces everywhere except the outcome: the
+# first document navigates while still at 402×778, the second loads, goes to
+# 402×874 — and in theirs never gets an inset. Here it gets them 25–60ms later.
+# Until a variant here sticks, a PASS is not evidence a fix works.
 #
 # Usage:
 #   Scripts/verify-ios-safe-area.sh --team <apple-team-id> [--device <name|udid>]
 #                                   [--launches <n>] [--keep] [--no-build]
+#                                   [--launch-color]
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEAM="${SWIFT_PWA_IOS_TEAM:-}"
 DEVICE=""
-LAUNCHES=51
+LAUNCHES=42
 KEEP=0
 BUILD=1
+LAUNCH_COLOR=0
 while [ $# -gt 0 ]; do
     case "$1" in
         --team) TEAM="$2"; shift 2 ;;
@@ -46,6 +51,7 @@ while [ $# -gt 0 ]; do
         --launches) LAUNCHES="$2"; shift 2 ;;
         --keep) KEEP=1; shift ;;
         --no-build) BUILD=0; KEEP=1; shift ;;
+        --launch-color) LAUNCH_COLOR=1; shift ;;
         *) echo "usage: $0 --team <id> [--device <name|udid>] [--launches <n>] [--keep] [--no-build]" >&2; exit 2 ;;
     esac
 done
@@ -125,6 +131,17 @@ assert count == 1, "the scaffold's configure moved; this patch needs updating"
 app_swift.write_text(text)
 PY
 
+    if [ "$LAUNCH_COLOR" -eq 1 ]; then
+        # A `window.background_color` colours the UILaunchScreen, the way the
+        # reporting app's does.
+        python3 - "$APP_DIR/pwa.json" <<'PY2'
+import json, sys
+path = sys.argv[1]
+manifest = json.load(open(path))
+manifest["window"]["background_color"] = {"light": "#ffffff", "dark": "#131313"}
+json.dump(manifest, open(path, "w"), indent=2)
+PY2
+    fi
     cp "$REPO/Scripts/safe-area-probe/"* "$APP_DIR/web/"
     cp "$REPO/Package.resolved" "$APP_DIR/Package.resolved"
 

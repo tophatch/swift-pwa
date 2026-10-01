@@ -5,14 +5,18 @@
 // through the sweep across launches, so one install covers every delay.
 // A delay of "none" never navigates: that launch is the control, and a
 // document that never navigated has to end up with insets.
-const DELAYS = [0, 10, 30, 50];
+const DELAYS = [0, 10];
 // How the first document leaves, crossed with every delay:
 //   replace — `location.replace` to a trivial second document;
 //   push    — `location.href`, a new history entry;
 //   heavy   — to a second document whose <head> runs for 150ms before it ends;
 //   stall   — the app's main thread is held for 100ms as the navigation starts,
-//             the way a busy launch holds the scheme handler that serves it.
-const VARIANTS = ["replace", "push", "heavy", "stall"];
+//             the way a busy launch holds the scheme handler that serves it;
+//   metas   — to a second document carrying theme-color and the
+//             apple-mobile-web-app metas (status bar black-translucent);
+//   styles  — to a second document behind five render-blocking stylesheets,
+//             which hold its first paint without holding its scripts.
+const VARIANTS = ["replace", "metas", "styles"];
 const PLAN = [["none", "none"], ...VARIANTS.flatMap((v) => DELAYS.map((d) => [v, d]))];
 const SETTLE_MS = 2000;
 
@@ -49,7 +53,7 @@ addEventListener("load", () => {
     log("load");
     if (doc === "first" && delay !== "none") {
         setTimeout(() => {
-            const page = variant === "heavy" ? "second-heavy.html" : "second.html";
+            const page = { heavy: "second-heavy.html", metas: "second-metas.html", styles: "second-styles.html" }[variant] ?? "second.html";
             const url = `${page}?launch=${launch}&variant=${variant}&delay=${delay}`;
             if (variant === "push") location.href = url;
             else location.replace(url);

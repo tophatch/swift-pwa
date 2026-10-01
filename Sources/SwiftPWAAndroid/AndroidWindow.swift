@@ -80,6 +80,18 @@
         private var currentTitle: String
         private var lastKnownSize: Size = .zero
         private var fullscreenOn: Bool = false
+        /// The page's departure, started by the first of a close or a quit to
+        /// reach this window; the other one awaits the same work.
+        private var preparation: Task<Void, Never>?
+        private var closeRequested = false
+        private var didEmitWillClose = false
+
+        /// Where a closing window's page goes, so it runs its real unload.
+        /// On the app's own origin rather than `about:blank`: the bridge is
+        /// only injected there, and the next document's `hello` is how the
+        /// runtime knows the old one has gone. The Activity serves it as an
+        /// empty page.
+        static let departureURL = URL(string: "https://swift-pwa.local/__swift-pwa/departed")!
 
         init(config: WindowConfig, role: AndroidWindowRole = .primary) {
             id = WindowID()
@@ -179,17 +191,52 @@
         public func isFullscreen() -> Bool { fullscreenOn }
 
         public func close() {
+            // Secondary close from Swift is best-effort and a no-op beyond the
+            // event emission — finishing a specific spawned Activity from
+            // Swift would need an `Activity` handle the single-slot bridge
+            // ref doesn't preserve. The user can dismiss the spawned Activity
+            // with the system back gesture.
+            guard role == .primary else {
+                emitWillCloseOnce()
+                eventContinuation.yield(.didClose)
+                eventContinuation.finish()
+                return
+            }
+            // Primary close = app quit, once the page has finished and the
+            // app's `beforeClose` handlers have run (#281).
+            guard !closeRequested else { return }
+            closeRequested = true
+            let deadline = ContinuousClock.now + CloseBudget.window
+            Task { @MainActor [self] in
+                await prepareToClose(until: deadline)
+                await CloseHandlers.shared.run(.window(id), until: deadline)
+                eventContinuation.yield(.didClose)
+                AndroidAppContext.shared.quit(exitCode: 0)
+            }
+        }
+
+        public func prepareToClose(until deadline: ContinuousClock.Instant) async {
+            if preparation == nil {
+                emitWillCloseOnce()
+                preparation = Task { @MainActor [bridge, adapter] in
+                    await bridge.letDocumentFinish(until: deadline) {
+                        adapter.load(.remote(Self.departureURL))
+                    }
+                }
+            }
+            await preparation?.value
+        }
+
+        /// The Activity stopped: let what the page posted as it went hidden
+        /// finish.
+        func finishPageForBackground(until deadline: ContinuousClock.Instant) async {
+            await bridge.finishGoingHidden(until: deadline)
+        }
+
+        private func emitWillCloseOnce() {
+            guard !didEmitWillClose else { return }
+            didEmitWillClose = true
             eventContinuation.yield(.willClose)
-            eventContinuation.yield(.didClose)
-            eventContinuation.finish()
-            // Primary close = app quit. Secondary close from Swift
-            // is best-effort and currently a no-op beyond the event
-            // emission — finishing a specific spawned Activity from
-            // Swift would need an `Activity` handle the single-slot
-            // bridge ref doesn't preserve. The user can dismiss the
-            // spawned Activity with the system back gesture.
-            guard role == .primary else { return }
-            AndroidAppContext.shared.quit(exitCode: 0)
         }
 
         deinit {

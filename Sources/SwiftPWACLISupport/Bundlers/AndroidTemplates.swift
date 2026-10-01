@@ -886,6 +886,14 @@ enum AndroidTemplates {
                 super.onPause()
             }
 
+            override fun onStop() {
+                // A stopped app can be killed without being told, so Swift
+                // flushes here: the page's work from going hidden, and the
+                // app's `beforeClose` handlers (#281).
+                pushLifecycle("stopped")
+                super.onStop()
+            }
+
             /// Surface the Activity's foreground state to Swift, where it
             /// becomes `WindowEvent.didFocus` / `.didBlur` — the same events
             /// the desktop backends emit when their window gains or loses
@@ -1232,6 +1240,19 @@ enum AndroidTemplates {
                         // null means "not mine", which is every request in an
                         // app that mounts nothing.
                         servedMountResponse(request)?.let { return capToRange(request, it) }
+                        // A closing window's page leaves for this empty page
+                        // so it runs its real unload; on our own origin, so
+                        // the bridge is injected and says the old one has gone.
+                        if (request.url.host == "swift-pwa.local" && request.url.path == "/__swift-pwa/departed") {
+                            return WebResourceResponse(
+                                "text/html",
+                                "utf-8",
+                                200,
+                                "OK",
+                                mapOf("Cache-Control" to "no-store"),
+                                java.io.ByteArrayInputStream("<!doctype html>".toByteArray(Charsets.UTF_8))
+                            )
+                        }
                         val response = assetLoader.shouldInterceptRequest(request.url)
                         // SPA history-routing fallback: a main-frame navigation to a
                         // client-side route with no file under assets/web/ (the loader

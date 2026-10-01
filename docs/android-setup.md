@@ -1433,6 +1433,16 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
+- **The flush happens on `onStop`.** A stopped app can be killed without being
+  told, so `ctx.beforeClose` runs with reason `.backgrounded` when the Activity
+  stops, alongside whatever the page posted from `visibilitychange` to `hidden`
+  (3 s at most, and Android guarantees none of it). `app.quit` and closing the
+  primary window give the page its full teardown and run `beforeClose` before
+  the process exits. A closing page departs to a blank page the Activity serves
+  at `https://swift-pwa.local/__swift-pwa/departed` — on the app's own origin,
+  because that's the only place the bridge is injected, and the next document
+  announcing itself is how the runtime knows the old one has gone.
+
 - **`window.snapshot` needs the window on screen, and costs more here.** The
   capture goes through `PixelCopy` against the window's composited surface,
   because the obvious spelling — `View.draw` into a software `Canvas` —

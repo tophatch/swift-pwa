@@ -142,6 +142,33 @@ public final class BridgeRuntime: @unchecked Sendable {
         lock.withLock { departure = nil }
     }
 
+    /// Wait for the document's in-flight invokes to finish, or `deadline` —
+    /// for a page that is staying put but may not run again, such as a mobile
+    /// app going to the background.
+    public func finishInFlightInvokes(until deadline: ContinuousClock.Instant) async {
+        while ContinuousClock.now < deadline {
+            if lock.withLock({ invocations.isEmpty }) { return }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+    }
+
+    /// The app is going to the background and the page is staying put: let
+    /// what the page posted on going hidden finish. The page gets its own
+    /// signal (`visibilitychange` to `hidden`); this waits for it — first for
+    /// the page to report `hidden`, which means its handlers have run and
+    /// what they posted is on its way, then for those invokes.
+    public func finishGoingHidden(until deadline: ContinuousClock.Instant) async {
+        while ContinuousClock.now < deadline {
+            let state = try? await webView.evaluateJavaScript("document.visibilityState")
+            if state?.contains("hidden") == true { break }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        // The invoke the handler posted crosses one more hop to reach this
+        // bridge after the page answers.
+        try? await Task.sleep(for: .milliseconds(50))
+        await finishInFlightInvokes(until: deadline)
+    }
+
     /// Cancel everything the current document opened, leaving the pump running.
     ///
     /// Used both by ``stop()`` (window teardown) and by a navigation, where the

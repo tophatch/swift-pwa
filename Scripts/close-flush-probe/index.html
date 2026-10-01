@@ -11,13 +11,24 @@ const mark = (value) => bridge.invoke("probe.write", { value });
 // is the only proof the page got to run.
 bridge.subscribe("window.subscribe", {}, (event) => {
     if (event && event.type === "willClose") mark("willClose");
-    if (event && event.type === "didResize" && !window.ready) {
-        window.ready = true;
-        mark("ready");
-    }
+    if (event && event.type === "didResize" && !window.ready) becomeReady("ready");
 });
+
+// Ready, then whatever a phone harness asked for — it has no driver to ask.
+function becomeReady(marker) {
+    window.ready = true;
+    mark(marker);
+    bridge.invoke("probe.action", null).then((action) => {
+        if (action === "quit") setTimeout(() => bridge.invoke("app.quit", {}), 500);
+        if (action === "close") setTimeout(() => bridge.invoke("window.close"), 500);
+    }).catch(() => {});
+}
 document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "hidden") mark("hidden");
+    if (document.visibilityState !== "hidden") return;
+    mark("hidden");
+    // What a mobile app does on going to the background, where there is no
+    // pagehide: the runtime has to stay up for this to land.
+    bridge.invoke("probe.slowWrite", { value: "hidden-slow" });
 });
 addEventListener("pagehide", () => {
     mark("pagehide");
@@ -28,6 +39,6 @@ addEventListener("pagehide", () => {
 // `willClose` can't be a subscription that never went live.
 addEventListener("load", () => {
     bridge.invoke("window.setSize", { width: 640, height: 480 }).catch(() => {});
-    setTimeout(() => { if (!window.ready) { window.ready = true; mark("ready-no-resize"); } }, 2000);
+    setTimeout(() => { if (!window.ready) becomeReady("ready-no-resize"); }, 2000);
 });
 </script>

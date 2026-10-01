@@ -7,15 +7,33 @@ struct ProbeValue: Codable { let value: String }
 
 private let markerLock = NSLock()
 
+/// `CLOSE_PROBE_LOG` on a desktop; on a phone, where a launch can't easily be
+/// handed a path, a folder of the app's own that the harness can reach: its
+/// Documents on iOS (`devicectl` copies from there), its data directory on
+/// Android (`run-as`), where Foundation's Documents isn't inside the app at all.
+private let markerPath: String? = ProcessInfo.processInfo.environment["CLOSE_PROBE_LOG"] ?? {
+    #if os(Android)
+        PlatformDirectories.dataDirectory(appID: AppPlugin.appID())
+            .appendingPathComponent("close-flush-markers.txt").path
+    #else
+        FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("close-flush-markers.txt").path
+    #endif
+}()
+
 /// One line per marker, appended and closed before the command answers, so a
 /// marker on disk means the write finished — the way a synchronous database
 /// write would. Serialised: invokes run concurrently, and two handles seeking
 /// to the same end overwrite each other.
 func appendMarker(_ value: String) {
-    guard let path = ProcessInfo.processInfo.environment["CLOSE_PROBE_LOG"] else { return }
+    guard let path = markerPath else { return }
     markerLock.lock()
     defer { markerLock.unlock() }
     let line = Data((value + "\n").utf8)
+    #if os(Android)
+        // Android discards stdout and stderr; logcat is where a harness looks.
+        RuntimeDiagnostics.emit("CLOSEPROBE \(value)")
+    #endif
     if let handle = FileHandle(forWritingAtPath: path) {
         handle.seekToEndOfFile()
         handle.write(line)
@@ -34,8 +52,18 @@ func label(_ reason: CloseReason) -> String {
     }
 }
 
+/// What the page should do once it's ready — `quit`, `close`, or nothing — for
+/// a phone, where no driver can tell it. Read from a file beside the markers,
+/// which the harness puts there before launch.
+private let probeAction: String = {
+    guard let path = markerPath else { return "" }
+    let file = URL(fileURLWithPath: path).deletingLastPathComponent().appendingPathComponent("close-probe-action.txt")
+    return (try? String(contentsOf: file, encoding: .utf8))?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+}()
+
 @MainActor
 func registerCloseProbe(_ ctx: any AppContext) {
+    ctx.registry.register("probe.action", typed: { (_: ProbeValue?, _) -> String in probeAction })
     ctx.registry.register("probe.write", typed: { (args: ProbeValue, _) -> Bool in
         appendMarker(args.value)
         return true

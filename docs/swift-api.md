@@ -528,15 +528,17 @@ See [docs/design/runtime-content-packs.md](design/runtime-content-packs.md).
 ```swift
 let main = try ctx.createWindow(...)
 
-await main.subscribe { event in
-    switch event {
-    case .didFocus:        /* ... */
-    case .didBlur:         /* ... */
-    case .didResize(let s):/* s is in DIPs */
-    case .didMove(let p):
-    case .didMinimize, .didDeminiaturize:
-    case .didEnterFullscreen, .didExitFullscreen:
-    case .willClose:       /* ... */
+Task {
+    for await event in main.eventStream() {
+        switch event {
+        case .didFocus:        /* ... */
+        case .didBlur:         /* ... */
+        case .didResize(let s):/* s is in DIPs */
+        case .didMove(let p):
+        case .didMinimize, .didDeminiaturize:
+        case .didEnterFullscreen, .didExitFullscreen:
+        case .willClose, .didClose: /* ... */
+        }
     }
 }
 ```
@@ -570,6 +572,56 @@ window doesn't report focus twice. And minimize / fullscreen are still
 programmatic-only on the GTK backends — a user-driven alt-tab now reports focus,
 but iconifying from the window manager doesn't report `.didMinimize`. See
 [docs/linux-setup.md](linux-setup.md#known-limitations-on-linux).
+
+## Before a window closes or the app quits
+
+Anything an app batches — a debounced write, a sync queue on a timer — needs a
+moment to flush before the window or the process goes. `beforeClose` is that
+moment, on every backend:
+
+```swift
+ctx.beforeClose { reason in
+    await sync.flushPending()
+}
+```
+
+`reason` is `.window(id)` (one window closing, the app staying up), `.quit`
+(⌘Q / Ctrl+Q, `app.quit`, the last window), `.system` (logout, shutdown,
+SIGTERM), or `.backgrounded` — iOS and Android have no quit, and a suspended
+app can be killed without being told, so going to the background is the last
+moment it is sure to run.
+
+**The page goes first.** A closing window is taken off screen, emits
+`willClose` while its bridge is still up, and its page runs its own teardown —
+`visibilitychange` to `hidden`, then `pagehide` — with the invokes those post
+allowed to finish. Then the handlers run, concurrently. A quit does that for
+every window. See [javascript-api.md](javascript-api.md#closing-and-quitting)
+for the page's half.
+
+**Bounded, and fixed.** A window gets 1 s, a quit 3 s, backgrounding 3 s
+(`CloseBudget`). A handler still running at the deadline is logged and
+abandoned, and the window closes or the app quits anyway — a hung flush must
+not read as a hung app. The budgets aren't configurable on purpose: the OS sets
+the real ceiling on the paths that matter most (iOS ends a background task when
+it wants, Windows allows about 5 s at session end, Android promises nothing after
+`onStop`), so a knob would hold on some platforms and silently not on others.
+
+There is no way to *cancel* a close from here. A "save changes?" prompt is a
+different feature with its own conventions on each platform, and isn't built.
+
+| Backend | What reaches `beforeClose` |
+| --- | --- |
+| macOS | close button / ⌘W / `window.close`; ⌘Q, `app.quit`, the last window under `.quit`, and logout / restart / shutdown (`applicationShouldTerminate`); SIGTERM |
+| GTK3 / GTK4 | the window manager's close, `window.close`, Ctrl+Q, `app.quit`, the last window; SIGTERM |
+| Windows | `WM_CLOSE` (close button, Alt+F4, `window.close`), Ctrl+Q, `app.quit`, the last window; `WM_ENDSESSION` (logoff, shutdown) |
+| iOS | going to the background (`.backgrounded`, under a background task); closing a scene with `window.close` |
+| Android | `onStop` (`.backgrounded`); `app.quit` and closing the primary window |
+
+Verified with `Scripts/verify-close-flush.sh` (macOS, both Linux backends),
+`verify-close-flush.ps1` (Windows), `verify-close-flush-ios.sh` and
+`verify-close-flush-android.sh`, which write a marker from every place a page
+or an app can hear it's going and read them back after the window or process
+has gone.
 
 ## Server-push events
 

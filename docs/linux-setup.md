@@ -590,6 +590,20 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**SIGTERM is a quit, not an ending.** A session ending, `systemd` stopping a
+unit, or `kill` goes through the same path as Ctrl+Q — every page gets its
+teardown and `ctx.beforeClose` runs with reason `.system` — so an app ends in
+under the 3 s budget instead of mid-write. SIGKILL can't be caught, by anything.
+
+**On GTK4 under a bare headless display, what a page posts can wait.** Measured
+under `xvfb-run` on a box with no desktop session: invokes posted by a freshly
+loaded page reach Swift only once the app sends the page something (any
+`evaluateJavaScript`, a driver verb), then all at once; the GTK main loop is
+idle in `poll` the whole time. Not seen on GTK3, and not measured on a real
+desktop session. The close path doesn't depend on it — it sends the page
+traffic of its own — but a harness waiting for a page's first message under bare
+Xvfb should nudge it (`Scripts/verify-close-flush.sh` does).
+
 **An installed app takes its name from its `.desktop` entry; a bare binary
 doesn't have one.** There is no `Info.plist` here, so the runtime reads `Name=`
 from `<prefix>/share/applications/<exe>.desktop` beside `<prefix>/bin/<exe>` —

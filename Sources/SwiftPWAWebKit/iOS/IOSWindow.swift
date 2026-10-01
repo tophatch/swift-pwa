@@ -113,20 +113,54 @@
         }
         public func isFullscreen() -> Bool { false }
 
+        /// Closes once the page has finished and the app's `beforeClose`
+        /// handlers have run (#281), then destroys the scene.
         public func close() {
-            emit(.willClose)
-            if let session = uiWindow?.windowScene?.session {
-                UIApplication.shared.requestSceneSessionDestruction(
-                    session,
-                    options: nil,
-                    errorHandler: nil
-                )
+            guard !closeRequested else { return }
+            closeRequested = true
+            let deadline = ContinuousClock.now + CloseBudget.window
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                await prepareToClose(until: deadline)
+                await CloseHandlers.shared.run(.window(id), until: deadline)
+                if let session = uiWindow?.windowScene?.session {
+                    UIApplication.shared.requestSceneSessionDestruction(session, options: nil, errorHandler: nil)
+                }
+                emit(.didClose)
+                for c in continuations.values { c.finish() }
+                continuations.removeAll()
+                bridge.stop()
+                app?.windowDidClose(id)
             }
-            emit(.didClose)
-            for c in continuations.values { c.finish() }
-            continuations.removeAll()
-            bridge.stop()
-            app?.windowDidClose(id)
         }
+
+        /// A scene can't be hidden before it goes, so the page's last frame
+        /// is laid over the web view while it navigates away — otherwise the
+        /// blank document it departs to would flash on screen first.
+        public func prepareToClose(until deadline: ContinuousClock.Instant) async {
+            if preparation == nil {
+                emit(.willClose)
+                let webView = adapter.webView
+                if let cover = webView.snapshotView(afterScreenUpdates: false) {
+                    cover.frame = webView.bounds
+                    webView.addSubview(cover)
+                }
+                preparation = Task { @MainActor [bridge, adapter] in
+                    await bridge.letDocumentFinish(until: deadline) {
+                        adapter.load(.remote(Closing.departureURL))
+                    }
+                }
+            }
+            await preparation?.value
+        }
+
+        /// The app went to the background: let what the page posted as it
+        /// went hidden finish.
+        func finishPageForBackground(until deadline: ContinuousClock.Instant) async {
+            await bridge.finishGoingHidden(until: deadline)
+        }
+
+        private var preparation: Task<Void, Never>?
+        private var closeRequested = false
     }
 #endif

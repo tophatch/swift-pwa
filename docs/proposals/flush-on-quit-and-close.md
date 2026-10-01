@@ -1,7 +1,9 @@
 # Proposal: a chance to flush on quit and close
 
-> **Status: decided, not implemented** (#281). Decisions from 2026-10-01 are
-> under [Decisions](#decisions).
+> **Status: implemented** (#281) on all five backends; Windows is written but
+> not yet run on hardware. Decisions from 2026-10-01 are under
+> [Decisions](#decisions); what measuring changed is under
+> [What measuring changed](#what-measuring-changed).
 
 ## The problem
 
@@ -111,15 +113,16 @@ Each of these is a bug or a stale doc on its own; worth an issue each:
   `swiftpwa_android.h`). Verified by grep.
 - **Android: `app.quit` doesn't `finish()` the Activity**, despite the comment
   saying it does; it `exit()`s the process directly. Verified by reading.
-- **macOS: `app.quit`'s `exitCode` is probably ignored.** `NSApp.terminate`
-  calls `exit()` itself, so `runForever`'s `exit(pendingExitCode ?? 0)` is never
-  reached. Inferred from AppKit's documented behaviour, **not measured**.
+- **macOS: `app.quit`'s `exitCode` was ignored.** `NSApp.terminate` calls
+  `exit(0)` itself, so `runForever`'s `exit(pendingExitCode ?? 0)` was never
+  reached. Measured (`exitCode: 3` → status 0), and fixed in the same change:
+  `applicationWillTerminate` exits with the code.
 - **`docs/tutorials/making-it-feel-native.md`'s minimize-to-tray recipe can't
   be done**: it says to cancel the close on `willClose`, and nothing can cancel
   a close. Not made possible here: cancelling a close is out of scope (see
-  [Decisions](#decisions)). The recipe needs rewriting or removing.
-- **`docs/swift-api.md` shows `main.subscribe { }`**, which doesn't exist; the
-  method is `eventStream()`.
+  [Decisions](#decisions)). The recipe was rewritten in the same change.
+- **`docs/swift-api.md` showed `main.subscribe { }`**, which doesn't exist; the
+  method is `eventStream()`. Fixed in the same change.
 
 ## Non-goals
 
@@ -149,9 +152,37 @@ Settled 2026-10-01:
    `WM_ENDSESSION`, logout) go in it only if they measure cleanly; otherwise
    they're documented under each platform's Known limitations.
 
+## What measuring changed
+
+- **`terminate` from a main-queue block deadlocks a held quit.** With
+  `.terminateLater`, AppKit holds the quit by spinning a nested run loop inside
+  `terminate`; called from a main-queue block — where `app.quit` and a window's
+  close land — that loop can't drain the main queue, so nothing it waited for
+  ran. ⌘Q worked (the menu calls it from the run loop); `app.quit` hung. The
+  quit is now scheduled on the run loop.
+- **Android injects the bridge only on the app's own origin**, so a page
+  departing to `about:blank` there would never announce the next document, and
+  every close would have waited out its deadline. Android departs to an empty
+  page the Activity serves on `https://swift-pwa.local`. On macOS, the bridge
+  is injected into `about:blank` (measured).
+- **The GTK GUI tests close windows with no main loop running**, where there's
+  nothing to wait with. A close there still destroys at once, as it always did.
+- **Geometry wasn't flushed on ⌘Q**, only on the last-window path; every quit
+  flushes it now.
+- **Under bare Xvfb on GTK4, a page's messages wait** until the app sends the
+  page something — on `main` too, so not this change, and not seen on GTK3.
+  The close path is unaffected (it sends the page traffic of its own); the
+  harness nudges the page while waiting for it to load. Recorded in
+  `docs/linux-setup.md`.
+
 ## Verification
 
-#281's probe, made a persistent script per platform: a page that writes a
+As built: `Scripts/verify-close-flush.sh` (macOS 7/7; GTK3 7/7 including
+Alt+F4 through xfwm4 and SIGTERM; GTK4 6/6 and Ctrl+Q skipped, because XTEST
+needs a window manager to focus the window), `verify-close-flush-ios.sh`
+(iPhone 17 Pro, 3/3), `verify-close-flush-android.sh` (Tab S10+, 3/3) and
+`verify-close-flush.ps1` (not yet run). As proposed: #281's probe, made a
+persistent script per platform: a page that writes a
 marker through a synchronous command in `willClose`, `visibilitychange`, and
 `pagehide`; plus an async command that sleeps 300ms before writing, which
 proves the bridge waits; and a Swift `beforeClose` that writes its own. The

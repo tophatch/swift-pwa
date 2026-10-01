@@ -297,6 +297,14 @@ three rather than ignoring it.
 Choose `keep-running` only for an app that has a status item or some
 other way back; without one it is the combination that strands a user.
 
+Whichever way it goes, a closing window's page gets its own teardown
+(`visibilitychange`, `pagehide`) and `ctx.beforeClose` runs before the
+window disappears — and a quit (⌘Q, `app.quit`, logout, SIGTERM) does the
+same for every window before the process exits, held open through
+`applicationShouldTerminate` for at most 3 s. See
+[swift-api.md](swift-api.md#before-a-window-closes-or-the-app-quits).
+`app.quit`'s exit code reaches the process status.
+
 To let a *user* choose — a checkbox in your settings UI — the page can
 read and set the policy at runtime with `app.lastWindowClosed`; it
 applies to the very next close. Storing their choice is your app's job,

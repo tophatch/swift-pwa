@@ -153,6 +153,7 @@
                 switch payload.state {
                 case "resumed": context.activeWindow?.emit(.didFocus)
                 case "paused": context.activeWindow?.emit(.didBlur)
+                case "stopped": context.flushForBackground()
                 default: break
                 }
             }

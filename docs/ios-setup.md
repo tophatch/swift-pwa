@@ -580,6 +580,14 @@ for before.
   page that lost them is wrong for about 200ms instead of for good, and an app
   needs no workaround of its own. A page whose insets are genuinely 0, or that
   isn't `cover`, is never touched.
+- **There is no quit, so the flush happens on going to the background.** A
+  suspended app can be killed without being told, so `ctx.beforeClose` runs
+  with reason `.backgrounded` when the app enters the background, under a
+  background task, alongside whatever the page posted from `visibilitychange`
+  to `hidden` — 3 s at most, and iOS can end it sooner. `pagehide` doesn't
+  fire: the page isn't leaving. Closing a scene with `window.close` gets the
+  full teardown, with the page's last frame laid over the web view so the blank
+  document it departs to never shows.
 
 - **`window.snapshot` can be taller than your page thinks it is.** A page that
   is not `viewport-fit=cover` gets a layout viewport inset by the status bar

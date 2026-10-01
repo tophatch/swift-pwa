@@ -1,7 +1,7 @@
 # Proposal: a chance to flush on quit and close
 
-> **Status: proposed** (#281). Nothing implemented. The decisions marked
-> **Open** are the maintainer's.
+> **Status: decided, not implemented** (#281). Decisions from 2026-10-01 are
+> under [Decisions](#decisions).
 
 ## The problem
 
@@ -46,18 +46,20 @@ because the app is quitting:
    beside it.
 2. **The bridge stays up until that document's in-flight invokes finish**,
    bounded by a deadline, and only then stops.
-3. **On quit, Swift handlers run** after every window has been through steps
-   1–2, also bounded, and then the process exits.
+3. **Swift handlers run** once the window, or on quit every window, has been
+   through steps 1–2, also bounded. Then the window closes or the process
+   exits.
 
 ```swift
-ctx.beforeQuit { reason in
+ctx.beforeClose { reason in
     await sync.flushPending()
 }
 ```
 
-`reason` says why: `.quit` (Cmd-Q / Ctrl+Q / `app.quit` / last window),
-`.system` (logout, shutdown, SIGTERM), or `.backgrounded` on mobile, where
-there is no quit and a suspended app can be killed without being told. Handlers
+`reason` says why: `.window(id)` (one window closing, the app staying up),
+`.quit` (Cmd-Q / Ctrl+Q / `app.quit` / last window), `.system` (logout,
+shutdown, SIGTERM), or `.backgrounded` on mobile, where there is no quit and
+a suspended app can be killed without being told. Handlers
 run concurrently. Missing the deadline logs which handler was still running,
 and the app quits anyway. An app that never registers one gets steps 1–2 for
 free.
@@ -114,39 +116,45 @@ Each of these is a bug or a stale doc on its own; worth an issue each:
   reached. Inferred from AppKit's documented behaviour, **not measured**.
 - **`docs/tutorials/making-it-feel-native.md`'s minimize-to-tray recipe can't
   be done**: it says to cancel the close on `willClose`, and nothing can cancel
-  a close. This proposal's vetoable close would make it possible, if it is
-  exposed. **Open.**
+  a close. Not made possible here: cancelling a close is out of scope (see
+  [Decisions](#decisions)). The recipe needs rewriting or removing.
 - **`docs/swift-api.md` shows `main.subscribe { }`**, which doesn't exist; the
   method is `eventStream()`.
 
 ## Non-goals
 
-- **`beforeunload`-style "are you sure?" prompts.** Vetoing a close for the
-  user to answer is a different feature with its own HIG on each platform.
+- **Cancelling a close**, including a `beforeunload`-style "save changes?"
+  prompt. See [Decisions](#decisions).
 - **Guaranteeing a write survives a crash or a force-quit.** Nothing can.
   This covers every orderly way out.
 
-## Open questions
+## Decisions
 
-1. **The deadline.** Recommend one fixed value per path rather than a knob:
-   1s for a window close, 3s for quit (the Windows session-end budget is ~5s).
-   Is a `pwa.json` override worth having?
-2. **The name.** `beforeQuit(_:)` reads right on desktop and slightly wrong
-   for `.backgrounded`. Alternatives: `onLeaving`, `beforeExit`.
-3. **Expose the vetoable close?** A `window.closeRequested` that the page can
-   cancel would enable the tray recipe, but it's a second feature. Recommend:
-   not in this change.
-4. **Ship order.** Recommend one PR covering all five for app-initiated quit
-   and window close, with OS-initiated paths (SIGTERM, `WM_ENDSESSION`, logout)
-   in the same PR only if they measure cleanly; otherwise a follow-up
-   documented under each platform's Known limitations.
+Settled 2026-10-01:
+
+1. **Fixed deadlines, no override**: 1s for a window close, 3s for quit. An
+   override couldn't be honoured everywhere. The OS sets the real ceiling on
+   the paths that matter most: iOS cuts a background task short when it
+   wants, Windows gives session end about 5s, and Android promises nothing
+   after `onStop`. A knob that works on three platforms is the kind of gap
+   the repo's parity rule exists to avoid.
+2. **Named `beforeClose`**, not `beforeQuit`. It reads right for a window
+   closing, the app quitting and a mobile app being backgrounded alike, which
+   is why `.window(id)` is one of its reasons.
+3. **No cancelling a close.** The one plausible exception is a "save
+   changes?" confirmation. That is a separate feature with its own HIG on
+   each platform (a document-modal sheet and `.terminateCancel` on macOS, a
+   dialog on GTK and Windows, nothing on mobile), and it isn't built here.
+4. **One PR** for all five platforms. OS-initiated paths (SIGTERM,
+   `WM_ENDSESSION`, logout) go in it only if they measure cleanly; otherwise
+   they're documented under each platform's Known limitations.
 
 ## Verification
 
 #281's probe, made a persistent script per platform: a page that writes a
 marker through a synchronous command in `willClose`, `visibilitychange`, and
 `pagehide`; plus an async command that sleeps 300ms before writing, which
-proves the bridge waits; and a Swift `beforeQuit` that writes its own. The
+proves the bridge waits; and a Swift `beforeClose` that writes its own. The
 database is read afterwards. Rows: `window.close`, the native close button or
 shortcut, `app.quit`, ⌘Q / Ctrl+Q, the last window closing, SIGTERM (Linux),
 logoff (Windows), and backgrounding (iOS, Android). Control: navigation, which

@@ -25,6 +25,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   normal launch taking the front as the control.
   `Scripts/verify-background-focus.sh` runs that check.
 
+- **iOS: a navigation soon after load could leave the next document's
+  safe-area insets at 0 for good** (#282). A `viewport-fit=cover` page that was
+  taller than the screen and navigated in its first few tens of milliseconds —
+  a launch that resumes into the last open page on a bridge reply does exactly
+  that — left the next document laid out full-screen with every
+  `env(safe-area-inset-*)` at 0. That put an `env(safe-area-inset-top)` header
+  under the Dynamic Island until another document loaded; backgrounding and
+  rotating didn't recover it. It's WebKit losing the update.
+  - **Before:** 7 of 16 launches stuck on an iPhone 17 Pro, against 0 of 8 for
+    the same page short.
+  - **What didn't work:** nothing native brings the insets back. Re-running
+    the web view's layout left 5 of 16 stuck, and
+    `contentInsetAdjustmentBehavior = .never` made it worse (8 of 40, with
+    variants that never stuck before sticking).
+  - **What does:** the page's viewport changing, which is what an adopter's
+    page-side workaround did. The runtime now does it itself, 150ms after each
+    main-frame load. Unlike the page, it can tell a lost update from a genuine
+    zero: it acts only when the page is `viewport-fit=cover`, reads 0 on every
+    side, and the web view's own `safeAreaInsets` aren't 0. Then it takes
+    `cover` off the meta tag and puts it back two frames (or at most 100ms)
+    later.
+  - **After:** 0 of 33 stuck over two runs. The 8 that lost their insets got
+    them back 192–204ms after load, and the 48 launches of the variants that
+    never stick were untouched.
+
+  Found by the reporting app's bisect, which narrowed it to a first document
+  taller than the screen. `Scripts/verify-ios-safe-area.sh` sweeps it, and the
+  `tall` variant is the one that sticks without the fix.
+
 ## [0.11.3] - 2026-09-27
 
 ### Fixed

@@ -20,16 +20,13 @@
 # "stuck" second document means nothing. Needs a device with a non-zero inset —
 # any Face ID iPhone; an iPad's top inset is 0 in portrait on some models.
 #
-# **It doesn't reproduce the bug yet.** On an iPhone 17 Pro and an iPad Pro
-# (iOS 27): 0 of 238 navigated documents stuck, across delays 0–70ms and
-# navigations by replace, push, a second document whose head blocks 150ms, the
-# app's main thread held as it navigates, the reporting app's apple-mobile-web-
-# app / theme-color metas, five render-blocking stylesheets, and a coloured
-# launch screen. The reporting app sticks in about two launches of three, and
-# its log has a shape this probe reproduces everywhere except the outcome: the
-# first document navigates while still at 402×778, the second loads, goes to
-# 402×874 — and in theirs never gets an inset. Here it gets them 25–60ms later.
-# Until a variant here sticks, a PASS is not evidence a fix works.
+# **What sticks** is a first document taller than the screen that navigates on
+# a bridge reply, 6–15ms into its life (the `tall` variant; found by bisecting
+# the reporting app). Without the runtime's repair that stuck 7 of 16 launches
+# on an iPhone 17 Pro; the same page short stuck 0 of 8. The other variants —
+# delays of 0–70ms, push, a head that blocks, a held main thread, the reporting
+# page's metas and stylesheets, a coloured launch screen — never stuck in 238
+# launches, and stay as controls that the repair mustn't disturb.
 #
 # Usage:
 #   Scripts/verify-ios-safe-area.sh --team <apple-team-id> [--device <name|udid>]
@@ -40,7 +37,7 @@ set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 TEAM="${SWIFT_PWA_IOS_TEAM:-}"
 DEVICE=""
-LAUNCHES=42
+LAUNCHES=48
 KEEP=0
 BUILD=1
 LAUNCH_COLOR=0
@@ -196,11 +193,13 @@ for delay, event, insets, viewport in last.values():
 
 def key(d):
     variant, ms = d.split(":")
-    return ("" if variant == "none" else variant, -1 if ms == "none" else int(ms))
+    return ("" if variant == "none" else variant, -1 if ms in ("none", "reply") else int(ms))
 print(f"{'navigation':>20}  launches  insets stuck at 0")
 for delay in sorted(by_delay, key=key):
     total, stuck = by_delay[delay]
-    label = "never (control)" if delay == "none:none" else f"{delay.replace(':', ' after ')}ms"
+    variant, ms = delay.split(":")
+    label = ("never (control)" if delay == "none:none"
+             else f"{variant} on a reply" if ms == "reply" else f"{variant} after {ms}ms")
     print(f"{label:>20}  {total:>8}  {stuck:>17}")
 
 control = by_delay.get("none:none", [0, 0])

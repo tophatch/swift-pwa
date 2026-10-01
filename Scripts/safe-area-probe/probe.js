@@ -16,8 +16,15 @@ const DELAYS = [0, 10];
 //             apple-mobile-web-app metas (status bar black-translucent);
 //   styles  — to a second document behind five render-blocking stylesheets,
 //             which hold its first paint without holding its scripts.
-const VARIANTS = ["replace", "metas", "styles"];
-const PLAN = [["none", "none"], ...VARIANTS.flatMap((v) => DELAYS.map((d) => [v, d]))];
+//   tall    — the first document is taller than the screen (a 2000px body)
+//             and leaves on a bridge reply, the moment the reporting app's
+//             launch resume did: this is what sticks (#282);
+//   short   — the same without the tall body, which doesn't.
+// `reply` in place of a delay: navigate when an invoke sent from the script
+// itself answers, then a zero timeout — 6–15ms into the document's life.
+const VARIANTS = ["replace"];
+const PLAN = [["none", "none"], ["tall", "reply"], ["tall", "reply"], ["short", "reply"],
+    ...VARIANTS.flatMap((v) => DELAYS.map((d) => [v, d]))];
 const SETTLE_MS = 2000;
 
 const probe = document.getElementById("probe");
@@ -49,16 +56,29 @@ new ResizeObserver(() => log("change")).observe(probe, { box: "border-box" });
 addEventListener("resize", () => log("resize"));
 document.addEventListener("visibilitychange", () => log(document.visibilityState));
 
+function leave() {
+    const page = { heavy: "second-heavy.html", metas: "second-metas.html", styles: "second-styles.html" }[variant] ?? "second.html";
+    const url = `${page}?launch=${launch}&variant=${variant}&delay=${delay}`;
+    if (variant === "push") location.href = url;
+    else location.replace(url);
+    if (variant === "stall") __SWIFT_PWA__.invoke("probe.stall", { ms: 100 }).catch(() => {});
+}
+
+if (doc === "first" && delay === "reply") {
+    if (variant === "tall") {
+        const filler = document.createElement("div");
+        filler.style.height = "2000px";
+        document.body.append(filler);
+    }
+    __SWIFT_PWA__.invoke("app.name", {}).then(() => setTimeout(leave, 0));
+}
+
 addEventListener("load", () => {
     log("load");
-    if (doc === "first" && delay !== "none") {
-        setTimeout(() => {
-            const page = { heavy: "second-heavy.html", metas: "second-metas.html", styles: "second-styles.html" }[variant] ?? "second.html";
-            const url = `${page}?launch=${launch}&variant=${variant}&delay=${delay}`;
-            if (variant === "push") location.href = url;
-            else location.replace(url);
-            if (variant === "stall") __SWIFT_PWA__.invoke("probe.stall", { ms: 100 }).catch(() => {});
-        }, Number(delay));
+    if (doc === "first" && delay === "reply") {
+        // Already on its way, from the script above.
+    } else if (doc === "first" && delay !== "none") {
+        setTimeout(leave, Number(delay));
     } else {
         setTimeout(() => log("final"), SETTLE_MS);
     }

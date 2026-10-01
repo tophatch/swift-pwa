@@ -453,7 +453,11 @@ What changes, all of it scoped to a driver build with the variable set:
 - the app doesn't take the focus: macOS takes the `.accessory` policy (no Dock
   icon, no menu bar) and never calls `NSApp.activate`, GTK3 maps the window
   with `focus-on-map` off, Windows shows it with `SW_SHOWNOACTIVATE`. None of
-  the three appears in the Dock, taskbar, window switcher or pager;
+  the three appears in the Dock, taskbar, window switcher or pager. On macOS
+  the first window is also ordered in only once the app has finished
+  launching: AppKit activates a launching app that already has a window up at
+  that point, whatever its policy, and does it when the process that launched
+  the app is frontmost — a suite started from an editor's terminal (#283);
 - `window.focus` stops raising the app, so a page that polls it until
   `!document.hidden` still gets what it wants — rendering — without the window
   coming back;
@@ -501,6 +505,9 @@ app's own event queue and a screenshot comes from the engine's own compositor, s
 neither ever needed the window on screen. Verified in this mode on all three:
 `drive click` and `drive type` landing on macOS, and a screenshot of live content
 everywhere (macOS, GTK3, Windows), with the frontmost application never changing.
+On macOS, `Scripts/verify-background-focus.sh` checks the frontmost application
+from a launcher that is frontmost itself — the only case where it can change —
+with a normal launch as the control that has to take the front.
 
 **Except the wheel, on macOS.** WebKit there drops a wheel event for a window
 parked off every display — correctly addressed, hit-tested to the webview, even

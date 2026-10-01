@@ -135,9 +135,47 @@
                 // WebKit to keep rendering it, but making it key would pull the
                 // app in front of whatever the user is doing.
                 if DriverBackground.isRequested {
-                    window.orderFrontRegardless()
+                    Self.orderInWithoutActivating(window)
                 } else {
                     window.makeKeyAndOrderFront(nil)
+                }
+            }
+        }
+
+        /// Windows a backgrounded run has asked to order in before the app
+        /// finished launching, and the observer that orders them in once it has.
+        private(set) static var windowsAwaitingLaunch: [NSWindow] = []
+        private static var launchObserver: (any NSObjectProtocol)?
+
+        /// Order `window` in for a backgrounded run — in the window list, so
+        /// WebKit keeps servicing it, without making it key or activating the
+        /// app.
+        ///
+        /// **Not before launch has finished.** AppKit activates a launching app
+        /// that already has a window ordered in when it finishes launching
+        /// (`-[NSApplication _sendFinishLaunchingNotification]`, inside
+        /// `NSApp.run()`), whatever its activation policy and however the
+        /// window was ordered in — `.accessory`, a non-activating panel,
+        /// `orderBack` all lose the same way. It only shows when the process
+        /// that launched the app is frontmost, which is exactly a suite started
+        /// from an editor's terminal (#283). A window ordered in once launch
+        /// has finished doesn't activate anything, so a window created during
+        /// `configure` waits for that one notification.
+        static func orderInWithoutActivating(_ window: NSWindow) {
+            guard NSApp?.isRunning != true else {
+                window.orderFrontRegardless()
+                return
+            }
+            windowsAwaitingLaunch.append(window)
+            guard launchObserver == nil else { return }
+            launchObserver = NotificationCenter.default.addObserver(
+                forName: NSApplication.didFinishLaunchingNotification, object: nil, queue: .main
+            ) { _ in
+                MainActor.assumeIsolated {
+                    for window in windowsAwaitingLaunch { window.orderFrontRegardless() }
+                    windowsAwaitingLaunch.removeAll()
+                    if let launchObserver { NotificationCenter.default.removeObserver(launchObserver) }
+                    launchObserver = nil
                 }
             }
         }
@@ -200,7 +238,7 @@
         /// while raising the app would undo the whole mode — 37 times a run.
         public func focus() {
             guard !DriverBackground.isRequested else {
-                nsWindow.orderFrontRegardless()
+                Self.orderInWithoutActivating(nsWindow)
                 return
             }
             nsWindow.makeKeyAndOrderFront(nil)
@@ -238,6 +276,9 @@
         // MARK: - NSWindowDelegate
 
         public func windowWillClose(_ notification: Notification) {
+            // A window closed during `configure` must not be ordered back in
+            // when launch finishes.
+            Self.windowsAwaitingLaunch.removeAll { $0 === nsWindow }
             emit(.willClose)
             // NSWindow has no `didClose` delegate hook — post a tick later
             // so observers see willClose before didClose.

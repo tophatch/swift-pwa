@@ -83,6 +83,29 @@
             }
         }
 
+        /// AppKit activates a launching app that already has a window ordered
+        /// in when launch finishes, whatever its policy (#283), so a window
+        /// asked for before then has to wait for it.
+        ///
+        /// Only the deferral is asserted: ordering the window in for real needs
+        /// a window server (see above). That the deferred window doesn't take
+        /// the front, and that the page still renders, is
+        /// `Scripts/verify-background-focus.sh`, run from a frontmost launcher.
+        @Test("a window asked for before launch finishes isn't ordered in until it has")
+        func orderInWaitsForLaunch() {
+            #expect(NSApp?.isRunning != true, "the test process never runs NSApp, so this is the before-launch path")
+            let window = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: 200, height: 100),
+                styleMask: [.titled],
+                backing: .buffered,
+                defer: true
+            )
+            window.isReleasedWhenClosed = false
+            MacWindow.orderInWithoutActivating(window)
+            #expect(!window.isVisible)
+            #expect(MacWindow.windowsAwaitingLaunch.contains { $0 === window })
+        }
+
         /// Requested and *honoured* are different questions — a backend that
         /// hasn't implemented backgrounding ignores the request in silence, and
         /// `capabilities.background` is what tells a harness which happened.

@@ -5,6 +5,26 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A backgrounded driver run still took the front on macOS** (#283). Under
+  `--background` / `SWIFT_PWA_DRIVE_BACKGROUND=1` the app became frontmost
+  about 0.2s after launch and stayed there, so typing in the editor that
+  started the suite went into the parked window, once per test file. Nothing
+  called `NSApp.activate`: AppKit activates a launching app that already has a
+  window ordered in when it finishes launching, under any activation policy,
+  and the first window was ordered in during `configure`, before `NSApp.run()`.
+  It only happens when the process that launched the app is frontmost, which
+  is why #208's measurement, from a launcher that wasn't, never saw it. A
+  backgrounded run now orders its windows in once launch has finished. WebKit
+  still gets the window, just one launch later, and the page renders at full
+  rate. Measured from a frontmost launcher against a fresh scaffold: before,
+  the app took the front in 2 of 2 runs at +0.16–0.18s; after, 0 of 3, with a
+  normal launch taking the front as the control.
+  `Scripts/verify-background-focus.sh` runs that check.
+
 ## [0.11.3] - 2026-09-27
 
 ### Fixed

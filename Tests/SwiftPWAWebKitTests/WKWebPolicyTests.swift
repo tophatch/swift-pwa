@@ -150,30 +150,27 @@
         /// The iOS safe-area repair (#282) is a script, and a script that
         /// doesn't parse fails in silence on the device. Every inset is 0 on
         /// macOS, which is the state it repairs, so it can be exercised here:
-        /// a `cover` page gets nudged and ends with its meta tag as it was.
-        @Test("the lost-safe-area repair nudges a cover page and restores its viewport")
-        func lostSafeAreaRepairNudgesACoverPage() async throws {
+        /// a `cover` page gets nudged and ends with its meta tag as it was, and
+        /// a page that isn't `cover` is left alone. One page for both, since
+        /// every web view adds to a group that runs concurrently.
+        @Test("the lost-safe-area repair nudges a cover page, restores it, and leaves other pages alone")
+        func lostSafeAreaRepair() async throws {
             let viewport = "width=device-width, initial-scale=1, viewport-fit=cover"
             let page = try await loadPage("""
             <meta name="viewport" content="\(viewport)"><a href="#">x</a>
             """)
             let answer = try await page.adapter.evaluateJavaScript(WKWebPolicy.lostSafeAreaRepair)
             #expect(answer?.contains("repaired") == true)
+            let metaContent = "document.querySelector('meta[name=viewport]').getAttribute('content')"
             try await waitUntil {
-                let content = try await page.adapter.evaluateJavaScript(
-                    "document.querySelector('meta[name=viewport]').getAttribute('content')"
-                )
-                return content?.contains("viewport-fit=cover") == true
+                try await page.adapter.evaluateJavaScript(metaContent)?.contains("viewport-fit=cover") == true
             }
-        }
 
-        @Test("the lost-safe-area repair leaves a page that isn't cover alone")
-        func lostSafeAreaRepairIgnoresOtherPages() async throws {
-            let page = try await loadPage("""
-            <meta name="viewport" content="width=device-width, initial-scale=1"><a href="#">x</a>
-            """)
-            let answer = try await page.adapter.evaluateJavaScript(WKWebPolicy.lostSafeAreaRepair)
-            #expect(answer?.contains("not-cover") == true)
+            _ = try await page.adapter.evaluateJavaScript(
+                "document.querySelector('meta[name=viewport]').setAttribute('content', 'width=device-width')"
+            )
+            let other = try await page.adapter.evaluateJavaScript(WKWebPolicy.lostSafeAreaRepair)
+            #expect(other?.contains("not-cover") == true)
         }
 
         /// Loads `html` on `https://app.example.com/index.html` with a real
@@ -198,7 +195,9 @@
         /// Polls rather than sleeping a fixed interval: WebKit's navigation
         /// callbacks are asynchronous and a fixed wait is either flaky or slow.
         private func waitUntil(
-            timeout: Duration = .seconds(5),
+            // Polled, so a generous ceiling costs nothing when WebKit is quick;
+            // see `WKBridgeIntegrationTests.waitForJSResult`.
+            timeout: Duration = .seconds(20),
             _ condition: () async throws -> Bool
         ) async throws {
             let deadline = ContinuousClock.now + timeout

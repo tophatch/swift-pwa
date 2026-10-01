@@ -460,7 +460,10 @@
     @MainActor
     private func waitForJSResult(
         in adapter: WKWebViewAdapter,
-        timeout: Duration = .seconds(5)
+        // Generous because it's polled: these suites run concurrently, and on a
+        // hosted macOS runner the whole group sat at 5.4–5.8 s — so a fixed 5 s
+        // failed every web-view test at once the moment one more was added.
+        timeout: Duration = .seconds(20)
     ) async throws -> String? {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {
@@ -493,7 +496,7 @@
     private func waitForJSExpr(
         in adapter: WKWebViewAdapter,
         _ expr: String,
-        timeout: Duration = .seconds(5)
+        timeout: Duration = .seconds(20)
     ) async throws -> String? {
         let deadline = ContinuousClock.now + timeout
         while ContinuousClock.now < deadline {

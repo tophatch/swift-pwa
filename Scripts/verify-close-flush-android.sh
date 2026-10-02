@@ -14,6 +14,9 @@
 #                 going hidden, and `beforeClose(.backgrounded)`.
 #   app.quit      the page calls it; the page gets its real unload first.
 #   window.close  the primary window closing, which quits the app.
+#   Back          backing out of the app: `onStop` flushes, the finished
+#                 Activity ends the runtime and the process, and a relaunch
+#                 finds exactly one runtime (it used to find two).
 #
 # There is no driver for Android, so the page is told what to do by a file the
 # harness drops into the app's data with `run-as` before launch.
@@ -124,9 +127,53 @@ run_row() { # row action control expected...
     fi
 }
 
+# Back out of the app: the Activity finishes, its `onStop` flushes, and the
+# runtime ends with the process (`beforeClose(.quit)`). Left running, it used to
+# outlive the Activity, and the next launch started a second runtime beside it
+# in the same process — so the relaunch below has to find exactly one.
+back_row() {
+    "${ADB[@]}" shell am force-stop "$PKG"
+    "${ADB[@]}" shell run-as "$PKG" sh -c "'echo none > $MARKERS_DIR/close-probe-action.txt'"
+    "${ADB[@]}" logcat -c
+    "${ADB[@]}" shell am start -n "$PKG/.MainActivity" >/dev/null
+    for _ in $(seq 1 30); do
+        "${ADB[@]}" logcat -d -s swift-pwa 2>/dev/null | grep -q "CLOSEPROBE ready" && break
+        sleep 1
+    done
+    "${ADB[@]}" shell input keyevent KEYCODE_BACK
+    sleep 8
+    "${ADB[@]}" logcat -d -s swift-pwa 2>/dev/null | tr -d '\r' > "$LOG"
+    local got missing=() pid
+    got="$(sed -n 's/.*CLOSEPROBE \(.*\)$/\1/p' "$LOG" | tr '\n' ' ')"
+    for m in hidden hidden-slow swift:backgrounded swift:quit; do
+        grep -q "CLOSEPROBE $m\$" "$LOG" || missing+=("$m")
+    done
+    pid="$("${ADB[@]}" shell pidof "$PKG" | tr -d '\r' || true)"
+    if [ ${#missing[@]} -ne 0 ] || [ -n "$pid" ]; then
+        echo "  FAIL  Back — missing [${missing[*]}], process ${pid:+still running ($pid)}${pid:-gone}; got [$got]"
+        FAIL=$((FAIL+1)); return
+    fi
+    "${ADB[@]}" logcat -c
+    "${ADB[@]}" shell am start -n "$PKG/.MainActivity" >/dev/null
+    local ready=0
+    for _ in $(seq 1 30); do
+        "${ADB[@]}" logcat -d -s swift-pwa 2>/dev/null | grep -q "CLOSEPROBE ready" && { ready=1; break; }
+        sleep 1
+    done
+    pid="$("${ADB[@]}" shell pidof "$PKG" | tr -d '\r' || true)"
+    local runtimes
+    runtimes="$("${ADB[@]}" shell "cat /proc/$pid/task/*/comm" 2>/dev/null | grep -c swift-pwa-runti || true)"
+    if [ "$ready" -eq 1 ] && [ "$runtimes" -eq 1 ]; then
+        echo "  PASS  Back — [$got] process gone; relaunch ready with 1 runtime"; PASS=$((PASS+1))
+    else
+        echo "  FAIL  Back — relaunch ready=$ready with $runtimes runtime thread(s)"; FAIL=$((FAIL+1))
+    fi
+}
+
 run_row "backgrounded (Home)" background hidden hidden hidden-slow swift:backgrounded
 run_row "app.quit" quit pagehide willClose pagehide pagehide-slow swift:quit
 run_row "window.close (primary)" close pagehide willClose pagehide pagehide-slow swift:window swift:quit
+back_row
 
 "${ADB[@]}" shell run-as "$PKG" rm -f "$MARKERS_DIR/close-probe-action.txt" || true
 echo

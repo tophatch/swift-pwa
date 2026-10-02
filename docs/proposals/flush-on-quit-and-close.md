@@ -107,12 +107,14 @@ gets. The Swift hook is the missing half.
 
 Each of these is a bug or a stale doc on its own; worth an issue each:
 
-- **Android: `nativeQuit` is declared and never called.** An Activity finish
-  never reaches Swift, and the runtime thread stays blocked until the OS kills
-  the process. Three comments say otherwise (`AndroidAppRuntime.swift`,
-  `swiftpwa_android.h`). Verified by grep.
+- **Android: `nativeQuit` was declared and never called.** An Activity finish
+  never reached Swift, so the runtime outlived it, and the next launch into the
+  same process started a second runtime (measured: two runtime threads after
+  Back and a relaunch). Fixed after #281: the finishing owner calls it, and
+  the app's handlers run with `.quit` before the process exits.
 - **Android: `app.quit` doesn't `finish()` the Activity**, despite the comment
-  saying it does; it `exit()`s the process directly. Verified by reading.
+  saying it did; it `exit()`s the process directly. The comment is gone; the
+  behaviour stays, since the process ending takes the Activity with it.
 - **macOS: `app.quit`'s `exitCode` was ignored.** `NSApp.terminate` calls
   `exit(0)` itself, so `runForever`'s `exit(pendingExitCode ?? 0)` was never
   reached. Measured (`exitCode: 3` → status 0), and fixed in the same change:

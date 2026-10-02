@@ -910,7 +910,17 @@ enum AndroidTemplates {
             }
 
             override fun onDestroy() {
-                if (runtimeOwner === this) runtimeOwner = null
+                val ownedRuntime = runtimeOwner === this
+                if (ownedRuntime) runtimeOwner = null
+                // Backing out of the app, or the system finishing it, ends the
+                // process's one Swift runtime. Left running, it outlived the
+                // Activity, and the next launch — into the same process —
+                // started a second runtime beside it, and a third after that.
+                // A configuration change destroys the Activity too, but only
+                // to recreate it, so that one keeps the runtime.
+                if (ownedRuntime && hasBridge && isFinishing && !isChangingConfigurations) {
+                    bridge.activityFinished()
+                }
                 if (hasBridge) bridge.detach()
                 super.onDestroy()
             }
@@ -1819,8 +1829,11 @@ enum AndroidTemplates {
             // hooks. Payload is a JSON string with a `channel` field the
             // Swift `AndroidHostEventRouter` dispatches on.
             external fun nativeHostEvent(json: String)
-            @Suppress("unused")
             private external fun nativeQuit(exitCode: Int)
+
+            /// The Activity that owns the Swift runtime is finishing: Swift
+            /// runs the app's `beforeClose` handlers and ends the process.
+            fun activityFinished() = nativeQuit(0)
 
             /// Synchronous by necessity: `shouldOverrideUrlLoading` must
             /// answer before the load proceeds. Returns one of the NAV_*

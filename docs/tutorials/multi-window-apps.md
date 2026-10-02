@@ -6,7 +6,7 @@ Two things to know up front: **windows are created in Swift** (there's no `windo
 
 Assumes you've met the bridge — see [Talking to the native side](talking-to-the-native-side.md).
 
-> Uses swift-pwa **0.8+**. Fully supported on macOS / Linux / Windows (see the per-platform notes at the end for mobile).
+> Uses swift-pwa **0.8+**. Fully supported on macOS / Linux / Windows and iPad (see the per-platform notes at the end for mobile).
 
 ---
 
@@ -115,7 +115,7 @@ Multi-window behaves differently across platforms — design for it:
 | Platform | Behavior |
 |---|---|
 | macOS / Linux / Windows | Full support — each `createWindow` is an independent native window sharing one app context and event bus. |
-| iOS | UIScene-based: a single scene is polished; multi-scene is scaffolded but not the recommended default. |
+| iOS | iPad, with `"ios": { "multiple_windows": true }` in `pwa.json`: each `createWindow` opens a window beside the others, and the system's own "New Window" opens your main page. iPhone shows one window, so a second `createWindow` throws. See [docs/ios-setup.md](../ios-setup.md#more-than-one-window-on-ipad). |
 | Android | **Activity-per-window** — a second `createWindow` launches a new Activity on the back stack (system-back returns to the caller), which is the native "open a detail view" UX. |
 
 > ⚠️ **Android caveat worth designing around:** on Android only the **foreground** Activity's web page receives bridge deliveries, so a Swift `ctx.emit(...)` (or a JS `emit` from one Activity) reaches the visible window, not both at once — unlike desktop's true fan-out to every open window. And `setTitle`/`setFullscreen`/`close` don't reach across Activities. Treat Android's "second window" as a pushed screen, not a peer you drive remotely — do per-window work from inside that window's own JS.

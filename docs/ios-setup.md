@@ -455,6 +455,47 @@ over HTTPS. The `.ipa` itself can be HTTP-redirected from the plist's
 `software-package` URL but the plist URL given to `itms-services://`
 must be HTTPS — iOS rejects http manifests outright.
 
+## More than one window on iPad
+
+Off by default, as on macOS, where the user can't open a second copy of an
+app's window. An app built around one window has nothing sensible to show in a
+second, and with multiple scenes declared iPadOS offers "New Window" for every
+app. Turn it on in `pwa.json`:
+
+```json
+"ios": { "multiple_windows": true }
+```
+
+That sets `UIApplicationSupportsMultipleScenes`, and then:
+
+- **`ctx.createWindow` opens a window beside the others.** A window is a
+  scene's, and a scene is the system's to make, so the runtime asks iPadOS for
+  one and pairs it with the window that asked, by id. The tutorial's pattern,
+  a command of your own that calls `ctx.createWindow`, works unchanged (see
+  [Multi-window apps](tutorials/multi-window-apps.md)). Windows created in
+  `configure` beyond the first open at every launch, beside any window iPadOS
+  brings back, so open secondary windows on demand instead.
+- **A window the system opens shows the app's main page.** "New Window" in the
+  Dock or the app switcher opens a scene nothing asked for. It gets a window
+  built from the first `WindowConfig` the app created.
+- **A window the system brings back shows the page it last showed.** iPadOS
+  restores an app's windows when it relaunches, and reconnects a background
+  window it disconnected to reclaim memory. The page is recorded on the scene's
+  session when the window goes to the background, and only a page of the
+  app's own comes back: the same bundle, or the same site for a `.remote`
+  window. The route is all that's restored; the page's own state is the page's
+  to keep.
+- **Closing a window from the system UI gets the full close.** The web view
+  outlives its scene, so the page still runs `visibilitychange` and
+  `pagehide` off screen, what it posts finishes, and `beforeClose(.window)`
+  runs, as for `window.close`. A window iPadOS reclaims for memory is closed
+  the same way, and comes back as a new window with a new id.
+- **`window.focus` brings another window's scene forward.**
+
+iPhone shows one scene at a time whatever `pwa.json` says, so there a second
+`ctx.createWindow` throws (`E_UNIMPLEMENTED`) rather than handing back a window
+that can never appear. The same goes for an iPad app without the flag.
+
 ## Links out of the app, and JavaScript dialogs
 
 Same behaviour as macOS, through the same shared policy — see
@@ -585,8 +626,8 @@ for before.
   with reason `.backgrounded` when the app enters the background, under a
   background task, alongside whatever the page posted from `visibilitychange`
   to `hidden` — 3 s at most, and iOS can end it sooner. `pagehide` doesn't
-  fire: the page isn't leaving. Closing a scene with `window.close` gets the
-  full teardown, with the page's last frame laid over the web view so the blank
+  fire: the page isn't leaving. Closing a window, with `window.close` or from
+  the system UI on iPad, gets the full teardown, with the page's last frame laid over the web view so the blank
   document it departs to never shows.
 
 - **`window.snapshot` can be taller than your page thinks it is.** A page that
@@ -620,11 +661,8 @@ for before.
 - **No automated TestFlight / App Store upload.** `xcrun altool` and
   `xcrun notarytool` aren't wrapped by the CLI; bring your own
   release script.
-- **Multi-scene support is scaffolded but minimal.** The
-  `UIApplicationSceneManifest` opts into multiple scenes, but the
-  per-scene window plumbing in `IOSWindow` is the bare minimum to
-  attach the first scene. iPad multi-window polish lands in a
-  follow-up.
+- **iPhone shows one window.** A second `ctx.createWindow` throws there; see
+  [More than one window on iPad](#more-than-one-window-on-ipad).
 - **Auto-updater is enterprise / ad-hoc only.** Apps distributed via
   the App Store get updates from the App Store; swift-pwa's
   `AppleUpdater` on iOS targets the `itms-services://` install path,

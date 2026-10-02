@@ -166,13 +166,32 @@ struct InfoPlistTests {
         #expect(parsed["CFBundleIdentifier"] as? String == "com.example.hi.ios")
         #expect(parsed["MinimumOSVersion"] as? String == "18.0")
         let scenes = parsed["UIApplicationSceneManifest"] as? [String: Any]
-        #expect(scenes?["UIApplicationSupportsMultipleScenes"] as? Bool == true)
+        #expect(scenes?["UIApplicationSupportsMultipleScenes"] as? Bool == false)
         let configs = scenes?["UISceneConfigurations"] as? [String: Any]
         let app = configs?["UIWindowSceneSessionRoleApplication"] as? [[String: Any]]
         #expect(app?.first?["UISceneDelegateClassName"] as? String == "SwiftPWAWebKit.SwiftPWASceneDelegate")
         // No storyboard name → fall back to the empty UILaunchScreen dict.
         #expect(parsed["UILaunchStoryboardName"] == nil)
         #expect(parsed["UILaunchScreen"] is [String: Any])
+    }
+
+    @Test("ios.multiple_windows opts into more than one scene")
+    func iosMultipleWindows() throws {
+        var m = manifest
+        m.ios?.multipleWindows = true
+        let parsed = try #require(PropertyListSerialization.propertyList(
+            from: InfoPlistGenerator.iOS(manifest: m, executableName: m.binaryName).encode(),
+            options: [], format: nil
+        ) as? [String: Any])
+        let scenes = parsed["UIApplicationSceneManifest"] as? [String: Any]
+        #expect(scenes?["UIApplicationSupportsMultipleScenes"] as? Bool == true)
+
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let decoded = try decoder.decode(
+            PWAManifest.IOSSection.self, from: Data(#"{"multiple_windows": true}"#.utf8)
+        )
+        #expect(decoded.multipleWindows == true)
     }
 
     @Test("iOS plist switches to UILaunchStoryboardName when a storyboard is supplied")

@@ -3,10 +3,11 @@
     import SwiftPWACore
     import UIKit
 
-    /// Pairs an incoming `UIScene` with one of the `IOSWindow`s created
-    /// from the user's configure closure. The first scene to connect
-    /// triggers configure (since it's the first time we have a real
-    /// `UIWindow`), subsequent scenes pull the next pending window.
+    /// Pairs an incoming `UIScene` with an `IOSWindow`. The first scene to
+    /// connect runs configure (the first time there's a real `UIWindow`) and
+    /// takes the first window it creates; a later scene takes the window that
+    /// asked for it, or a new one if the system opened it (see
+    /// ``IOSAppContext/attachWindow(to:options:)``).
     @MainActor
     public final class SwiftPWASceneDelegate: UIResponder, UIWindowSceneDelegate {
         public var window: UIWindow?
@@ -27,12 +28,19 @@
             // First-scene boot: run the user's configure closure.
             if let configure = runtime.pendingConfigure {
                 runtime.pendingConfigure = nil
-                try? configure(context)
+                context.prepareLaunch(restoring: session)
+                do {
+                    try configure(context)
+                } catch {
+                    FileHandle.standardError.writeQuietly(Data("swift-pwa: configure threw: \(error)\n".utf8))
+                }
                 // Opt-in dev/test control socket — see `AppDriver`. Only the
                 // first scene starts it; a second one would fail to bind.
                 AppDriver.startIfRequested(context, backend: "ios")
+                context.finishLaunching(in: windowScene)
+            } else {
+                context.attachWindow(to: windowScene, options: connectionOptions)
             }
-            attachNextPendingWindow(to: windowScene)
 
             // Cold-launch open: a file that launched the app arrives here, not
             // via `scene(_:openURLContexts:)`. Emitted retained, so the WebView
@@ -57,6 +65,18 @@
         /// backgrounding (a system alert, the app switcher).
         public func sceneWillResignActive(_ scene: UIScene) {
             window(for: scene)?.emit(.didBlur)
+        }
+
+        /// The last moment the page is sure to be recorded before the system
+        /// can reclaim the scene or end the app.
+        public func sceneDidEnterBackground(_ scene: UIScene) {
+            window(for: scene)?.recordPage(in: scene.session)
+        }
+
+        public func sceneDidDisconnect(_ scene: UIScene) {
+            guard let window = window(for: scene) else { return }
+            window.recordPage(in: scene.session)
+            window.sceneDidDisconnect()
         }
 
         /// The `IOSWindow` showing in `scene`, if it has one attached yet:
@@ -88,19 +108,6 @@
             let events = IOSAppRuntime.shared.context.events
             OpenFile.emit(fileURLs.map(\.path), on: events)
             OpenURL.emit(urls.filter { !$0.isFileURL }.map(\.absoluteString), on: events)
-        }
-
-        private func attachNextPendingWindow(to windowScene: UIWindowScene) {
-            let context = IOSAppRuntime.shared.context
-            // Pick the first IOSWindow with no UIWindow attached.
-            let candidate = context.windows.values
-                .compactMap { $0 as? IOSWindow }
-                .first(where: { $0.uiWindow == nil })
-            guard let pending = candidate else { return }
-            let uiWindow = UIWindow(windowScene: windowScene)
-            uiWindow.rootViewController = pending.viewController
-            pending.uiWindow = uiWindow
-            uiWindow.makeKeyAndVisible()
         }
     }
 #endif

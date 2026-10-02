@@ -5,6 +5,66 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **More than one window on iPad, opted into with `ios.multiple_windows`**
+  (#287). iPad multi-window was scaffolded rather than usable:
+  - `ctx.createWindow` after launch made a window that never appeared, because
+    nothing asked iPadOS for a scene to show it in.
+  - A scene took whichever window had no scene yet, so with two waiting, which
+    page landed where was up to dictionary order.
+  - A window the system opened ("New Window" in the Dock, or one it brought
+    back on relaunch) had no content.
+  - A window closed from the system UI stayed in `ctx.windows` with its bridge
+    running, and its page and `beforeClose` were never told.
+
+  Now a window created after launch asks iPadOS for a scene of its own and is
+  paired with it by id. A window the system opens is built from the app's
+  first `WindowConfig` and shows the main page. One the system brings back, or
+  reconnects after reclaiming its memory, shows the page it last showed. That
+  page is recorded on the scene's session whenever the page or route changes,
+  and only a page of the app's own comes back. A window the system closes gets
+  the same teardown as `window.close`: the web view outlives its scene, so the
+  page still gets `pagehide` off screen and what it posted finishes. And
+  `window.focus` brings another window's scene forward.
+
+  It's opt-in because the old manifest declared multiple scenes for every app.
+  So iPadOS offered "New Window" for apps built around one window, and that
+  window came up empty. That matches macOS, where the user can't open a second
+  copy of an app's window either. Without the flag, and always on iPhone
+  (which shows one scene at a time), a second `ctx.createWindow` throws
+  `E_UNIMPLEMENTED` rather than returning a window that can never appear.
+
+  Measured with `Scripts/verify-close-flush-ios.sh --multi-window`, which now
+  also runs on a simulator (`--simulator <udid>`). Four rows, each checked by
+  markers the pages and the app write:
+  - **second-window:** a window the app opens closes itself.
+  - **system-close:** the same window, closed by the system.
+  - **system-window:** a scene nobody asked for.
+  - **restore:** a kill and relaunch while the second window is in front.
+
+  Results:
+  - iPad Pro 11" simulator: 4/4 on each of two passes.
+  - iPhone 17 simulator: the second window refused, and the backgrounding rows
+    still 2/2.
+
+  The restore row also showed that iPadOS forgets a window opened since the
+  app last went to the background if the app is killed while in front. That's
+  not the runtime's to fix, and it isn't how the system ends apps.
+
+### Fixed
+
+- **`window.setSize` shrank the page inside its own window on iOS.** It set
+  the `UIWindow`'s bounds, so the page drew in a box of that size and the rest
+  of the scene was black. A window fills its scene, and the scene's size is
+  the user's to set, so `setSize` now does nothing there, as `setPosition`
+  already did. Found by the #287 probe, which sizes its window on load the way
+  a desktop page might.
+- **An error thrown from `configure` on iOS vanished.** It was swallowed with
+  `try?`. It's now logged, as on macOS.
+
 ## [0.11.4] - 2026-10-02
 
 ### Added

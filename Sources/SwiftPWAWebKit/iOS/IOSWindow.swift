@@ -7,9 +7,9 @@
     /// iOS `Window` implementation. A `UIWindow` plus a single
     /// view controller hosting a `WKWebView` via `WKWebViewAdapter`.
     ///
-    /// The actual `UIWindow` is supplied by `SwiftPWASceneDelegate`
-    /// when a scene connects; until then the window is "pending" and
-    /// only its `webView` and `bridge` are live.
+    /// The actual `UIWindow` is supplied when its scene connects (see
+    /// ``IOSAppContext/createWindow(_:)``); until then the window is
+    /// "pending" and only its `webView` and `bridge` are live.
     @MainActor
     public final class IOSWindow: Window {
         public let id = WindowID()
@@ -23,7 +23,9 @@
         private var titleStorage: String
         private var continuations: [UUID: AsyncStream<WindowEvent>.Continuation] = [:]
 
-        public init(config: WindowConfig, app: IOSAppContext) throws {
+        /// `restoring` is the page to show instead of the config's entry, for
+        /// a window the system is bringing back (see ``RestoredPage``).
+        public init(config: WindowConfig, app: IOSAppContext, restoring: URL? = nil) throws {
             let cfg = WKWebViewConfiguration()
             if case let .bundled(directory, entry, spaFallback) = config.content {
                 app.assetProvider.setBundleRoot(directory, spaFallback: spaFallback, fallbackDocument: entry)
@@ -63,7 +65,37 @@
             bridge.start()
             // Before `load`, so the first navigation is policed too.
             adapter.attachWebPolicy(policy: app.externalURLs, opener: AppleURLOpener())
-            adapter.load(config.content)
+            adapter.load(RestoredPage.content(config.content, restoring: restoring))
+        }
+
+        func attach(to scene: UIWindowScene) {
+            let uiWindow = UIWindow(windowScene: scene)
+            uiWindow.rootViewController = viewController
+            self.uiWindow = uiWindow
+            uiWindow.makeKeyAndVisible()
+            recordPage(in: scene.session)
+            // Every page and every in-page route change, not only on going to
+            // the background: an app can end without getting there.
+            pageObservation = adapter.webView.observe(\.url) { [weak self] _, _ in
+                MainActor.assumeIsolated {
+                    guard let self, let session = self.uiWindow?.windowScene?.session else { return }
+                    self.recordPage(in: session)
+                }
+            }
+        }
+
+        private var pageObservation: NSKeyValueObservation?
+        private static let lastPageKey = "swift-pwa.page"
+
+        /// Remembers the page on the scene's session, which outlives both a
+        /// scene the system disconnects to reclaim memory and the app itself.
+        func recordPage(in session: UISceneSession) {
+            guard !closeRequested, let url = adapter.webView.url else { return }
+            session.userInfo = [Self.lastPageKey: url.absoluteString]
+        }
+
+        static func lastPage(in session: UISceneSession) -> URL? {
+            (session.userInfo?[lastPageKey] as? String).flatMap(URL.init(string:))
         }
 
         public func eventStream() -> AsyncStream<WindowEvent> {
@@ -88,10 +120,10 @@
         }
         public func title() -> String { titleStorage }
 
-        public func setSize(_ size: Size, animated _: Bool) {
-            // iOS windows fill their scene; size is informational only.
-            uiWindow?.bounds = CGRect(x: 0, y: 0, width: size.width, height: size.height)
-        }
+        /// A window fills its scene, and the scene's size is the user's to set.
+        /// Setting the `UIWindow`'s bounds instead shrank the page inside its
+        /// own window and left the rest of the scene black.
+        public func setSize(_: Size, animated _: Bool) {}
         public func size() -> Size {
             let s = uiWindow?.bounds.size ?? .zero
             return Size(width: Double(s.width), height: Double(s.height))
@@ -101,6 +133,11 @@
         public func position() -> Point { .zero }
 
         public func focus() {
+            // A scene that isn't in front only comes forward when the system
+            // is asked to activate it; making its window key does nothing.
+            if UIApplication.shared.supportsMultipleScenes, let session = uiWindow?.windowScene?.session {
+                UIApplication.shared.activateSceneSession(for: UISceneSessionActivationRequest(session: session))
+            }
             uiWindow?.makeKeyAndVisible()
             emit(.didFocus)
         }
@@ -116,16 +153,34 @@
         /// Closes once the page has finished and the app's `beforeClose`
         /// handlers have run (#281), then destroys the scene.
         public func close() {
+            finish(destroyingScene: true)
+        }
+
+        /// The system took the scene away: the user closed the window from the
+        /// system UI, or iPadOS reclaimed a background scene's memory. The web
+        /// view outlives its scene, so the page still departs and gets its
+        /// `pagehide` off screen, and `beforeClose(.window)` runs. A reclaimed
+        /// scene that comes back gets a new window, showing the page this one
+        /// recorded.
+        func sceneDidDisconnect() {
+            finish(destroyingScene: false)
+        }
+
+        private func finish(destroyingScene: Bool) {
             guard !closeRequested else { return }
             closeRequested = true
             let deadline = ContinuousClock.now + CloseBudget.window
+            let task = BackgroundTask(named: "swift-pwa window close")
             Task { @MainActor [weak self] in
+                defer { task.end() }
                 guard let self else { return }
                 await prepareToClose(until: deadline)
                 await CloseHandlers.shared.run(.window(id), until: deadline)
-                if let session = uiWindow?.windowScene?.session {
+                if destroyingScene, let session = uiWindow?.windowScene?.session {
                     UIApplication.shared.requestSceneSessionDestruction(session, options: nil, errorHandler: nil)
                 }
+                pageObservation = nil
+                uiWindow = nil
                 emit(.didClose)
                 for c in continuations.values { c.finish() }
                 continuations.removeAll()

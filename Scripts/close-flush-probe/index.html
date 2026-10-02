@@ -21,19 +21,61 @@ bridge.subscribe("window.subscribe", {}, (event) => {
 function becomeReady(marker) {
     window.ready = true;
     mark(marker);
-    bridge.invoke("probe.action", null).then((action) => {
+    bridge.invoke("probe.action", { value: prefix }).then((action) => {
         if (action === "quit") setTimeout(() => bridge.invoke("app.quit", {}), 500);
         if (action === "close") setTimeout(() => bridge.invoke("window.close"), 500);
-        // iPad multi-window: the first window opens a second, which closes
-        // itself; the first counts scenes before and after.
-        if (action === "second-window" && !prefix) {
-            bridge.invoke("probe.openScene", null);
-            [3000, 9000].forEach((t) => setTimeout(() => bridge.invoke("probe.sceneCount", null)
-                .then((n) => mark("scenes-" + n)), t));
-        }
-        if (action === "second-window" && prefix) setTimeout(() => bridge.invoke("window.close"), 1000);
+        if (multiWindow[action]) prefix ? multiWindow[action].second() : multiWindow[action].first();
     }).catch(() => {});
 }
+
+// iPad multi-window rows (#287). The first window starts from one scene,
+// does the row, and counts scenes; the second window's page (prefixed) plays
+// its part.
+const countScenes = (...times) => bridge.invoke("probe.countScenes", { value: times.join(",") });
+const recordSessions = () => bridge.invoke("probe.sessions", null).then((s) => mark("sessions " + s));
+const reset = () => bridge.invoke("probe.resetSessions", null);
+const after = (ms, body) => new Promise((resolve) => setTimeout(resolve, ms)).then(body);
+const multiWindow = {
+    // The app opens a window; it closes itself.
+    "second-window": {
+        first: () => reset().then(() => after(1500, () => {
+            bridge.invoke("probe.openScene", null);
+            countScenes(3000, 9000);
+        })),
+        second: () => after(1000, () => bridge.invoke("window.close")),
+    },
+    // The app opens a window; the system takes its scene away.
+    "system-close": {
+        first: () => reset().then(() => after(1500, () => {
+            bridge.invoke("probe.openScene", null);
+            countScenes(3000, 9000);
+        })),
+        second: () => after(1000, () => bridge.invoke("probe.dropScene", null)),
+    },
+    // The system opens a window nobody asked for, then the first one closes it.
+    "system-window": {
+        first: () => reset().then(() => after(1500, () => {
+            bridge.invoke("probe.systemScene", null);
+            countScenes(4000);
+            after(6000, reset);
+        })),
+        second: () => {},
+    },
+    // The app opens a window and leaves it, for the next launch to bring back.
+    "keep-second": {
+        first: () => reset().then(() => after(1500, () => {
+            bridge.invoke("probe.openScene", null);
+            countScenes(4000);
+            after(5000, recordSessions);
+        })),
+        second: () => {},
+    },
+    // After a relaunch: what came back.
+    "count": {
+        first: () => { recordSessions(); countScenes(4000); after(6000, reset); },
+        second: () => { recordSessions(); after(6000, reset); },
+    },
+};
 document.addEventListener("visibilitychange", () => {
     if (document.visibilityState !== "hidden") return;
     mark("hidden");

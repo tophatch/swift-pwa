@@ -379,9 +379,12 @@ inspector.focus()
 inspector.close()
 ```
 
-`ctx.createWindow` is supported on macOS / Linux / Windows. iOS is
-UIScene-aware: a single scene is polished, multi-scene scaffolded.
-The cross-platform `Window` protocol documents per-method support;
+`ctx.createWindow` is supported on macOS / Linux / Windows, and on iPad when
+`pwa.json` sets `ios.multiple_windows`: each window gets a scene of its own,
+and a window the system opens or brings back is built from the first config
+(see [docs/ios-setup.md](ios-setup.md#more-than-one-window-on-ipad)). iPhone
+shows one window, so a second `createWindow` throws there. Android opens a new
+Activity per window. The cross-platform `Window` protocol documents per-method support;
 unsupported operations log a one-shot warning rather than throwing.
 
 ## Where an app's files go
@@ -614,12 +617,12 @@ different feature with its own conventions on each platform, and isn't built.
 | macOS | close button / ⌘W / `window.close`; ⌘Q, `app.quit`, the last window under `.quit`, and logout / restart / shutdown (`applicationShouldTerminate`); SIGTERM |
 | GTK3 / GTK4 | the window manager's close, `window.close`, Ctrl+Q, `app.quit`, the last window; SIGTERM |
 | Windows | `WM_CLOSE` (close button, Alt+F4, `window.close`), Ctrl+Q, `app.quit`, the last window; `WM_ENDSESSION` (logoff, shutdown) |
-| iOS | going to the background (`.backgrounded`, under a background task); closing a scene with `window.close` |
+| iOS | going to the background (`.backgrounded`, under a background task); closing a window with `window.close` or from the system UI |
 | Android | `onStop` (`.backgrounded`); `app.quit` and closing the primary window |
 
 Verified with `Scripts/verify-close-flush.sh` (macOS, both Linux backends),
 `verify-close-flush.ps1` (Windows), `verify-close-flush-ios.sh` (with
-`--second-window` for closing one of two scenes on an iPad) and
+`--multi-window` for the iPad multi-window rows) and
 `verify-close-flush-android.sh`, which write a marker from every place a page
 or an app can hear it's going and read them back after the window or process
 has gone.

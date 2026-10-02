@@ -7,10 +7,6 @@
     /// iOS runtime. Bootstraps `UIApplication` with a UIScene-aware
     /// delegate; the configure closure runs as soon as the first scene
     /// is connected, so it has a real `UIWindow` to attach to.
-    ///
-    /// **Status**: scaffolded but the per-scene window plumbing is
-    /// minimal. Multi-scene iPad multitasking will land in a follow-up
-    /// once we have a real iOS test target running in CI.
     @MainActor
     public final class IOSAppRuntime {
         public static let shared = IOSAppRuntime()
@@ -81,14 +77,109 @@
             use(ClipboardPlugin(SystemClipboard()))
         }
 
+        /// An iOS window is a scene's, and a scene is the system's to make. So
+        /// a window starts detached: the one created while the app launches
+        /// takes the launching scene, and one created later asks iPadOS for a
+        /// scene of its own and is paired with it by id when it connects.
+        ///
+        /// Without multiple scenes (iPhone, or `ios.multiple_windows` off) a
+        /// second window has nowhere to appear, and saying so is better than
+        /// handing back a window nobody will ever see.
         @discardableResult
         public func createWindow(_ config: WindowConfig) throws -> any Window {
-            // iOS windows are tied to a scene; we instantiate a
-            // detached IOSWindow now and the SceneDelegate attaches
-            // it to a UIWindow when a scene connects.
-            let win = try IOSWindow(config: config, app: self)
+            guard windows.isEmpty || UIApplication.shared.supportsMultipleScenes else {
+                throw BridgeError(
+                    code: BridgeError.unimplemented,
+                    message: "This app shows one window at a time: a second window needs an iPad "
+                        + "and \"multiple_windows\": true in pwa.json's ios section"
+                )
+            }
+            let restoring = launched ? nil : launchRestoreURL
+            launchRestoreURL = nil
+            let win = try IOSWindow(config: config, app: self, restoring: restoring)
             windows[win.id] = win
+            if primaryConfig == nil { primaryConfig = config }
+            if launched {
+                requestScene(for: win)
+            } else {
+                windowsAwaitingLaunch.append(win)
+            }
             return win
+        }
+
+        /// The first window's config. A window the system opens or brings
+        /// back is built from it, showing the page it last showed.
+        private var primaryConfig: WindowConfig?
+        private var launched = false
+        private var windowsAwaitingLaunch: [IOSWindow] = []
+        /// What the launching scene last showed, when the system is bringing
+        /// back a multi-window app's windows; the first window created loads it
+        /// instead of its entry.
+        private var launchRestoreURL: URL?
+
+        static let windowActivityType = "swift-pwa.window"
+        private static let windowIDKey = "windowID"
+
+        /// The launching scene connected and `configure` ran: the first window
+        /// it created takes `scene`, and any more ask for scenes of their own.
+        func finishLaunching(in scene: UIWindowScene) {
+            launched = true
+            let waiting = windowsAwaitingLaunch
+            windowsAwaitingLaunch = []
+            guard let first = waiting.first else { return }
+            first.attach(to: scene)
+            for window in waiting.dropFirst() {
+                requestScene(for: window)
+            }
+        }
+
+        func prepareLaunch(restoring session: UISceneSession) {
+            if UIApplication.shared.supportsMultipleScenes, let url = IOSWindow.lastPage(in: session) {
+                launchRestoreURL = url
+            }
+        }
+
+        /// The window for a scene that connected after launch: the one that
+        /// asked for it, or, for a scene the system opened or brought back, a
+        /// new window from the app's first config showing what that scene
+        /// last showed.
+        func attachWindow(to scene: UIWindowScene, options: UIScene.ConnectionOptions) {
+            let requested = options.userActivities
+                .first { $0.activityType == Self.windowActivityType }?
+                .userInfo?[Self.windowIDKey] as? String
+            if let requested {
+                guard let window = windows[WindowID(raw: requested)] as? IOSWindow, window.uiWindow == nil else {
+                    // The window that asked was closed before its scene came.
+                    UIApplication.shared.requestSceneSessionDestruction(scene.session, options: nil)
+                    return
+                }
+                window.attach(to: scene)
+                return
+            }
+            guard let primaryConfig else { return }
+            do {
+                let window = try IOSWindow(
+                    config: primaryConfig, app: self, restoring: IOSWindow.lastPage(in: scene.session)
+                )
+                windows[window.id] = window
+                window.attach(to: scene)
+            } catch {
+                FileHandle.standardError.writeQuietly(Data(
+                    "swift-pwa: couldn't make a window for a scene iPadOS opened: \(error)\n".utf8
+                ))
+            }
+        }
+
+        private func requestScene(for window: IOSWindow) {
+            let activity = NSUserActivity(activityType: Self.windowActivityType)
+            activity.userInfo = [Self.windowIDKey: window.id.raw]
+            let request = UISceneSessionActivationRequest(role: .windowApplication, userActivity: activity)
+            UIApplication.shared.activateSceneSession(for: request) { [weak window] error in
+                FileHandle.standardError.writeQuietly(Data(
+                    "swift-pwa: iPadOS didn't open a scene for a new window: \(error)\n".utf8
+                ))
+                Task { @MainActor in window?.close() }
+            }
         }
 
         public func use(_ plugin: any Plugin) {
@@ -124,13 +215,7 @@
         }
 
         private func flushForBackground() {
-            final class BackgroundTask: @unchecked Sendable {
-                var id = UIBackgroundTaskIdentifier.invalid
-            }
-            let task = BackgroundTask()
-            task.id = UIApplication.shared.beginBackgroundTask(withName: "swift-pwa beforeClose") {
-                UIApplication.shared.endBackgroundTask(task.id)
-            }
+            let task = BackgroundTask(named: "swift-pwa beforeClose")
             let deadline = ContinuousClock.now + CloseBudget.backgrounded
             let windows = windows.values.compactMap { $0 as? IOSWindow }
             Task { @MainActor in
@@ -140,8 +225,28 @@
                     }
                     group.addTask { await CloseHandlers.shared.run(.backgrounded, until: deadline) }
                 }
-                UIApplication.shared.endBackgroundTask(task.id)
+                task.end()
             }
+        }
+    }
+
+    /// Time to finish in, should the app be in the background: what a closing
+    /// window or a backgrounding app has left to run would otherwise be
+    /// suspended mid-flight.
+    @MainActor
+    final class BackgroundTask {
+        private var id = UIBackgroundTaskIdentifier.invalid
+
+        init(named name: String) {
+            id = UIApplication.shared.beginBackgroundTask(withName: name) { [weak self] in
+                MainActor.assumeIsolated { self?.end() }
+            }
+        }
+
+        func end() {
+            guard id != .invalid else { return }
+            UIApplication.shared.endBackgroundTask(id)
+            id = .invalid
         }
     }
 

@@ -244,7 +244,9 @@ const unsub = __SWIFT_PWA__.subscribe('window.subscribe', {}, (event) => {
 ```
 
 `Window.position()` / `setPosition` / `.didMove` are no-ops on the GTK4
-backend (Wayland refuses to give apps their own position).
+backend (Wayland refuses to give apps their own position). On iOS a window
+fills its scene, whose size is the user's to set, so `setSize`, `setPosition`,
+`minimize` and `maximize` do nothing there; `window.size` reports the scene's.
 
 #### A picture of your own content
 

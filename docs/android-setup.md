@@ -867,6 +867,29 @@ the process is still scheduled. A spawned secondary Activity doesn't report —
 it doesn't own the runtime, and its lifecycle would otherwise read as the
 primary's. JS sees the same events through `window.events`.
 
+### Back, and an Activity that goes while the app stays
+
+**Back goes back in the page first**, the way Chrome and installed web apps
+do: while the WebView has history, Back runs it, so a single-page app gets its
+`popstate` and routes the way it does in a browser. An entry pushed without a
+user gesture doesn't count, because Chromium skips those going back. So push
+from the tap that navigates, not from a timer. At the root the generated
+Activity stands aside and Android decides. On Android 12+ an app the user
+opened from the launcher then stays running in the background, with the
+system's back-to-home animation; the callback is only enabled while there's
+history, because an always-on one would lose both.
+
+**The Swift runtime outlives its Activity.** Android can still finish the root
+Activity while keeping the process: Back on an app started some other way (a
+deep link from another app, `adb`), or the system destroying an Activity to
+reclaim memory. The runtime starts once per process and keeps running, and the
+next primary Activity attaches to it. The primary window keeps its id and shows
+the page it was showing, which is how Android expects a recreated Activity to
+carry on, so a `Window` the app holds keeps working. `configure` doesn't run
+again. The page in the new WebView is a fresh document on the same URL: what it
+kept in memory is gone, as after any reload, and `onStop` already ran the
+`.backgrounded` flush before the old one went.
+
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important

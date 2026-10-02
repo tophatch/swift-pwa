@@ -77,6 +77,9 @@ private let probeAction: String = {
 
 @MainActor
 func registerCloseProbe(_ ctx: any AppContext) {
+    // Once per `configure`: a runtime that starts twice in one process runs
+    // it twice (#288).
+    appendMarker("configure")
     // Once per page prefix: a window the system opens shows the same page,
     // and mustn't run the action a second time.
     let actionTaken = TakenActions()

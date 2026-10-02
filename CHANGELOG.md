@@ -55,8 +55,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app last went to the background if the app is killed while in front. That's
   not the runtime's to fix, and it isn't how the system ends apps.
 
+### Changed
+
+- **Back on Android goes back in the page first** (#288). While the WebView
+  has history, Back runs it, as Chrome and installed web apps do, so a
+  single-page app gets its `popstate`. Before, Back always left the app, even
+  from three screens deep in it. At the root the generated Activity stands
+  aside and Android decides, which on Android 12+ keeps an app opened from the
+  launcher running in the background with the system's back-to-home
+  animation. The callback is only enabled while there's history, since an
+  always-on one would lose both. An entry pushed without a user gesture
+  doesn't count: Chromium skips those going back, and the probe first measured
+  exactly that, a `pushState` from a timer that Back never reached.
+
 ### Fixed
 
+- **A relaunch after Back started a second Swift runtime on Android** (#288).
+  Android can finish the root Activity and keep the process: Back on an app
+  started from a deep link or `adb`, or the system destroying an Activity to
+  reclaim memory. Nothing told Swift, and the next primary Activity started
+  `swiftPwaMain()` again. That ran a second runtime beside the first, and the
+  app's `configure` a second time. On a Galaxy Tab S10+ that left two runtime
+  threads after one Back and a relaunch, with every `beforeClose` handler
+  registered twice. Ending the process on Back was tried and dropped, because
+  apps rely on staying warm. Instead:
+  - the runtime starts once per process and outlives its Activity;
+  - the next primary Activity attaches to it, and the primary window keeps its
+    id and shows the page it was showing, as a recreated Activity should;
+  - `configure` doesn't run again.
+
+  `AndroidAppRuntime.run` also refuses a second start itself, so an app built
+  by an older CLI attaches the new Activity instead of running `configure`
+  twice. Its extra thread can't return, so it parks.
+
+  `Scripts/verify-close-flush-android.sh` gains two Back rows and a `-r` row
+  filter. On a Tab S10+ all 5 rows passed on each of three passes:
+  - **Back (history):** a tap pushes an entry, and Back fires `popstate` with
+    the app still on screen.
+  - **Back (root):** same process, one runtime thread, `configure` once, and
+    the page back on its route.
+
+  The root row also passed 2/2 with Android's "Don't keep activities" setting
+  forcing the system-destroys-it case. An unguarded Activity, standing in for
+  an older CLI, was caught by the runtime's own guard.
 - **`window.setSize` shrank the page inside its own window on iOS.** It set
   the `UIWindow`'s bounds, so the page drew in a box of that size and the rest
   of the scene was black. A window fills its scene, and the scene's size is

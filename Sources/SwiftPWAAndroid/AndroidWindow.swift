@@ -65,6 +65,7 @@
         public let role: AndroidWindowRole
 
         let adapter: AndroidWebViewAdapter
+        private let content: WindowContent
 
         /// Pumps inbound JSON frames from the adapter's stream and
         /// dispatches them through the registry; same shape as the
@@ -97,6 +98,7 @@
             id = WindowID()
             self.role = role
             currentTitle = config.title
+            content = config.content
             adapter = AndroidWebViewAdapter()
             webView = adapter
 
@@ -225,6 +227,19 @@
                 }
             }
             await preparation?.value
+        }
+
+        /// Load this window into a new primary Activity's WebView: `url`, the
+        /// page the last one showed, when it's one of this window's own (the
+        /// bundle, or the same site for a `.remote` window), else the window's
+        /// content from the start.
+        func show(restoring url: URL?) {
+            let home = URL(string: AndroidWebViewAdapter.resolveURL(for: content))
+            if let url, url != Self.departureURL, let origin = WebOrigin(url), origin == home.flatMap(WebOrigin.init) {
+                adapter.load(.remote(url))
+            } else {
+                adapter.load(content)
+            }
         }
 
         /// The Activity stopped: let what the page posted as it went hidden

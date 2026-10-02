@@ -25,6 +25,18 @@ function becomeReady(marker) {
         if (action === "quit") setTimeout(() => bridge.invoke("app.quit", {}), 500);
         if (action === "close") setTimeout(() => bridge.invoke("window.close"), 500);
         if (multiWindow[action]) prefix ? multiWindow[action].second() : multiWindow[action].first();
+        // Android Back (#288): a history entry for Back to walk, or a route
+        // for a relaunch to come back to.
+        // On a tap: Chromium skips a history entry pushed without a user
+        // gesture when going back, so a timer's push would never be reached.
+        if (action === "push-history") addEventListener("click", () => {
+            history.pushState({}, "", "?pushed=1");
+            mark("pushed");
+        }, { once: true });
+        if (action === "replace-route") setTimeout(() => {
+            sessionStorage.setItem("seen", "1");
+            location.replace("index.html?restored=1");
+        }, 500);
     }).catch(() => {});
 }
 
@@ -83,6 +95,10 @@ document.addEventListener("visibilitychange", () => {
     // pagehide: the runtime has to stay up for this to land.
     bridge.invoke("probe.slowWrite", { value: prefix + "hidden-slow" });
 });
+addEventListener("popstate", () => mark("popstate"));
+// The replaced route, shown again by a new WebView (whose sessionStorage
+// starts empty) after its Activity went.
+if (location.search.includes("restored=1") && !sessionStorage.getItem("seen")) mark("restored");
 addEventListener("pagehide", () => {
     mark("pagehide");
     bridge.invoke("probe.slowWrite", { value: prefix + "pagehide-slow" });

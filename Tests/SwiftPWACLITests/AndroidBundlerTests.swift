@@ -702,6 +702,25 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("bridge.attach()"))
     }
 
+    /// Back can finish the root Activity while Android keeps the process, and
+    /// the next primary used to start a second runtime beside the first,
+    /// running the app's `configure` again (#288).
+    @Test("MainActivity starts the runtime once per process and hands a new primary to it")
+    func mainActivityRuntimeOncePerProcess() throws {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains("var runtimeStarted = false"))
+        let start = try #require(activity.range(of: "if (!runtimeStarted) {"))
+        let thread = try #require(activity.range(of: "thread(name = \"swift-pwa-runtime\""))
+        #expect(start.upperBound < thread.lowerBound, "the runtime thread starts only behind the guard")
+        #expect(activity.contains(".put(\"state\", \"reattached\")"))
+        #expect(activity.contains("lastPrimaryUrl = webView.url"))
+        // Back walks the page's history, and stands aside at the root.
+        #expect(activity.contains("object : OnBackPressedCallback(false)"))
+        #expect(activity.contains("historyBack.isEnabled = canGoBack"))
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        #expect(bridge.contains("override fun doUpdateVisitedHistory("))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

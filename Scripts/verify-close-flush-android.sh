@@ -14,6 +14,13 @@
 #                 going hidden, and `beforeClose(.backgrounded)`.
 #   app.quit      the page calls it; the page gets its real unload first.
 #   window.close  the primary window closing, which quits the app.
+#   Back (history)  Back with a history entry goes back in the page (its
+#                 `popstate`) and leaves the app where it is.
+#   Back (root)   Back at the root. Launched the way this harness launches,
+#                 Android finishes the Activity but keeps the process; the
+#                 runtime has to outlive it (#288). `onStop` flushes, and a
+#                 relaunch attaches to the same runtime: one runtime thread,
+#                 `configure` run once, and the page back on the route it had.
 #
 # There is no driver for Android, so the page is told what to do by a file the
 # harness drops into the app's data with `run-as` before launch.
@@ -27,17 +34,20 @@
 #     -s  adb serial (default: the only attached device)
 #     -k  keep the scaffolded app directory
 #     -n  don't rebuild — reuse the app installed by a previous -k run
+#     -r  run only the rows whose name contains this text
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERIAL=""
 KEEP=0
 BUILD=1
-while getopts "s:kn" opt; do
+ONLY=""
+while getopts "s:knr:" opt; do
     case "$opt" in
         s) SERIAL="$OPTARG" ;;
         k) KEEP=1 ;;
         n) BUILD=0; KEEP=1 ;;
+        r) ONLY="$OPTARG" ;;
         *) echo "usage: $0 [-s serial] [-k] [-n]" >&2; exit 2 ;;
     esac
 done
@@ -95,8 +105,10 @@ MARKERS_DIR="$("${ADB[@]}" shell run-as "$PKG" find . -name close-flush-markers.
 [ -n "$MARKERS_DIR" ] || { echo "::error::the probe never wrote its markers file — did the app start?"; exit 1; }
 
 PASS=0; FAIL=0
+wanted() { [ -z "$ONLY" ] || [[ "$1" == *"$ONLY"* ]]; }
 run_row() { # row action control expected...
     local row="$1" action="$2" control="$3"; shift 3
+    wanted "$row" || return 0
     "${ADB[@]}" shell am force-stop "$PKG"
     "${ADB[@]}" shell run-as "$PKG" sh -c "'echo $action > $MARKERS_DIR/close-probe-action.txt'"
     "${ADB[@]}" logcat -c
@@ -124,9 +136,78 @@ run_row() { # row action control expected...
     fi
 }
 
+# Launch with `action` written for the page and wait for it to be ready.
+launch_ready() {
+    "${ADB[@]}" shell am force-stop "$PKG"
+    "${ADB[@]}" shell run-as "$PKG" sh -c "'echo $1 > $MARKERS_DIR/close-probe-action.txt'"
+    "${ADB[@]}" logcat -c
+    "${ADB[@]}" shell am start -n "$PKG/.MainActivity" >/dev/null
+    wait_marker ready
+}
+wait_marker() { # marker [seconds]
+    for _ in $(seq 1 "${2:-30}"); do
+        "${ADB[@]}" logcat -d -s swift-pwa 2>/dev/null | grep -q "CLOSEPROBE $1" && return 0
+        sleep 1
+    done
+    return 1
+}
+markers() { "${ADB[@]}" logcat -d -s swift-pwa 2>/dev/null | sed -n 's/.*CLOSEPROBE \(.*\)$/\1/p' | tr -d '\r'; }
+pid_of() { "${ADB[@]}" shell pidof "$PKG" | tr -d '\r' || true; }
+runtime_threads() { "${ADB[@]}" shell "cat /proc/$1/task/*/comm" 2>/dev/null | grep -c swift-pwa-runti || true; }
+our_activity_resumed() {
+    "${ADB[@]}" shell dumpsys activity activities | grep -m1 topResumedActivity | grep -q "$PKG/.MainActivity"
+}
+verdict() { # row, failure or empty
+    local got; got="$(markers | tr '\n' ' ')"
+    if [ -z "$2" ]; then echo "  PASS  $1 — [$got]"; PASS=$((PASS+1))
+    else echo "  FAIL  $1 — $2 [$got]"; FAIL=$((FAIL+1)); fi
+}
+
+back_history_row() {
+    wanted "Back (history)" || return 0
+    launch_ready push-history || { verdict "Back (history)" "the app never became ready"; return; }
+    sleep 1
+    # A tap, so the page's push carries a user gesture (see the probe).
+    local size; size="$("${ADB[@]}" shell wm size | sed -n 's/.*: \([0-9]*\)x\([0-9]*\).*/\1 \2/p' | tail -1)"
+    "${ADB[@]}" shell input tap $((${size% *} / 2)) $((${size#* } / 2))
+    wait_marker pushed 5 || { verdict "Back (history)" "control: the tap never pushed a history entry"; return; }
+    sleep 1
+    "${ADB[@]}" shell input keyevent KEYCODE_BACK
+    if ! wait_marker popstate 6; then verdict "Back (history)" "no popstate: Back didn't go back in the page"
+    elif ! our_activity_resumed; then verdict "Back (history)" "the app left the screen"
+    else verdict "Back (history)" ""; fi
+}
+
+back_root_row() {
+    wanted "Back (root)" || return 0
+    launch_ready replace-route || { verdict "Back (root)" "the app never became ready"; return; }
+    sleep 2
+    local pid; pid="$(pid_of)"
+    "${ADB[@]}" shell input keyevent KEYCODE_BACK
+    sleep 6
+    local after; after="$(pid_of)"
+    if [ "$after" != "$pid" ]; then verdict "Back (root)" "the process went (pid $pid → ${after:-none})"; return; fi
+    if ! markers | grep -qx swift:backgrounded; then verdict "Back (root)" "control: no onStop flush"; return; fi
+    if "${ADB[@]}" shell dumpsys activity activities | grep -q "$PKG/.MainActivity t"; then
+        echo "        (Back kept the Activity this time, so the relaunch below resumes it)"
+    fi
+    "${ADB[@]}" shell am start -n "$PKG/.MainActivity" >/dev/null
+    sleep 6
+    local threads configures
+    threads="$(runtime_threads "$(pid_of)")"
+    configures="$(markers | grep -cx configure || true)"
+    if [ "$(pid_of)" != "$pid" ]; then verdict "Back (root)" "the relaunch was a new process"
+    elif [ "$threads" -ne 1 ]; then verdict "Back (root)" "$threads runtime threads after the relaunch"
+    elif [ "$configures" -ne 1 ]; then verdict "Back (root)" "configure ran $configures times"
+    elif ! markers | grep -qx restored; then verdict "Back (root)" "the page didn't come back on its route"
+    else verdict "Back (root)" ""; fi
+}
+
 run_row "backgrounded (Home)" background hidden hidden hidden-slow swift:backgrounded
 run_row "app.quit" quit pagehide willClose pagehide pagehide-slow swift:quit
 run_row "window.close (primary)" close pagehide willClose pagehide pagehide-slow swift:window swift:quit
+back_history_row
+back_root_row
 
 "${ADB[@]}" shell run-as "$PKG" rm -f "$MARKERS_DIR/close-probe-action.txt" || true
 echo

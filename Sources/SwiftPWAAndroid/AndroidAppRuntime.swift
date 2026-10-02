@@ -28,10 +28,10 @@
     ///      runner), runs the user's `configure` closure
     ///      synchronously on the worker thread, then **blocks** on a
     ///      semaphore until `quit(exitCode:)` is called.
-    ///   4. `quit(exitCode:)` releases the semaphore. `run` returns
-    ///      to its caller (which on Android is the worker thread's
-    ///      JNI bootstrap), which then signals back to Kotlin to
-    ///      tear the Activity down.
+    ///   4. `quit(exitCode:)` releases the semaphore and `run` ends the
+    ///      process. An Activity finishing doesn't: the runtime starts once
+    ///      per process, and a later primary Activity attaches to it
+    ///      (#288).
     ///
     /// `MainThread.run` is wired to a JNI hop to
     /// `Handler(Looper.getMainLooper()).post(...)`, mirroring the
@@ -89,6 +89,20 @@
         public nonisolated func run(
             _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) throws -> Never {
+            // Once per process (#288). The generated Activity starts the
+            // runtime only once, but one built by an older CLI starts it again
+            // for each new primary Activity, and a second run would run the
+            // app's `configure` again beside the first. This thread can't
+            // return, so it gives the running window the new WebView and parks.
+            guard Self.claimTheProcess() else {
+                RuntimeDiagnostics.emit(
+                    "swift-pwa: the runtime is already running; attaching the new Activity to it"
+                )
+                AndroidAppContext.shared.reattachPrimary(showing: nil)
+                while true {
+                    DispatchSemaphore(value: 0).wait()
+                }
+            }
             installMainThreadHook()
 
             let context = AndroidAppContext.shared
@@ -148,12 +162,18 @@
             // `configure`, because the Activity is already resumed by the time
             // the runtime thread starts and the first push can beat it.
             AndroidHostEventRouter.subscribe(channel: "window.lifecycle") { data in
-                struct Payload: Decodable { let state: String }
+                struct Payload: Decodable {
+                    let state: String
+                    let url: String?
+                }
                 guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
                 switch payload.state {
                 case "resumed": context.activeWindow?.emit(.didFocus)
                 case "paused": context.activeWindow?.emit(.didBlur)
                 case "stopped": context.flushForBackground()
+                // A new primary Activity, the runtime having outlived the last
+                // one (#288).
+                case "reattached": context.reattachPrimary(showing: payload.url.flatMap(URL.init(string:)))
                 default: break
                 }
             }
@@ -229,18 +249,26 @@
                 swiftpwa_android_log("configure threw: \(error)")
             }
 
-            // Block until `quit(exitCode:)` is invoked. The semaphore
-            // is signalled by `AndroidAppContext.completeRun`, which
-            // the JNI quit trampoline calls when the Activity's
-            // `onDestroy` runs.
+            // Block until `quit(exitCode:)` is invoked: `app.quit`, or the
+            // primary window closing. An Activity finishing doesn't end the
+            // runtime; the next one attaches to it (#288).
             context.runSemaphore.wait()
 
-            // Protocol contract is `-> Never`. Calling `exit()` here
-            // tears down the JVM process; the Activity has already
-            // been destroyed by the time we get here (since the
-            // semaphore was signalled from `onDestroy`'s teardown
-            // path), so no UI cleanup is leaked.
+            // Protocol contract is `-> Never`. The page and the app's
+            // `beforeClose` handlers have already finished, so ending the
+            // process here leaks nothing.
             exit(context.pendingExitCode ?? 0)
+        }
+
+        private static let processLock = NSLock()
+        private nonisolated(unsafe) static var processClaimed = false
+
+        private static func claimTheProcess() -> Bool {
+            processLock.lock()
+            defer { processLock.unlock() }
+            guard !processClaimed else { return false }
+            processClaimed = true
+            return true
         }
 
         private func installMainThreadHook() {

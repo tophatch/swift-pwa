@@ -6,11 +6,12 @@
 
     /// Android-side `AppContext`.
     ///
-    /// Singleton because there is one `Activity` per process and the
-    /// JNI bridge is process-wide. The Kotlin `SwiftPWABridge` is
-    /// attached once at `Activity.onCreate` and detached at
-    /// `Activity.onDestroy`; the singleton tracks the resulting
-    /// window state and routes inbound JSON frames to it.
+    /// Singleton because there is one runtime per process and the JNI
+    /// bridge is process-wide. Each `Activity` attaches its Kotlin
+    /// `SwiftPWABridge` in `onCreate` and detaches it in `onDestroy`; the
+    /// runtime, and this context, outlive any one of them (#288). The
+    /// singleton tracks the window state and routes inbound JSON frames to
+    /// whichever window is active.
     /// The cross-platform `AppContext` protocol is `@MainActor`, but
     /// on Android we can't actually hop to a Swift-runtime MainActor
     /// (libdispatch's main queue isn't drained by anyone, so
@@ -251,8 +252,23 @@
             }
         }
 
-        /// Called from the JNI quit trampoline (binder thread) or
-        /// from `quit(exitCode:)` (MainActor). Sets the exit code if
+        /// A new primary Activity attached to this runtime, which outlived the
+        /// one before it: Back finished that one while Android kept the
+        /// process, or the system destroyed it to reclaim memory (#288). To
+        /// the app it's the same window, so the primary window keeps its id
+        /// and shows the page it was showing in the new WebView, the way
+        /// Android expects a recreated Activity to carry on. `configure`
+        /// doesn't run again.
+        nonisolated func reattachPrimary(showing url: URL?) {
+            guard let primary = windows.values.lazy.compactMap({ $0 as? AndroidWindow })
+                .first(where: { $0.role == .primary })
+            else { return }
+            activeWindow = primary
+            primary.show(restoring: url)
+        }
+
+        /// Called from the JNI quit trampoline, which `app.quit` and a
+        /// closing primary window reach through `quit(exitCode:)`. Sets the exit code if
         /// not already set, then signals the run semaphore so
         /// `AndroidAppRuntime.run` unblocks.
         ///

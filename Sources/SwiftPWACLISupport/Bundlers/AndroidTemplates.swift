@@ -709,6 +709,7 @@ enum AndroidTemplates {
         import android.os.Build
         import android.os.Bundle
         import android.webkit.WebView
+        import androidx.activity.OnBackPressedCallback
         import androidx.appcompat.app.AppCompatActivity
         import androidx.webkit.WebViewAssetLoader
         import dev.swiftpwa.runtime.SwiftPWABridge
@@ -731,6 +732,7 @@ enum AndroidTemplates {
         /// first biometric / file-picker call.
         class MainActivity : AppCompatActivity() {
             private lateinit var bridge: SwiftPWABridge
+            private lateinit var webView: WebView
             private var isSecondary: Boolean = false
 
             /// False for the redundant-primary instance that forwards its
@@ -761,6 +763,20 @@ enum AndroidTemplates {
                 /// takes over normally.
                 @JvmStatic
                 var runtimeOwner: MainActivity? = null
+
+                /// The Swift runtime starts once per process and outlives the
+                /// Activity that started it. Back can finish a root Activity
+                /// while Android keeps the process, and the system can destroy
+                /// one to reclaim memory; the next primary attaches to the
+                /// running runtime rather than starting a second one, which
+                /// would run the app's `configure` again (#288).
+                @JvmStatic
+                var runtimeStarted = false
+
+                /// What the owner was showing when it went, for the next
+                /// primary to show again: to the user it's the same window.
+                @JvmStatic
+                var lastPrimaryUrl: String? = null
             }
 
             override fun onCreate(savedInstanceState: Bundle?) {
@@ -782,7 +798,7 @@ enum AndroidTemplates {
                     return
                 }
 
-                val webView = WebView(this)\(backgroundColorLine)
+                webView = WebView(this)\(backgroundColorLine)
                 setContentView(webView)
 
                 if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -812,6 +828,18 @@ enum AndroidTemplates {
                 bridge = SwiftPWABridge(this, webView, assetLoader)
                 bridge.attach()
 
+                // Back walks the page's own history first, the way Chrome and
+                // installed web apps do, so a single-page app gets its
+                // `popstate`. At the root the callback stands aside and the
+                // system decides: on Android 12+ that keeps an app opened from
+                // the launcher running, with the system's back-to-home
+                // animation, and an always-on callback would lose both.
+                val historyBack = object : OnBackPressedCallback(false) {
+                    override fun handleOnBackPressed() { webView.goBack() }
+                }
+                onBackPressedDispatcher.addCallback(this, historyBack)
+                bridge.onHistoryChanged = { canGoBack -> historyBack.isEnabled = canGoBack }
+
                 // Secondary-window mode is signalled by the
                 // `swift-pwa.config-json` intent extra, set by
                 // `SwiftPWABridge.spawnWindow` when the Swift side
@@ -839,12 +867,23 @@ enum AndroidTemplates {
                     }
                 } else {
                     runtimeOwner = this
-                    // Hand control to the Swift runtime on a worker
-                    // thread. The runtime blocks until `quit()` is
-                    // invoked; running on the UI thread would
-                    // deadlock the WebView's own event pump.
-                    thread(name = "swift-pwa-runtime", isDaemon = false) {
-                        swiftPwaMain()
+                    if (!runtimeStarted) {
+                        runtimeStarted = true
+                        // Hand control to the Swift runtime on a worker
+                        // thread. The runtime blocks until `quit()` is
+                        // invoked; running on the UI thread would
+                        // deadlock the WebView's own event pump.
+                        thread(name = "swift-pwa-runtime", isDaemon = false) {
+                            swiftPwaMain()
+                        }
+                    } else {
+                        // The runtime is still running from an earlier
+                        // Activity: give its window this WebView, showing
+                        // what the last one was.
+                        push(
+                            JSONObject().put("channel", "window.lifecycle").put("state", "reattached")
+                                .put("url", lastPrimaryUrl ?: JSONObject.NULL)
+                        )
                     }
                     // A file or deep link this app was opened *with* ("Open
                     // with" / share / a `myapp://` link) rides in on the launch
@@ -910,7 +949,10 @@ enum AndroidTemplates {
             }
 
             override fun onDestroy() {
-                if (runtimeOwner === this) runtimeOwner = null
+                if (runtimeOwner === this) {
+                    if (hasBridge) lastPrimaryUrl = webView.url
+                    runtimeOwner = null
+                }
                 if (hasBridge) bridge.detach()
                 super.onDestroy()
             }
@@ -1301,6 +1343,15 @@ enum AndroidTemplates {
                         }
                     }
 
+                    // Every history change, pushState included, so Back knows
+                    // whether the page has somewhere to go back to. (An entry
+                    // pushed without a user gesture doesn't count: Chromium
+                    // skips those going back, and `canGoBack` agrees.)
+                    override fun doUpdateVisitedHistory(view: WebView, url: String?, isReload: Boolean) {
+                        super.doUpdateVisitedHistory(view, url, isReload)
+                        onHistoryChanged?.invoke(view.canGoBack())
+                    }
+
                     override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
                         super.onPageStarted(view, url, favicon)
                         if (!WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -1365,6 +1416,9 @@ enum AndroidTemplates {
             // -------------------------------------------------------------
             // Lifecycle
             // -------------------------------------------------------------
+
+            /// Told whether the page can go back, after every history change.
+            var onHistoryChanged: ((Boolean) -> Unit)? = null
 
             fun attach() {
                 nativeAttach(this)

@@ -46,9 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - **restore:** a kill and relaunch while the second window is in front.
 
   Results:
+  - iPad Pro 11" (M5): 12/12 over three passes.
   - iPad Pro 11" simulator: 4/4 on each of two passes.
   - iPhone 17 simulator: the second window refused, and the backgrounding rows
-    still 2/2.
+    still 2/2. The device row wasn't run (the phone was locked); it's the same
+    code path as an iPad app without the flag.
 
   The restore row also showed that iPadOS forgets a window opened since the
   app last went to the background if the app is killed while in front. That's

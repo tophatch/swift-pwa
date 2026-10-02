@@ -272,6 +272,15 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// makes iOS treat the app as iPhone-only and letterbox it on iPad.
         /// Override here to ship phone-only (`[1]`) or iPad-only (`[2]`).
         public var deviceFamily: [Int]?
+        /// Let the app have more than one window on iPad
+        /// (`UIApplicationSupportsMultipleScenes`). Off by default, which is
+        /// what a desktop app gets too: the system offers no "New Window", and
+        /// a second `ctx.createWindow` throws rather than making a window that
+        /// can never appear. On, iPadOS shows its window controls, a window the
+        /// app creates opens beside the others, and a window the system opens
+        /// or brings back shows the page that window last showed (the app's
+        /// main page for a new one). iPhone shows one window regardless.
+        public var multipleWindows: Bool?
         /// Arbitrary keys merged into the generated iOS `Info.plist`, after
         /// swift-pwa's own (override on collision). See
         /// ``MacOSSection/infoPlist``.

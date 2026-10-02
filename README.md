@@ -316,7 +316,7 @@ For codesigning, device deployment, and Linux GTK setup, see [Platform setup](#p
 | App driver (`drive`/`mcp`)²²  |           Yes           |          Partial²²           |            Yes             |        Partial²²        |           Yes            |           —²³            |
 | Agent tools (`agent.*`)²⁴     |           Yes           |              —               |            Yes             |           Yes           |           Yes            |           —²⁴            |
 
-1. iOS UIScene single scene polished, multi-scene scaffolded.
+1. iPad, opted into with `"ios": { "multiple_windows": true }`: each window gets a scene of its own, and a window the system opens or brings back shows the app's page. iPhone shows one window. Detail: [docs/ios-setup.md](docs/ios-setup.md#more-than-one-window-on-ipad).
 2. `Window.position()` / `setPosition` / `.didMove` are no-ops on GTK4 (Wayland refuses to give apps their own position).
 3. iOS has no system *save panel*, so `dialog.saveFile` (which hands back a path for the app to write) is a no-op there. Use `dialog.exportFile` instead — it presents `UIDocumentPickerViewController` and does the write, giving iOS a real save/share UX (added v0.7.9; the same command works on every platform). A location the user picks outside the app container is security-scoped: the runtime holds that grant for the session, and an app that wants the folder back on a later launch stores the `bookmark` the pick returned (`dialog.resolveBookmark`). Detail: [docs/javascript-api.md](docs/javascript-api.md#dialog).
 4. GTK4 dialogs require GTK 4.10+ (`GtkAlertDialog` / `GtkFileDialog`).

@@ -2,6 +2,7 @@ import Foundation
 import SwiftPWA
 #if os(iOS)
     import UIKit
+    import WebKit
 #endif
 
 // Copied into a scaffolded app by verify-close-flush.sh / .ps1 (#281).
@@ -46,6 +47,16 @@ func appendMarker(_ value: String) {
     }
 }
 
+final class TakenActions: @unchecked Sendable {
+    private let lock = NSLock()
+    private var values: Set<String> = []
+    func insert(_ value: String) -> Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return values.insert(value).inserted
+    }
+}
+
 func label(_ reason: CloseReason) -> String {
     switch reason {
     case .window: "window"
@@ -66,7 +77,12 @@ private let probeAction: String = {
 
 @MainActor
 func registerCloseProbe(_ ctx: any AppContext) {
-    ctx.registry.register("probe.action", typed: { (_: ProbeValue?, _) -> String in probeAction })
+    // Once per page prefix: a window the system opens shows the same page,
+    // and mustn't run the action a second time.
+    let actionTaken = TakenActions()
+    ctx.registry.register("probe.action", typed: { (args: ProbeValue?, _) -> String in
+        actionTaken.insert(args?.value ?? "") ? probeAction : ""
+    })
     ctx.registry.register("probe.write", typed: { (args: ProbeValue, _) -> Bool in
         appendMarker(args.value)
         return true
@@ -79,22 +95,88 @@ func registerCloseProbe(_ ctx: any AppContext) {
         return true
     })
     #if os(iOS)
-        // iPad multi-window: a second window and a scene to show it in. The
-        // runtime has no `window.create` and opens no scene for a window made
-        // after launch, so the probe asks for one itself.
+        // iPad multi-window (#287): a window the app opens, a window the
+        // system opens, and a scene the system takes away.
         ctx.registry.register("probe.openScene", typed: { (_: ProbeValue?, _) -> Bool in
-            try await MainActor.run {
-                _ = try ctx.createWindow(WindowConfig(
-                    title: "second",
-                    size: Size(width: 800, height: 600),
-                    content: .bundledWeb(entry: "window2.html", spaFallback: false)
-                ))
-                UIApplication.shared.requestSceneSessionActivation(nil, userActivity: nil, options: nil)
+            do {
+                try await MainActor.run {
+                    _ = try ctx.createWindow(WindowConfig(
+                        title: "second",
+                        size: Size(width: 800, height: 600),
+                        content: .bundledWeb(entry: "window2.html", spaFallback: false)
+                    ))
+                }
+                return true
+            } catch {
+                appendMarker("create-refused")
+                return false
+            }
+        })
+        // What "New Window" in the Dock does: a scene with nothing asking for it.
+        ctx.registry.register("probe.systemScene", typed: { (_: ProbeValue?, _) -> Bool in
+            await MainActor.run {
+                UIApplication.shared.activateSceneSession(
+                    for: UISceneSessionActivationRequest(role: .windowApplication)
+                ) { error in appendMarker("system-scene-error \(error)") }
             }
             return true
         })
-        ctx.registry.register("probe.sceneCount", typed: { (_: ProbeValue?, _) -> Int in
-            await MainActor.run { UIApplication.shared.connectedScenes.count }
+        // What closing a window from the system UI does: the calling window's
+        // scene goes, without the runtime being asked.
+        ctx.registry.register("probe.dropScene", typed: { (_: ProbeValue?, call) -> Bool in
+            await MainActor.run {
+                guard let id = call.originWindow,
+                      let adapter = ctx.window(id)?.webView as? WKWebViewAdapter,
+                      let session = adapter.webView.window?.windowScene?.session
+                else { return false }
+                UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
+                return true
+            }
+        })
+        // Between rows: every other window goes, hidden ones included (they
+        // outlive closing the connected ones), and the caller forgets its
+        // page, so the next launch starts from the app's entry in one window.
+        ctx.registry.register("probe.resetSessions", typed: { (_: ProbeValue?, call) -> Bool in
+            await MainActor.run {
+                let mine = call.originWindow
+                    .flatMap { ctx.window($0)?.webView as? WKWebViewAdapter }?
+                    .webView.window?.windowScene?.session
+                guard let mine else {
+                    appendMarker("reset-no-session")
+                    return false
+                }
+                let others = UIApplication.shared.openSessions.filter { $0 !== mine }
+                for session in others {
+                    UIApplication.shared.requestSceneSessionDestruction(session, options: nil)
+                }
+                mine.userInfo = nil
+                appendMarker("reset-\(others.count)")
+                return true
+            }
+        })
+        // What iPadOS kept: each session, whether it's connected, and the page
+        // the runtime recorded on it.
+        ctx.registry.register("probe.sessions", typed: { (_: ProbeValue?, _) -> String in
+            await MainActor.run {
+                UIApplication.shared.openSessions.map { session in
+                    let page = (session.userInfo?["swift-pwa.page"] as? String)
+                        .map { URL(string: $0)?.lastPathComponent ?? $0 } ?? "none"
+                    return "\(session.scene == nil ? "hidden" : "connected"):\(page)"
+                }.sorted().joined(separator: ",")
+            }
+        })
+        // Scene counts at the given delays (ms, comma-separated), taken in
+        // Swift: the page asking may be hidden behind the window it opened,
+        // and WebKit stops a hidden page's timers.
+        ctx.registry.register("probe.countScenes", typed: { (args: ProbeValue, _) -> Bool in
+            let start = ContinuousClock.now
+            Task { @MainActor in
+                for delay in args.value.split(separator: ",").compactMap({ Int($0) }) {
+                    try? await Task.sleep(until: start + .milliseconds(delay))
+                    appendMarker("scenes-\(UIApplication.shared.connectedScenes.count)")
+                }
+            }
+            return true
         })
     #endif
     ctx.beforeClose { reason in

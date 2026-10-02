@@ -53,9 +53,12 @@ enum InfoPlistGenerator {
         // Overridable via `ios.device_family` or the `info_plist` passthrough.
         plist["UIDeviceFamily"] = manifest.ios?.deviceFamily ?? [1, 2]
 
-        // UIScene declarations for full multi-window support.
+        // UIScene declarations. More than one scene only when the app asks
+        // for it: with the flag on, iPadOS offers "New Window" for every app,
+        // and an app built around one window has nothing sensible to show in
+        // a second.
         plist["UIApplicationSceneManifest"] = [
-            "UIApplicationSupportsMultipleScenes": true,
+            "UIApplicationSupportsMultipleScenes": manifest.ios?.multipleWindows ?? false,
             "UISceneConfigurations": [
                 "UIWindowSceneSessionRoleApplication": [
                     [

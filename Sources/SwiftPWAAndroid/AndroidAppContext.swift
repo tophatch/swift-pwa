@@ -228,33 +228,11 @@
             quitting = true
             Task { @MainActor [self] in
                 await Closing.beforeQuit(self, reason: .quit)
-                completeRun(exitCode: exitCode)
+                swiftpwa_android_dispatch_quit(exitCode)
             }
         }
 
         private nonisolated(unsafe) var quitting = false
-
-        /// The Activity that owns the runtime is finishing — the user backed
-        /// out of the app, or the system finished it. Called from its
-        /// `onDestroy` through the JNI quit trampoline, on the UI thread.
-        ///
-        /// The page already flushed when the Activity stopped, which always
-        /// comes first, and its WebView is going with the Activity, so there
-        /// is no page teardown here: the app's `beforeClose` handlers run
-        /// with `.quit`, bounded, and then the process ends. It has to: the
-        /// runtime runs once per process, and one left behind made the next
-        /// launch start a second beside it.
-        nonisolated func activityFinished(exitCode: Int32) {
-            guard !quitting else { return }
-            quitting = true
-            activeWindow?.emit(.willClose)
-            Task { @MainActor [self] in
-                let deadline = ContinuousClock.now + CloseBudget.quit
-                WindowStateStore.shared.flushNow()
-                await CloseHandlers.shared.run(.quit, until: deadline)
-                completeRun(exitCode: exitCode)
-            }
-        }
 
         /// The Activity stopped. A stopped app can be killed without being
         /// told, so this is the last moment it is sure to run: let each page

@@ -867,16 +867,6 @@ the process is still scheduled. A spawned secondary Activity doesn't report —
 it doesn't own the runtime, and its lifecycle would otherwise read as the
 primary's. JS sees the same events through `window.events`.
 
-**Backing out of the app ends it.** When the Activity that owns the runtime
-finishes — Back from its root, or the system finishing it — `onStop` flushes
-first as it always does, then the app's `ctx.beforeClose` handlers run with
-`.quit` and the process exits. That's deliberate rather than tidy: the Swift
-runtime runs once per process, and before this it outlived the Activity, so the
-next launch into the still-cached process started a second runtime beside the
-first (measured: two `swift-pwa-runtime` threads after one Back and a
-relaunch), running `configure` again against the same state. A configuration
-change destroys the Activity only to recreate it, and keeps the runtime.
-
 ## 6. Architecture notes
 
 The Android backend differs from the desktop ones in a few important
@@ -887,8 +877,7 @@ ways. These shape the public API surface and what to expect:
   Activity and `swiftpwa_android_main` runs on a worker thread; the
   runtime's `run` method registers handlers, executes the user's
   `configure` closure on the worker, then blocks on a semaphore until
-  `quit(exitCode:)` is invoked or the owning Activity finishes, and exits
-  the process.
+  `quit(exitCode:)` is invoked.
 - **`MainThread.run` hops through `Handler(Looper.getMainLooper()).post`.**
   Same shape as Windows' message-only dispatcher window and GTK's
   `g_idle_add` — defined in `AndroidAppRuntime.installMainThreadHook`.

@@ -301,15 +301,14 @@ char *swiftpwa_android_dispatch_mount_resolve(const char *url);
 // Lifecycle.
 // ---------------------------------------------------------------------
 
-// Set by Swift; called by JNI when the Activity that owns the runtime
-// finishes (`onDestroy` with `isFinishing`, not a configuration change).
+// Set by Swift; called by JNI when the Activity is destroyed.
 typedef void (*swiftpwa_android_quit_fn)(int exit_code, void *user);
 
 void swiftpwa_android_set_quit_handler(swiftpwa_android_quit_fn handler,
                                        void *user);
 
-// Called from `SwiftPWABridge.nativeQuit`; forwards to Swift's quit
-// handler, which runs `beforeClose` and then ends the run.
+// Called from JNI on Activity teardown; Swift's quit handler unblocks
+// the `AppRuntime.run(_:)` semaphore.
 void swiftpwa_android_dispatch_quit(int exit_code);
 
 #ifdef __cplusplus

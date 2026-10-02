@@ -109,11 +109,11 @@
                 )
             }, nil)
 
-            // Quit handler: JNI calls this from the owning Activity's
-            // `onDestroy` when it is finishing. `context.quit(exitCode:)`
-            // doesn't come through here — it ends the run itself.
+            // Quit handler: JNI calls this when the Activity tears
+            // down (or the user invokes `context.quit(exitCode:)`).
+            // Releases the run-loop semaphore so this method returns.
             swiftpwa_android_set_quit_handler({ exitCode, _ in
-                AndroidAppContext.shared.activityFinished(exitCode: Int32(exitCode))
+                AndroidAppContext.shared.completeRun(exitCode: Int32(exitCode))
             }, nil)
 
             // OS "Open with" / share-sheet: `MainActivity` reads the
@@ -229,16 +229,17 @@
                 swiftpwa_android_log("configure threw: \(error)")
             }
 
-            // Block until the run ends: `quit(exitCode:)`, or the owning
-            // Activity finishing (`activityFinished`). Both signal the
-            // semaphore through `AndroidAppContext.completeRun` once the
-            // app's `beforeClose` handlers have run.
+            // Block until `quit(exitCode:)` is invoked. The semaphore
+            // is signalled by `AndroidAppContext.completeRun`, which
+            // the JNI quit trampoline calls when the Activity's
+            // `onDestroy` runs.
             context.runSemaphore.wait()
 
-            // Protocol contract is `-> Never`. `exit()` ends the process —
-            // which a finished Activity requires rather than tolerates: the
-            // runtime runs once per process, and the next launch into a
-            // surviving one would start a second beside it.
+            // Protocol contract is `-> Never`. Calling `exit()` here
+            // tears down the JVM process; the Activity has already
+            // been destroyed by the time we get here (since the
+            // semaphore was signalled from `onDestroy`'s teardown
+            // path), so no UI cleanup is leaked.
             exit(context.pendingExitCode ?? 0)
         }
 

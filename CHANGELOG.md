@@ -70,23 +70,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Android: backing out of the app left its Swift runtime running, and the
-  next launch started a second one beside it.** Back from the root Activity
-  finishes it but leaves the process cached. Nothing told Swift: the Kotlin
-  side declared `nativeQuit` and never called it, though three comments said
-  it was called from `onDestroy`. So the runtime thread stayed blocked, and
-  the next launch, into the same process, ran `AndroidAppRuntime.run` and the
-  app's `configure` again against the same shared context: duplicate
-  `beforeClose` handlers, a second window object, a second runtime thread
-  per Back. Measured on a Tab S10+: two `swift-pwa-runtime` threads after one
-  Back and a relaunch. Now the finishing owner Activity calls it (not on a
-  configuration change, which recreates the Activity). The app's
-  `beforeClose` handlers run with `.quit`, and the process exits; the page
-  has already flushed at `onStop`, which always comes first. After: the
-  process is gone after Back, and the relaunch finds exactly one runtime.
-  `Scripts/verify-close-flush-android.sh` checks it (its new Back row) along
-  with the other three rows, all passing.
-
 - **A backgrounded driver run still took the front on macOS** (#283). Under
   `--background` / `SWIFT_PWA_DRIVE_BACKGROUND=1` the app became frontmost
   about 0.2s after launch and stayed there, so typing in the editor that

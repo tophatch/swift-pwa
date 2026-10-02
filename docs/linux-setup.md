@@ -595,14 +595,19 @@ unit, or `kill` goes through the same path as Ctrl+Q — every page gets its
 teardown and `ctx.beforeClose` runs with reason `.system` — so an app ends in
 under the 3 s budget instead of mid-write. SIGKILL can't be caught, by anything.
 
-**On GTK4 under a bare headless display, what a page posts can wait.** Measured
-under `xvfb-run` on a box with no desktop session: invokes posted by a freshly
-loaded page reach Swift only once the app sends the page something (any
-`evaluateJavaScript`, a driver verb), then all at once; the GTK main loop is
-idle in `poll` the whole time. Not seen on GTK3, and not measured on a real
-desktop session. The close path doesn't depend on it — it sends the page
-traffic of its own — but a harness waiting for a page's first message under bare
-Xvfb should nudge it (`Scripts/verify-close-flush.sh` does).
+**On a GTK4 box nobody is logged in to, what a page posts can wait.** Measured
+on a headless GTK4 machine with no active seat session: a freshly loaded page's
+invokes reached Swift only once the app sent the page something (any
+`evaluateJavaScript`, a driver verb), then all at once — WebKitGTK's
+`script-message-received` didn't fire until then, while the page rendered at
+63 fps. With a user logged in at the console, everything arrived on time:
+on the desktop itself (Wayland and X11), and in the same SSH-launched
+`xvfb-run` that had held them. Not seen on GTK3. The suspect is the GPU render
+nodes, which logind grants only to the active session's user (the held runs
+logged `renderD129: Permission denied`), but hiding them entirely didn't
+reproduce it, so the mechanism is unproven. Users on a desktop don't hit it; a
+CI or headless test box can, so a harness waiting for a page's first message
+there should nudge it (`Scripts/verify-close-flush.sh` does).
 
 **An installed app takes its name from its `.desktop` entry; a bare binary
 doesn't have one.** There is no `Info.plist` here, so the runtime reads `Name=`

@@ -1,5 +1,8 @@
 import Foundation
 import SwiftPWA
+#if os(iOS)
+    import UIKit
+#endif
 
 // Copied into a scaffolded app by verify-close-flush.sh / .ps1 (#281).
 
@@ -75,6 +78,25 @@ func registerCloseProbe(_ ctx: any AppContext) {
         appendMarker(args.value)
         return true
     })
+    #if os(iOS)
+        // iPad multi-window: a second window and a scene to show it in. The
+        // runtime has no `window.create` and opens no scene for a window made
+        // after launch, so the probe asks for one itself.
+        ctx.registry.register("probe.openScene", typed: { (_: ProbeValue?, _) -> Bool in
+            try await MainActor.run {
+                _ = try ctx.createWindow(WindowConfig(
+                    title: "second",
+                    size: Size(width: 800, height: 600),
+                    content: .bundledWeb(entry: "window2.html", spaFallback: false)
+                ))
+                UIApplication.shared.requestSceneSessionActivation(nil, userActivity: nil, options: nil)
+            }
+            return true
+        })
+        ctx.registry.register("probe.sceneCount", typed: { (_: ProbeValue?, _) -> Int in
+            await MainActor.run { UIApplication.shared.connectedScenes.count }
+        })
+    #endif
     ctx.beforeClose { reason in
         try? await Task.sleep(for: .milliseconds(200))
         appendMarker("swift:\(label(reason))")

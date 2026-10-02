@@ -5,7 +5,10 @@
 Close-flush check (#281). The script drives this page.
 <script>
 const bridge = window.__SWIFT_PWA__;
-const mark = (value) => bridge.invoke("probe.write", { value });
+// A second window's copy of this page prefixes its markers, so the two can be
+// told apart in one log.
+const prefix = document.body.dataset.prefix || "";
+const mark = (value) => bridge.invoke("probe.write", { value: prefix + value });
 
 // Every way a page can hear it is going. A marker on disk from one of these
 // is the only proof the page got to run.
@@ -21,6 +24,14 @@ function becomeReady(marker) {
     bridge.invoke("probe.action", null).then((action) => {
         if (action === "quit") setTimeout(() => bridge.invoke("app.quit", {}), 500);
         if (action === "close") setTimeout(() => bridge.invoke("window.close"), 500);
+        // iPad multi-window: the first window opens a second, which closes
+        // itself; the first counts scenes before and after.
+        if (action === "second-window" && !prefix) {
+            bridge.invoke("probe.openScene", null);
+            [3000, 9000].forEach((t) => setTimeout(() => bridge.invoke("probe.sceneCount", null)
+                .then((n) => mark("scenes-" + n)), t));
+        }
+        if (action === "second-window" && prefix) setTimeout(() => bridge.invoke("window.close"), 1000);
     }).catch(() => {});
 }
 document.addEventListener("visibilitychange", () => {
@@ -28,11 +39,11 @@ document.addEventListener("visibilitychange", () => {
     mark("hidden");
     // What a mobile app does on going to the background, where there is no
     // pagehide: the runtime has to stay up for this to land.
-    bridge.invoke("probe.slowWrite", { value: "hidden-slow" });
+    bridge.invoke("probe.slowWrite", { value: prefix + "hidden-slow" });
 });
 addEventListener("pagehide", () => {
     mark("pagehide");
-    bridge.invoke("probe.slowWrite", { value: "pagehide-slow" });
+    bridge.invoke("probe.slowWrite", { value: prefix + "pagehide-slow" });
 });
 
 // `ready` once a resize has come back through the subscription, so a missing

@@ -36,6 +36,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   app never launched before this change anyway. Verified on a Galaxy Z
   Fold7: the old spelling crashes as reported, the build now refuses it, and
   a fresh `init --bundle-id com.example.under_probe` launches and renders.
+- **iOS apps claimed to be built with their deployment target's SDK, so iOS
+  ran them in compatibility mode** (#301). An app targeting iOS 18 built with
+  the 27.1 SDK had `minos 18.0, sdk 18.0` in its `LC_BUILD_VERSION`, on device
+  and simulator alike. iOS picks compatibility behaviours from that SDK
+  version. The visible one is screen size: on the iPhone Duo's cover screen
+  the app ran letterboxed in a 375×667 box. The Swift driver only writes the
+  real SDK version when `SDKROOT` is in its environment, and `xcodebuild`
+  doesn't export it when linking a SwiftPM executable. `build --target ios`
+  now sets it. A package with a Swift macro, which is built for the Mac in
+  the same run, still builds. CI's `ios-build` job now bundles a fresh
+  scaffold for the simulator and requires its stamped SDK to match the one
+  `xcrun` reports. Verified on Xcode 27 (SDK 27.1): `sdk 27.1` on simulator
+  and device builds, and on an iPhone Duo simulator the app fills the screen
+  where the old build was letterboxed.
 
 ## [0.11.5] - 2026-10-02
 

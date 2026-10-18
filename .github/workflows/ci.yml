@@ -52,6 +52,25 @@ jobs:
             -configuration Release \
             -derivedDataPath build/ios-sim \
             build
+      - name: Build the CLI
+        run: swift build --product swift-pwa
+      - name: A bundled app records the SDK it was built with
+        # iOS decides compatibility behaviour from the SDK version in the
+        # binary's LC_BUILD_VERSION. The driver only writes the real one when
+        # SDKROOT is in its environment, and without it every app claimed its
+        # deployment target and ran letterboxed on newer screen sizes (#301).
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ios-sdk && cd /tmp/ios-sdk
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" init SdkStamp --path app
+          cd app
+          sed -i '' -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" build --target ios --simulator
+          EXPECTED=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          xcrun vtool -show-build build/ios-simulator/SdkStamp.app/SdkStamp | tee /tmp/ios-sdk/build-version.txt
+          STAMPED=$(awk '$1 == "sdk" { print $2 }' /tmp/ios-sdk/build-version.txt | sort -u)
+          echo "SDK in use: $EXPECTED; stamped: $STAMPED"
+          test "$STAMPED" = "$EXPECTED"
 
   bundle-smoke:
     # Does a bundled app actually run somewhere other than the machine that

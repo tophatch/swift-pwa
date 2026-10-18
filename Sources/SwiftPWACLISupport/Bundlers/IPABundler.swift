@@ -48,6 +48,10 @@ struct IPABundler {
     /// slow compile.
     static let simctlProbeTimeout: TimeInterval = 120
 
+    static func sdkName(simulator: Bool) -> String {
+        simulator ? "iphonesimulator" : "iphoneos"
+    }
+
     func build() async throws -> URL {
         if simulator {
             try await Self.ensureSimulatorRuntimeInstalled()
@@ -79,13 +83,21 @@ struct IPABundler {
         args.append(contentsOf: Self.buildPhaseSigningArgs)
         args.append("build")
 
-        try await Shell.run("/usr/bin/env", args)
+        // The Swift driver only records the SDK's version in the binary's
+        // LC_BUILD_VERSION when SDKROOT is in its environment, and xcodebuild
+        // doesn't export it to a SwiftPM executable's link. Without it the
+        // binary claims the deployment target as its SDK, and iOS runs it in
+        // compatibility mode: letterboxed on screen sizes newer than that SDK.
+        let sdkPath = try await Shell.capture(
+            "/usr/bin/env", ["xcrun", "--sdk", Self.sdkName(simulator: simulator), "--show-sdk-path"]
+        ).trimmingCharacters(in: .whitespacesAndNewlines)
+        try await Shell.run("/usr/bin/env", args, envOverrides: ["SDKROOT": sdkPath])
 
         // SwiftPM executable targets compile to a bare Mach-O, not an .app —
         // xcodebuild puts it (plus any SwiftPM resource bundles) in:
         //   <derived>/Build/Products/<Configuration>-iphonesimulator/
         // We assemble the .app ourselves from those pieces.
-        let suffix = simulator ? "iphonesimulator" : "iphoneos"
+        let suffix = Self.sdkName(simulator: simulator)
         let productsDir = derived
             .appendingPathComponent("Build/Products")
             .appendingPathComponent("\(configurationName)-\(suffix)")

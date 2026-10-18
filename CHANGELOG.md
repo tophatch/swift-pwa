@@ -31,6 +31,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A freshly scaffolded app looked shrunken on a phone.** `init`'s
+  `web/index.html` had no viewport tag, so iOS laid it out 980 CSS px wide and
+  scaled it down to fit. It now carries
+  `width=device-width, initial-scale=1, viewport-fit=cover`, the tag the
+  docs and examples already recommend, and pads the body by the safe-area
+  insets, so the content clears the status bar and home indicator. On desktop
+  the insets are 0 and the page looks as before. Checked on an iPhone 17 Pro
+  simulator before and after, and on macOS through the driver.
 - **An absolute `--output` or `--manifest` path was nested under the working
   directory.** `build --output /tmp/out` wrote to `./tmp/out`, because every
   command joined the path onto the working directory whether or not it was

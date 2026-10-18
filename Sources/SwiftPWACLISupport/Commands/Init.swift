@@ -613,9 +613,17 @@ enum Templates {
         return """
         <!doctype html>
         <html><head><meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <title>\(escaped)</title>
         <style>
-          body { font-family: -apple-system, system-ui, sans-serif; margin: 2rem; }
+          /* The page fills the window, under any notch or home indicator, so
+             the padding grows by each safe-area inset (0 on desktop). */
+          body {
+            font-family: -apple-system, system-ui, sans-serif;
+            margin: 0;
+            padding: calc(2rem + env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-right))
+                     calc(2rem + env(safe-area-inset-bottom)) calc(2rem + env(safe-area-inset-left));
+          }
           button { padding: .5rem 1rem; }
         </style></head>
         <body>

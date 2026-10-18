@@ -202,35 +202,66 @@ public enum Envelope {
     }
 
     /// Encode one outbound frame as JSON bytes ready for `evaluateJavaScript`.
+    ///
+    /// **Sorted keys are part of the wire contract.** `JSONEncoder` does not
+    /// preserve declaration order for synthesized `CodingKeys` and varies it
+    /// per encode, so identical records reached the page with their fields in
+    /// different orders and `JSON.stringify(a) === JSON.stringify(b)` — the
+    /// obvious way to ask "did this change?" — never matched. It is pinned
+    /// here, at the one choke point every backend delivers through, so it holds
+    /// for every producer of reply and chunk bytes: typed handlers, raw
+    /// `register` handlers, and `EventBus` payloads alike, nested objects too.
+    ///
+    /// The handler's bytes are sorted and checked by ``SortedJSON`` and copied
+    /// into the frame, never parsed into `Any` and written out again. The
+    /// frame's own keys are written by hand in the same byte order.
     public static func encode(_ frame: OutboundFrame) throws -> Data {
-        var dict: [String: Any] = ["v": version]
-        if let epoch = frame.epoch { dict[epochKey] = epoch }
-        switch frame {
-        case let .reply(id, ok, _):
-            dict["kind"] = "reply"
-            dict["id"] = NSNumber(value: id)
-            dict["ok"] = try jsonObject(from: ok)
-        case let .replyError(id, error, _):
-            dict["kind"] = "reply"
-            dict["id"] = NSNumber(value: id)
-            dict["err"] = ["code": error.code, "message": error.message]
-        case let .event(id, chunk, _):
-            dict["kind"] = "event"
-            dict["id"] = NSNumber(value: id)
-            dict["chunk"] = try jsonObject(from: chunk)
-        case let .end(id, _):
-            dict["kind"] = "end"
-            dict["id"] = NSNumber(value: id)
+        var out: [UInt8] = []
+        func key(_ name: String) {
+            out.append(contentsOf: out.isEmpty ? Array("{\"".utf8) : Array(",\"".utf8))
+            out.append(contentsOf: name.utf8)
+            out.append(contentsOf: "\":".utf8)
         }
-        // `.sortedKeys` is part of the wire contract: `JSONEncoder` does not
-        // preserve declaration order for synthesized `CodingKeys` and varies
-        // per encode, so identical records reached the page with their fields
-        // in different orders and `JSON.stringify(a) === JSON.stringify(b)`
-        // — the obvious way to ask "did this change?" — never matched. It is
-        // applied here, at the one choke point every backend delivers through,
-        // because this re-serialization would otherwise undo a sort done by
-        // the handler's own encoder. It sorts nested objects too.
-        return try JSONSerialization.data(withJSONObject: dict, options: [.fragmentsAllowed, .sortedKeys])
+        func string(_ value: String) throws {
+            try out.append(contentsOf: JSONSerialization.data(withJSONObject: value, options: [.fragmentsAllowed]))
+        }
+
+        switch frame {
+        case let .event(_, chunk, _):
+            key("chunk")
+            try SortedJSON.append(chunk, to: &out)
+        default:
+            break
+        }
+        if let epoch = frame.epoch {
+            key(epochKey)
+            try string(epoch)
+        }
+        if case let .replyError(_, error, _) = frame {
+            key("err")
+            out.append(contentsOf: "{\"code\":".utf8)
+            try string(error.code)
+            out.append(contentsOf: ",\"message\":".utf8)
+            try string(error.message)
+            out.append(UInt8(ascii: "}"))
+        }
+        let (id, kind): (UInt64, String) = switch frame {
+        case let .reply(id, _, _), let .replyError(id, _, _): (id, "reply")
+        case let .event(id, _, _): (id, "event")
+        case let .end(id, _): (id, "end")
+        }
+        key("id")
+        out.append(contentsOf: String(id).utf8)
+        key("kind")
+        try string(kind)
+        if case let .reply(_, ok, _) = frame {
+            key("ok")
+            try SortedJSON.append(ok, to: &out)
+        }
+        key("v")
+        out.append(contentsOf: String(version).utf8)
+        out.append(UInt8(ascii: "}"))
+        return Data(out)
     }
 
     // MARK: - helpers
@@ -247,11 +278,6 @@ public enum Envelope {
             return Data("null".utf8)
         }
         return try JSONSerialization.data(withJSONObject: any, options: [.fragmentsAllowed])
-    }
-
-    private static func jsonObject(from data: Data) throws -> Any {
-        // `data` is always a complete JSON value (including `null`).
-        try JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed])
     }
 }
 

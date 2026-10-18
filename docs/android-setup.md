@@ -887,15 +887,37 @@ primary's. JS sees the same events through `window.events`.
 
 ### Back, and an Activity that goes while the app stays
 
-**Back goes back in the page first**, the way Chrome and installed web apps
+**Back closes what the page has open first.** A close watcher (a
+`CloseWatcher`, a modal `<dialog>`, an auto popover) gets Back before history
+does, as in Chrome on Android. So a page whose screen has a natural "up" and no
+history entry behind it keeps Back. That covers an app that reopens on the last
+document at launch, or one that navigates with `location.replace`:
+
+```js
+// While the reader is open, Back returns to the shelf instead of leaving the app.
+const watcher = new CloseWatcher();
+watcher.onclose = () => showShelf();
+```
+
+The page reports how many watchers it holds as that changes, so the Activity's
+Back callback is enabled only while there is one (or history). Predictive back
+then still works everywhere else. Back reaches the page as Escape, which is a
+close request in Chromium, so the watcher gets the events it would get on
+desktop: `cancel`, then `close`. As in Chrome, only the first Back can be
+cancelled; the second closes the watcher. A hung page can't trap Back: if two
+Backs reach it and nothing changes, the third does what Back does without a
+watcher. Needs a WebView with document-start scripts and message listeners
+(WebView 85+). Without them, Back walks history alone.
+
+**Then Back goes back in the page**, the way Chrome and installed web apps
 do: while the WebView has history, Back runs it, so a single-page app gets its
 `popstate` and routes the way it does in a browser. An entry pushed without a
 user gesture doesn't count, because Chromium skips those going back. So push
-from the tap that navigates, not from a timer. At the root the generated
-Activity stands aside and Android decides. On Android 12+ an app the user
+from the tap that navigates, not from a timer. With no watcher and no history
+the generated Activity stands aside and Android decides. On Android 12+ an app the user
 opened from the launcher then stays running in the background, with the
 system's back-to-home animation; the callback is only enabled while there's
-history, because an always-on one would lose both.
+a watcher or history, because an always-on one would lose both.
 
 **The Swift runtime outlives its Activity.** Android can still finish the root
 Activity while keeping the process: Back on an app started some other way (a
@@ -1473,6 +1495,13 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 *"The page at …/ says:"* with an OK button.
 
 ## 8. Known limitations
+
+- **The `SWIFT_PWA_*` launch variables don't reach an Android app.**
+  `SWIFT_PWA_WEB_DATA=ephemeral` and `SWIFT_PWA_INITIAL_ROUTE` are read from
+  the process environment, and an Android app is started by the system with
+  none of the caller's: `adb shell am start` has no way to set one. An
+  on-device test that needs clean web storage clears it from the page
+  (`localStorage.clear()`, `indexedDB.deleteDatabase(…)`).
 
 - **The flush happens on `onStop`.** A stopped app can be killed without being
   told, so `ctx.beforeClose` runs with reason `.backgrounded` when the Activity

@@ -16,6 +16,13 @@
     /// resuming the caller's Swift continuation also happens on the
     /// main thread.
     public final class WebKitGTKAdapter: PWAWebView, @unchecked Sendable {
+        /// The launch's one in-memory web context under
+        /// `SWIFT_PWA_WEB_DATA=ephemeral`, created by the first window and
+        /// shared by every later one, as the default context is. Never freed:
+        /// it lives as long as the process.
+        private nonisolated(unsafe) static let ephemeralContext: UnsafeMutablePointer<WebKitWebContext>? =
+            webkit_web_context_new_ephemeral()
+
         /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
         /// `internal` so the synthetic-input extension can address it.
         let viewWidget: UnsafeMutablePointer<GtkWidget>
@@ -67,8 +74,12 @@
                 _ = webkit_user_content_manager_register_script_message_handler(ucm, name)
             }
 
-            // Create the web view.
-            guard let view = webkit_web_view_new_with_user_content_manager(ucm) else {
+            // Create the web view, in the launch's ephemeral context under
+            // `SWIFT_PWA_WEB_DATA=ephemeral` and the default one otherwise.
+            let created = WebData.isEphemeral
+                ? swiftpwa_web_view_new_in_context(ucm, Self.ephemeralContext)
+                : webkit_web_view_new_with_user_content_manager(ucm)
+            guard let view = created else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_web_view_new failed")
             }
             viewWidget = view

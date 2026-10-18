@@ -797,6 +797,26 @@ The DevTools binding is cross-platform: `Cmd+Opt+J` on macOS via
 WKWebView's `_showInspector:` SPI and `Ctrl+Alt+J` on Linux via
 `webkit_web_inspector_show`.
 
+## Pinch zoom follows the viewport tag
+
+A page whose viewport tag rules zoom out — `user-scalable=no`, or a
+`maximum-scale` of 1 or less — isn't pinch-zoomed, by touch or touchpad, as on
+iOS, macOS and Android. WebView2 ignores the tag itself, like desktop Chromium,
+so swift-pwa injects a short script that reads it once the document is parsed
+and, only when it rules zoom out, adds `touch-action: pan-x pan-y` to the root
+(as a constructed stylesheet, not in the page's DOM) and cancels Ctrl-`wheel`,
+which is how Chromium delivers a touchpad pinch. A page with no such tag is
+untouched.
+
+The pinch's events still reach the page — two-finger `touchmove`, and
+Ctrl-`wheel` for a touchpad — so a page that gives a pinch its own meaning
+handles it as anywhere else. That is why this isn't WebView2's
+`IsPinchZoomEnabled`: measured, the setting stops a page's zoom only if it's
+set before the page loads, and the page then receives none of the pinch's
+events. The tag is read once per document; a page that rewrites its viewport
+tag later keeps the first decision. Ctrl-`+` / Ctrl-`-` zoom isn't affected.
+`Scripts/verify-windows-pinch-zoom.ps1` checks it, with a `-Released` control.
+
 ## Location (`geo.*`)
 
 `Windows.Devices.Geolocation` is **built-in WinRT**, so unlike the Phi Silica

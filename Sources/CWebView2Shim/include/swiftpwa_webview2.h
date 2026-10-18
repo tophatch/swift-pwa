@@ -111,11 +111,18 @@ void swiftpwa_w2_env_release(swiftpwa_w2_env *env);
 
 // Attach a controller to `parent_hwnd`. The controller owns the
 // `ICoreWebView2` view, which becomes available once `cb` fires.
+//
+// `in_private_profile` non-NULL puts the view in that InPrivate profile, whose
+// web data is kept in memory and discarded with it (SWIFT_PWA_WEB_DATA=
+// ephemeral). Views given the same name share one profile. A runtime too old
+// for InPrivate profiles fails the controller rather than falling back to the
+// persistent profile.
 void swiftpwa_w2_create_controller(
     swiftpwa_w2_env *env,
     void *parent_hwnd /* HWND */,
     swiftpwa_w2_controller_ready_cb cb,
-    void *user);
+    void *user,
+    const wchar_t *in_private_profile /* nullable */);
 
 void swiftpwa_w2_controller_release(swiftpwa_w2_controller *ctrl);
 

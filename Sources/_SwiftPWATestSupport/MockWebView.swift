@@ -122,6 +122,9 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
     }
 
     public func deliver(_ frame: OutboundFrame) async throws {
+        // Every backend encodes before it sends, so a frame that can't be
+        // encoded fails here too rather than being recorded as delivered.
+        _ = try Envelope.encode(frame)
         lock.withLock { _deliveredFrames.append(frame) }
     }
 

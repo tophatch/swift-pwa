@@ -168,6 +168,10 @@ struct EnvelopeTests {
         let data = try Envelope.encode(.reply(id: 1, ok: payload))
         let text = String(decoding: data, as: UTF8.self)
         #expect(text.contains(#""ok":{"alpha":{"bravo":3,"zulu":2},"middle":4,"zebra":1}"#))
+        // Code-point order, as `JSONEncoder`'s `.sortedKeys` writes it: not
+        // case-insensitive, and not numeric-aware.
+        let mixed = try Envelope.encode(.reply(id: 1, ok: Data(#"{"b":1,"a2":2,"B":3,"a10":4}"#.utf8)))
+        #expect(String(decoding: mixed, as: UTF8.self).contains(#""ok":{"B":3,"a10":4,"a2":2,"b":1}"#))
     }
 
     @Test("event chunks are sorted on the same path")
@@ -176,6 +180,45 @@ struct EnvelopeTests {
         let data = try Envelope.encode(.event(id: 2, chunk: chunk))
         let text = String(decoding: data, as: UTF8.self)
         #expect(text.contains(#""chunk":{"key":"scrollOffset","value":42}"#))
+    }
+
+    @Test("a frame is compact and its own keys sort with the payload's")
+    func exactFrameBytes() throws {
+        let reply = try Envelope.encode(.reply(
+            id: 9,
+            ok: Data(#"{ "z": 1, "a": [{"y":2,"x":3}] }"#.utf8),
+            epoch: "doc"
+        ))
+        #expect(String(decoding: reply, as: UTF8.self)
+            == #"{"ep":"doc","id":9,"kind":"reply","ok":{"a":[{"x":3,"y":2}],"z":1},"v":1}"#)
+        let event = try Envelope.encode(.event(id: 3, chunk: Data("null".utf8)))
+        #expect(String(decoding: event, as: UTF8.self) == #"{"chunk":null,"id":3,"kind":"event","v":1}"#)
+        let end = try Envelope.encode(.end(id: UInt64.max, epoch: "e"))
+        #expect(String(decoding: end, as: UTF8.self) == #"{"ep":"e","id":18446744073709551615,"kind":"end","v":1}"#)
+    }
+
+    @Test("an error message is escaped, not spliced")
+    func errorMessageEscaped() throws {
+        let message = "bad \"input\"\n}{ \u{2028}"
+        let data = try Envelope.encode(.replyError(
+            id: 1,
+            error: BridgeError(code: "E_X", message: message),
+            epoch: "d\"e"
+        ))
+        let json = try #require(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let err = try #require(json["err"] as? [String: Any])
+        #expect(err["message"] as? String == message)
+        #expect(json["ep"] as? String == "d\"e")
+    }
+
+    @Test("a handler's malformed bytes fail the frame instead of reaching the page")
+    func malformedPayloadThrows() {
+        #expect(throws: SortedJSONError.self) {
+            try Envelope.encode(.reply(id: 1, ok: Data("1);alert(1);(".utf8)))
+        }
+        #expect(throws: SortedJSONError.self) {
+            try Envelope.encode(.event(id: 1, chunk: Data()))
+        }
     }
 
     @Test("event and end frames encode")

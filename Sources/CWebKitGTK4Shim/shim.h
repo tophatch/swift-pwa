@@ -11,6 +11,22 @@ static inline const char *swiftpwa_gobject_type_name(gpointer instance) {
     return g_type_name(G_TYPE_FROM_INSTANCE(instance));
 }
 
+/// A web view in `context` with `ucm` as its content manager. Both are
+/// construct-only properties, and `webkit_web_view_new_with_context` takes no
+/// content manager, so this goes through `g_object_new`, which is variadic and
+/// so can't be called from Swift.
+static inline GtkWidget *swiftpwa_web_view_new_in_context(
+    WebKitUserContentManager *ucm,
+    WebKitWebContext *context
+) {
+    return GTK_WIDGET(g_object_new(
+        WEBKIT_TYPE_WEB_VIEW,
+        "user-content-manager", ucm,
+        "web-context", context,
+        NULL
+    ));
+}
+
 /// Extracts the JS string from the `script-message-received` signal's
 /// value argument.
 ///

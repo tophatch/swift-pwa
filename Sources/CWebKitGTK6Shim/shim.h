@@ -42,10 +42,20 @@ static inline char *swiftpwa_extract_message_string(gpointer arg) {
 
 /// `webkit_web_view_new_with_user_content_manager` was removed in
 /// webkitgtk-6.0; construction goes through `g_object_new` with the
-/// content manager as a property.
+/// content manager as a property. `session` is the network session holding
+/// the view's web data, or NULL for the default persistent one.
 static inline GtkWidget *swiftpwa_web_view_new_with_user_content_manager(
-    WebKitUserContentManager *ucm
+    WebKitUserContentManager *ucm,
+    WebKitNetworkSession *session
 ) {
+    if (session) {
+        return GTK_WIDGET(g_object_new(
+            WEBKIT_TYPE_WEB_VIEW,
+            "user-content-manager", ucm,
+            "network-session", session,
+            NULL
+        ));
+    }
     return GTK_WIDGET(g_object_new(
         WEBKIT_TYPE_WEB_VIEW,
         "user-content-manager", ucm,

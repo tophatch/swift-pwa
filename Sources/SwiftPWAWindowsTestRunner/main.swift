@@ -442,6 +442,20 @@
         try expect(names == ["My Book_01.epub"], "expected [\"My Book_01.epub\"], got \(names)")
     }
 
+    /// A reply's keys reach the page sorted by code point, and bytes that
+    /// aren't JSON never reach it at all (#307). Here because Windows runs the
+    /// same corelibs Foundation the old re-serialization was slow on.
+    func envelopeSortsAndChecksReplies() throws {
+        let frame = try Envelope.encode(.reply(id: 4, ok: Data(#"{ "b":1, "a2":{"y":0,"x":0}, "B":"é" }"#.utf8)))
+        let text = String(decoding: frame, as: UTF8.self)
+        let expected = #"{"id":4,"kind":"reply","ok":{"B":"é","a2":{"x":0,"y":0},"b":1},"v":1}"#
+        try expect(text == expected, "expected \(expected), got \(text)")
+        for bad in [Data("{\"a\":}".utf8), Data([0x22, 0xFF, 0x22])] {
+            let refused = (try? Envelope.encode(.reply(id: 1, ok: bad))) == nil
+            try expect(refused, "malformed reply bytes were encoded: \(Array(bad))")
+        }
+    }
+
     let cases: [(String, () async throws -> Void)] = [
         ("installAndRelaunch errors when no update has been staged", installAndRelaunchWithoutStagedUpdate),
         ("currentExecutablePath honours the explicit override", currentExecutablePathOverride),
@@ -461,7 +475,8 @@
         ("WIC scales during decode when maxSide is set", wicScalesDuringDecode),
         ("WIC encode keeps red and blue where they were (PNG + JPEG)", wicPreservesChannelOrder),
         ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData),
-        ("app.openFile names a Windows path by its last component", openFileNamesAWindowsPath)
+        ("app.openFile names a Windows path by its last component", openFileNamesAWindowsPath),
+        ("a reply's keys are sorted and malformed bytes refused", envelopeSortsAndChecksReplies)
     ]
 
     var passed = 0

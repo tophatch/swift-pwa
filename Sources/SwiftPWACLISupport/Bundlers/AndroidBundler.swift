@@ -252,6 +252,9 @@ struct AndroidBundler {
             withIntermediateDirectories: true
         )
         try BridgeJSData.source.write(to: bridgeJsDst, atomically: true, encoding: .utf8)
+        try AndroidBackWatchers.script.write(
+            to: assets.appendingPathComponent(AndroidBackWatchers.assetPath), atomically: true, encoding: .utf8
+        )
 
         // Gradle wrapper (gradlew + gradlew.bat + gradle/wrapper/*).
         // Vendored as a SwiftPWACLISupport resource so the generated

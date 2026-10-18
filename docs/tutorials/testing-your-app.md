@@ -200,6 +200,18 @@ The page keeps rendering at full rate while it's off screen — which is not fre
 
 ---
 
+## Step 6c — Keep each run's storage to itself
+
+Launches of your app share one web data store, so what one test writes to `localStorage` or IndexedDB is waiting for the next, and two test files running side by side read each other's writes. Give each launch a store of its own that starts empty and is gone when the app quits:
+
+```bash
+SWIFT_PWA_WEB_DATA=ephemeral node --test
+```
+
+Export it once for the whole suite: `drive` passes it on to every app it launches. Your app's own files aren't web storage and aren't affected. See [docs/app-driver.md](../app-driver.md#giving-each-run-its-own-storage).
+
+---
+
 ## Step 7 — In CI
 
 On Linux, run it under a virtual display. GTK3's input path works there even though the display server has no input device at all:

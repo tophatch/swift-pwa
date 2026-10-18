@@ -195,20 +195,21 @@ enum AndroidTemplates {
     /// secret values out of the manifest. The error message points at
     /// the env var name rather than throwing a generic null deref so
     /// the user knows what knob to set.
+    ///
+    /// `storeFile` uses Gradle's `file(…)` rather than `java.io.File(…)`:
+    /// inside `android { }` the name `java` resolves to the Java plugin's
+    /// extension, not the package, so the latter doesn't compile.
     private static func signingConfigsBlock(_ s: SigningConfig) -> String {
-        // Kotlin string literals require backslash + double-quote
-        // escaping. Backslashes need doubling so a Windows path like
-        // `C:\Users\me\release.jks` survives the round-trip.
-        let escapedPath = s.keystoreAbsolutePath
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
-        let escapedAlias = s.keyAlias
-            .replacingOccurrences(of: "\\", with: "\\\\")
-            .replacingOccurrences(of: "\"", with: "\\\"")
+        // Kotlin string literals require backslash, double-quote and
+        // dollar escaping. Backslashes need doubling so a Windows path like
+        // `C:\Users\me\release.jks` survives the round-trip, and a `$`
+        // would otherwise start a string template.
+        let escapedPath = kotlinStringContent(s.keystoreAbsolutePath)
+        let escapedAlias = kotlinStringContent(s.keyAlias)
         return """
             signingConfigs {
                 create("release") {
-                    storeFile = java.io.File("\(escapedPath)")
+                    storeFile = file("\(escapedPath)")
                     storeType = "\(s.storeType)"
                     keyAlias = "\(escapedAlias)"
                     storePassword = System.getenv("SWIFT_PWA_ANDROID_STORE_PASSWORD")
@@ -221,6 +222,12 @@ enum AndroidTemplates {
             }
 
         """
+    }
+
+    private static func kotlinStringContent(_ raw: String) -> String {
+        raw.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "$", with: "\\$")
     }
 
     static func androidManifestXml(

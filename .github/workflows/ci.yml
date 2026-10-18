@@ -1255,6 +1255,28 @@ jobs:
           name: HelloPWA-debug-apk
           path: Examples/HelloPWA/build/android/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Signed release build (compiles the signingConfigs block)
+        # assembleDebug never evaluates `signingConfigs`, so a release-signing
+        # block that doesn't compile shipped behind a green job (#305). A
+        # throwaway keystore under a path with a `$` also covers the Kotlin
+        # string escaping.
+        env:
+          SWIFT_PWA_ANDROID_STORE_PASSWORD: ci-throwaway
+          SWIFT_PWA_ANDROID_KEY_PASSWORD: ci-throwaway
+        run: |
+          KEYDIR="$RUNNER_TEMP/keys\$dir"
+          mkdir -p "$KEYDIR"
+          keytool -genkeypair -keystore "$KEYDIR/ci.p12" -storetype pkcs12 -alias ci \
+            -keyalg RSA -keysize 2048 -validity 2 -dname CN=swift-pwa-ci \
+            -storepass ci-throwaway -keypass ci-throwaway
+          cd Examples/HelloPWA
+          swift run --package-path ../.. swift-pwa build --target android \
+            --sign "$KEYDIR/ci.p12" --android-key-alias ci
+          cd build/android/HelloPWA-android
+          ./gradlew --no-daemon assembleRelease
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | tee /dev/stderr \
+            | grep "CN=swift-pwa-ci"
 
   lint:
     runs-on: macos-15

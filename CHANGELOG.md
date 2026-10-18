@@ -5,6 +5,24 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **Android release signing didn't compile** (#305). `--sign` and
+  `android.signing` wrote `storeFile = java.io.File(…)` into the generated
+  `app/build.gradle.kts`, and inside `android { }` the name `java` is the Java
+  plugin's extension, not the package. So `./gradlew assembleRelease` failed at
+  script compilation for every app that configured signing. It's now
+  `file(…)`, Gradle's own call, which takes the absolute path as given. A `$`
+  in the keystore path or alias is escaped too, since Kotlin would have read it
+  as a string template. The tests compared the generated text and never
+  compiled it, and CI only ran `assembleDebug`, which never evaluates
+  `signingConfigs`. CI's `android` job now builds a release APK signed with a
+  throwaway keystore and checks its certificate with `apksigner`. Verified on a
+  Galaxy Z Fold7: a cross-compiled, signed release APK installs, launches and
+  renders.
+
 ## [0.11.5] - 2026-10-02
 
 ### Added

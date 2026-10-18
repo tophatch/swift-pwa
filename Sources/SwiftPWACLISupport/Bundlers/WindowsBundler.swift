@@ -71,6 +71,40 @@ struct WindowsBundler {
     /// WebView2 / WIL headers below, and needed for the same reason: `INCLUDE`
     /// no longer reaches the compile task (#219, #238).
     var nativeIncludeDirs: [URL] = []
+    /// The build already compiled this configuration for this host — the
+    /// headless permission check `build` runs first is a `swift run -c <same>`
+    /// with the same search paths — so the exe is there and current.
+    ///
+    /// Not built a second time because the second `swift build` is where
+    /// Swift 6.4's build planner stalls on GitHub's Windows runners: 15 to 45
+    /// minutes at four cores in `[Pre-planning 1 / N]` before it compiles
+    /// nothing, in about half the runs measured, where a Windows 11 machine
+    /// takes 4.5 s every time. The build still runs when the exe isn't where
+    /// it should be.
+    var alreadyBuilt = false
+
+    /// Where the build put the exe, if it's there.
+    ///
+    /// SwiftPM creates `.build/release` as a symlink to the arch-qualified
+    /// output directory (e.g. `.build/x86_64-unknown-windows-msvc/release/`).
+    /// Symlink creation on Windows requires Administrator privileges *or*
+    /// Developer Mode enabled in Settings — without either, SwiftPM emits the
+    /// cosmetic "warning: unable to create symbolic link at .build\release"
+    /// and the symlink simply doesn't exist. So the binary is looked for
+    /// through the symlink first, then in the first `*-windows-msvc` arch
+    /// directory (covers x86_64 and aarch64 hosts). Developer Mode isn't
+    /// required because it's a machine-wide setting, often unavailable on CI
+    /// runners or shared boxes.
+    static func builtBinary(exeName: String, buildDir: URL, configuration: BuildConfiguration) -> URL? {
+        let fm = FileManager.default
+        let symlinkBinary = buildDir.appendingPathComponent(configuration.swiftPMValue).appendingPathComponent(exeName)
+        if fm.fileExists(atPath: symlinkBinary.path) { return symlinkBinary }
+        guard let archDir = (try? fm.contentsOfDirectory(at: buildDir, includingPropertiesForKeys: nil))?
+            .first(where: { $0.lastPathComponent.hasSuffix("-windows-msvc") && !$0.lastPathComponent.hasPrefix(".") })
+        else { return nil }
+        let candidate = archDir.appendingPathComponent(configuration.swiftPMValue).appendingPathComponent(exeName)
+        return fm.fileExists(atPath: candidate.path) ? candidate : nil
+    }
 
     func build() async throws -> URL {
         #if !os(Windows)
@@ -85,57 +119,34 @@ struct WindowsBundler {
             // — measured on a real Windows box, with a control: a header only
             // on INCLUDE is `file not found`, and the same header behind
             // `-Xcc -I` compiles (#219).
-            let packagePaths = Self.resolvePackagePaths(projectRoot: projectRoot)
-            let searchDirs = nativeLibraryDirs + (packagePaths?.libDirs ?? [])
-            try await Shell.run(
-                "swift",
-                ["build", "-c", configuration.swiftPMValue]
-                    + NativeLibrarySearch.compilerArgs(
-                        for: nativeIncludeDirs + (packagePaths?.includeDirs ?? [])
-                    )
-                    + NativeLibrarySearch.linkerArgs(for: searchDirs, target: .windows),
-                cwd: projectRoot
-            )
             // The .exe is named after the SwiftPM target, resolved from
             // the package rather than guessed from the display `name`.
             let resolvedExe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
             let exeName = resolvedExe + ".exe"
             let buildDir = projectRoot.appendingPathComponent(".build")
-            // SwiftPM creates `.build/release` as a symlink to the
-            // arch-qualified output directory (e.g.
-            // `.build/x86_64-unknown-windows-msvc/release/`). Symlink
-            // creation on Windows requires Administrator privileges
-            // *or* Developer Mode enabled in Settings — without either,
-            // SwiftPM emits the cosmetic
-            //   "warning: unable to create symbolic link at .build\release"
-            // and the symlink simply doesn't exist. Look for the binary
-            // through the symlink first, then fall back to scanning
-            // `.build` for the first `*-windows-msvc` arch directory
-            // (covers x86_64 and aarch64 hosts) and trying its `release/`.
-            // We don't require Developer Mode because that's a
-            // machine-wide setting, often unavailable on CI runners or
-            // shared boxes.
-            let symlinkBinary = buildDir
-                .appendingPathComponent(configuration.swiftPMValue)
-                .appendingPathComponent(exeName)
-            let binary: URL
-            if FileManager.default.fileExists(atPath: symlinkBinary.path) {
-                binary = symlinkBinary
-            } else if let archDir = (try? FileManager.default.contentsOfDirectory(
-                at: buildDir, includingPropertiesForKeys: nil
-            ))?.first(where: { url in
-                let name = url.lastPathComponent
-                return name.hasSuffix("-windows-msvc") && !name.hasPrefix(".")
-            }) {
-                let candidate = archDir
-                    .appendingPathComponent(configuration.swiftPMValue)
-                    .appendingPathComponent(exeName)
-                guard FileManager.default.fileExists(atPath: candidate.path) else {
-                    throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
-                }
-                binary = candidate
+            if alreadyBuilt,
+               Self.builtBinary(exeName: exeName, buildDir: buildDir, configuration: configuration) != nil
+            {
+                print("swift-pwa: using the \(configuration.swiftPMValue) build the permission check just made")
             } else {
-                throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
+                let packagePaths = Self.resolvePackagePaths(projectRoot: projectRoot)
+                let searchDirs = nativeLibraryDirs + (packagePaths?.libDirs ?? [])
+                try await Shell.run(
+                    "swift",
+                    ["build", "-c", configuration.swiftPMValue]
+                        + NativeLibrarySearch.compilerArgs(
+                            for: nativeIncludeDirs + (packagePaths?.includeDirs ?? [])
+                        )
+                        + NativeLibrarySearch.linkerArgs(for: searchDirs, target: .windows),
+                    cwd: projectRoot
+                )
+            }
+            guard let binary = Self.builtBinary(exeName: exeName, buildDir: buildDir, configuration: configuration)
+            else {
+                throw BundlerError.binaryMissing(
+                    buildDir.appendingPathComponent(configuration.swiftPMValue).appendingPathComponent(exeName),
+                    expectedName: exeName
+                )
             }
 
             let bundleDir = outputDir.appendingPathComponent(manifest.name)

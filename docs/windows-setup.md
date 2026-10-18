@@ -977,6 +977,15 @@ same change: an app declaring `windows.native_library_dirs` crashed SwiftPM with
 runtime-environment override was keyed `PATH` while Windows spells it `Path` and
 compares the two as equal.
 
+**A Windows build compiles the app once.** The permission check that every
+build runs first (see above) compiles the app in the configuration being built,
+with the same search paths, and the bundler packages that exe rather than
+running `swift build` again. The second build compiled nothing, and on GitHub's
+hosted Windows runners Swift 6.4.0's build planner stalled in it about half the
+time: up to 45 minutes at four cores on `[Pre-planning 1 / N]`, where the same
+step on a Windows 11 machine takes about 4 s. Not ours to fix, so it's not run.
+A build whose permission check didn't run, or left no exe, still builds.
+
 **A window moved to a negative coordinate used to kill the app.** `WM_MOVE`
 packs its coordinates as *signed* 16-bit words, and the handler read them
 unsigned out of an `Int32(lParam)` conversion that **trapped** for any value

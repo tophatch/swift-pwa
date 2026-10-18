@@ -319,7 +319,7 @@ struct Build: AsyncParsableCommand {
         // tiers' search paths — never the app's own declared ones, which
         // `CommandCatalog` resolves for the host itself (the `--target` here
         // may not be this machine).
-        try await Self.validatePermissions(
+        let builtForHost = try await Self.validatePermissions(
             manifest: pwa, projectRoot: cwd, target: target, configuration: configuration.rawValue,
             nativeLibraryDirs: tierLibraryDirs
         )
@@ -500,7 +500,8 @@ struct Build: AsyncParsableCommand {
                 singleFile: singleFile,
                 configuration: configuration,
                 nativeLibraryDirs: nativeLibraryDirs,
-                nativeIncludeDirs: nativeIncludeDirs
+                nativeIncludeDirs: nativeIncludeDirs,
+                alreadyBuilt: builtForHost
             )
             artifact = try await bundler.build()
         case .android:
@@ -988,10 +989,13 @@ struct Build: AsyncParsableCommand {
         "javascript", "about", "blob", "ws", "wss", "pwa"
     ]
 
+    /// Returns whether it built the app for this host — the permission check
+    /// runs the app, so it compiles it first, in the configuration being built.
+    @discardableResult
     static func validatePermissions(
         manifest: PWAManifest, projectRoot: URL, target: BuildTarget, configuration: String,
         nativeLibraryDirs: [URL] = []
-    ) async throws {
+    ) async throws -> Bool {
         try PermissionCheck.validateNames(manifest)
         if target == .macos || target == .ios {
             try PermissionCheck.validateAppleReasons(manifest)
@@ -1007,7 +1011,7 @@ struct Build: AsyncParsableCommand {
             swift-pwa: pwa.json permissions not checked against the app for --target \(target.rawValue) — \
             comparing them means running the app, and this build is cross-compiled.
             """)
-            return
+            return false
         }
         // The configuration being built, not a hardcoded release: a `--configuration
         // debug` build would otherwise trigger a whole second compile just to be
@@ -1022,6 +1026,7 @@ struct Build: AsyncParsableCommand {
         ) {
             throw ValidationError(drift)
         }
+        return true
     }
 
     static func validateAgentSurface(

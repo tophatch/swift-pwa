@@ -33,6 +33,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.11.7 CLI, the same app fails the ephemeral, real-store, route and
   misspelling rows.
 
+### Fixed
+
+- **A Windows build no longer compiles the app twice, which stalled for up to
+  45 minutes on GitHub's Windows runners.** Every `swift-pwa build --target
+  windows` first runs the app headlessly to check its `permissions`, which
+  compiles it in the configuration being built; the bundler then ran
+  `swift build` again, found nothing to compile, and on hosted runners Swift
+  6.4.0's build planner sat in that second build at four cores on
+  `[Pre-planning 1 / N]` for 15 to 45 minutes in about half of the last 40
+  runs of our own CI job. That is the step an adopter's release workflow runs
+  too. The bundler now packages the exe the permission check built, and still
+  builds when there isn't one. The stall itself is swift-build's, and isn't
+  reproducible on a Windows 11 machine (4.5 s in 4 of 4 runs), so the step is
+  skipped rather than hidden behind a longer timeout.
+
+  Verified with `Scripts/bundle-smoke-windows.ps1` on Windows x64: one release
+  build per bundle where the runs before the change show two, and the folder,
+  portable and single-file launches all pass.
+
 ## [0.11.7] - 2026-10-18
 
 ### Added

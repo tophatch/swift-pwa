@@ -279,7 +279,7 @@ canvas.height = height;
 canvas.getContext('2d').drawImage(bitmap, 0, 0);
 ```
 
-Three things worth knowing:
+Four things worth knowing:
 
 - **`width` / `height` are device pixels.** On a Retina or high-DPI display
   they are `devicePixelRatio` times the window's CSS size. Size the canvas in
@@ -290,6 +290,10 @@ Three things worth knowing:
 - **Ask `window.canSnapshot` first** rather than catching `E_UNIMPLEMENTED` per
   call. It answers without rendering anything, so an app can offer the feature
   or fall back once at startup.
+- **On macOS it leaves out `backdrop-filter`.** A blurred panel comes back
+  unblurred, because there the window server applies the blur and the snapshot
+  renders the page's layers without it. iOS, Android and Windows include it.
+  Hide blurred chrome before snapshotting a page you'll show in its place.
 
 It is the webview's pixels, not the screen's, so it works while the window is
 occluded or in the background and needs no screen-recording permission

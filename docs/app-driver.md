@@ -430,6 +430,18 @@ capture comes from the webview's own compositor, so it is:
 Verified by driving a window moved to `(-984, -768)` — almost entirely off the
 display — and getting back a full, correctly rendered 1024×768 viewport.
 
+> **On macOS a shot leaves out `backdrop-filter`.** A blurred panel comes back
+> as its own background over the content behind it, unblurred, so a blur that
+> works on screen looks broken in every shot. WebKit's snapshot renders the
+> page's layers itself, and on macOS a backdrop filter is applied by the window
+> server, which the snapshot never goes through. Measured over a sharp
+> checkerboard: as sharp inside the blurred panel as outside it on macOS,
+> blurred on the iOS Simulator; Android and WebView2 shots show the blur too.
+> `window.snapshot` takes the same path, so it has the same gap on macOS.
+> Capturing the window instead would need the Screen Recording permission, which
+> is a grant swift-pwa doesn't ask for. To check a blur by eye, look at the
+> window, or capture it yourself with `screencapture -l <window id>`.
+
 > **A clean screenshot of an occluded window can still be a stale one.** The
 > capture is complete, but WebKit **throttles `requestAnimationFrame` for a window
 > the compositor isn't showing** — measured at 1 frame in 3 seconds while

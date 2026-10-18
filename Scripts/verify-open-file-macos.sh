@@ -30,7 +30,9 @@ FILE="$WORK/Open Check_01.pdf"
 LOG="$WORK/app.log"
 
 cleanup() {
-    pkill -f "$APP_DIR/build/macos/$APP.app/Contents/MacOS/$APP" 2>/dev/null || true
+    # Matched without the $TMPDIR prefix: the process runs from the resolved
+    # /private/var/… path, which the /var/… spelling never matches.
+    pkill -f "swift-pwa-open-file-macos/$APP/build/macos/$APP.app/Contents/MacOS/$APP" 2>/dev/null || true
     [ "$KEEP" -eq 1 ] || rm -rf "$WORK"
 }
 trap cleanup EXIT

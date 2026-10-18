@@ -1,0 +1,45 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>drop probe</title>
+<!--
+  What a drop delivers to a page (#300). The same file is opened in the app and
+  in Safari, so the two can be compared on one device with one drag. Each drop
+  lists what the page could see at dragenter and at drop, and whether each
+  File's bytes could be read. Scripts/verify-ios-drop.sh installs and serves it.
+-->
+<style>
+  body { font: 16px -apple-system, system-ui; margin: 0; padding: calc(16px + env(safe-area-inset-top)) 16px 16px; }
+  #zone { border: 3px dashed #888; border-radius: 16px; height: 40vh; display: grid; place-items: center; font-size: 22px; color: #555; }
+  #zone.over { border-color: #07f; color: #07f; background: #07f1; }
+  #where { font-weight: 600; margin-bottom: 12px; }
+  pre { white-space: pre-wrap; font: 14px ui-monospace, monospace; }
+</style>
+<div id="where"></div>
+<div id="zone">Drop photos or files here</div>
+<pre id="out"></pre>
+<script>
+document.getElementById('where').textContent =
+  (window.__SWIFT_PWA__ ? 'In the swift-pwa app' : 'In the browser') + ' — ' + location.href;
+const out = document.getElementById('out');
+const zone = document.getElementById('zone');
+const line = (text) => { out.textContent = text + '\n' + out.textContent; };
+const describe = (dt) =>
+  `types=${JSON.stringify([...dt.types])} items=${JSON.stringify([...dt.items].map((i) => i.kind + ':' + i.type))} files=${dt.files.length}`;
+zone.addEventListener('dragenter', (e) => { e.preventDefault(); zone.classList.add('over'); line('dragenter ' + describe(e.dataTransfer)); });
+zone.addEventListener('dragover', (e) => e.preventDefault());
+zone.addEventListener('dragleave', () => zone.classList.remove('over'));
+zone.addEventListener('drop', async (e) => {
+  e.preventDefault();
+  zone.classList.remove('over');
+  line('drop ' + describe(e.dataTransfer));
+  for (const file of e.dataTransfer.files) {
+    let read;
+    try { read = (await file.arrayBuffer()).byteLength + ' bytes read'; } catch (err) { read = 'unreadable: ' + err; }
+    line(`  file "${file.name}" type=${file.type || '(none)'} size=${file.size} — ${read}`);
+  }
+  for (const item of e.dataTransfer.items) {
+    if (item.kind === 'string') item.getAsString((s) => line(`  string ${item.type}: ${s.slice(0, 120)}`));
+  }
+});
+</script>

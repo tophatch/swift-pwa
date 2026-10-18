@@ -715,6 +715,7 @@ enum AndroidTemplates {
         import android.net.Uri
         import android.os.Build
         import android.os.Bundle
+        import android.view.KeyEvent
         import android.webkit.WebView
         import androidx.activity.OnBackPressedCallback
         import androidx.appcompat.app.AppCompatActivity
@@ -843,17 +844,45 @@ enum AndroidTemplates {
                 bridge = SwiftPWABridge(this, webView, assetLoader)
                 bridge.attach()
 
-                // Back walks the page's own history first, the way Chrome and
-                // installed web apps do, so a single-page app gets its
-                // `popstate`. At the root the callback stands aside and the
-                // system decides: on Android 12+ that keeps an app opened from
-                // the launcher running, with the system's back-to-home
-                // animation, and an always-on callback would lose both.
-                val historyBack = object : OnBackPressedCallback(false) {
-                    override fun handleOnBackPressed() { webView.goBack() }
+                // Back goes first to a close watcher the page holds (a
+                // `CloseWatcher`, a modal <dialog>, an auto popover), as in
+                // Chrome, delivered as Escape, which is a close request there.
+                // Then it walks the page's own history, so a single-page app
+                // gets its `popstate`. With neither, the callback stands aside
+                // and the system decides: on Android 12+ that keeps an app
+                // opened from the launcher running, with the system's
+                // back-to-home animation, and an always-on callback would lose
+                // both.
+                var canGoBack = false
+                var pageWatchers = 0
+                // Backs handed to the page that changed nothing. A responsive
+                // page's watcher closes on the second at the latest (Chromium
+                // lets only the first be cancelled), so a third means the page
+                // is hung, and it mustn't trap Back.
+                var unansweredBacks = 0
+                val back = object : OnBackPressedCallback(false) {
+                    override fun handleOnBackPressed() {
+                        if (pageWatchers > 0 && unansweredBacks < 2) {
+                            unansweredBacks += 1
+                            webView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, KeyEvent.KEYCODE_ESCAPE))
+                            webView.dispatchKeyEvent(KeyEvent(KeyEvent.ACTION_UP, KeyEvent.KEYCODE_ESCAPE))
+                        } else if (canGoBack) {
+                            unansweredBacks = 0
+                            webView.goBack()
+                        } else {
+                            // Only a hung page's watchers hold the callback on
+                            // here: this Back goes on as if there were none.
+                            unansweredBacks = 0
+                            isEnabled = false
+                            onBackPressedDispatcher.onBackPressed()
+                            isEnabled = true
+                        }
+                    }
                 }
-                onBackPressedDispatcher.addCallback(this, historyBack)
-                bridge.onHistoryChanged = { canGoBack -> historyBack.isEnabled = canGoBack }
+                fun updateBack() { back.isEnabled = canGoBack || pageWatchers > 0 }
+                onBackPressedDispatcher.addCallback(this, back)
+                bridge.onHistoryChanged = { canGoBack = it; updateBack() }
+                bridge.onBackWatchers = { count -> pageWatchers = count; unansweredBacks = 0; updateBack() }
 
                 // Secondary-window mode is signalled by the
                 // `swift-pwa.config-json` intent extra, set by
@@ -1367,6 +1396,27 @@ enum AndroidTemplates {
                     webView.addJavascriptInterface(JsBridge(this), "__SwiftPWA__post")
                 }
 
+                // How many close watchers the page holds, so Back can go to it
+                // (see AndroidBackWatchers.swift). Both APIs or neither: without
+                // them Back walks history alone, as it did before.
+                if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) &&
+                    WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)
+                ) {
+                    WebViewCompat.addWebMessageListener(
+                        webView,
+                        "__SwiftPWA__back",
+                        setOf("https://swift-pwa.local")
+                    ) { _, message, _, isMainFrame, _ ->
+                        if (isMainFrame) message.data?.toIntOrNull()?.let { onBackWatchers?.invoke(it) }
+                    }
+                    WebViewCompat.addDocumentStartJavaScript(
+                        webView,
+                        activity.assets.open("\#(AndroidBackWatchers
+            .assetPath)").bufferedReader().use { it.readText() },
+                        setOf("https://swift-pwa.local")
+                    )
+                }
+
                 if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
                     WebViewCompat.addDocumentStartJavaScript(
                         webView,
@@ -1529,6 +1579,9 @@ enum AndroidTemplates {
 
             /// Told whether the page can go back, after every history change.
             var onHistoryChanged: ((Boolean) -> Unit)? = null
+
+            /// Told how many close watchers the page has open, as it changes.
+            var onBackWatchers: ((Int) -> Unit)? = null
 
             fun attach() {
                 nativeAttach(this)

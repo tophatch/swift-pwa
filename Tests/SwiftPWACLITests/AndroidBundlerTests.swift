@@ -753,9 +753,32 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("lastPrimaryUrl = webView.url"))
         // Back walks the page's history, and stands aside at the root.
         #expect(activity.contains("object : OnBackPressedCallback(false)"))
-        #expect(activity.contains("historyBack.isEnabled = canGoBack"))
+        #expect(activity.contains("back.isEnabled = canGoBack || pageWatchers > 0"))
         let bridge = AndroidTemplates.swiftPWABridgeKt()
         #expect(bridge.contains("override fun doUpdateVisitedHistory("))
+    }
+
+    /// Back goes to a close watcher the page holds before it walks history,
+    /// as in Chrome, and a hung page can't keep it (#294).
+    @Test("Back goes to the page's close watchers as Escape, and can't be trapped")
+    func backGoesToCloseWatchers() throws {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains("import android.view.KeyEvent"))
+        let watcherBranch = try #require(activity.range(of: "if (pageWatchers > 0 && unansweredBacks < 2) {"))
+        let escape = try #require(activity.range(of: "KeyEvent.KEYCODE_ESCAPE"))
+        let history = try #require(activity.range(of: "} else if (canGoBack) {"))
+        #expect(watcherBranch.upperBound < escape.lowerBound && escape.upperBound < history.lowerBound)
+        #expect(activity.contains("bridge.onBackWatchers = { count -> pageWatchers = count; unansweredBacks = 0;"))
+
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        #expect(bridge.contains("\"__SwiftPWA__back\""))
+        #expect(bridge.contains("if (isMainFrame) message.data?.toIntOrNull()?.let { onBackWatchers?.invoke(it) }"))
+        #expect(bridge.contains("activity.assets.open(\"swift_pwa/back-watchers.js\")"))
+        #expect(bridge.contains("var onBackWatchers: ((Int) -> Unit)? = null"))
+
+        // The page side reports a count, and only from the top frame.
+        #expect(AndroidBackWatchers.script.contains("window.top !== window || !window.__SwiftPWA__back"))
+        #expect(AndroidBackWatchers.script.contains("window.CloseWatcher = class CloseWatcher extends Native"))
     }
 
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")

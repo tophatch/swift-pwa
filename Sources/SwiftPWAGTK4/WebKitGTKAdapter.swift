@@ -16,6 +16,13 @@
     /// resuming the caller's Swift continuation also happens on the
     /// main thread.
     public final class WebKitGTKAdapter: PWAWebView, @unchecked Sendable {
+        /// The launch's one in-memory network session under
+        /// `SWIFT_PWA_WEB_DATA=ephemeral`, created by the first window and
+        /// shared by every later one, as the default session is. Never freed:
+        /// it lives as long as the process.
+        private nonisolated(unsafe) static let ephemeralSession: OpaquePointer? =
+            webkit_network_session_new_ephemeral()
+
         /// Owned `GtkWidget*` whose concrete type is `WebKitWebView`.
         /// Read by `GTKWindow.init` to attach via `gtk_window_set_child`.
         let viewWidget: UnsafeMutablePointer<GtkWidget>
@@ -86,7 +93,10 @@
             // `webkit_web_view_new_with_user_content_manager` is gone in
             // 6.0; use the g_object_new property-based constructor via
             // the shim.
-            guard let view = swiftpwa_web_view_new_with_user_content_manager(ucm) else {
+            // In the launch's ephemeral session under
+            // `SWIFT_PWA_WEB_DATA=ephemeral`, the default one otherwise.
+            let session = WebData.isEphemeral ? Self.ephemeralSession : nil
+            guard let view = swiftpwa_web_view_new_with_user_content_manager(ucm, session) else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_web_view_new failed")
             }
             viewWidget = view

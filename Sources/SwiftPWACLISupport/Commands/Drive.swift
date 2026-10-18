@@ -947,16 +947,29 @@ struct LaunchedApp {
         )
     }
 
-    // The simulator path: bundle a real `.app` (via the same `build --target
-    // ios --simulator` an adopter runs), install it, launch it with the driver
-    // asked for, and read the handshake off the app's console.
-    //
-    // Nothing here is new machinery on the app's side — the iOS runtime has
-    // started the control socket since it shipped. What was missing was a way to
-    // get a *debug* build onto a simulator and read its stdout: `deploy` built
-    // release only, so the socket wasn't compiled in, and an iPad layout could
-    // only be checked by deploy → screenshot → crop → squint, once per change.
-    //
+    /// The simulator path: bundle a real `.app` (via the same `build --target
+    /// ios --simulator` an adopter runs), install it, launch it with the driver
+    /// asked for, and read the handshake off the app's console.
+    ///
+    /// Nothing here is new machinery on the app's side — the iOS runtime has
+    /// started the control socket since it shipped. What was missing was a way to
+    /// get a *debug* build onto a simulator and read its stdout: `deploy` built
+    /// release only, so the socket wasn't compiled in, and an iPad layout could
+    /// only be checked by deploy → screenshot → crop → squint, once per change.
+    ///
+    /// Pass `SWIFT_PWA_WEB_DATA` on to an app launched on a simulator or a
+    /// device. A desktop launch inherits this process's environment and gets
+    /// it that way; those two launches are handed an environment built here,
+    /// and without this the setting a suite exported never reached them.
+    static func forwardWebData(
+        into environment: inout [String: String],
+        from source: [String: String] = ProcessInfo.processInfo.environment
+    ) {
+        if let value = source[WebData.environmentVariable] {
+            environment[WebData.environmentVariable] = value
+        }
+    }
+
     // macOS-only at the source level, not just at runtime: the body reaches for
     // `simctl` and for POSIX `dup2` / `fflush(stdout)`, neither of which is
     // portable — glibc types `stdout` as a mutable global (a strict-concurrency
@@ -1004,6 +1017,7 @@ struct LaunchedApp {
             if let route = options.route {
                 childEnvironment[InitialRoute.environmentVariable] = route
             }
+            Self.forwardWebData(into: &childEnvironment)
             let stdout = Pipe()
             let handshake = HandshakeReader()
             stdout.fileHandleForReading.readabilityHandler = { handle in
@@ -1094,6 +1108,7 @@ struct LaunchedApp {
             if let route = options.route {
                 childEnvironment[InitialRoute.environmentVariable] = route
             }
+            Self.forwardWebData(into: &childEnvironment)
             let environmentJSON = try String(
                 data: JSONSerialization.data(withJSONObject: childEnvironment, options: [.sortedKeys]),
                 encoding: .utf8

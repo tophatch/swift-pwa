@@ -233,7 +233,8 @@ extern "C" void swiftpwa_w2_create_controller(
     swiftpwa_w2_env *env,
     void *parent_hwnd,
     swiftpwa_w2_controller_ready_cb cb,
-    void *user) {
+    void *user,
+    const wchar_t *in_private_profile) {
     if (!env || !env->com || !cb) {
         if (cb) cb(nullptr, static_cast<int32_t>(E_INVALIDARG), user);
         return;
@@ -284,7 +285,25 @@ extern "C" void swiftpwa_w2_create_controller(
             return S_OK;
         });
 
-    HRESULT hr = env->com->CreateCoreWebView2Controller(hwnd, handler.Get());
+    HRESULT hr = S_OK;
+    if (in_private_profile) {
+        ComPtr<ICoreWebView2Environment10> env10;
+        hr = env->com.As(&env10);
+        if (FAILED(hr)) {
+            fprintf(stderr,
+                    "swift-pwa: SWIFT_PWA_WEB_DATA=ephemeral needs InPrivate profiles, which this WebView2 "
+                    "Runtime doesn't have. Update the WebView2 Runtime, or unset SWIFT_PWA_WEB_DATA.\n");
+            cb(nullptr, static_cast<int32_t>(hr), user);
+            return;
+        }
+        ComPtr<ICoreWebView2ControllerOptions> options;
+        hr = env10->CreateCoreWebView2ControllerOptions(&options);
+        if (SUCCEEDED(hr)) hr = options->put_IsInPrivateModeEnabled(TRUE);
+        if (SUCCEEDED(hr)) hr = options->put_ProfileName(in_private_profile);
+        if (SUCCEEDED(hr)) hr = env10->CreateCoreWebView2ControllerWithOptions(hwnd, options.Get(), handler.Get());
+    } else {
+        hr = env->com->CreateCoreWebView2Controller(hwnd, handler.Get());
+    }
     if (FAILED(hr)) {
         cb(nullptr, static_cast<int32_t>(hr), user);
     }
@@ -1136,7 +1155,8 @@ extern "C" swiftpwa_w2_hresult swiftpwa_w2_check_runtime(void) {
 
 extern "C" void swiftpwa_w2_create_environment(const wchar_t *, swiftpwa_w2_env_ready_cb, void *) {}
 extern "C" void swiftpwa_w2_env_release(swiftpwa_w2_env *) {}
-extern "C" void swiftpwa_w2_create_controller(swiftpwa_w2_env *, void *, swiftpwa_w2_controller_ready_cb, void *) {}
+extern "C" void swiftpwa_w2_create_controller(swiftpwa_w2_env *, void *, swiftpwa_w2_controller_ready_cb, void *,
+                                              const wchar_t *) {}
 extern "C" void swiftpwa_w2_controller_release(swiftpwa_w2_controller *) {}
 extern "C" void swiftpwa_w2_controller_set_bounds(swiftpwa_w2_controller *, int32_t, int32_t, int32_t, int32_t) {}
 extern "C" void swiftpwa_w2_controller_set_visible(swiftpwa_w2_controller *, int) {}

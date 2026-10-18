@@ -15,6 +15,17 @@ struct DriveLaunchTests {
         #endif
     }
 
+    @Test("SWIFT_PWA_WEB_DATA reaches a simulator or device launch when it's set, and only then")
+    func forwardsWebData() {
+        var environment = ["SWIFT_PWA_DRIVE": "0"]
+        LaunchedApp.forwardWebData(into: &environment, from: ["SWIFT_PWA_WEB_DATA": "ephemeral", "HOME": "/x"])
+        #expect(environment == ["SWIFT_PWA_DRIVE": "0", "SWIFT_PWA_WEB_DATA": "ephemeral"])
+
+        var untouched = ["SWIFT_PWA_DRIVE": "0"]
+        LaunchedApp.forwardWebData(into: &untouched, from: ["HOME": "/x"])
+        #expect(untouched == ["SWIFT_PWA_DRIVE": "0"])
+    }
+
     @Test("parses the announcement line")
     func parsesAnnouncement() throws {
         let parsed = try #require(

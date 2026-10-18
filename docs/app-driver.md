@@ -98,6 +98,33 @@ It's a thin wrapper over `SWIFT_PWA_INITIAL_ROUTE`, which works on any launch
 (`SWIFT_PWA_INITIAL_ROUTE=/doc.html?id=42 ./MyApp`) and is useful well outside
 testing. First window only, bundled content only; see the README.
 
+### Giving each run its own storage
+
+Every launch of an app shares one persistent web data store, so a
+`localStorage` key or IndexedDB record one run writes is there in the next, and
+runs launched side by side read each other's writes. A test that reads storage
+back is then flaky for reasons nothing in the test can see.
+`SWIFT_PWA_WEB_DATA=ephemeral` gives a launch a store of its own: it starts
+empty, keeps everything in memory, shares nothing with the persistent store or
+with any other launch, and is gone when the app quits.
+
+```bash
+SWIFT_PWA_WEB_DATA=ephemeral swift-pwa drive eval "localStorage.length"   # 0, every time
+SWIFT_PWA_WEB_DATA=ephemeral SWIFT_PWA_DRIVE=0 ./.build/debug/MyApp &
+```
+
+`drive` passes it on to every launch it makes, simulator and device included.
+It covers web storage only — `localStorage`, IndexedDB, cookies and caches —
+not the app's own files, which stay where `app.documentsDir` says. The app's
+windows share the launch's store with each other, as they share the persistent
+one. Each engine uses its own in-memory store: a non-persistent
+`WKWebsiteDataStore` on Apple, an ephemeral WebKitGTK context or network session
+on Linux, and an InPrivate WebView2 profile on Windows, named for the launch so
+two running at once don't meet in the browser process WebView2 shares between
+them. Any other value is reported on stderr and the launch stays persistent.
+Not on Android, where nothing reaches an app's environment (see
+[android-setup.md](android-setup.md#8-known-limitations)).
+
 ### Driving on the iOS Simulator
 
 ```bash

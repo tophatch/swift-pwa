@@ -7,6 +7,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`SWIFT_PWA_WEB_DATA=ephemeral` gives a launch web storage of its own**
+  (#303). Every launch of an app shared one persistent web data store, so a
+  value one test run wrote to `localStorage` or IndexedDB was there in every
+  later run, and test files running side by side read each other's writes:
+  storage was the one piece of a run a test couldn't scope. An ephemeral launch
+  starts empty, keeps everything in memory, and shares nothing with the
+  persistent store or another launch; the app's windows share it among
+  themselves. Each engine's own in-memory store does the work: a
+  non-persistent `WKWebsiteDataStore` on Apple, an ephemeral context (GTK3) or
+  network session (GTK4) on Linux, and an InPrivate WebView2 profile on
+  Windows. The profile is named per launch, because every launch of an app
+  shares one WebView2 browser process, and a fixed name would put two runs in
+  one profile. `drive` passes the variable on to simulator and device
+  launches, which are handed an environment rather than inheriting one.
+  Only `ephemeral` was asked for. A store in a chosen directory, kept across
+  relaunches, waits for a test that needs it.
+
+  Verified with `Scripts/verify-web-data.sh` on macOS, GTK3 and GTK4, and
+  `Scripts/verify-web-data.ps1` on Windows x64 and arm64. Each checks
+  `localStorage` and IndexedDB, in turn and side by side, and leaves the
+  persistent store as it was. Each script has a `--released` control that has
+  to fail, and does on every one of them. The control also shows why the
+  report couldn't catch a value moving between two live apps: IndexedDB
+  writes cross between running launches immediately, while `localStorage`
+  serves each launch its own cached copy. Checked on the iOS Simulator through
+  `drive`. Not on Android, where an app gets none of the caller's environment;
+  that's now a known limitation in `docs/android-setup.md`.
+
 ### Fixed
 
 - **A large command reply took seconds off Apple, most of it re-sorting what

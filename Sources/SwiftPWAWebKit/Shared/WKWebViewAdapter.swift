@@ -31,11 +31,20 @@
         /// constructible without an `AppContext` (the driver builds one).
         private nonisolated(unsafe) var webPolicy: WKWebPolicy?
 
+        /// The launch's one in-memory store under `SWIFT_PWA_WEB_DATA=ephemeral`.
+        /// One, not one per window: `nonPersistent()` makes a new store each
+        /// call, and an app's windows share storage as they do in the
+        /// persistent store.
+        private static let ephemeralStore = WKWebsiteDataStore.nonPersistent()
+
         public init(configuration: WKWebViewConfiguration? = nil) throws {
             var captured: AsyncStream<InboundMessage>.Continuation?
             stream = AsyncStream { captured = $0 }
 
             let cfg = configuration ?? WKWebViewConfiguration()
+            if WebData.isEphemeral {
+                cfg.websiteDataStore = Self.ephemeralStore
+            }
             // Let the app's own JS (first-party content from pwa://) play media
             // it generates — e.g. on-device TTS — without a user gesture.
             // Autoplay policies exist to tame untrusted web pages; for a

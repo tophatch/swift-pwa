@@ -1474,6 +1474,13 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
+- **The `SWIFT_PWA_*` launch variables don't reach an Android app.**
+  `SWIFT_PWA_WEB_DATA=ephemeral` and `SWIFT_PWA_INITIAL_ROUTE` are read from
+  the process environment, and an Android app is started by the system with
+  none of the caller's: `adb shell am start` has no way to set one. An
+  on-device test that needs clean web storage clears it from the page
+  (`localStorage.clear()`, `indexedDB.deleteDatabase(…)`).
+
 - **The flush happens on `onStop`.** A stopped app can be killed without being
   told, so `ctx.beforeClose` runs with reason `.backgrounded` when the Activity
   stops, alongside whatever the page posted from `visibilitychange` to `hidden`

@@ -130,13 +130,24 @@
             // will pump messages via `pumpUntilReady` until the
             // callback flips `ready`.
             let user = Unmanaged.passRetained(self).toOpaque()
-            swiftpwa_w2_create_controller(
-                environment,
-                UnsafeMutableRawPointer(parent),
-                controllerReadyTrampoline,
-                user
-            )
+            guard WebData.isEphemeral else {
+                swiftpwa_w2_create_controller(
+                    environment, UnsafeMutableRawPointer(parent), controllerReadyTrampoline, user, nil
+                )
+                return
+            }
+            Self.ephemeralProfile.withCString(encodedAs: UTF16.self) { profile in
+                swiftpwa_w2_create_controller(
+                    environment, UnsafeMutableRawPointer(parent), controllerReadyTrampoline, user, profile
+                )
+            }
         }
+
+        /// The launch's InPrivate profile under `SWIFT_PWA_WEB_DATA=ephemeral`,
+        /// named for this launch alone. Every launch of an app shares one
+        /// user data folder, and with it one browser process, so a fixed name
+        /// would put two launches running side by side in one profile.
+        private static let ephemeralProfile = "ephemeral-\(UUID().uuidString.prefix(8))"
 
         /// Paint the controller's surface with the half of the configured
         /// background Windows currently asks for. Called once the controller

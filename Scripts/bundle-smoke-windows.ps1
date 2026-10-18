@@ -105,11 +105,43 @@ function Write-Utf8NoBom([string]$Path, [string]$Text) {
 # rather than on PowerShell's reading of the first stderr line as an error.
 function Invoke-Native([string]$Label, [scriptblock]$Command) {
     $ErrorActionPreference = "Continue"
+    $clock = [Diagnostics.Stopwatch]::StartNew()
     & $Command 2>&1 | ForEach-Object {
         # A native stderr line arrives as an ErrorRecord; print the line.
         if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.TargetObject)" } else { "$_" }
     } | Write-Host
+    $script:Timings += , ("{0,-20} {1,7:N0} s" -f $Label, $clock.Elapsed.TotalSeconds)
+    Write-Host ("-- {0}: {1:N0} s" -f $Label, $clock.Elapsed.TotalSeconds)
     if ($LASTEXITCODE -ne 0) { throw "$Label failed ($LASTEXITCODE)" }
+}
+
+# Prints, once a minute while the builds run, what the build processes are
+# doing, into this same log. Runs of this job usually take ~12 minutes, and
+# about a third take 30-60: in each of those SwiftPM sat on "[Pre-planning
+# 1 / N]" for 15-35 minutes and then found nothing to compile. The log alone
+# can't say whether it was working, waiting, or competing with something, so
+# each line carries the CPU seconds and memory of the build processes,
+# Defender's scanner and the free memory. A CPU total that stops growing is
+# waiting; one that keeps growing is working. A separate process writing to
+# the inherited console, so a run killed by its timeout still leaves the lines.
+function Start-BuildSampler {
+    $sampler = {
+        while ($true) {
+            Start-Sleep -Seconds 60
+            $groups = Get-Process -ErrorAction SilentlyContinue |
+                Where-Object { $_.ProcessName -match '^(swift|SWB|clang|lld|link$|BundleSmoke|MsMpEng)' } |
+                Group-Object ProcessName | Sort-Object Name | ForEach-Object {
+                    $cpu = ($_.Group | Measure-Object -Property CPU -Sum).Sum
+                    $mb = ($_.Group | Measure-Object -Property WorkingSet64 -Sum).Sum / 1MB
+                    "{0}x{1} cpu={2:N0}s ws={3:N0}MB" -f $_.Name, $_.Count, $cpu, $mb
+                }
+            $free = (Get-CimInstance Win32_OperatingSystem).FreePhysicalMemory / 1MB
+            Write-Host ("[sample {0:HH:mm:ss}] free={1:N1}GB | {2}" -f (Get-Date), $free, ($groups -join ' | '))
+        }
+    }
+    $encoded = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($sampler.ToString()))
+    Start-Process powershell -NoNewWindow -PassThru `
+        -ArgumentList "-NoProfile", "-EncodedCommand", $encoded
 }
 
 # Launch `$Exe` in describe mode and return a verdict. The exe is a GUI-subsystem
@@ -166,6 +198,7 @@ function Test-Launch([string]$Label, [string]$Exe, [string]$PathValue) {
     return "PASS  $Label - $($names.Count) commands"
 }
 
+$Timings = @()
 Enter-BuildEnv
 Remove-Tree $WorkDir
 New-Item -ItemType Directory -Path $WorkDir | Out-Null
@@ -205,6 +238,7 @@ foreach ($pkg in "Microsoft.Web.WebView2", "Microsoft.Windows.ImplementationLibr
 
 $relocated = Join-Path $WorkDir "relocated"
 New-Item -ItemType Directory $relocated | Out-Null
+$sampler = Start-BuildSampler
 Push-Location $appDir
 try {
     Write-Host "== swift-pwa build --target windows ($Configuration) ==" -ForegroundColor Cyan
@@ -215,7 +249,12 @@ try {
     Invoke-Native "single-file bundle" {
         & $cli build --target windows --configuration $Configuration --single-file --output "out\single"
     }
-} finally { Pop-Location }
+} finally {
+    Pop-Location
+    Stop-Process -Id $sampler.Id -ErrorAction SilentlyContinue
+}
+Write-Host "== time per phase ==" -ForegroundColor Cyan
+$Timings | ForEach-Object { Write-Host "  $_" }
 
 # Move both artifacts out of the project, then delete its build tree, so a
 # bundle that reaches back into .build fails here rather than on a user's box.

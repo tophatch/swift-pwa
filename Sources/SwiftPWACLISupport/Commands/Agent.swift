@@ -51,7 +51,7 @@ struct AgentCheck: AsyncParsableCommand {
 
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let pwa = try PWAManifest.load(from: cwd.appendingPathComponent(manifest))
+        let pwa = try PWAManifest.load(from: Build.commandLinePath(manifest, in: cwd))
 
         guard let expose = pwa.agent?.expose, !expose.isEmpty else {
             print("""

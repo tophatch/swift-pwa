@@ -78,7 +78,7 @@ struct Codegen: AsyncParsableCommand {
             return try CommandCatalog.decode(at: URL(fileURLWithPath: catalog))
         }
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let manifestURL = cwd.appendingPathComponent(manifest)
+        let manifestURL = Build.commandLinePath(manifest, in: cwd)
         let pwa: PWAManifest
         do {
             pwa = try PWAManifest.load(from: manifestURL)

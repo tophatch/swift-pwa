@@ -148,9 +148,9 @@ struct Deploy: AsyncParsableCommand {
 
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let manifestURL = cwd.appendingPathComponent(manifest)
-        let outputDir = cwd.appendingPathComponent(
-            Build.resolveOutput(output, target: target, simulator: simulator)
+        let manifestURL = Build.commandLinePath(manifest, in: cwd)
+        let outputDir = Build.commandLinePath(
+            Build.resolveOutput(output, target: target, simulator: simulator), in: cwd
         )
         let pwa = try PWAManifest.load(from: manifestURL)
 

@@ -31,6 +31,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An absolute `--output` or `--manifest` path was nested under the working
+  directory.** `build --output /tmp/out` wrote to `./tmp/out`, because every
+  command joined the path onto the working directory whether or not it was
+  already absolute. `build`, `deploy`, `dev`, `codegen` and `agent` now take
+  an absolute path as given. Found while building a comparison app for #301.
 - **A document opened into an already-running Android app couldn't be read**
   (#298). The launcher Activity is `standard`, so a warm "Open with" or share
   arrives as a second `MainActivity`. That Activity hands the intent to the

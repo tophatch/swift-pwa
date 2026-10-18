@@ -167,6 +167,14 @@ struct InfoPlist {
         set { entries[key] = newValue }
     }
 
+    /// Add `keys` where the plist has no value yet, so an `info_plist`
+    /// passthrough still wins.
+    mutating func addMissing(_ keys: [String: Any]) {
+        for (key, value) in keys where entries[key] == nil {
+            entries[key] = value
+        }
+    }
+
     func write(to url: URL) throws {
         let data = try PropertyListSerialization.data(
             fromPropertyList: entries,

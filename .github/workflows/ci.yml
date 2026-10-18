@@ -52,6 +52,25 @@ jobs:
             -configuration Release \
             -derivedDataPath build/ios-sim \
             build
+      - name: Build the CLI
+        run: swift build --product swift-pwa
+      - name: A bundled app records the SDK it was built with
+        # iOS decides compatibility behaviour from the SDK version in the
+        # binary's LC_BUILD_VERSION. The driver only writes the real one when
+        # SDKROOT is in its environment, and without it every app claimed its
+        # deployment target and ran letterboxed on newer screen sizes (#301).
+        run: |
+          set -euo pipefail
+          mkdir -p /tmp/ios-sdk && cd /tmp/ios-sdk
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" init SdkStamp --path app
+          cd app
+          sed -i '' -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" build --target ios --simulator
+          EXPECTED=$(xcrun --sdk iphonesimulator --show-sdk-version)
+          xcrun vtool -show-build build/ios-simulator/SdkStamp.app/SdkStamp | tee /tmp/ios-sdk/build-version.txt
+          STAMPED=$(awk '$1 == "sdk" { print $2 }' /tmp/ios-sdk/build-version.txt | sort -u)
+          echo "SDK in use: $EXPECTED; stamped: $STAMPED"
+          test "$STAMPED" = "$EXPECTED"
 
   bundle-smoke:
     # Does a bundled app actually run somewhere other than the machine that
@@ -85,6 +104,12 @@ jobs:
       - name: Bundle a debug .app (debug so the driver is compiled in)
         working-directory: /tmp/bundle-smoke/app
         run: "$GITHUB_WORKSPACE/.build/debug/swift-pwa build --target macos --configuration debug"
+      - name: The unsigned build's ad hoc signature covers the whole bundle
+        # Without --sign the bundle used to carry only the linker's signature on
+        # the executable, which binds neither Info.plist nor the resources, so
+        # `codesign --verify` failed on every app built without an identity.
+        working-directory: /tmp/bundle-smoke/app
+        run: codesign --verify --deep --strict build/macos/BundleSmoke.app
       - name: Delete .build, then drive the .app
         working-directory: /tmp/bundle-smoke/app
         run: |
@@ -1255,6 +1280,28 @@ jobs:
           name: HelloPWA-debug-apk
           path: Examples/HelloPWA/build/android/HelloPWA-android/app/build/outputs/apk/debug/app-debug.apk
           if-no-files-found: error
+      - name: Signed release build (compiles the signingConfigs block)
+        # assembleDebug never evaluates `signingConfigs`, so a release-signing
+        # block that doesn't compile shipped behind a green job (#305). A
+        # throwaway keystore under a path with a `$` also covers the Kotlin
+        # string escaping.
+        env:
+          SWIFT_PWA_ANDROID_STORE_PASSWORD: ci-throwaway
+          SWIFT_PWA_ANDROID_KEY_PASSWORD: ci-throwaway
+        run: |
+          KEYDIR="$RUNNER_TEMP/keys\$dir"
+          mkdir -p "$KEYDIR"
+          keytool -genkeypair -keystore "$KEYDIR/ci.p12" -storetype pkcs12 -alias ci \
+            -keyalg RSA -keysize 2048 -validity 2 -dname CN=swift-pwa-ci \
+            -storepass ci-throwaway -keypass ci-throwaway
+          cd Examples/HelloPWA
+          swift run --package-path ../.. swift-pwa build --target android \
+            --sign "$KEYDIR/ci.p12" --android-key-alias ci
+          cd build/android/HelloPWA-android
+          ./gradlew --no-daemon assembleRelease
+          APKSIGNER=$(ls -d "$ANDROID_HOME"/build-tools/* | sort -V | tail -1)/apksigner
+          "$APKSIGNER" verify --print-certs app/build/outputs/apk/release/app-release.apk | tee /dev/stderr \
+            | grep "CN=swift-pwa-ci"
 
   lint:
     runs-on: macos-15

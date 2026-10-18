@@ -138,11 +138,16 @@
             // the host-event handler is installed below so the C-shim's
             // pre-handler buffer flush (of an `onCreate`-time push) finds
             // this subscriber. On Android the paths are `content://` URIs,
-            // read via the `fs.*` content-URI methods.
+            // read via the `fs.*` content-URI methods, so the Activity also
+            // sends each one's display name and type from its provider.
             AndroidHostEventRouter.subscribe(channel: OpenFile.channel) { data in
-                struct Payload: Decodable { let paths: [String] }
+                struct Payload: Decodable {
+                    let paths: [String]
+                    let names: [String]?
+                    let mimeTypes: [String?]?
+                }
                 guard let payload = try? JSONDecoder().decode(Payload.self, from: data) else { return }
-                OpenFile.emit(payload.paths, on: context.events)
+                OpenFile.emit(payload.paths, names: payload.names, mimeTypes: payload.mimeTypes, on: context.events)
             }
 
             // The same intent path carries deep links: an `ACTION_VIEW` whose

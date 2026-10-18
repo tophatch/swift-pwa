@@ -269,18 +269,21 @@ public func swiftpwa_android_main() {
 #endif
 ```
 
-The JNI symbol mangling — `Java_<package>_<class>_<method>` with dots
-replaced by underscores — is what links the Kotlin `external fun
-swiftPwaMain()` declaration to your Swift function. If you change
+The JNI symbol mangling — `Java_<package>_<class>_<method>`, with each
+`.` in the package written `_` and each `_` written `_1` — is what links
+the Kotlin `external fun swiftPwaMain()` declaration to your Swift
+function. So `com.example.my_app` is `Java_com_example_my_1app_…`. If you change
 `pwa.json`'s `android.package_id`, regenerate the scaffold and update
 the `@_cdecl` to match.
 
 **Drift is caught for you.** `swift-pwa build --target android` (and
 `swift-pwa doctor --target android`) compare the `@_cdecl` symbol in
-`AndroidEntry.swift` against the manifest's `package_id` and **warn** if
-they disagree, before you get the runtime `UnsatisfiedLinkError`. The fix
-it prints: set the `@_cdecl` to the mangled current package, or delete
-`AndroidEntry.swift` and re-run `swift-pwa init <name> --in-place`.
+`AndroidEntry.swift` against the manifest's `package_id` and **fail** if
+they disagree. A mismatch is a crash on every launch, so the build stops
+rather than producing an APK that installs and then dies with
+`UnsatisfiedLinkError`. The fix it prints: set the `@_cdecl` to the
+mangled current package, or delete `AndroidEntry.swift` and re-run
+`swift-pwa init <name> --in-place`.
 
 > Why a manual `@_cdecl` instead of a generated wrapper? Because the
 > exported symbol's name has to embed the user's Java package id,
@@ -569,11 +572,26 @@ exactly the local-file open case. Wildcards work (`"image/*"`). Unset → no
 association (the app only opens from the launcher).
 
 The file arrives as a **`content://` URI** (the SAF form), delivered to JS as
-`{ paths: ["content://…"] }`; read it with `fs.readBinary` (the same
-content-URI path `dialog.openFile` uses — see §8). The URI carries a temporary
-read grant scoped to the launching activity, so no extra permission step is
-needed. Both cold launch (the file starts the app) and warm delivery (the app
-is already running) are handled; device-verified on a Galaxy Tab S10+.
+`{ paths: ["content://…"], names: ["Report.pdf"], mimeTypes: ["application/pdf"] }`;
+read it with `fs.readBinary` (the same content-URI path `dialog.openFile`
+uses — see §8). The URI's last segment is usually a provider id, so the
+Activity asks the provider for the display name (`OpenableColumns.DISPLAY_NAME`)
+and type (`ContentResolver.getType`, else the intent's type when it names one
+concrete type) while it holds the read grant. The URI carries a temporary
+read grant, so no extra permission step is needed. Both cold launch (the file
+starts the app) and warm delivery (the app is already running) are handled.
+
+A warm open arrives as a second `MainActivity` that hands the intent to the
+running one and finishes, and Android ties the grant to the Activity that
+received it. So that Activity first re-grants each URI to the app itself,
+and the running Activity revokes those grants when it finishes, which is when
+a cold-launch grant would end too. A share starts that second Activity in the
+*sending* app's task, so it also brings the running app's task to the front;
+otherwise the user would be left in the sender with nothing visibly opened.
+That needs the running Activity to be in a task of the app's own, which it is
+unless a share started the app in the first place.
+`Scripts/verify-android-open-file.sh` checks cold and warm opens on a device,
+including that the file is still readable.
 
 ### Deep links (`url_schemes`)
 
@@ -1623,8 +1641,10 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 - **`UnsatisfiedLinkError: Native method not found: ...swiftPwaMain`**
   — your `@_cdecl` symbol name doesn't match the Java package +
   class. The expected name is
-  `Java_<package>_MainActivity_swiftPwaMain` with dots replaced by
-  underscores. Double-check `pwa.json`'s `android.package_id`.
+  `Java_<package>_MainActivity_swiftPwaMain`, with each `.` in the
+  package written `_` and each `_` written `_1`. Double-check
+  `pwa.json`'s `android.package_id`; `swift-pwa doctor --target android`
+  prints the exact symbol it needs.
 - **`assembleDebug` fails on `jniLibs is empty`** — see §4 above;
   either re-run with `--cross-compile-android` or drop the `.so`s
   in by hand.

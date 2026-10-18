@@ -46,7 +46,7 @@ struct Dev: AsyncParsableCommand {
         } else {
             #if canImport(Darwin) || canImport(Glibc) || canImport(WinSDK)
                 // Built-in live-reload server over the project's web/ dir.
-                let pwa = try PWAManifest.load(from: cwd.appendingPathComponent(manifest))
+                let pwa = try PWAManifest.load(from: Build.commandLinePath(manifest, in: cwd))
                 let webDir = cwd.appendingPathComponent(pwa.web.directory)
                 guard FileManager.default.fileExists(atPath: webDir.path) else {
                     throw ValidationError(
@@ -78,7 +78,7 @@ struct Dev: AsyncParsableCommand {
         // search paths here too, or `dev` fails where `build` would have
         // worked. Read afresh: the manifest above is inside the
         // built-in-server branch.
-        let devManifest = try PWAManifest.load(from: cwd.appendingPathComponent(manifest))
+        let devManifest = try PWAManifest.load(from: Build.commandLinePath(manifest, in: cwd))
         task.arguments = try ["run"]
             + NativeLibrarySearch.hostLinkerArgs(manifest: devManifest, projectRoot: cwd)
             + NativeLibrarySearch.hostCompilerArgs(manifest: devManifest, projectRoot: cwd)

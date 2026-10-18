@@ -25,6 +25,14 @@ struct BuildOutputLayoutTests {
         #expect(Build.resolveOutput("dist", target: .ios, simulator: true) == "dist")
     }
 
+    @Test("a command-line path is absolute as given, otherwise under the working directory")
+    func commandLinePaths() {
+        let cwd = URL(fileURLWithPath: "/work/app")
+        #expect(Build.commandLinePath("build/macos", in: cwd).path == "/work/app/build/macos")
+        #expect(Build.commandLinePath("/tmp/out", in: cwd).path == "/tmp/out")
+        #expect(Build.commandLinePath("../shared/pwa.json", in: cwd).path == "/work/shared/pwa.json")
+    }
+
     // MARK: - arch validation
 
     @Test("macOS takes one or both slices")

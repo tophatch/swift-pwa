@@ -557,4 +557,13 @@ struct InitTests {
         )
         #expect(original == "// existing")
     }
+
+    @Test("the starter page sets a viewport and pads by the safe-area insets")
+    func starterPageViewport() {
+        let html = Templates.indexHTML(name: "MyApp")
+        // Without it iOS lays the page out at 980 CSS px and shrinks it to fit.
+        #expect(html
+            .contains(#"<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />"#))
+        #expect(html.contains("env(safe-area-inset-top)"))
+    }
 }

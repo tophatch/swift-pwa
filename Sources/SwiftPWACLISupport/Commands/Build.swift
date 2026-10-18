@@ -256,8 +256,8 @@ struct Build: AsyncParsableCommand {
 
     func run() async throws {
         let cwd = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-        let manifestURL = cwd.appendingPathComponent(manifest)
-        let outputDir = cwd.appendingPathComponent(Self.resolveOutput(output, target: target, simulator: simulator))
+        let manifestURL = Self.commandLinePath(manifest, in: cwd)
+        let outputDir = Self.commandLinePath(Self.resolveOutput(output, target: target, simulator: simulator), in: cwd)
         let pwa = try PWAManifest.load(from: manifestURL)
         try Self.validateArchs(arch, target: target)
 
@@ -555,6 +555,16 @@ struct Build: AsyncParsableCommand {
     static func resolveOutput(_ explicit: String?, target: BuildTarget, simulator: Bool) -> String {
         if let explicit, !explicit.isEmpty { return explicit }
         return "build/\(target.outputSubdirectory(simulator: simulator))"
+    }
+
+    /// A path given on the command line: absolute as given, otherwise against
+    /// the working directory. `appendingPathComponent` would nest an absolute
+    /// path under the working directory instead.
+    static func commandLinePath(_ path: String, in cwd: URL) -> URL {
+        // The base must be marked a directory, or relative resolution
+        // replaces its last component instead of appending to it.
+        let base = URL(fileURLWithPath: cwd.path, isDirectory: true)
+        return URL(fileURLWithPath: path, relativeTo: base).absoluteURL.standardizedFileURL
     }
 
     /// `--arch` means different things per platform, so reject the combinations

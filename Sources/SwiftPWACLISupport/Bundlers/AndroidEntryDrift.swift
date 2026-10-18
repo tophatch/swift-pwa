@@ -9,7 +9,8 @@ import Foundation
 /// the user changes `android.package_id` after `init`, the (user-owned)
 /// `AndroidEntry.swift` still names the old package and the app dies at
 /// launch with `UnsatisfiedLinkError: Native method not found`. Nothing
-/// catches that until runtime — so the bundler and `doctor` warn on it.
+/// catches that until runtime, so the bundler refuses to build and `doctor`
+/// fails the check.
 enum AndroidEntryDrift {
     /// The effective Android package id, mirroring `AndroidBundler`'s
     /// default resolution (explicit `android.package_id`, else the
@@ -59,11 +60,33 @@ enum AndroidEntryDrift {
         return nil
     }
 
-    /// JNI mangling as the scaffold emits it (dots → underscores). The
-    /// scaffold uses this simple form; full JNI escaping isn't needed
-    /// because the Kotlin side is generated from the same string.
+    /// The package part of a JNI symbol, escaped the way the JVM looks it up:
+    /// `.` → `_`, and a literal `_` → `_1`. Getting this wrong only shows up
+    /// as an `UnsatisfiedLinkError` at launch, so `init` emits the symbol
+    /// through this function and the drift check compares against it.
     static func mangle(_ packageId: String) -> String {
-        packageId.replacingOccurrences(of: ".", with: "_")
+        var out = ""
+        for scalar in packageId.unicodeScalars {
+            switch scalar {
+            case ".": out += "_"
+            case "_": out += "_1"
+            case ";": out += "_2"
+            case "[": out += "_3"
+            case "a" ... "z", "A" ... "Z", "0" ... "9": out.unicodeScalars.append(scalar)
+            default:
+                let hex = String(scalar.value, radix: 16)
+                out += "_0" + String(repeating: "0", count: max(0, 4 - hex.count)) + hex
+            }
+        }
+        return out
+    }
+
+    /// Fail the build on a mismatch: the APK would assemble, install and then
+    /// crash on its first launch, and nothing after the build can fix that.
+    static func check(projectRoot: URL, packageId: String) throws {
+        if let drift = detect(projectRoot: projectRoot, packageId: packageId) {
+            throw AndroidBundlerError.staleEntryPoint(message(for: drift, packageId: packageId))
+        }
     }
 
     /// Extract `<X>` from `@_cdecl("Java_<X>_MainActivity_swiftPwaMain")`.

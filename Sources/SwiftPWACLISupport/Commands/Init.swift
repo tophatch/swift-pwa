@@ -550,15 +550,15 @@ enum Templates {
     }
 
     /// JNI entry-point boilerplate. The exported symbol's name has to
-    /// embed the user's Java package id (with dots replaced by
-    /// underscores) — SwiftPM doesn't know about the package id, so
+    /// embed the user's Java package id, JNI-escaped by
+    /// `AndroidEntryDrift.mangle` — SwiftPM doesn't know about the package id, so
     /// this file lives in the user's project. Apps that change
     /// `pwa.json`'s `android.package_id` after `init` must update the
     /// `@_cdecl` string in lockstep — keep them in sync or the
     /// Activity surfaces `UnsatisfiedLinkError: Native method not
     /// found` at startup.
     static func androidEntrySwift(name: String, packageId: String) -> String {
-        let mangled = packageId.replacingOccurrences(of: ".", with: "_")
+        let mangled = AndroidEntryDrift.mangle(packageId)
         return """
         // swift-pwa-generated: v\(SwiftPWAVersion.current)
         #if os(Android)
@@ -567,7 +567,7 @@ enum Templates {
 
             /// JNI entry point for the generated `MainActivity.swiftPwaMain()`
             /// Kotlin declaration. The symbol name is mangled per JNI's
-            /// rules (`Java_<package>_<class>_<method>`, dots → underscores)
+            /// rules (`Java_<package>_<class>_<method>`, `.` → `_`, `_` → `_1`)
             /// and must stay in lockstep with `pwa.json`'s `android.package_id`.
             ///
             /// Called from the worker thread the activity spawns. The
@@ -613,9 +613,17 @@ enum Templates {
         return """
         <!doctype html>
         <html><head><meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
         <title>\(escaped)</title>
         <style>
-          body { font-family: -apple-system, system-ui, sans-serif; margin: 2rem; }
+          /* The page fills the window, under any notch or home indicator, so
+             the padding grows by each safe-area inset (0 on desktop). */
+          body {
+            font-family: -apple-system, system-ui, sans-serif;
+            margin: 0;
+            padding: calc(2rem + env(safe-area-inset-top)) calc(2rem + env(safe-area-inset-right))
+                     calc(2rem + env(safe-area-inset-bottom)) calc(2rem + env(safe-area-inset-left));
+          }
           button { padding: .5rem 1rem; }
         </style></head>
         <body>

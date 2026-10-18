@@ -381,7 +381,8 @@ struct AndroidBundlerUnitTests {
         )
         #expect(kts.contains("signingConfigs {"))
         #expect(kts.contains("create(\"release\")"))
-        #expect(kts.contains("storeFile = java.io.File(\"/secrets/release.jks\")"))
+        #expect(kts.contains("storeFile = file(\"/secrets/release.jks\")"))
+        #expect(!kts.contains("java.io.File"))
         #expect(kts.contains("storeType = \"pkcs12\""))
         #expect(kts.contains("keyAlias = \"upload-key\""))
         // Both env vars referenced — the configure-time gate that
@@ -393,6 +394,42 @@ struct AndroidBundlerUnitTests {
         #expect(kts.contains("signingConfig = signingConfigs.getByName(\"release\")"))
         #expect(kts.contains("enableV1Signing = true"))
         #expect(kts.contains("enableV2Signing = true"))
+    }
+
+    @Test("A $ in the keystore path or alias isn't read as a Kotlin string template")
+    func gradleDollarPath() {
+        let kts = AndroidTemplates.appBuildGradleKts(
+            packageId: "com.example.hi",
+            versionCode: 1,
+            versionName: "1.0.0",
+            minSdk: 28,
+            targetSdk: 34,
+            abis: ["arm64-v8a"],
+            soBaseName: "Hi",
+            signing: .init(
+                keystoreAbsolutePath: "/keys/$release.jks",
+                keyAlias: "key$1",
+                storeType: "jks",
+                v1SigningEnabled: true,
+                v2SigningEnabled: true
+            )
+        )
+        #expect(kts.contains(#"storeFile = file("/keys/\$release.jks")"#))
+        #expect(kts.contains(#"keyAlias = "key\$1""#))
+    }
+
+    @Test("An opened document carries its provider's display name and type (#298)")
+    func openFileCarriesNameAndType() {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains(#".put("names", names).put("mimeTypes", types)"#))
+        #expect(activity.contains("android.provider.OpenableColumns.DISPLAY_NAME"))
+        #expect(activity.contains("contentResolver.getType(uri)"))
+        // A wildcard from a multi-file share says nothing about any one file.
+        #expect(activity.contains("intentType?.takeIf { !it.contains('*') }"))
+        // The hand-off to a running app keeps the read grant and raises its task.
+        #expect(activity.contains("keepOpenedUriGrants(intent)"))
+        #expect(activity.contains("bringTaskToFront(owner)"))
+        #expect(activity.contains("ownerTask.moveToFront()"))
     }
 
     @Test("Windows-style backslash paths are escaped for Kotlin")
@@ -415,7 +452,7 @@ struct AndroidBundlerUnitTests {
         )
         // Each backslash must be doubled so Kotlin's lexer doesn't
         // interpret `\U` / `\m` / `\r` as escape sequences.
-        #expect(kts.contains(#"storeFile = java.io.File("C:\\Users\\me\\release.jks")"#))
+        #expect(kts.contains(#"storeFile = file("C:\\Users\\me\\release.jks")"#))
     }
 
     // MARK: - Signing resolver

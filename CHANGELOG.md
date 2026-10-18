@@ -5,6 +5,134 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`app.openFile` says what each file is called, and what type its sender
+  declared** (#298). The payload is now `{ paths, names, mimeTypes }`,
+  index-aligned. On Android `paths[i]` is a `content://` URI, and for
+  MediaStore, Downloads and most apps' FileProviders its last segment is an id,
+  so an app that received a document couldn't title it, and lost the intent's
+  type too. The Activity now asks the provider for `DISPLAY_NAME` and its type
+  while it holds the read grant. A multi-file share's wildcard type (`image/*`)
+  is not used, since it describes none of the files. On every other platform
+  `names[i]` is the path's last component, so a page reads `names[i]` without
+  branching. `mimeTypes[i]` is `null` there, because nothing sent a type and
+  the name already says what the file is. Guessing a type from the extension
+  is left to the page, the same fallback it needs for a provider that
+  declares none. `paths` is unchanged, so existing handlers keep working.
+  Verified with a share from the Files app on a Galaxy Z Fold7, with
+  `Scripts/verify-android-open-file.sh` (cold and warm opens of MediaStore
+  files, plus a control that must fall back), and with
+  `Scripts/verify-open-file-macos.sh` (Launch Services "Open With"). Each
+  script also fails against the old payload. The Core tests pass on Linux too.
+  A Windows path's name is checked in `SwiftPWAWindowsTestRunner`.
+
+### Fixed
+
+- **A macOS app built without `--sign` failed signature verification.** The
+  only signature was the one the linker puts on the executable. It binds
+  neither `Info.plist` nor the resources, so `codesign --verify --strict`
+  reported "code has no resources but signature indicates they must be
+  present" for every unsigned build, back to at least 0.11.5. The bundler now
+  signs the whole bundle ad hoc when no identity is given. That's a valid
+  signature for the Mac that built it, and distributing still needs
+  `--sign`. Release, debug and universal builds now verify, and the app
+  launches and drives, including after being moved. CI's `bundle-smoke` job
+  now runs `codesign --verify --strict` on its fresh scaffold.
+- **Apple bundles were missing the build keys Xcode writes into every app.**
+  We assemble `.app` bundles ourselves, so `Info.plist` had no
+  `DTPlatformName`, `DTPlatformVersion`, `DTPlatformBuild`, `DTSDKName`,
+  `DTSDKBuild`, `DTXcode`, `DTXcodeBuild`, `DTCompiler`, `BuildMachineOSBuild`
+  or `CFBundleSupportedPlatforms`. App Store Connect rejects an upload without
+  `DTPlatformName` (ITMS-90507), and reads `DTXcode` / `DTSDKBuild` to apply
+  its minimum-SDK rule. iOS and macOS bundles now get them, read from
+  `xcrun`, `xcodebuild` and `sw_vers` at build time. An `info_plist`
+  passthrough still overrides them. With only the Command Line Tools there is
+  no `xcodebuild`, so the two `DTXcode*` keys are left out and the build says
+  so. Checked against what Xcode 27.1 writes. Simulator and macOS bundles
+  install and launch. A device install and an App Store upload weren't tried:
+  the first needs an Xcode account signed in, the second a paid account.
+
+  app.** The share started a second Activity in the sender's task, which
+  handed the file to the running one and finished. The page got the file, but
+  nothing came forward. The second Activity now raises the running Activity's
+  task first, through `ActivityManager.AppTask`, which needs no permission for
+  the app's own tasks. If a share is what started the app, the running
+  Activity is in the sender's task, which `AppTask` can't reach, so the app
+  isn't raised and a line is logged. Verified on a Galaxy Z Fold7 with the app
+  in the background and a PDF shared from the Files app: before, the Files app
+  kept focus; after, the app is in front with the file opened and readable.
+- **A freshly scaffolded app looked shrunken on a phone.** `init`'s
+  `web/index.html` had no viewport tag, so iOS laid it out 980 CSS px wide and
+  scaled it down to fit. It now carries
+  `width=device-width, initial-scale=1, viewport-fit=cover`, the tag the
+  docs and examples already recommend, and pads the body by the safe-area
+  insets, so the content clears the status bar and home indicator. On desktop
+  the insets are 0 and the page looks as before. Checked on an iPhone 17 Pro
+  simulator before and after, and on macOS through the driver.
+- **An absolute `--output` or `--manifest` path was nested under the working
+  directory.** `build --output /tmp/out` wrote to `./tmp/out`, because every
+  command joined the path onto the working directory whether or not it was
+  already absolute. `build`, `deploy`, `dev`, `codegen` and `agent` now take
+  an absolute path as given. Found while building a comparison app for #301.
+- **A document opened into an already-running Android app couldn't be read**
+  (#298). The launcher Activity is `standard`, so a warm "Open with" or share
+  arrives as a second `MainActivity`. That Activity hands the intent to the
+  running one and finishes, and Android ties the read grant to the Activity
+  the intent was delivered to. So the page received the URI, and
+  `fs.readBinary` then failed with a `SecurityException`. This has been so
+  since 0.10.4, when deep links added the hand-off. A URL needs no
+  grant, so only documents were affected. The second Activity now re-grants
+  each URI to the app before it finishes. The running Activity revokes those
+  grants when it finishes, which is when a cold-launch grant ends too.
+  Measured on a Galaxy Z Fold7: without the re-grant the warm read is denied;
+  with it the read succeeds; after Back on the root Activity it's denied again
+  while the file still exists.
+
+- **Android release signing didn't compile** (#305). `--sign` and
+  `android.signing` wrote `storeFile = java.io.File(…)` into the generated
+  `app/build.gradle.kts`, and inside `android { }` the name `java` is the Java
+  plugin's extension, not the package. So `./gradlew assembleRelease` failed at
+  script compilation for every app that configured signing. It's now
+  `file(…)`, Gradle's own call, which takes the absolute path as given. A `$`
+  in the keystore path or alias is escaped too, since Kotlin would have read it
+  as a string template. The tests compared the generated text and never
+  compiled it, and CI only ran `assembleDebug`, which never evaluates
+  `signingConfigs`. CI's `android` job now builds a release APK signed with a
+  throwaway keystore and checks its certificate with `apksigner`. Verified on a
+  Galaxy Z Fold7: a cross-compiled, signed release APK installs, launches and
+  renders.
+- **An Android `package_id` containing `_` crashed on every launch, and a stale
+  entry point only warned** (#306). The JVM finds `swiftPwaMain` by a JNI
+  symbol that writes `.` as `_` and `_` as `_1`, but `init` and the drift
+  check only did the first. So for `com.example.my_app`, `init` wrote
+  `Java_com_example_my_app_…`, the JVM looked up `Java_com_example_my_1app_…`,
+  and the app died with `UnsatisfiedLinkError`. The check agreed with `init`,
+  so it never flagged it. Both now use one JNI-escaping function. The check is
+  also an error now, in `build` and so in `deploy`: a mismatch is a crash on
+  every launch, and the warning was easy to miss among SwiftPM's harmless
+  pkg-config ones. An app created by an older `init` with an underscore in
+  its package id now fails the build with the exact `@_cdecl` to write. That
+  app never launched before this change anyway. Verified on a Galaxy Z
+  Fold7: the old spelling crashes as reported, the build now refuses it, and
+  a fresh `init --bundle-id com.example.under_probe` launches and renders.
+- **iOS apps claimed to be built with their deployment target's SDK, so iOS
+  ran them in compatibility mode** (#301). An app targeting iOS 18 built with
+  the 27.1 SDK had `minos 18.0, sdk 18.0` in its `LC_BUILD_VERSION`, on device
+  and simulator alike. iOS picks compatibility behaviours from that SDK
+  version. The visible one is screen size: on the iPhone Duo's cover screen
+  the app ran letterboxed in a 375×667 box. The Swift driver only writes the
+  real SDK version when `SDKROOT` is in its environment, and `xcodebuild`
+  doesn't export it when linking a SwiftPM executable. `build --target ios`
+  now sets it. A package with a Swift macro, which is built for the Mac in
+  the same run, still builds. CI's `ios-build` job now bundles a fresh
+  scaffold for the simulator and requires its stamped SDK to match the one
+  `xcrun` reports. Verified on Xcode 27 (SDK 27.1): `sdk 27.1` on simulator
+  and device builds, and on an iPhone Duo simulator the app fills the screen
+  where the old build was letterboxed.
+
 ## [0.11.5] - 2026-10-02
 
 ### Added

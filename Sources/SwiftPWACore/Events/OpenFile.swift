@@ -11,7 +11,13 @@ import Foundation
 /// event to JS. This routes them all through one event-bus channel.
 ///
 /// The app subscribes from JS with
-/// `__SWIFT_PWA__.on("app.openFile", ({ paths }) => …)`. Payloads are emitted
+/// `__SWIFT_PWA__.on("app.openFile", ({ paths, names, mimeTypes }) => …)`.
+/// The three arrays are index-aligned. `names[i]` is the file's display name:
+/// on Android the path is a `content://` URI whose last segment is often an
+/// id, so the name comes from the provider; elsewhere it's the path's last
+/// component. `mimeTypes[i]` is the type the sending app or provider declared,
+/// or `null` when none was, which is every desktop open, where the name
+/// already says what the file is. Payloads are emitted
 /// **retained**, so a file that *launched* the app (the open event fires
 /// before the WebView has loaded and before any JS listener exists) is
 /// replayed to the WebView as soon as it subscribes — the single most
@@ -23,18 +29,58 @@ public enum OpenFile {
     /// The event-bus channel opened-file events are delivered on.
     public static let channel = "app.openFile"
 
-    /// JSON payload `{ "paths": [...] }` for a set of opened file paths — the
-    /// shape JS receives as the `on("app.openFile", …)` callback argument.
-    public static func payload(paths: [String]) -> Data {
-        (try? JSONEncoder().encode(["paths": paths])) ?? Data(#"{"paths":[]}"#.utf8)
+    private struct Payload: Encodable {
+        let paths: [String]
+        let names: [String]
+        let mimeTypes: [String?]
+
+        func encode(to encoder: any Encoder) throws {
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            try c.encode(paths, forKey: .paths)
+            try c.encode(names, forKey: .names)
+            // Encoded as an array of nullable strings, so a `null` stays in
+            // its slot and the arrays keep their alignment.
+            var types = c.nestedUnkeyedContainer(forKey: .mimeTypes)
+            for type in mimeTypes {
+                if let type { try types.encode(type) } else { try types.encodeNil() }
+            }
+        }
+
+        enum CodingKeys: String, CodingKey { case paths, names, mimeTypes }
+    }
+
+    /// JSON payload `{ "paths", "names", "mimeTypes" }` for a set of opened
+    /// files — the shape JS receives as the `on("app.openFile", …)` callback
+    /// argument. `names` and `mimeTypes` are used only when they line up with
+    /// `paths`; otherwise each name is the path's last component and each type
+    /// `null`.
+    public static func payload(paths: [String], names: [String]? = nil, mimeTypes: [String?]? = nil) -> Data {
+        let body = Payload(
+            paths: paths,
+            names: names?.count == paths.count ? names! : paths.map(displayName(of:)),
+            mimeTypes: mimeTypes?.count == paths.count ? mimeTypes! : paths.map { _ in nil }
+        )
+        return (try? JSONEncoder().encode(body)) ?? Data(#"{"paths":[],"names":[],"mimeTypes":[]}"#.utf8)
     }
 
     /// Emit `paths` on the bus, retained so a WebView that subscribes after a
     /// cold launch still receives them. A no-op for an empty list, so callers
     /// can pass the result of ``launchFilePaths(_:)`` unconditionally.
-    public static func emit(_ paths: [String], on events: EventBus) {
+    public static func emit(
+        _ paths: [String], names: [String]? = nil, mimeTypes: [String?]? = nil, on events: EventBus
+    ) {
         guard !paths.isEmpty else { return }
-        events.emit(channel, payload: payload(paths: paths), retain: true)
+        events.emit(channel, payload: payload(paths: paths, names: names, mimeTypes: mimeTypes), retain: true)
+    }
+
+    /// The last component of a path or `file:` URL, percent-decoded. Only a
+    /// `file:` prefix is read as a URL: a Windows path such as `C:\a.pdf`
+    /// would otherwise parse as one with the scheme `c`.
+    static func displayName(of path: String) -> String {
+        if path.lowercased().hasPrefix("file:"), let url = URL(string: path), !url.lastPathComponent.isEmpty {
+            return url.lastPathComponent
+        }
+        return URL(fileURLWithPath: path).lastPathComponent
     }
 
     /// File paths among the process launch arguments — the desktop "open

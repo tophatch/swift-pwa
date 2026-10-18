@@ -660,7 +660,10 @@ for before.
   then installs + launches via `devicectl`.
 - **No automated TestFlight / App Store upload.** `xcrun altool` and
   `xcrun notarytool` aren't wrapped by the CLI; bring your own
-  release script.
+  release script. The bundle does carry the build keys App Store Connect
+  checks (`DTPlatformName`, `DTSDKName`, `DTXcode`, `CFBundleSupportedPlatforms`
+  and the rest), read from the toolchain that built it, as Xcode writes them.
+  An upload hasn't been tried, since that needs a paid account.
 - **iPhone shows one window.** A second `ctx.createWindow` throws there; see
   [More than one window on iPad](#more-than-one-window-on-ipad).
 - **Auto-updater is enterprise / ad-hoc only.** Apps distributed via

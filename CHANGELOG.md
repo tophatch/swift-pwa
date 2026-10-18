@@ -31,7 +31,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
-- **Sharing to an already-running Android app left the user in the sending
+- **Apple bundles were missing the build keys Xcode writes into every app.**
+  We assemble `.app` bundles ourselves, so `Info.plist` had no
+  `DTPlatformName`, `DTPlatformVersion`, `DTPlatformBuild`, `DTSDKName`,
+  `DTSDKBuild`, `DTXcode`, `DTXcodeBuild`, `DTCompiler`, `BuildMachineOSBuild`
+  or `CFBundleSupportedPlatforms`. App Store Connect rejects an upload without
+  `DTPlatformName` (ITMS-90507), and reads `DTXcode` / `DTSDKBuild` to apply
+  its minimum-SDK rule. iOS and macOS bundles now get them, read from
+  `xcrun`, `xcodebuild` and `sw_vers` at build time. An `info_plist`
+  passthrough still overrides them. With only the Command Line Tools there is
+  no `xcodebuild`, so the two `DTXcode*` keys are left out and the build says
+  so. Checked against what Xcode 27.1 writes. Simulator and macOS bundles
+  install and launch. A device install and an App Store upload weren't tried:
+  the first needs an Xcode account signed in, the second a paid account.
+
   app.** The share started a second Activity in the sender's task, which
   handed the file to the running one and finished. The page got the file, but
   nothing came forward. The second Activity now raises the running Activity's

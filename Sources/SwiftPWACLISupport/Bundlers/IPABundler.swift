@@ -209,6 +209,7 @@ struct IPABundler {
         for (key, value) in iconPlistKeys {
             plist[key] = value
         }
+        try await plist.addMissing(AppleBuildEnvironment.probe(sdk: Self.sdkName(simulator: simulator)).plistKeys)
         try plist.write(to: app.appendingPathComponent("Info.plist"))
 
         // SwiftPM resource bundles from an adopter target or a dependency.

@@ -68,7 +68,8 @@ struct MacAppBundler {
         )
 
         // 3. Info.plist
-        let plist = InfoPlistGenerator.macOS(manifest: manifest, executableName: exe)
+        var plist = InfoPlistGenerator.macOS(manifest: manifest, executableName: exe)
+        try await plist.addMissing(AppleBuildEnvironment.probe(sdk: "macosx").plistKeys)
         try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
 
         // PkgInfo

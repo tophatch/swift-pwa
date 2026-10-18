@@ -808,6 +808,7 @@ enum AndroidTemplates {
                 if (owner != null && intent?.getStringExtra("swift-pwa.config-json") == null) {
                     keepOpenedUriGrants(intent)
                     owner.handleOpenIntent(intent)
+                    bringTaskToFront(owner)
                     finish()
                     return
                 }
@@ -1052,6 +1053,26 @@ enum AndroidTemplates {
                         android.util.Log.w("swift-pwa", "couldn't keep the grant for $uri: ${t.message}")
                     }
                 }
+            }
+
+            /// A share starts this Activity in the *sender's* task, so finishing
+            /// it alone would leave the user in the sending app with nothing
+            /// visibly opened. Raise the task the running Activity lives in.
+            /// `AppTask` covers only the app's own tasks, which is where the
+            /// owner is unless it was itself started by a share.
+            @Suppress("DEPRECATION")
+            private fun bringTaskToFront(owner: MainActivity) {
+                if (owner.taskId == taskId) return
+                val tasks = getSystemService(android.app.ActivityManager::class.java)?.appTasks ?: return
+                val ownerTask = tasks.firstOrNull {
+                    val info = it.taskInfo
+                    (if (Build.VERSION.SDK_INT >= 29) info.taskId else info.id) == owner.taskId
+                }
+                if (ownerTask == null) {
+                    android.util.Log.i("swift-pwa", "opened into a task this app doesn't own; not raising it")
+                    return
+                }
+                ownerTask.moveToFront()
             }
 
             /// `OpenableColumns.DISPLAY_NAME`, which every provider that hands

@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Sharing to an already-running Android app left the user in the sending
+  app.** The share started a second Activity in the sender's task, which
+  handed the file to the running one and finished. The page got the file, but
+  nothing came forward. The second Activity now raises the running Activity's
+  task first, through `ActivityManager.AppTask`, which needs no permission for
+  the app's own tasks. If a share is what started the app, the running
+  Activity is in the sender's task, which `AppTask` can't reach, so the app
+  isn't raised and a line is logged. Verified on a Galaxy Z Fold7 with the app
+  in the background and a PDF shared from the Files app: before, the Files app
+  kept focus; after, the app is in front with the file opened and readable.
 - **A freshly scaffolded app looked shrunken on a phone.** `init`'s
   `web/index.html` had no viewport tag, so iOS laid it out 980 CSS px wide and
   scaled it down to fit. It now carries

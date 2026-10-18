@@ -426,6 +426,10 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("contentResolver.getType(uri)"))
         // A wildcard from a multi-file share says nothing about any one file.
         #expect(activity.contains("intentType?.takeIf { !it.contains('*') }"))
+        // The hand-off to a running app keeps the read grant and raises its task.
+        #expect(activity.contains("keepOpenedUriGrants(intent)"))
+        #expect(activity.contains("bringTaskToFront(owner)"))
+        #expect(activity.contains("ownerTask.moveToFront()"))
     }
 
     @Test("Windows-style backslash paths are escaped for Kotlin")

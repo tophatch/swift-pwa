@@ -585,8 +585,13 @@ A warm open arrives as a second `MainActivity` that hands the intent to the
 running one and finishes, and Android ties the grant to the Activity that
 received it. So that Activity first re-grants each URI to the app itself,
 and the running Activity revokes those grants when it finishes, which is when
-a cold-launch grant would end too. `Scripts/verify-android-open-file.sh` checks
-cold and warm opens on a device, including that the file is still readable.
+a cold-launch grant would end too. A share starts that second Activity in the
+*sending* app's task, so it also brings the running app's task to the front;
+otherwise the user would be left in the sender with nothing visibly opened.
+That needs the running Activity to be in a task of the app's own, which it is
+unless a share started the app in the first place.
+`Scripts/verify-android-open-file.sh` checks cold and warm opens on a device,
+including that the file is still readable.
 
 ### Deep links (`url_schemes`)
 

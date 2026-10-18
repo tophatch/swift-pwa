@@ -17,14 +17,53 @@ private final class PayloadBox: @unchecked Sendable {
 
 @Suite("OpenFile (app.openFile delivery)")
 struct OpenFileTests {
-    private func decodePaths(_ data: Data) throws -> [String] {
-        try JSONDecoder().decode([String: [String]].self, from: data)["paths"] ?? []
+    private struct Decoded: Decodable {
+        let paths: [String]
+        let names: [String]
+        let mimeTypes: [String?]
     }
 
-    @Test("payload is a { paths: [...] } object")
+    private func decode(_ data: Data) throws -> Decoded {
+        try JSONDecoder().decode(Decoded.self, from: data)
+    }
+
+    private func decodePaths(_ data: Data) throws -> [String] {
+        try decode(data).paths
+    }
+
+    @Test("a desktop open names each file by its last component and declares no type")
     func payloadShape() throws {
-        let data = OpenFile.payload(paths: ["/a/b.png", "/c/d.jpg"])
-        #expect(try decodePaths(data) == ["/a/b.png", "/c/d.jpg"])
+        let decoded = try decode(OpenFile.payload(paths: ["/a/b.png", "/c/My Notes.md"]))
+        #expect(decoded.paths == ["/a/b.png", "/c/My Notes.md"])
+        #expect(decoded.names == ["b.png", "My Notes.md"])
+        #expect(decoded.mimeTypes == [nil, nil])
+    }
+
+    @Test("names and types a platform supplies are kept, nulls in their slots")
+    func payloadSuppliedMetadata() throws {
+        let data = OpenFile.payload(
+            paths: ["content://media/external/file/189", "content://p/2"],
+            names: ["Chapter_0001.pdf", "notes.md"],
+            mimeTypes: ["application/pdf", nil]
+        )
+        #expect(String(decoding: data, as: UTF8.self).contains(",null]"))
+        let decoded = try decode(data)
+        #expect(decoded.names == ["Chapter_0001.pdf", "notes.md"])
+        #expect(decoded.mimeTypes == ["application/pdf", nil])
+    }
+
+    @Test("metadata that doesn't line up with the paths is replaced, not misaligned")
+    func payloadMisalignedMetadata() throws {
+        let decoded = try decode(OpenFile.payload(
+            paths: ["/x/one.pdf", "/x/two.pdf"], names: ["only-one"], mimeTypes: ["application/pdf"]
+        ))
+        #expect(decoded.names == ["one.pdf", "two.pdf"])
+        #expect(decoded.mimeTypes == [nil, nil])
+    }
+
+    @Test("a file: URL is named by its decoded last component")
+    func displayNameOfFileURL() {
+        #expect(OpenFile.displayName(of: "file:///home/me/My%20Book.epub") == "My Book.epub")
     }
 
     @Test("launchFilePaths keeps existing files, drops argv[0], flags, and non-files")

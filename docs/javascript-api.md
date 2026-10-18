@@ -441,8 +441,8 @@ your app handles — the file path(s) arrive as a **server-push event** on the
 `app.openFile` channel. Subscribe with `on` (see [`events.*`](#events--server-initiated-push)):
 
 ```js
-__SWIFT_PWA__.on('app.openFile', ({ paths }) => {
-    for (const path of paths) openDocument(path);   // e.g. read via fs.readBinary
+__SWIFT_PWA__.on('app.openFile', ({ paths, names, mimeTypes }) => {
+    paths.forEach((path, i) => openDocument(path, names[i], mimeTypes[i]));   // read via fs.readBinary
 });
 ```
 
@@ -453,8 +453,14 @@ Key points:
   is emitted **retained**, so it replays to your listener as soon as you
   subscribe — you never miss the launch file. (Consequence: a manual page reload
   re-subscribes and re-receives the launch file; ignore a repeat if that matters.)
-- **Payload** is `{ paths: string[] }` — selecting multiple files in one "Open
-  With" delivers them as one event.
+- **Payload** is `{ paths: string[], names: string[], mimeTypes: (string | null)[] }`,
+  index-aligned — selecting multiple files in one "Open With" delivers them as
+  one event. `names[i]` is the file's name: on Android `paths[i]` is a
+  `content://` URI whose last segment is often an id, so the name comes from
+  the provider; elsewhere it's the path's last component. `mimeTypes[i]` is the
+  type the sending app or provider declared, or `null` when none was — always
+  `null` for a desktop open, where the name already says what the file is. So
+  `mimeTypes[i] ?? typeFromName(names[i])` works on every platform.
 - **macOS sandbox.** A file handed over by Launch Services is readable via
   `fs.readBinary` — the runtime holds the security-scoped grant for the session,
   so no extra step is needed on your side.

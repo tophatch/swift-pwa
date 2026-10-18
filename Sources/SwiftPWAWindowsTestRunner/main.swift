@@ -433,6 +433,15 @@
         }
     }
 
+    /// An opened file's name comes from its path. A Windows path must not be
+    /// read as a URL, or `C:\…` parses with the scheme `c` (#298).
+    func openFileNamesAWindowsPath() throws {
+        let data = OpenFile.payload(paths: [#"C:\Users\me\My Book_01.epub"#])
+        struct Decoded: Decodable { let names: [String] }
+        let names = try JSONDecoder().decode(Decoded.self, from: data).names
+        try expect(names == ["My Book_01.epub"], "expected [\"My Book_01.epub\"], got \(names)")
+    }
+
     let cases: [(String, () async throws -> Void)] = [
         ("installAndRelaunch errors when no update has been staged", installAndRelaunchWithoutStagedUpdate),
         ("currentExecutablePath honours the explicit override", currentExecutablePathOverride),
@@ -451,7 +460,8 @@
         ("WIC JPEG output differs from PNG (format is not dropped)", wicEncodesJPEGDistinctFromPNG),
         ("WIC scales during decode when maxSide is set", wicScalesDuringDecode),
         ("WIC encode keeps red and blue where they were (PNG + JPEG)", wicPreservesChannelOrder),
-        ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData)
+        ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData),
+        ("app.openFile names a Windows path by its last component", openFileNamesAWindowsPath)
     ]
 
     var passed = 0

@@ -784,6 +784,12 @@ enum AndroidTemplates {
                 /// primary to show again: to the user it's the same window.
                 @JvmStatic
                 var lastPrimaryUrl: String? = null
+
+                /// Documents opened into a running app, re-granted to the app so
+                /// they outlive the Activity that received them. Revoked when
+                /// the owner goes, which is when a cold-launch grant would end.
+                @JvmStatic
+                val keptUriGrants = mutableSetOf<Uri>()
             }
 
             override fun onCreate(savedInstanceState: Bundle?) {
@@ -800,6 +806,7 @@ enum AndroidTemplates {
                 // bridge first is what would do the damage.
                 val owner = runtimeOwner
                 if (owner != null && intent?.getStringExtra("swift-pwa.config-json") == null) {
+                    keepOpenedUriGrants(intent)
                     owner.handleOpenIntent(intent)
                     finish()
                     return
@@ -959,6 +966,12 @@ enum AndroidTemplates {
                 if (runtimeOwner === this) {
                     if (hasBridge) lastPrimaryUrl = webView.url
                     runtimeOwner = null
+                    if (!isChangingConfigurations) {
+                        for (uri in keptUriGrants) {
+                            revokeUriPermission(packageName, uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                        }
+                        keptUriGrants.clear()
+                    }
                 }
                 if (hasBridge) bridge.detach()
                 super.onDestroy()
@@ -997,11 +1010,80 @@ enum AndroidTemplates {
                         streamExtras(intent)?.forEach { uris.add(it.toString()) }
                 }
                 if (uris.isNotEmpty()) {
-                    push(JSONObject().put("channel", "app.openFile").put("paths", JSONArray(uris)))
+                    // The URI's last segment is usually a provider id, not a
+                    // name, and the intent's type is gone once it's handled. So
+                    // resolve both now, while this Activity holds the read grant.
+                    val names = JSONArray()
+                    val types = JSONArray()
+                    for (uri in uris) {
+                        val parsed = Uri.parse(uri)
+                        names.put(openedDisplayName(parsed))
+                        types.put(openedMimeType(parsed, intent.type) ?: JSONObject.NULL)
+                    }
+                    push(
+                        JSONObject().put("channel", "app.openFile").put("paths", JSONArray(uris))
+                            .put("names", names).put("mimeTypes", types)
+                    )
                 }
                 if (urls.isNotEmpty()) {
                     push(JSONObject().put("channel", "app.openURL").put("urls", JSONArray(urls)))
                 }
+            }
+
+            /// A document's read grant belongs to the Activity the intent was
+            /// delivered to, and this one is about to finish, which would take
+            /// the grant with it before the page reads the file. Re-grant each
+            /// URI to the app itself, which isn't tied to an Activity.
+            private fun keepOpenedUriGrants(intent: Intent?) {
+                if (intent == null) return
+                val flags = intent.flags and Intent.FLAG_GRANT_READ_URI_PERMISSION
+                if (flags == 0) return
+                val uris = ArrayList<Uri>()
+                intent.data?.let { uris.add(it) }
+                if (intent.action == Intent.ACTION_SEND) streamExtra(intent)?.let { uris.add(it) }
+                if (intent.action == Intent.ACTION_SEND_MULTIPLE) streamExtras(intent)?.let { uris.addAll(it) }
+                intent.clipData?.let { clip -> for (i in 0 until clip.itemCount) clip.getItemAt(i).uri?.let { uris.add(it) } }
+                for (uri in uris.distinct()) {
+                    if (uri.scheme != "content") continue
+                    try {
+                        grantUriPermission(packageName, uri, flags)
+                        keptUriGrants.add(uri)
+                    } catch (t: Exception) {
+                        android.util.Log.w("swift-pwa", "couldn't keep the grant for $uri: ${t.message}")
+                    }
+                }
+            }
+
+            /// `OpenableColumns.DISPLAY_NAME`, which every provider that hands
+            /// out a stream is expected to answer; the URI's last segment when
+            /// one doesn't, or refuses the query. A document id such as
+            /// `primary:Download/a.pdf` is a path, so only its last part is kept.
+            private fun openedDisplayName(uri: Uri): String {
+                val fallback = uri.lastPathSegment?.substringAfterLast('/') ?: uri.toString()
+                if (uri.scheme != "content") return fallback
+                return try {
+                    contentResolver.query(
+                        uri, arrayOf(android.provider.OpenableColumns.DISPLAY_NAME), null, null, null
+                    )?.use { cursor ->
+                        if (cursor.moveToFirst()) cursor.getString(0) else null
+                    } ?: fallback
+                } catch (t: Exception) {
+                    android.util.Log.w("swift-pwa", "no display name for $uri: ${t.message}")
+                    fallback
+                }
+            }
+
+            /// The provider's type for the stream, else the type the sender put
+            /// on the intent when it names one concrete type. A share of several
+            /// files carries a common wildcard such as `image/*`, which says
+            /// nothing about any one of them.
+            private fun openedMimeType(uri: Uri, intentType: String?): String? {
+                val resolved = try {
+                    if (uri.scheme == "content") contentResolver.getType(uri) else null
+                } catch (t: Exception) {
+                    null
+                }
+                return resolved ?: intentType?.takeIf { !it.contains('*') }
             }
 
             private fun push(payload: JSONObject) {

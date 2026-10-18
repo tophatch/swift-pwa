@@ -7,7 +7,43 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`app.openFile` says what each file is called, and what type its sender
+  declared** (#298). The payload is now `{ paths, names, mimeTypes }`,
+  index-aligned. On Android `paths[i]` is a `content://` URI, and for
+  MediaStore, Downloads and most apps' FileProviders its last segment is an id,
+  so an app that received a document couldn't title it, and lost the intent's
+  type too. The Activity now asks the provider for `DISPLAY_NAME` and its type
+  while it holds the read grant. A multi-file share's wildcard type (`image/*`)
+  is not used, since it describes none of the files. On every other platform
+  `names[i]` is the path's last component, so a page reads `names[i]` without
+  branching. `mimeTypes[i]` is `null` there, because nothing sent a type and
+  the name already says what the file is. Guessing a type from the extension
+  is left to the page, the same fallback it needs for a provider that
+  declares none. `paths` is unchanged, so existing handlers keep working.
+  Verified with a share from the Files app on a Galaxy Z Fold7, with
+  `Scripts/verify-android-open-file.sh` (cold and warm opens of MediaStore
+  files, plus a control that must fall back), and with
+  `Scripts/verify-open-file-macos.sh` (Launch Services "Open With"). Each
+  script also fails against the old payload. The Core tests pass on Linux too.
+  A Windows path's name is checked in `SwiftPWAWindowsTestRunner`.
+
 ### Fixed
+
+- **A document opened into an already-running Android app couldn't be read**
+  (#298). The launcher Activity is `standard`, so a warm "Open with" or share
+  arrives as a second `MainActivity`. That Activity hands the intent to the
+  running one and finishes, and Android ties the read grant to the Activity
+  the intent was delivered to. So the page received the URI, and
+  `fs.readBinary` then failed with a `SecurityException`. This has been so
+  since 0.10.4, when deep links added the hand-off. A URL needs no
+  grant, so only documents were affected. The second Activity now re-grants
+  each URI to the app before it finishes. The running Activity revokes those
+  grants when it finishes, which is when a cold-launch grant ends too.
+  Measured on a Galaxy Z Fold7: without the re-grant the warm read is denied;
+  with it the read succeeds; after Back on the root Activity it's denied again
+  while the file still exists.
 
 - **Android release signing didn't compile** (#305). `--sign` and
   `android.signing` wrote `storeFile = java.io.File(…)` into the generated

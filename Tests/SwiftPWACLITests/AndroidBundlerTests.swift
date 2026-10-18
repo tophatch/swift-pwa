@@ -418,6 +418,16 @@ struct AndroidBundlerUnitTests {
         #expect(kts.contains(#"keyAlias = "key\$1""#))
     }
 
+    @Test("An opened document carries its provider's display name and type (#298)")
+    func openFileCarriesNameAndType() {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains(#".put("names", names).put("mimeTypes", types)"#))
+        #expect(activity.contains("android.provider.OpenableColumns.DISPLAY_NAME"))
+        #expect(activity.contains("contentResolver.getType(uri)"))
+        // A wildcard from a multi-file share says nothing about any one file.
+        #expect(activity.contains("intentType?.takeIf { !it.contains('*') }"))
+    }
+
     @Test("Windows-style backslash paths are escaped for Kotlin")
     func gradleWindowsPath() {
         let kts = AndroidTemplates.appBuildGradleKts(

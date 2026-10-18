@@ -13,22 +13,22 @@ Assumes you've met the bridge — see [Talking to the native side](talking-to-th
 Whenever the OS opens a file with your app, swift-pwa emits it on the `app.openFile` channel. Subscribe once, early:
 
 ```js
-__SWIFT_PWA__.on('app.openFile', ({ paths }) => {
-  for (const path of paths) openDocument(path);
+__SWIFT_PWA__.on('app.openFile', ({ paths, names, mimeTypes }) => {
+  paths.forEach((path, i) => openDocument(path, names[i], mimeTypes[i]));
 });
 ```
 
-The payload is `{ paths: string[] }` — usually one file, but a multi-select "Open With" or a share can send several.
+The payload is `{ paths, names, mimeTypes }`, three index-aligned arrays — usually one file, but a multi-select "Open With" or a share can send several. Use `names[i]` for the file's name rather than parsing the path: on Android the path is a `content://` URI whose last segment is often just an id. `mimeTypes[i]` is the type the sending app declared, or `null` when nothing did (always the case on desktop), so fall back to the name's extension.
 
 **It's cold-start safe.** The event is emitted *retained*, so a file that **launched** your app (the app wasn't running yet) is replayed to your listener the moment you subscribe — you won't miss it just because your JS hadn't loaded when the OS handed over the file. (One consequence: a manual page reload re-subscribes and re-receives the launch file.)
 
 Then read it with the file plugin — the path is a real filesystem path on desktop/iOS and a `content://` URI on Android, but `fs.*` handles both transparently:
 
 ```js
-async function openDocument(path) {
+async function openDocument(path, name, mimeType) {
   const { dataBase64 } = await __SWIFT_PWA__.invoke('fs.readBinary', { path });
   // or: const { contents } = await __SWIFT_PWA__.invoke('fs.readText', { path });
-  render(dataBase64);
+  render(dataBase64, { title: name, type: mimeType ?? typeFromName(name) });
 }
 ```
 

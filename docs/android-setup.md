@@ -572,11 +572,21 @@ exactly the local-file open case. Wildcards work (`"image/*"`). Unset → no
 association (the app only opens from the launcher).
 
 The file arrives as a **`content://` URI** (the SAF form), delivered to JS as
-`{ paths: ["content://…"] }`; read it with `fs.readBinary` (the same
-content-URI path `dialog.openFile` uses — see §8). The URI carries a temporary
-read grant scoped to the launching activity, so no extra permission step is
-needed. Both cold launch (the file starts the app) and warm delivery (the app
-is already running) are handled; device-verified on a Galaxy Tab S10+.
+`{ paths: ["content://…"], names: ["Report.pdf"], mimeTypes: ["application/pdf"] }`;
+read it with `fs.readBinary` (the same content-URI path `dialog.openFile`
+uses — see §8). The URI's last segment is usually a provider id, so the
+Activity asks the provider for the display name (`OpenableColumns.DISPLAY_NAME`)
+and type (`ContentResolver.getType`, else the intent's type when it names one
+concrete type) while it holds the read grant. The URI carries a temporary
+read grant, so no extra permission step is needed. Both cold launch (the file
+starts the app) and warm delivery (the app is already running) are handled.
+
+A warm open arrives as a second `MainActivity` that hands the intent to the
+running one and finishes, and Android ties the grant to the Activity that
+received it. So that Activity first re-grants each URI to the app itself,
+and the running Activity revokes those grants when it finishes, which is when
+a cold-launch grant would end too. `Scripts/verify-android-open-file.sh` checks
+cold and warm opens on a device, including that the file is still readable.
 
 ### Deep links (`url_schemes`)
 

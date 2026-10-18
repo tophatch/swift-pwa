@@ -39,6 +39,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **WebView2 pinch-zoomed a page whose viewport tag said not to** (#304).
+  `user-scalable=no` or `maximum-scale=1` keeps a page unzoomed on iOS, macOS
+  and Android. WebView2, like desktop Chromium, ignores the tag, so a touch or
+  touchpad pinch magnified the app's whole UI, fixed chrome included, into a
+  state nothing else in the app has. To stop it, a page had to cancel every
+  two-finger `touchmove` and Ctrl-`wheel` itself, on every page, to undo
+  something only one backend did. The Windows backend now gives the tag its
+  meaning. A script injected at document start reads the tag, and only when
+  it rules zoom out adds `touch-action: pan-x pan-y` to the root and cancels
+  Ctrl-`wheel`. No manifest setting, because the page already says what it
+  wants.
+
+  WebView2's own `IsPinchZoomEnabled` was the obvious switch, and measuring
+  it ruled it out. Set after a page loads, it doesn't stop that page zooming.
+  Set before, it does, but the page then receives none of the pinch's events,
+  which breaks a page that gives a pinch its own meaning. With the script,
+  the events still arrive: 250 Ctrl-`wheel` events reached a page whose pinch
+  no longer zoomed it. Verified with `Scripts/verify-windows-pinch-zoom.ps1`
+  on x64 and on an arm64 Surface, with touchpad and touch pinches through
+  DevTools. Against 0.11.6, both pinches zoom the same page to 4×. The tag
+  parsing runs in a WebKit test on macOS. WebKitGTK is unchecked: neither
+  Linux box can synthesize a pinch.
+
 - **A large command reply took seconds off Apple, most of it re-sorting what
   was already JSON** (#307). Every reply and stream chunk was encoded by the
   handler, parsed back into `Any`, and written out again by `JSONSerialization`

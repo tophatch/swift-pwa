@@ -201,6 +201,12 @@
                 bridgeJS.withCString(encodedAs: UTF16.self) { wcs in
                     swiftpwa_w2_view_add_script_on_document_created(view, wcs)
                 }
+                // WebView2 ignores a viewport tag that rules out zoom, as
+                // desktop Chromium does; this makes it mean what it does on
+                // every other platform (#304).
+                ViewportZoom.script.withCString(encodedAs: UTF16.self) { wcs in
+                    swiftpwa_w2_view_add_script_on_document_created(view, wcs)
+                }
                 let user = Unmanaged.passUnretained(self).toOpaque()
                 swiftpwa_w2_view_set_web_message_handler(view, messageReceivedTrampoline, user)
                 if permissionPolicy != nil {

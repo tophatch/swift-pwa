@@ -31,6 +31,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A macOS app built without `--sign` failed signature verification.** The
+  only signature was the one the linker puts on the executable. It binds
+  neither `Info.plist` nor the resources, so `codesign --verify --strict`
+  reported "code has no resources but signature indicates they must be
+  present" for every unsigned build, back to at least 0.11.5. The bundler now
+  signs the whole bundle ad hoc when no identity is given. That's a valid
+  signature for the Mac that built it, and distributing still needs
+  `--sign`. Release, debug and universal builds now verify, and the app
+  launches and drives, including after being moved. CI's `bundle-smoke` job
+  now runs `codesign --verify --strict` on its fresh scaffold.
 - **Apple bundles were missing the build keys Xcode writes into every app.**
   We assemble `.app` bundles ourselves, so `Info.plist` had no
   `DTPlatformName`, `DTPlatformVersion`, `DTPlatformBuild`, `DTSDKName`,

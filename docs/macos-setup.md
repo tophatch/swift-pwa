@@ -313,10 +313,12 @@ and re-applying it at startup is one `invoke`. See
 
 ## 5. Codesigning
 
-For a quick local run you don't need signing — Gatekeeper will warn
-once and remember the exception. For anything you'll share, sign with
-a Developer ID Application certificate from your Apple Developer
-account:
+For a quick local run you don't need an identity. Without `--sign` the
+bundle is signed ad hoc, which seals `Info.plist` and the resources so
+`codesign --verify` passes and the app runs on the Mac that built it.
+Another Mac's Gatekeeper won't trust an ad hoc signature, so for anything
+you'll share, sign with a Developer ID Application certificate from your
+Apple Developer account:
 
 ```bash
 # List available identities.

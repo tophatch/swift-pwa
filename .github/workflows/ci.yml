@@ -104,6 +104,12 @@ jobs:
       - name: Bundle a debug .app (debug so the driver is compiled in)
         working-directory: /tmp/bundle-smoke/app
         run: "$GITHUB_WORKSPACE/.build/debug/swift-pwa build --target macos --configuration debug"
+      - name: The unsigned build's ad hoc signature covers the whole bundle
+        # Without --sign the bundle used to carry only the linker's signature on
+        # the executable, which binds neither Info.plist nor the resources, so
+        # `codesign --verify` failed on every app built without an identity.
+        working-directory: /tmp/bundle-smoke/app
+        run: codesign --verify --deep --strict build/macos/BundleSmoke.app
       - name: Delete .build, then drive the .app
         working-directory: /tmp/bundle-smoke/app
         run: |

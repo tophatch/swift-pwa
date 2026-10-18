@@ -8,7 +8,7 @@ import Foundation
 ///   3. Generate `Info.plist` from the manifest.
 ///   4. Copy the web bundle into `Contents/Resources/web`.
 ///   5. Convert the icon (PNG → .icns) via `sips`/`iconutil` if present.
-///   6. Optionally codesign with the supplied identity.
+///   6. Codesign with the supplied identity, or ad hoc without one.
 struct MacAppBundler {
     let manifest: PWAManifest
     let projectRoot: URL
@@ -112,8 +112,13 @@ struct MacAppBundler {
             args.append(app.path)
             try await Shell.run("/usr/bin/env", args)
         } else {
-            print("note: not signed. Pass --sign <identity> for a signed build.")
-            print("      For notarization, also pass --notarize <keychain-profile>.")
+            // The linker signs the executable ad hoc, but that signature binds
+            // neither Info.plist nor the resources, so the bundle as a whole
+            // fails `codesign --verify`. Sealing it ad hoc makes it a valid
+            // signature for this Mac; distributing still needs an identity.
+            try await Shell.run("codesign", ["--force", "--sign", "-", app.path])
+            print("note: signed ad hoc, which runs on this Mac. Pass --sign <identity> to distribute,")
+            print("      and --notarize <keychain-profile> for notarization.")
         }
 
         // 8. Notarize + staple (opt-in, macOS distribution).

@@ -22,6 +22,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   throwaway keystore and checks its certificate with `apksigner`. Verified on a
   Galaxy Z Fold7: a cross-compiled, signed release APK installs, launches and
   renders.
+- **An Android `package_id` containing `_` crashed on every launch, and a stale
+  entry point only warned** (#306). The JVM finds `swiftPwaMain` by a JNI
+  symbol that writes `.` as `_` and `_` as `_1`, but `init` and the drift
+  check only did the first. So for `com.example.my_app`, `init` wrote
+  `Java_com_example_my_app_…`, the JVM looked up `Java_com_example_my_1app_…`,
+  and the app died with `UnsatisfiedLinkError`. The check agreed with `init`,
+  so it never flagged it. Both now use one JNI-escaping function. The check is
+  also an error now, in `build` and so in `deploy`: a mismatch is a crash on
+  every launch, and the warning was easy to miss among SwiftPM's harmless
+  pkg-config ones. An app created by an older `init` with an underscore in
+  its package id now fails the build with the exact `@_cdecl` to write. That
+  app never launched before this change anyway. Verified on a Galaxy Z
+  Fold7: the old spelling crashes as reported, the build now refuses it, and
+  a fresh `init --bundle-id com.example.under_probe` launches and renders.
 
 ## [0.11.5] - 2026-10-02
 

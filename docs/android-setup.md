@@ -269,18 +269,21 @@ public func swiftpwa_android_main() {
 #endif
 ```
 
-The JNI symbol mangling — `Java_<package>_<class>_<method>` with dots
-replaced by underscores — is what links the Kotlin `external fun
-swiftPwaMain()` declaration to your Swift function. If you change
+The JNI symbol mangling — `Java_<package>_<class>_<method>`, with each
+`.` in the package written `_` and each `_` written `_1` — is what links
+the Kotlin `external fun swiftPwaMain()` declaration to your Swift
+function. So `com.example.my_app` is `Java_com_example_my_1app_…`. If you change
 `pwa.json`'s `android.package_id`, regenerate the scaffold and update
 the `@_cdecl` to match.
 
 **Drift is caught for you.** `swift-pwa build --target android` (and
 `swift-pwa doctor --target android`) compare the `@_cdecl` symbol in
-`AndroidEntry.swift` against the manifest's `package_id` and **warn** if
-they disagree, before you get the runtime `UnsatisfiedLinkError`. The fix
-it prints: set the `@_cdecl` to the mangled current package, or delete
-`AndroidEntry.swift` and re-run `swift-pwa init <name> --in-place`.
+`AndroidEntry.swift` against the manifest's `package_id` and **fail** if
+they disagree. A mismatch is a crash on every launch, so the build stops
+rather than producing an APK that installs and then dies with
+`UnsatisfiedLinkError`. The fix it prints: set the `@_cdecl` to the
+mangled current package, or delete `AndroidEntry.swift` and re-run
+`swift-pwa init <name> --in-place`.
 
 > Why a manual `@_cdecl` instead of a generated wrapper? Because the
 > exported symbol's name has to embed the user's Java package id,
@@ -1623,8 +1626,10 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 - **`UnsatisfiedLinkError: Native method not found: ...swiftPwaMain`**
   — your `@_cdecl` symbol name doesn't match the Java package +
   class. The expected name is
-  `Java_<package>_MainActivity_swiftPwaMain` with dots replaced by
-  underscores. Double-check `pwa.json`'s `android.package_id`.
+  `Java_<package>_MainActivity_swiftPwaMain`, with each `.` in the
+  package written `_` and each `_` written `_1`. Double-check
+  `pwa.json`'s `android.package_id`; `swift-pwa doctor --target android`
+  prints the exact symbol it needs.
 - **`assembleDebug` fails on `jniLibs is empty`** — see §4 above;
   either re-run with `--cross-compile-android` or drop the `.so`s
   in by hand.

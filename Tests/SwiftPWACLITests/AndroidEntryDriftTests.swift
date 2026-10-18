@@ -76,6 +76,45 @@ struct AndroidEntryDriftTests {
         #expect(AndroidEntryDrift.detect(projectRoot: root, packageId: "com.example.hello") == nil)
     }
 
+    @Test("mangle escapes the package the way the JVM looks the symbol up")
+    func mangleEscapesUnderscore() {
+        #expect(AndroidEntryDrift.mangle("com.example.hello") == "com_example_hello")
+        #expect(AndroidEntryDrift.mangle("com.example.my_app") == "com_example_my_1app")
+    }
+
+    @Test("detect flags an underscore package spelled with a bare underscore")
+    func detectsUnescapedUnderscore() throws {
+        // The spelling `init` wrote before the escaping fix; the JVM looks up
+        // `Java_com_example_my_1app_…`, so this crashed at launch.
+        let root = tmpProject(packageInCdecl: "com_example_my_app")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let mismatch = try #require(AndroidEntryDrift.detect(projectRoot: root, packageId: "com.example.my_app"))
+        #expect(mismatch.expected == "com_example_my_1app")
+    }
+
+    @Test("detect accepts the escaped underscore spelling")
+    func acceptsEscapedUnderscore() {
+        let root = tmpProject(packageInCdecl: "com_example_my_1app")
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(AndroidEntryDrift.detect(projectRoot: root, packageId: "com.example.my_app") == nil)
+    }
+
+    @Test("check throws on a stale entry point instead of warning")
+    func checkThrows() throws {
+        let root = tmpProject(packageInCdecl: "com_example_old")
+        defer { try? FileManager.default.removeItem(at: root) }
+        #expect(throws: AndroidBundlerError.self) {
+            try AndroidEntryDrift.check(projectRoot: root, packageId: "com.example.new")
+        }
+        try AndroidEntryDrift.check(projectRoot: root, packageId: "com.example.old")
+    }
+
+    @Test("init's AndroidEntry.swift names the symbol the drift check expects")
+    func initTemplateMatchesCheck() {
+        let src = Templates.androidEntrySwift(name: "MyApp", packageId: "com.example.my_app")
+        #expect(AndroidEntryDrift.declaredPackage(in: src) == "com_example_my_1app")
+    }
+
     @Test("detect returns nil when there is no AndroidEntry.swift")
     func noEntryFile() {
         let root = URL(fileURLWithPath: NSTemporaryDirectory())

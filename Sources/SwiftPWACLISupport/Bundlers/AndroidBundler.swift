@@ -68,9 +68,7 @@ struct AndroidBundler {
         let pkg = androidPackageId()
         // Catch a stale JNI entry point (package_id changed after `init`)
         // before producing an APK that would UnsatisfiedLinkError at launch.
-        if let drift = AndroidEntryDrift.detect(projectRoot: projectRoot, packageId: pkg) {
-            print("warning: \(AndroidEntryDrift.message(for: drift, packageId: pkg))")
-        }
+        try AndroidEntryDrift.check(projectRoot: projectRoot, packageId: pkg)
         // SwiftPM product name → `lib<name>.so`. Resolved from the
         // package rather than guessed from the display `name`.
         let soBase = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
@@ -1335,9 +1333,12 @@ enum AndroidBundlerError: Error, CustomStringConvertible {
     case signingUnknownStoreType(String)
     case crossCompileFailed([String])
     case cxxSharedMissing(abi: String, searched: [String])
+    case staleEntryPoint(String)
 
     var description: String {
         switch self {
+        case let .staleEntryPoint(message):
+            "swift-pwa: \(message)"
         case .signingMissingAlias:
             """
             swift-pwa: release signing was requested (--sign or pwa.json's \

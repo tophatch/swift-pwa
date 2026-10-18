@@ -5,6 +5,45 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Fixed
+
+- **A large command reply took seconds off Apple, most of it re-sorting what
+  was already JSON** (#307). Every reply and stream chunk was encoded by the
+  handler, parsed back into `Any`, and written out again by `JSONSerialization`
+  with `.sortedKeys`, because that second pass was where key order got pinned
+  (the wire contract from 0.9.x: the same record always arrives as the same
+  bytes). On Apple the round trip is cheap. On swift-corelibs-foundation, which
+  Android, Linux and Windows run, it isn't: sorting each object's keys goes
+  through `NSString` comparison, and a reply scales with its records. On a
+  Galaxy Z Fold7, a 45,000-record reply (15.7 MB) took **7.75 s** from `invoke`
+  to resolved; it now takes **0.79 s**. Encoding alone on the Linux box went
+  from 7.8 s to 0.3 s.
+
+  The envelope now copies the handler's bytes into the frame instead, sorting
+  each object's keys and checking the bytes in one pass over them, and writes
+  its own few keys by hand in the same order. It still runs at the one point
+  every backend delivers through, so the contract holds for every producer:
+  typed handlers, raw `register` handlers and `EventBus` payloads, nested
+  objects included. Splicing a sorted `JSONEncoder` result without that pass
+  was faster still, but would have dropped the guarantee for every raw
+  producer, and put their bytes on the page unchecked.
+
+  **The order changes, once.** Keys now sort by Unicode code point, the order
+  `JSONEncoder`'s `.sortedKeys` writes: `B` before `a`, and `a10` before `a2`.
+  `JSONSerialization` sorted them case-insensitively and numerically. What a
+  page can rely on is unchanged, that an unchanged record compares equal with
+  `JSON.stringify`; a page that compared against a string saved by an older
+  version will see one change. Strings and numbers are copied as written.
+
+- **A call whose reply wasn't valid JSON never settled.** A raw `register`
+  handler returning bytes that aren't JSON failed to encode, the error was
+  dropped, and the page's `invoke` promise waited forever (a one-shot
+  `subscribe` too). It now rejects with `E_ENCODE`, naming the byte where the
+  JSON stopped. Found writing the test for the change above, against the old
+  runtime: the call timed out rather than failing.
+
 ## [0.11.6] - 2026-10-18
 
 ### Added

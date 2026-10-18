@@ -35,15 +35,20 @@ every backend.
 
 ## Record shape on the wire
 
-**Object keys arrive in alphabetical order, and the same value always encodes to
-the same bytes.** Swift's `JSONEncoder` does not preserve declaration order for
+**Object keys arrive sorted, and the same value always encodes to the same
+bytes.** Swift's `JSONEncoder` does not preserve declaration order for
 synthesized `CodingKeys` — it emits them in hash order, which differs *per
 encode* and again per process — so before this was pinned, two `invoke` calls
 returning an identical record could put its fields in different orders, and
 `JSON.stringify(a) === JSON.stringify(b)` (the obvious way for a page to ask
-"did this change?") never matched. Every frame is now serialized with sorted
-keys at the single point all five backends deliver through, nested objects
-included.
+"did this change?") never matched. Every frame's keys are sorted at the single
+point all five backends deliver through, nested objects included, whichever
+handler produced them.
+
+The order is Unicode code point, the order `JSONEncoder`'s `.sortedKeys` writes:
+uppercase before lowercase (`B` before `a`), and digits compared one at a time
+(`a10` before `a2`). Don't rely on the order to mean anything; rely on it being
+the same every time.
 
 So this is safe:
 
@@ -58,8 +63,12 @@ Two things this does *not* promise. Key **order** is fixed, but an optional
 Swift property that is `nil` is still omitted rather than sent as `null`, so a
 record's key **set** can differ between calls when a field goes from absent to
 present — a real change, correctly reflected. And ordering applies to what
-crosses the bridge; a plugin that hands you a pre-serialized string is
+crosses the bridge as JSON; a plugin that hands you a pre-serialized string is
 responsible for its own contents.
+
+A reply or chunk that isn't well-formed JSON — bytes a raw `register` handler
+built by hand, say — rejects that call with `E_ENCODE`, naming the byte where
+it stopped, rather than reaching the page.
 
 ## Navigating away
 

@@ -64,6 +64,37 @@ struct BridgeRuntimeTests {
         #expect(err.code == BridgeError.notFound)
     }
 
+    @Test("a reply whose bytes aren't JSON fails the call instead of never settling")
+    func malformedReplyFailsTheCall() async throws {
+        let (app, _, webView, bridge) = await setUp()
+        defer { bridge.stop() }
+        app.registry.register("raw.bad") { _ in .ok(Data("{\"a\":".utf8)) }
+        app.registry.register("raw.badStream") { _ in
+            .stream(AsyncThrowingStream { continuation in
+                continuation.yield(Data("[1,]".utf8))
+                continuation.finish()
+            })
+        }
+
+        try webView.sendInvoke(id: 210, command: "raw.bad", payload: EmptyArgs())
+        try webView.sendSubscribe(id: 211, command: "raw.bad", payload: EmptyArgs())
+        try webView.sendSubscribe(id: 212, command: "raw.badStream", payload: EmptyArgs())
+        func encodeError(_ wanted: UInt64) -> BridgeError? {
+            for case let .replyError(id, err, _) in webView.deliveredFrames where id == wanted {
+                return err
+            }
+            return nil
+        }
+        try await waitFor { [210, 211, 212].allSatisfy { encodeError($0) != nil } }
+        for id: UInt64 in [210, 211, 212] {
+            #expect(encodeError(id)?.code == BridgeError.encode)
+            #expect(encodeError(id)?.message.contains("not well-formed JSON") == true)
+        }
+        // The one-shot subscribe failed, so it isn't also ended as if it had
+        // delivered.
+        #expect(!webView.deliveredFrames.contains(.end(id: 211)))
+    }
+
     @Test("subscribe pumps events then ends on unsubscribe")
     func subscribeUnsubscribe() async throws {
         let (_, win, webView, bridge) = await setUp()

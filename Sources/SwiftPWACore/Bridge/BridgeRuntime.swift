@@ -384,8 +384,9 @@ public final class BridgeRuntime: @unchecked Sendable {
         let result = await registry.dispatch(context)
         switch result {
         case let .ok(data):
-            try? await webView.deliver(.event(id: id, chunk: data, epoch: epoch))
-            try? await webView.deliver(.end(id: id, epoch: epoch))
+            if await deliverHandlerBytes(.event(id: id, chunk: data, epoch: epoch)) {
+                try? await webView.deliver(.end(id: id, epoch: epoch))
+            }
             finishInbound(id, generation: generation)
         case let .failure(err):
             try? await webView.deliver(.replyError(id: id, error: err, epoch: epoch))
@@ -406,6 +407,12 @@ public final class BridgeRuntime: @unchecked Sendable {
                     try? await webView.deliver(.end(id: id, epoch: epoch))
                 } catch let err as BridgeError {
                     try? await self.webView.deliver(.replyError(id: id, error: err, epoch: epoch))
+                } catch let err as SortedJSONError {
+                    try? await webView.deliver(.replyError(
+                        id: id,
+                        error: BridgeError(code: BridgeError.encode, message: "\(err)"),
+                        epoch: epoch
+                    ))
                 } catch {
                     try? await webView.deliver(.replyError(
                         id: id,
@@ -419,10 +426,34 @@ public final class BridgeRuntime: @unchecked Sendable {
         }
     }
 
+    /// Delivers a frame carrying a handler's bytes, and returns whether it
+    /// went. Bytes that aren't JSON can't be put in a frame, so the call fails
+    /// on the page with `E_ENCODE` instead of never settling. Any other failure
+    /// means the page is gone, and there is no one to tell.
+    @discardableResult
+    private func deliverHandlerBytes(_ frame: OutboundFrame) async -> Bool {
+        do {
+            try await webView.deliver(frame)
+            return true
+        } catch let error as SortedJSONError {
+            let id: UInt64 = switch frame {
+            case let .reply(id, _, _), let .replyError(id, _, _), let .event(id, _, _), let .end(id, _): id
+            }
+            try? await webView.deliver(.replyError(
+                id: id,
+                error: BridgeError(code: BridgeError.encode, message: "\(error)"),
+                epoch: frame.epoch
+            ))
+            return false
+        } catch {
+            return false
+        }
+    }
+
     private func deliver(_ result: InvocationResult, id: UInt64, epoch: String?) async {
         switch result {
         case let .ok(data):
-            try? await webView.deliver(.reply(id: id, ok: data, epoch: epoch))
+            await deliverHandlerBytes(.reply(id: id, ok: data, epoch: epoch))
         case let .failure(err):
             try? await webView.deliver(.replyError(id: id, error: err, epoch: epoch))
         case .stream:

@@ -5,6 +5,34 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`SWIFT_PWA_*` launch variables reach a debug Android build, and
+  `SWIFT_PWA_WEB_DATA=ephemeral` works there.** Android starts an app with
+  none of its caller's environment, so `SWIFT_PWA_WEB_DATA` and
+  `SWIFT_PWA_INITIAL_ROUTE` could not be set on Android at all, and an
+  on-device test that read storage back had to clear it from the page first.
+  A debug build now copies the launch intent's `SWIFT_PWA_*` string extras
+  into its environment before the Swift runtime starts
+  (`adb shell am start -S … --es SWIFT_PWA_WEB_DATA ephemeral`). Debug only,
+  because any app on the device can start another with extras of its
+  choosing. A cold start only, because the runtime outlives its Activity
+  (#288). A launch into a running app logs that it ignored them.
+  WebView has no in-memory store, so an ephemeral launch gets a data directory
+  of its own (`WebView.setDataDirectorySuffix`, named per launch), apart from
+  the app's real store, and the next launch deletes what earlier ephemeral ones
+  left on disk.
+
+  Verified on a Galaxy Z Fold7 with `Scripts/verify-android-web-data.sh`:
+  localStorage, IndexedDB and a cookie, read back across cold launches, with a
+  control that has to read back what the last persistent launch wrote. The
+  probe waits out WebView's commits before each force-stop: localStorage lands
+  within 2 s, but a cookie only on CookieManager's 30 s flush. Built by the
+  0.11.7 CLI, the same app fails the ephemeral, real-store, route and
+  misspelling rows.
+
 ## [0.11.7] - 2026-10-18
 
 ### Added

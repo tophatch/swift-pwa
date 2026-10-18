@@ -122,8 +122,12 @@ one. Each engine uses its own in-memory store: a non-persistent
 on Linux, and an InPrivate WebView2 profile on Windows, named for the launch so
 two running at once don't meet in the browser process WebView2 shares between
 them. Any other value is reported on stderr and the launch stays persistent.
-Not on Android, where nothing reaches an app's environment (see
-[android-setup.md](android-setup.md#8-known-limitations)).
+On Android, which starts an app with none of its caller's environment, a
+debug build takes it as a launch extra instead (`adb shell am start -S -n
+<package>/.MainActivity --es SWIFT_PWA_WEB_DATA ephemeral`), and the store is
+a data directory of the process's own, deleted by the next launch, since
+WebView has no in-memory one (see
+[android-on-device-testing.md](android-on-device-testing.md#launch-variables)).
 
 ### Driving on the iOS Simulator
 

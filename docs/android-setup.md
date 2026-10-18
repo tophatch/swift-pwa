@@ -1496,12 +1496,24 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
-- **The `SWIFT_PWA_*` launch variables don't reach an Android app.**
-  `SWIFT_PWA_WEB_DATA=ephemeral` and `SWIFT_PWA_INITIAL_ROUTE` are read from
-  the process environment, and an Android app is started by the system with
-  none of the caller's: `adb shell am start` has no way to set one. An
-  on-device test that needs clean web storage clears it from the page
-  (`localStorage.clear()`, `indexedDB.deleteDatabase(…)`).
+- **`SWIFT_PWA_*` launch variables are intent extras, in debug builds only,
+  on a cold start only.** Android starts an app with none of its caller's
+  environment, so a debug build copies the launch intent's `SWIFT_PWA_*`
+  string extras into its own before the runtime starts
+  (`adb shell am start -S -n <package>/.MainActivity --es SWIFT_PWA_WEB_DATA ephemeral`;
+  see [android-on-device-testing.md](android-on-device-testing.md#launch-variables)).
+  A release build ignores them, because any app on the device can start
+  another with extras of its choosing. And they apply when the process starts:
+  the runtime outlives its Activity, so a launch into a running app keeps the
+  variables it started with and logs that it ignored the new ones. `-S` stops
+  the app first.
+
+- **An ephemeral web store is on disk, not in memory.** Android's WebView has
+  no in-memory store, so `SWIFT_PWA_WEB_DATA=ephemeral` gives the process a
+  data directory of its own (`WebView.setDataDirectorySuffix`) that starts
+  empty and leaves the app's real store alone. The next launch deletes what
+  earlier ephemeral ones left. It lasts as long as the process does, which on
+  Android can be longer than the Activity you were testing.
 
 - **The flush happens on `onStop`.** A stopped app can be killed without being
   told, so `ctx.beforeClose` runs with reason `.backgrounded` when the Activity

@@ -781,6 +781,26 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBackWatchers.script.contains("window.CloseWatcher = class CloseWatcher extends Native"))
     }
 
+    @Test("A debug cold start takes SWIFT_PWA_* extras as env before the library and the first WebView")
+    func launchExtrasBecomeEnvironment() throws {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        // Debug builds only: any app can start this one with extras.
+        let gate = try #require(activity.range(of: """
+        if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    if (!runtimeStarted && runtimeOwner == null) {
+                        copyLaunchEnvironment(intent)
+                        chooseWebData()
+        """))
+        // Before the runtime can read its environment, and before a WebView
+        // exists, which is when WebView stops taking a data directory suffix.
+        let load = try #require(activity.range(of: "System.loadLibrary(\"Hi\")"))
+        let webView = try #require(activity.range(of: "webView = WebView(this)"))
+        #expect(gate.upperBound < load.lowerBound && load.upperBound < webView.lowerBound)
+        #expect(activity.contains("android.system.Os.setenv(key, value, true)"))
+        #expect(activity.contains("it.startsWith(\"SWIFT_PWA_\")"))
+        #expect(activity.contains("\"ephemeral\" -> WebView.setDataDirectorySuffix(prefix +"))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

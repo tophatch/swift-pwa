@@ -795,6 +795,18 @@ enum AndroidTemplates {
 
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
+                if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    if (!runtimeStarted && runtimeOwner == null) {
+                        copyLaunchEnvironment(intent)
+                        chooseWebData()
+                    } else if (launchEnvironmentKeys(intent).isNotEmpty()) {
+                        android.util.Log.w(
+                            "swift-pwa",
+                            "ignoring this launch's SWIFT_PWA_* extras: the app was already running, and they " +
+                                "only apply when it starts. `am start -S` stops it first."
+                        )
+                    }
+                }
                 // Load the Swift-compiled .so. The base name matches
                 // the SwiftPM target name; the loader prepends `lib`
                 // and appends `.so`. Calling System.loadLibrary again
@@ -1183,6 +1195,58 @@ enum AndroidTemplates {
                     bridge.nativeHostEvent(payload.toString())
                 } catch (t: Throwable) {
                     android.util.Log.e("swift-pwa", "failed to push system.memoryPressure: ${t.message}")
+                }
+            }
+
+            /// Debug builds: the launch intent's `SWIFT_PWA_*` string extras
+            /// become the process's environment variables, which is where the
+            /// runtime reads them on every other platform. Android starts an app
+            /// with none of its caller's environment, so without this a test had
+            /// no way to pass `SWIFT_PWA_WEB_DATA` or `SWIFT_PWA_INITIAL_ROUTE`:
+            /// `adb shell am start -S -n <pkg>/.MainActivity --es
+            /// SWIFT_PWA_WEB_DATA ephemeral` now does it. Debug only, because
+            /// any app on the device can start this one with extras of its
+            /// choosing. Called before the Swift library loads.
+            private fun copyLaunchEnvironment(intent: Intent?) {
+                val extras = intent?.extras ?: return
+                for (key in launchEnvironmentKeys(intent)) {
+                    val value = extras.getString(key)
+                    if (value == null) {
+                        android.util.Log.w("swift-pwa", "ignoring the launch extra $key: pass it as a string (--es)")
+                        continue
+                    }
+                    android.system.Os.setenv(key, value, true)
+                    android.util.Log.i("swift-pwa", "launch environment: $key=$value")
+                }
+            }
+
+            private fun launchEnvironmentKeys(intent: Intent?): List<String> =
+                intent?.extras?.keySet()?.filter { it.startsWith("SWIFT_PWA_") }.orEmpty()
+
+            /// `SWIFT_PWA_WEB_DATA=ephemeral` gives this process web storage of
+            /// its own, as it gives a launch on the other platforms: WebView keeps
+            /// its store in a directory named for a suffix the process sets
+            /// before its first WebView, so a suffix no earlier launch used
+            /// starts empty and leaves the app's real store untouched. Unlike the
+            /// other engines' stores it's on disk rather than in memory, so the
+            /// next launch deletes what earlier ephemeral ones left.
+            private fun chooseWebData() {
+                val prefix = "ephemeral-"
+                val leftovers = listOf(File(applicationInfo.dataDir), cacheDir).flatMap { dir ->
+                    dir.listFiles { file -> file.name.contains("webview_$prefix", ignoreCase = true) }.orEmpty().toList()
+                }
+                if (leftovers.isNotEmpty()) {
+                    thread(name = "swift-pwa-web-data-cleanup") { leftovers.forEach { it.deleteRecursively() } }
+                }
+                val raw = android.system.Os.getenv("SWIFT_PWA_WEB_DATA")
+                when (raw?.trim()?.lowercase()) {
+                    null, "", "persistent" -> {}
+                    "ephemeral" -> WebView.setDataDirectorySuffix(prefix + java.util.UUID.randomUUID().toString().take(8))
+                    else -> android.util.Log.w(
+                        "swift-pwa",
+                        "SWIFT_PWA_WEB_DATA=$raw isn't a setting — use `ephemeral`, or unset it. " +
+                            "Web storage is persistent for this launch."
+                    )
                 }
             }
 

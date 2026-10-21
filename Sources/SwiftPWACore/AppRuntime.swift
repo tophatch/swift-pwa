@@ -95,6 +95,11 @@ public protocol AppContext: AnyObject, Sendable {
     /// more sharply: the concrete type lives in the Apple backend, so an app
     /// naming it directly cannot compile for Linux, Windows or Android at all.
     var authorizationSession: (any AuthorizationSessionPresenter)? { get }
+
+    /// Switching between the app's declared alternate icons, where the
+    /// platform lets the person choose one (iOS and Android); `nil` elsewhere.
+    /// The same thing `app.icon.list` / `app.icon.set` reach from the page.
+    var appIcons: (any AppIcons)? { get }
 }
 
 public extension AppContext {
@@ -105,6 +110,11 @@ public extension AppContext {
 
     /// No OS authorization session unless the backend supplies one.
     var authorizationSession: (any AuthorizationSessionPresenter)? {
+        nil
+    }
+
+    /// No alternate icons unless the backend supplies them.
+    var appIcons: (any AppIcons)? {
         nil
     }
 

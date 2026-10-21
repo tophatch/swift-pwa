@@ -682,7 +682,9 @@ struct WindowsBundler {
 
     /// Drive `makeappx.exe pack` (and optionally `signtool.exe sign`)
     /// against a staging tree containing the EXE, web bundle, an
-    /// `AppxManifest.xml`, and a `Square150x150Logo.png` icon.
+    /// `AppxManifest.xml`, and a `Square150x150Logo.png` icon — plus, for an
+    /// icon with dark art, theme-qualified taskbar logos and the
+    /// `resources.pri` that lets Windows pick between them.
     ///
     /// The MSIX format requires a signed package for the OS to install
     /// it without developer-mode sideloading; we don't try to generate
@@ -690,28 +692,13 @@ struct WindowsBundler {
     /// is the documented path), so unsigned packages here are valid
     /// only on developer-mode boxes.
     private func buildMSIX(stagingDir: URL) async throws -> URL {
-        // Generate AppxManifest.xml. The architecture written into
-        // `<Identity ProcessorArchitecture="…">` must match the EXE
-        // SwiftPM produced — when the host's Swift toolchain is x86_64
-        // and the user passed `--arch arm64` (or vice versa),
-        // `Add-AppxPackage` rejects the install with a "doesn't match
-        // current device" error. We don't try to detect that mismatch
-        // here because cross-compile on Swift-for-Windows is still
-        // rough; instead, document the constraint in
-        // `docs/windows-setup.md`.
-        let appxManifest = AppxManifestGenerator.render(manifest: manifest, arch: arch)
-        try appxManifest.write(
-            to: stagingDir.appendingPathComponent("AppxManifest.xml"),
-            atomically: true,
-            encoding: .utf8
-        )
-
         // The MSIX schema requires at least a Square150x150Logo. If the
         // caller provided an icon, copy it; otherwise emit a 1x1
         // placeholder PNG so makeappx doesn't reject the manifest.
         let logoPath = stagingDir.appendingPathComponent("Square150x150Logo.png")
-        let iconOutcome: IconOutcome
-        if let icon = manifest.icon(for: .windows) {
+        var iconOutcome: IconOutcome
+        let art = manifest.iconArt(for: .windows)
+        if let icon = art?.light {
             let src = projectRoot.appendingPathComponent(icon)
             let isPNG = src.pathExtension.lowercased() == "png"
             if isPNG, FileManager.default.fileExists(atPath: src.path) {
@@ -727,6 +714,53 @@ struct WindowsBundler {
         }
         if !FileManager.default.fileExists(atPath: logoPath.path) {
             try Data(placeholderPNG).write(to: logoPath)
+        }
+
+        // Dark art → a taskbar logo per taskbar theme. Windows has no tinted
+        // mode, so that art isn't used here.
+        var themedLogos = false
+        if case let .bundled(source, _) = iconOutcome, let art, art.dark != nil {
+            if let problem = art.problem(under: projectRoot) {
+                iconOutcome = .bundled(source: source, detail: "dark taskbar logo skipped: \(problem.line)")
+            } else if try stageThemedTaskbarLogos(art, into: stagingDir) {
+                themedLogos = true
+            } else {
+                iconOutcome = .bundled(
+                    source: source, detail: "dark taskbar logo skipped: this host can't resize PNGs"
+                )
+            }
+        }
+
+        /// Generate AppxManifest.xml. The architecture written into
+        /// `<Identity ProcessorArchitecture="…">` must match the EXE
+        /// SwiftPM produced — when the host's Swift toolchain is x86_64
+        /// and the user passed `--arch arm64` (or vice versa),
+        /// `Add-AppxPackage` rejects the install with a "doesn't match
+        /// current device" error. We don't try to detect that mismatch
+        /// here because cross-compile on Swift-for-Windows is still
+        /// rough; instead, document the constraint in
+        /// `docs/windows-setup.md`.
+        func writeAppxManifest(themed: Bool) throws {
+            try AppxManifestGenerator.render(
+                manifest: manifest, arch: arch,
+                square44x44Logo: themed ? Self.themedTaskbarLogo : "Square150x150Logo.png"
+            ).write(to: stagingDir.appendingPathComponent("AppxManifest.xml"), atomically: true, encoding: .utf8)
+        }
+        try writeAppxManifest(themed: themedLogos)
+        if themedLogos {
+            do {
+                try await indexPackageResources(stagingDir: stagingDir)
+                iconOutcome = .bundled(source: art?.light ?? "", detail: "light + dark taskbar logos")
+            } catch {
+                // Without the index the qualified files resolve to nothing,
+                // so fall back to the one logo every build has.
+                try removeThemedTaskbarLogos(from: stagingDir)
+                try writeAppxManifest(themed: false)
+                iconOutcome = .bundled(
+                    source: art?.light ?? "",
+                    detail: "dark taskbar logo skipped: makepri failed (\(error))"
+                )
+            }
         }
         IconOutcome.report(iconOutcome)
 
@@ -753,6 +787,65 @@ struct WindowsBundler {
         }
 
         return msixURL
+    }
+
+    /// What `Square44x44Logo` names when the themed set is staged.
+    static let themedTaskbarLogo = "Square44x44Logo.png"
+
+    /// The `targetsize` qualifiers staged: the sizes the taskbar, Start and
+    /// the shell ask for at 100 % scale, up to the jumbo view.
+    static let taskbarLogoSizes = [16, 24, 32, 48, 256]
+
+    /// Stage the taskbar logo per taskbar theme: the dark art as
+    /// `altform-unplated` (what a dark taskbar shows) and the light art as
+    /// `altform-lightunplated` (a light taskbar), measured on Windows 11 to
+    /// switch live with the theme, plus the light art unqualified and as the
+    /// plain `targetsize` fallback. Returns `false`, having written nothing,
+    /// where PNGs can't be resized here.
+    private func stageThemedTaskbarLogos(_ art: PWAManifest.IconArt, into stagingDir: URL) throws -> Bool {
+        guard let darkPath = art.dark else { return false }
+        let light = try Data(contentsOf: projectRoot.appendingPathComponent(art.light))
+        let dark = try Data(contentsOf: projectRoot.appendingPathComponent(darkPath))
+        var files: [(String, Data)] = []
+        guard let base = WindowsIcon.resizePNG(light, to: 44) else { return false }
+        files.append((Self.themedTaskbarLogo, base))
+        for size in Self.taskbarLogoSizes {
+            guard let lightSized = WindowsIcon.resizePNG(light, to: size),
+                  let darkSized = WindowsIcon.resizePNG(dark, to: size)
+            else { return false }
+            files.append(("Square44x44Logo.targetsize-\(size).png", lightSized))
+            files.append(("Square44x44Logo.targetsize-\(size)_altform-unplated.png", darkSized))
+            files.append(("Square44x44Logo.targetsize-\(size)_altform-lightunplated.png", lightSized))
+        }
+        for (name, data) in files {
+            try data.write(to: stagingDir.appendingPathComponent(name))
+        }
+        return true
+    }
+
+    private func removeThemedTaskbarLogos(from stagingDir: URL) throws {
+        let fm = FileManager.default
+        for name in try fm.contentsOfDirectory(atPath: stagingDir.path) where name.hasPrefix("Square44x44Logo") {
+            try fm.removeItem(at: stagingDir.appendingPathComponent(name))
+        }
+    }
+
+    /// Write `resources.pri`, the index Windows resolves qualified assets
+    /// through; without it a `targetsize` / `altform` file is never chosen.
+    /// `makepri.exe` ships in the Windows SDK beside `makeappx.exe`. Its
+    /// config goes outside the staging tree so it isn't packed.
+    private func indexPackageResources(stagingDir: URL) async throws {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("swift-pwa-pri-\(UUID().uuidString)")
+        try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmp) }
+        let config = tmp.appendingPathComponent("priconfig.xml")
+        try await Shell.run("makepri.exe", ["createconfig", "/cf", config.path, "/dq", "en-US", "/o"])
+        try await Shell.run("makepri.exe", [
+            "new", "/pr", stagingDir.path, "/cf", config.path,
+            "/mn", stagingDir.appendingPathComponent("AppxManifest.xml").path,
+            "/of", stagingDir.appendingPathComponent("resources.pri").path, "/o"
+        ])
     }
 
     /// 1x1 transparent PNG (67 bytes). Used as a placeholder

@@ -249,4 +249,92 @@ struct AppPluginTests {
         #expect(AppPlugin.strippingExeExtension("my.tool") == "my.tool") // only .exe is stripped
         #expect(AppPlugin.strippingExeExtension(".exe") == "") // degenerate, but consistent
     }
+
+    @Test("app.icon.list reports unsupported where the backend supplies no icons")
+    func iconListUnsupported() async throws {
+        let app = makeApp()
+        let result = await dispatch("app.icon.list", payload: Data("null".utf8), on: app)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AppIconState.self, from: data) == .unsupported)
+        // The primary icon is `null`, the value `app.icon.set` takes back,
+        // not a missing key the page would read as `undefined`.
+        let json = try #require(JSONSerialization.jsonObject(with: data) as? [String: Any])
+        #expect(json.keys.contains("current"))
+        #expect(json["current"] is NSNull)
+    }
+
+    @Test("app.icon.set fails with E_UNIMPLEMENTED where the backend supplies no icons")
+    func iconSetUnsupported() async throws {
+        let app = makeApp()
+        let result = try await dispatch(
+            "app.icon.set", payload: JSONEncoder().encode(AppIconSetArgs(name: "sketch")), on: app
+        )
+        guard case let .failure(error) = result else { Issue.record("expected a failure"); return }
+        #expect(error.code == BridgeError.unimplemented)
+    }
+
+    @Test("app.icon.list and app.icon.set reach the backend's icons")
+    func iconListAndSet() async throws {
+        let app = makeApp()
+        let icons = RecordingAppIcons(alternates: ["sketch", "night"])
+        app.appIcons = icons
+
+        let list = await dispatch("app.icon.list", payload: Data("null".utf8), on: app)
+        guard case let .ok(data) = list else { Issue.record("expected ok"); return }
+        #expect(try JSONDecoder().decode(AppIconState.self, from: data)
+            == AppIconState(current: nil, alternates: ["sketch", "night"], supported: true))
+
+        let set = try await dispatch(
+            "app.icon.set", payload: JSONEncoder().encode(AppIconSetArgs(name: "night")), on: app
+        )
+        guard case .ok = set else { Issue.record("expected ok"); return }
+        // `null` is the primary icon, which is always selectable.
+        let reset = await dispatch("app.icon.set", payload: Data(#"{"name":null}"#.utf8), on: app)
+        guard case .ok = reset else { Issue.record("expected ok"); return }
+        #expect(icons.selections == ["night", nil])
+    }
+
+    /// A name the app didn't declare would otherwise reach the platform, which
+    /// on iOS fails only after showing nothing, and on Android names a
+    /// component that doesn't exist.
+    @Test("app.icon.set refuses an undeclared name before reaching the backend")
+    func iconSetUnknownName() async throws {
+        let app = makeApp()
+        let icons = RecordingAppIcons(alternates: ["sketch"])
+        app.appIcons = icons
+        let result = try await dispatch(
+            "app.icon.set", payload: JSONEncoder().encode(AppIconSetArgs(name: "sktech")), on: app
+        )
+        guard case let .failure(error) = result else { Issue.record("expected a failure"); return }
+        #expect(error.code == BridgeError.notFound)
+        #expect(error.message.contains("sketch"))
+        #expect(icons.selections.isEmpty)
+    }
+}
+
+/// An ``AppIcons`` that records what it was asked to select.
+private final class RecordingAppIcons: AppIcons, @unchecked Sendable {
+    private let lock = NSLock()
+    private let alternates: [String]
+    private var current: String?
+    private var recorded: [String?] = []
+
+    init(alternates: [String]) {
+        self.alternates = alternates
+    }
+
+    var selections: [String?] {
+        lock.withLock { recorded }
+    }
+
+    func state() async throws -> AppIconState {
+        lock.withLock { AppIconState(current: current, alternates: alternates, supported: true) }
+    }
+
+    func select(_ name: String?) async throws {
+        lock.withLock {
+            current = name
+            recorded.append(name)
+        }
+    }
 }

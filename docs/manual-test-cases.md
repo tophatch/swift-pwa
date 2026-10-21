@@ -44,6 +44,7 @@ When adding new cases:
 |--------------|-------|----------------|
 | Updater      | 10    | **macOS ✓**¹   |
 | OAuth        | 2     | **scripted ✓**²|
+| App icons    | 3     | **scripted ✓**³|
 
 ¹ **macOS cases 1 + 2 verified end-to-end 2026-07-14** against a real
 bundled `Examples/HelloPWA` + the real `AppleUpdater` (ad-hoc and
@@ -77,6 +78,15 @@ stand-in provider on any desktop box, so the loopback receiver, the PKCE
 round-trip, the `state` check and the timeout are all automated. What stays
 here is the two things it can't reach — both on Apple, both about a prompt only
 a human can read.
+
+³ **App icons (#314) — the build and the `app.icon.*` commands are scripted**
+(`Scripts/verify-app-icons.sh` on macOS and the iOS Simulator,
+`Scripts/verify-android-app-icons.sh`, `Scripts\verify-app-icons-windows.ps1`,
+each with a control), first run 2026-10-21 (on Windows, the package rows;
+the taskbar rows need an unlocked desktop). What stays here is how each icon
+style *looks*, which only a person can judge — the scripts check that the
+art is in the bundle and the commands answer, not that the home screen draws
+it.
 
 ### OAuth 1. iOS — the cookie-sharing prompt
 
@@ -116,6 +126,65 @@ programmatically.
 second or two** — not at the end of `timeoutMs`. A rejection that arrives five
 minutes later means the session's cancellation path isn't wired and the app is
 silently using the timeout instead.
+
+---
+
+## App icons
+
+Build `Scripts/verify-app-icons.sh`'s probe app (`-k` keeps it) or any app
+whose `pwa.json` has `"icon": { "light", "dark", "tinted" }` and one
+`alternate_icons` entry, with art different enough to tell apart (different
+colours per appearance, and tinted art that isn't a flat shape).
+
+### App icons 1. iOS — the home-screen styles and the switch
+
+**What it covers:** the home screen drawing the supplied art in each style,
+and the system's confirmation alert.
+
+**Why human-only:** the style is a home-screen setting the simulator doesn't
+expose, and the alert is outside the app.
+
+**Steps:** install on a device → long-press the home screen → Edit →
+Customize → Default, Dark, Clear, Tinted in turn → then in the app,
+`app.icon.set` to the alternate → OK → repeat the four styles.
+
+**Pass criteria:** each style shows the matching art — Clear and Tinted both
+from the tinted art (its shape survives), not the light icon filtered; the
+alert names the app and shows the alternate; `set` resolves only after OK.
+
+### App icons 2. macOS — the icon styles
+
+**What it covers:** macOS 26+'s Default, Dark, Clear and Tinted icon styles
+on the generated Icon Composer icon.
+
+**Why human-only:** the Dock and Finder are the surfaces that matter, and
+nothing reads their pixels without screen-recording permission.
+
+**Steps:** copy the `.app` into `/Applications` (or `~/Applications`) →
+System Settings → Appearance → *Icon & widget style* through each →
+look at it in Finder and, running, in the Dock → restore your style.
+
+**Pass criteria:** the matching art in each style, masked to the system
+shape with no border or second mask; on macOS before 26 (if one is to hand)
+the light art, masked.
+
+### App icons 3. Android — the themed icon and the launcher swap
+
+**What it covers:** the adaptive icon's inset, the themed layer, and the
+launcher following `app.icon.set`.
+
+**Why human-only:** launchers differ, and how an icon sits in its mask is a
+judgement.
+
+**Steps:** install → find the app in the drawer → Wallpaper & style (or the
+launcher's equivalent) → turn on themed / palette app icons → back to the
+drawer → off again → pin the app to the home screen → `app.icon.set` to the
+alternate → watch the drawer and the pinned icon → `app.icon.set` null.
+
+**Pass criteria:** the art fills the launcher's shape with no white margin
+and nothing important cropped; themed, it shows the tinted art's shape in
+the palette colour; after `set` the drawer and the pinned icon change within
+a few seconds and the pinned icon still opens the app.
 
 ---
 
@@ -476,6 +545,9 @@ signature handoff aren't covered by per-host unit tests.
 
 ## Checklist (copy into the release PR)
 
+- [ ] **App icons 1.** iOS home-screen styles + the switch's alert
+- [ ] **App icons 2.** macOS icon styles in Finder and the Dock
+- [ ] **App icons 3.** Android themed icon + the launcher swap
 - [x] **Updater 1.** macOS `.app` auto-update end-to-end ✓ 2026-07-14
 - [x] **Updater 2.** macOS wrong-key rejection ✓ 2026-07-14
 - [x] **Updater 3.** Linux AppImage auto-update end-to-end (+ EXDEV

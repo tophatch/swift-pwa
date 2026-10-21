@@ -119,6 +119,15 @@ The bundler:
    "icon": "icon-ios.png",
    "macos": { "icon": "icon-macos.png" }
    ```
+
+   **An icon with dark or tinted art takes a different path**: the
+   bundler writes a generated Icon Composer document and compiles it with
+   `actool` into `Assets.car` (named by `CFBundleIconName`), so macOS 26's
+   Dark, Clear and Tinted icon styles show your art. That art is
+   full-bleed like iOS's — the system masks it — and `actool` also renders
+   an already-masked `AppIcon.icns` for macOS before 26, at up to 256 px.
+   An `.appiconset` wouldn't do: `actool` compiles one for macOS without a
+   warning and keeps only the light art. See [app-icons.md](app-icons.md).
 6. If `pwa.json.description` is set, writes a `Credits.html` so the
    description shows up as the body of the standard About panel.
 
@@ -403,6 +412,13 @@ returns a clean error explaining how to bundle first.
 
 ## Known limitations on macOS
 
+- **No alternate app icons.** `alternate_icons` isn't built into the `.app`
+  and `app.icon.list` reports `supported: false`. AppKit has no API for an
+  icon the person picks, and both workarounds were measured to lose the
+  dark, clear and tinted styles: the running app's Dock icon
+  (`NSApp.applicationIconImage`) draws only the alternate's light art, and a
+  custom icon written onto the bundle breaks its code signature and shows one
+  flat image in every style. See [app-icons.md](app-icons.md).
 - **A backgrounded driven run rests on private API.** `swift-pwa drive
   --background` parks the app's window off screen, and WebKit is the only
   engine swift-pwa ships on that stops servicing `requestAnimationFrame` for a

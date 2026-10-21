@@ -24,7 +24,14 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     public var executableName: String?
     public var version: String // e.g. "1.0.0"
     public var description: String?
-    public var icon: String? // path to a 1024x1024 PNG, optional
+    /// The app icon: a path to a 1024×1024 PNG, or one PNG per appearance
+    /// (`{ "light", "dark", "tinted" }`). See ``IconArt``.
+    public var icon: IconArt?
+    /// Icons the person can switch to from the app's settings (JSON key
+    /// `alternate_icons`), through `app.icon.set`. Built into the iOS and
+    /// Android artifacts, the two platforms that let an app offer this; the
+    /// others ignore it and `app.icon.list` reports `supported: false`.
+    public var alternateIcons: [AlternateIcon]?
     public var web: WebSection
     public var window: WindowSection
     public var macos: MacOSSection?
@@ -66,8 +73,9 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     /// on the `app.openURL` event channel.
     public var urlSchemes: [String]?
 
-    /// The icon source for one build target: that platform's own `icon`
-    /// when it sets one, otherwise the top-level ``icon``.
+    /// The icon source for one build target — the light art's path — from
+    /// that platform's own `icon` when it sets one, otherwise the top-level
+    /// ``icon``. ``iconArt(for:)`` carries the other appearances.
     ///
     /// A per-target override exists because the two Apple platforms want
     /// **opposite artwork** from the same project. macOS composites nothing —
@@ -78,6 +86,14 @@ public struct PWAManifest: Codable, Sendable, Equatable {
     /// Apple's, with the padding rendering as a dark border on the home
     /// screen. One key can't be right for both.
     public func icon(for target: BuildTarget) -> String? {
+        iconArt(for: target)?.light
+    }
+
+    /// The whole icon for one build target, every appearance included. A
+    /// per-target `icon` replaces the top-level one outright rather than
+    /// merging with it: the reason a target has its own art at all is that it
+    /// wants different pictures.
+    public func iconArt(for target: BuildTarget) -> IconArt? {
         let platform = switch target {
         case .macos: macos?.icon
         case .ios: ios?.icon
@@ -228,7 +244,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Icon source for this target, overriding the top-level ``icon``.
         /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
         /// sometimes unavoidable.
-        public var icon: String?
+        public var icon: IconArt?
         public var category: String? // LSApplicationCategoryType
         public var minimumSystemVersion: String? // e.g. "15.0"
         public var copyright: String? // NSHumanReadableCopyright; shown under the version in the About panel
@@ -264,7 +280,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Icon source for this target, overriding the top-level ``icon``.
         /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
         /// sometimes unavoidable.
-        public var icon: String?
+        public var icon: IconArt?
         public var minimumSystemVersion: String? // e.g. "18.0"
         /// `UIDeviceFamily` — which device idioms the app supports
         /// (`1` = iPhone, `2` = iPad). Defaults to `[1, 2]` (universal): a
@@ -498,7 +514,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Icon source for this target, overriding the top-level ``icon``.
         /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
         /// sometimes unavoidable.
-        public var icon: String?
+        public var icon: IconArt?
         public var executableName: String? // defaults to top-level `id` last component
         /// File types this app opens, declared in the generated `.desktop`
         /// entry so the desktop environment associates the app with them
@@ -598,7 +614,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// Icon source for this target, overriding the top-level ``icon``.
         /// See ``PWAManifest/icon(for:)`` for why per-target artwork is
         /// sometimes unavoidable.
-        public var icon: String?
+        public var icon: IconArt?
         /// Directories holding native libraries this app vendors itself —
         /// anything the platform doesn't ship and swift-pwa doesn't resolve for
         /// you (the reported case: SQLite, built per ABI, for GRDB). Each is
@@ -655,7 +671,7 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         public var nativeIncludeDirs: [String]?
         public init(
             documentTypes: [ExtensionDocumentType]? = nil,
-            icon: String? = nil,
+            icon: IconArt? = nil,
             nativeLibraryDirs: [String]? = nil,
             nativeIncludeDirs: [String]? = nil
         ) {
@@ -709,10 +725,9 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// `dev.swiftpwa.<id>`.
         public var packageId: String?
         /// Icon source for the Android build, overriding the top-level
-        /// ``icon``. A plain override: adaptive-icon artwork (a separate
-        /// foreground and background layer) isn't modelled — the launcher
-        /// icon stays one flattened image.
-        public var icon: String?
+        /// ``icon``. `tinted` art makes the launcher icon an adaptive icon
+        /// with a themed layer; see ``IconArt``.
+        public var icon: IconArt?
         /// Minimum SDK the generated Gradle scaffold accepts, *and*
         /// the API level the cross-compile triple is built against.
         /// Defaults to 28 (Android 9) — the floor of the Swift

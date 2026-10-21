@@ -439,6 +439,24 @@ the app running and brings the window back when it's next activated;
 `keep-running` stays windowless; `quit` terminates. See
 [docs/macos-setup.md](macos-setup.md#what-happens-when-the-last-window-closes-macoslast_window_closed).
 
+#### `app.icon.list` / `app.icon.set` — the icon the user picks
+
+```js
+const { current, alternates, supported } = await __SWIFT_PWA__.invoke('app.icon.list');
+// supported: false → leave the setting out (macOS, Windows, Linux)
+// alternates: the names in pwa.json's alternate_icons, sorted; current: one of them, or null for the primary
+
+await __SWIFT_PWA__.invoke('app.icon.set', { name: 'sketch' }); // { name: null } → the primary icon
+```
+
+iOS and Android only. On iOS the system confirms the change with an alert
+of its own, and `set` resolves when the person dismisses it; the page doesn't
+run while the alert is up, so don't await it on a path that has to carry on.
+An undeclared name fails with `E_NOT_FOUND`, and `set` on a platform without
+alternate icons with `E_UNIMPLEMENTED`. The icons themselves — and the dark,
+clear and tinted art each can carry — come from `pwa.json`; see
+[app-icons.md](app-icons.md).
+
 The change applies to the very next close — nothing is cached at launch —
 so this is the command to put behind a preference checkbox. **Storing the
 user's choice is your app's job**: `pwa.json`'s `macos.last_window_closed`

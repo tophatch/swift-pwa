@@ -1,9 +1,11 @@
 # Proposal: app icon appearances and alternate icons
 
-Status: **de-risking** (#314), 2026-10-21. All five platforms in one change.
-All four probes are measured on real hardware, including the macOS
-alternates options. See
-[De-risking](#de-risking-before-any-cli-code).
+Status: **implemented** (#314), 2026-10-21, as planned below. How it
+behaves now is in [../app-icons.md](../app-icons.md); this page keeps the
+measurements and the reasoning. Two details moved during the build: an
+unsupported platform answers `alternates: []` (there is nothing a page could do
+with the names), and `app.icon.set` there fails with the existing
+`E_UNIMPLEMENTED` rather than a new code.
 
 ## The problem
 

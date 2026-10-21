@@ -590,6 +590,11 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**One app icon, with no styles and no alternates.** The freedesktop icon theme
+has no per-app dark variant and no way for an app to switch its icon, so the
+AppImage uses the `light` art and `app.icon.list` reports `supported: false`.
+See [app-icons.md](app-icons.md).
+
 **`fs.thumbnail` gives what the desktop's thumbnailers draw.** It reads the
 shared thumbnail cache (`~/.cache/thumbnails`) first, then runs the
 `.thumbnailer` entry the desktop installed for the file's type and stores what

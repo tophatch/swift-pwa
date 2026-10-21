@@ -5,6 +5,61 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **App icon appearances and alternate icons** (#314). `icon` can be one PNG
+  per appearance — `{ "light", "dark", "tinted" }` — and `alternate_icons`
+  lists icons the user picks in the app, switched with `app.icon.set` and
+  read with `app.icon.list` (`{ current, alternates, supported }`;
+  `ctx.appIcons` from Swift). A consumer had artwork for both and one PNG
+  showed the same picture in every system style. A plain `"icon": "x.png"`
+  builds byte-for-byte as before on macOS, iOS and Android (compared against
+  the 0.11.8 CLI, down to the compiled renditions' digests).
+
+  Everything was measured on hardware before it was built
+  (`docs/proposals/app-icon-appearances.md`), and two first guesses were
+  wrong:
+  - **macOS drops dark and tinted from an `.appiconset` silently**: `actool`
+    compiles it for `macosx` without a warning and keeps the light art. The
+    bundler instead writes a generated **Icon Composer `.icon`** (one layer
+    per appearance, Liquid Glass effects off), which macOS 27 draws in its
+    Default, Dark, Clear and Tinted styles. iOS compiles the same document,
+    alternates included, so one generator serves both; with an `actool` too
+    old for `.icon` the iOS build falls back to a classic icon set and macOS
+    to the light `.icns`, and the build says so.
+  - **Clear needs no art of its own**: iOS and macOS both draw their Clear
+    styles from the tinted art (Icon Composer's "mono"), verified with
+    half-black/half-white tinted art whose split survived in Clear.
+
+  Per platform, each checked with a control built by the 0.11.8 CLI:
+  - **iOS** (iPhone 17 Pro, iPad mini simulator): the home screen's Dark and
+    Tinted styles draw the supplied art, the switch works on the bundle our
+    `actool` call compiles, and `set` settles when the person dismisses iOS's
+    own confirmation alert — the page doesn't run while it's up. The switch
+    lands even if the app is closed with the alert showing.
+    `Scripts/verify-app-icons.sh --simulator`.
+  - **macOS**: appearances as above; **no alternates**. AppKit has none, and
+    both workarounds lose the styles this adds — the running app's Dock icon
+    draws only the alternate's light art, and a custom icon written onto the
+    bundle breaks `codesign --verify --strict` and shows one flat image in
+    every style — so `app.icon.list` says `supported: false`.
+    `Scripts/verify-app-icons.sh`.
+  - **Android** (Galaxy Z Fold7, One UI): `tinted` makes an adaptive icon
+    whose themed layer it is, inset so full-bleed art fills the visible icon;
+    alternates are one launcher `<activity-alias>` each, switched without
+    stopping the app — the drawer and a pinned home-screen icon update within
+    about two seconds. An app without `alternate_icons` keeps its manifest
+    unchanged. `Scripts/verify-android-app-icons.sh`.
+  - **Windows** (MSIX): `dark` adds theme-qualified taskbar logos and a
+    `resources.pri` (`makepri.exe`). Built and installed on Windows 11 arm64,
+    the package carries all ten qualified logos and the index resolves them;
+    a hand-built package of the same shape made a Windows 11 x64 taskbar show
+    the dark art dark and the light art light, switching live with the theme.
+    `Scripts\verify-app-icons-windows.ps1`.
+  - **Linux**: one icon, `supported: false`.
+
 ## [0.11.8] - 2026-10-21
 
 ### Added

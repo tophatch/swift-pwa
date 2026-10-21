@@ -204,9 +204,12 @@ When `pwa.json`'s icon (`android.icon` when set, else the top-level
 `icon`) is a PNG, the bundler copies it to
 `res/mipmap/ic_launcher.png` and wires `android:icon="@mipmap/ic_launcher"`
 into the manifest; aapt/Gradle scale it per density at build time (a
-single source PNG is enough); adaptive-icon artwork — a separate
-foreground and background layer — isn't modelled, so the launcher icon is
-one flattened image. Without an icon, the platform default
+single source PNG is enough). With `tinted` art (`"icon": { "light",
+"tinted" }`) the launcher icon becomes an adaptive icon whose themed
+(monochrome) layer is the tinted art, and each `alternate_icons` entry
+becomes a launcher `<activity-alias>` that `app.icon.set` switches to — the
+launcher entry then moves from `MainActivity` to those aliases. See
+[app-icons.md](app-icons.md). Without an icon, the platform default
 launcher icon is used. The build prints a one-line icon summary either
 way (`swift-pwa: app icon ← icon.png`, or the fallback reason — no icon
 set / not a PNG / file missing).
@@ -1566,6 +1569,13 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
+- **A themed icon reads only the tinted art's alpha.** Android draws the
+  monochrome layer in the palette colour wherever it's opaque, so a tinted
+  PNG without a transparent background themes as a solid tile; the build
+  warns. Android has no dark icon, so `dark` art isn't used. Alternate-icon
+  switching was measured on Samsung's One UI launcher only: the drawer and a
+  pinned home-screen icon update within about two seconds there, and other
+  launchers may take longer. See [app-icons.md](app-icons.md).
 - **`SWIFT_PWA_*` launch variables are intent extras, in debug builds only,
   on a cold start only.** Android starts an app with none of its caller's
   environment, so a debug build copies the launch intent's `SWIFT_PWA_*`

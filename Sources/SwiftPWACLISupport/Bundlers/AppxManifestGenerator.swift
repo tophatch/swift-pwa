@@ -38,7 +38,12 @@ enum AppxManifestGenerator {
         }
     }
 
-    static func render(manifest: PWAManifest, arch: Architecture = .x64) -> String {
+    /// `square44x44Logo` is the taskbar / Start-list logo: the 150 px tile
+    /// logo itself unless the bundler staged a theme-qualified set (an icon
+    /// with dark art), which `resources.pri` resolves per taskbar theme.
+    static func render(
+        manifest: PWAManifest, arch: Architecture = .x64, square44x44Logo: String = "Square150x150Logo.png"
+    ) -> String {
         // Identity.Name must be A-Z, a-z, 0-9, dot, hyphen — no
         // underscores, no spaces. We start from `manifest.id` (which
         // looks like reverse-DNS already) and strip anything outside
@@ -142,7 +147,7 @@ enum AppxManifestGenerator {
                   Description="\(description)"
                   BackgroundColor="transparent"
                   Square150x150Logo="Square150x150Logo.png"
-                  Square44x44Logo="Square150x150Logo.png" />\(fileTypeExtensions)
+                  Square44x44Logo="\(square44x44Logo)" />\(fileTypeExtensions)
             </Application>
           </Applications>
 

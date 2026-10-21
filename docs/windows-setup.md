@@ -397,7 +397,11 @@ swift run swift-pwa build --target windows --package-format msix --sign <thumbpr
 The bundler stages the EXE, web bundle, a generated `AppxManifest.xml`,
 and a `Square150x150Logo.png` (taken from `pwa.json`'s `icon` if
 provided, otherwise a 1×1 placeholder — the build prints a one-line
-icon summary either way), then drives `makeappx.exe pack`
+icon summary either way). With `dark` art (`"icon": { "light", "dark" }`)
+it also stages taskbar logos per taskbar theme — the dark art for a dark
+taskbar, the light art for a light one — and indexes them into
+`resources.pri` with `makepri.exe`; see [app-icons.md](app-icons.md). Then
+it drives `makeappx.exe pack`
 and — if `--sign` is supplied — `signtool.exe sign`. Both binaries
 ship with the Windows SDK; no extra install needed once you've launched
 the VS Developer Shell. `--arch` is one of `x64` (default), `x86`, or
@@ -945,6 +949,12 @@ served. It is checked against the bug it was written for: on the pre-fix code it
 reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
+
+**App icon styles are the MSIX taskbar logo only, and there are no alternate
+icons.** A dark taskbar shows the `dark` art from an MSIX; the portable
+`.exe` embeds one icon, the `light` art. Windows has no tinted style, and no
+way for an app to let the person pick its icon, so `app.icon.list` reports
+`supported: false`. See [app-icons.md](app-icons.md).
 
 **`fs.thumbnail` gives no PDF thumbnail without a reader that installs one,
 and none for a OneDrive placeholder.** It asks the shell for the thumbnail

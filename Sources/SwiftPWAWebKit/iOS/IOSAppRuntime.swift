@@ -57,6 +57,7 @@
         /// backend type (see ``AppContext/urlOpener``).
         public let urlOpener: (any URLOpener)? = AppleURLOpener()
         public let authorizationSession: (any AuthorizationSessionPresenter)? = SystemAuthorizationSession()
+        public let appIcons: (any AppIcons)? = IOSAppIcons()
         /// Stored to satisfy ``AppContext``; this backend never reads it.
         /// macOS is the only platform where an app outlives its windows —
         /// see ``LastWindowClosedPolicy``.

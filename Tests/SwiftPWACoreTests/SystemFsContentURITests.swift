@@ -1,3 +1,4 @@
+import _SwiftPWATestSupport
 import Foundation
 @testable import SwiftPWACore
 import Testing
@@ -18,6 +19,7 @@ struct SystemFsContentURITests {
         var writes: [(String, Data)] = []
         var metas: [String] = []
         var lists: [String] = []
+        var listTimeouts: [Duration?] = []
         var nextRead: Result<Data, any Error> = .success(Data())
         var nextWrite: (any Error)?
         var nextMeta: Result<FsMetadata, any Error> = .success(
@@ -41,7 +43,12 @@ struct SystemFsContentURITests {
         }
 
         func readDir(uri: String) async throws -> [FsEntry] {
+            try await readDir(uri: uri, loadingTimeout: nil)
+        }
+
+        func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
             lists.append(uri)
+            listTimeouts.append(loadingTimeout)
             return try nextList.get()
         }
     }
@@ -222,6 +229,32 @@ struct SystemFsContentURITests {
             #expect(entries[0].path.hasPrefix("content://"))
             #expect(entries[1].isDir)
         }
+    }
+
+    @Test("fs.readDir's loadingTimeoutMs reaches the resolver, and a listing still loading fails as such")
+    @MainActor
+    func readDirLoadingTimeout() async {
+        let r = RecordingResolver()
+        let app = MockAppContext()
+        app.use(FsPlugin(SystemFs()))
+        func dispatch(_ payload: String) async -> InvocationResult {
+            let inv = Invocation(id: 1, command: "fs.readDir", payload: Data(payload.utf8))
+            return await app.registry.dispatch(CommandContext(invocation: inv, caller: .agent, appContext: app))
+        }
+        SystemFs.setContentResolver(r)
+        defer { SystemFs.setContentResolver(nil) }
+        _ = await dispatch(#"{"path":"content://example/tree/root","loadingTimeoutMs":2500}"#)
+        _ = await dispatch(#"{"path":"content://example/tree/root"}"#)
+        #expect(r.listTimeouts == [.milliseconds(2500), nil])
+
+        // What the Android resolver throws when the provider still says
+        // "loading": the page gets that code, not a generic failure.
+        r.nextList = .failure(BridgeError(code: BridgeError.stillLoading, message: "still loading"))
+        guard case let .failure(error) = await dispatch(#"{"path":"content://example/tree/root"}"#) else {
+            Issue.record("expected a failure")
+            return
+        }
+        #expect(error.code == "E_STILL_LOADING")
     }
 
     @Test("a resolver with no listing refuses rather than reporting an empty folder")

@@ -86,8 +86,10 @@ public struct FsPlugin: Plugin {
 
         registry.register(
             "fs.readDir",
-            typed: { (args: FsPathArgs, _) async throws -> FsReadDirResult in
-                try await FsReadDirResult(entries: fs.readDir(path: args.path))
+            typed: { (args: FsReadDirArgs, _) async throws -> FsReadDirResult in
+                try await FsReadDirResult(entries: fs.readDir(
+                    path: args.path, loadingTimeout: args.loadingTimeoutMs.map { .milliseconds($0) }
+                ))
             }
         )
 

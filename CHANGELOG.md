@@ -62,6 +62,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A listing of a Drive folder on Android is current, not Drive's cache**
+  (#316). Drive answers a listing from its local cache and doesn't bring it up
+  to date on its own, so a file uploaded to a picked folder from a computer
+  stayed out of every `fs.readDir` — five listings over two minutes, measured,
+  and in the report ten over five minutes — until the folder was opened in the
+  system picker. The issue expected Drive to mark such a listing
+  `EXTRA_LOADING`; measured, it never does. What it does is refresh when asked
+  (`ContentResolver.refresh`) and notify about a second later. `fs.readDir`
+  now lists, asks for the refresh, waits for the notification and lists again:
+  about 1.45 s a Drive folder with something new in it and 0.65 s with nothing,
+  and no wait at all for a provider that doesn't refresh, such as local
+  storage. A provider that does mark `EXTRA_LOADING` is waited for the same
+  way. The wait is bounded by a new `loadingTimeoutMs` (10 s by default); past
+  it the call fails with the new `E_STILL_LOADING` rather than returning rows
+  the provider calls incomplete, so an app reconciling a library can't prune
+  against them. `loadingTimeoutMs: 0` returns the cache at once, without the
+  error. A served file is found in the cache first and refreshed only when it
+  isn't there, so page loads don't pay the second. `Fs` and `FsContentResolver`
+  gain a `readDir` overload taking the timeout, with defaults, so existing
+  implementations keep compiling.
+
+  Verified on a Galaxy Z Fold7 against a Drive folder with
+  `Scripts/verify-android-saf-drive.sh`: a file uploaded from this Mac's Drive
+  for desktop is in the first listing after the upload, a 1 ms wait fails with
+  `E_STILL_LOADING`, and 0 returns the cache in 45 ms. Built by the 0.11.7 CLI,
+  the same app never listed the uploaded file in five listings over two
+  minutes.
+
 - **`fs.metadata` and `fs.exists` answer for the folder `dialog.openDirectory`
   returned** (#319). A tree URI names the grant, not a document, and both
   Drive and the local storage provider refuse a query on one

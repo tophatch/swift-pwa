@@ -71,11 +71,33 @@
         }
 
         public func readDir(uri: String) async throws -> [FsEntry] {
-            try await AndroidRPC.call(
+            try await readDir(uri: uri, loadingTimeout: nil)
+        }
+
+        public func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
+            let milliseconds = loadingTimeout.map { duration -> Int in
+                let (seconds, attoseconds) = duration.components
+                return Int(seconds) * 1000 + Int(attoseconds / 1_000_000_000_000_000)
+            }
+            let result = try await AndroidRPC.call(
                 "fs.readDirContentUri",
-                ContentURIArgs(uri: uri),
+                ContentURIReadDirArgs(uri: uri, loadingTimeoutMs: milliseconds),
                 as: ContentURIEntriesResult.self
-            ).entries
+            )
+            // The provider's cached rows, which it says are incomplete: not a
+            // listing an app may prune against (#316).
+            if result.loading == true {
+                let waited = milliseconds.map { "\($0) ms" } ?? "10 s"
+                throw BridgeError(
+                    code: BridgeError.stillLoading,
+                    message: """
+                    fs.readDir: the provider was still loading \(uri) after \(waited); \
+                    its \(result.entries.count) cached entries may be incomplete. Try again, or pass a longer \
+                    loadingTimeoutMs.
+                    """
+                )
+            }
+            return result.entries
         }
     }
 
@@ -117,5 +139,15 @@
     /// the shape a filesystem path returns.
     struct ContentURIEntriesResult: Decodable {
         let entries: [FsEntry]
+        /// True when the provider still marked the listing as loading once
+        /// the wait ran out.
+        let loading: Bool?
+    }
+
+    /// `{"uri": "...", "loadingTimeoutMs": n}`; the Kotlin side's default
+    /// wait when the timeout is absent.
+    struct ContentURIReadDirArgs: Encodable {
+        let uri: String
+        let loadingTimeoutMs: Int?
     }
 #endif

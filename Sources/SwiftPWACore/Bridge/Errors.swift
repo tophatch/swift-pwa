@@ -22,6 +22,12 @@ public struct BridgeError: Error, Sendable, Codable, Equatable {
     /// asked to treat as fatal, or a checksum mismatch on `net.download`.
     public static let net = "E_NET"
 
+    /// The source answered with a listing it marked incomplete, and didn't
+    /// finish within the wait: an Android `DocumentsProvider` backed by a
+    /// network (Drive) still fetching a folder. Not an empty folder, and not
+    /// a failure to act on by pruning — try again, or wait longer.
+    public static let stillLoading = "E_STILL_LOADING"
+
     /// Secure-storage failure (`secrets.*`): the platform store is unavailable,
     /// access was denied, or a read/write failed. A *missing* key is not an
     /// error — `secrets.get` returns `{ value: null }`.

@@ -181,12 +181,16 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func readDir(path: String) async throws -> [FsEntry] {
+        try await readDir(path: path, loadingTimeout: nil)
+    }
+
+    public func readDir(path: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
         if Self.isContentURI(path) {
             // A SAF tree the user picked. Each entry comes back with its own
             // document URI as its `path`, so the read that already works can
             // open it and a subdirectory can be listed in turn — recursion is
             // the caller's, exactly as it is for a filesystem path.
-            return try await requireContentResolver("fs.readDir").readDir(uri: path)
+            return try await requireContentResolver("fs.readDir").readDir(uri: path, loadingTimeout: loadingTimeout)
         }
         let fm = FileManager.default
         let entries: [String]

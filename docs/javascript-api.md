@@ -1067,7 +1067,10 @@ await __SWIFT_PWA__.invoke('fs.mkdir',    { path, recursive: true });
 await __SWIFT_PWA__.invoke('fs.remove',   { path, recursive: true });
 const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path });
 // → entries: [{ name, path, isDir, isFile, size, modified }], size and
-//   modified as fs.metadata reports them, so a rescan needs no call per file
+//   modified as fs.metadata reports them, so a rescan needs no call per file.
+//   Optional loadingTimeoutMs: how long to wait for an Android network
+//   provider's current listing (default 10 s; 0 = its cache, at once); a
+//   provider that hasn't answered in time fails with E_STILL_LOADING
 await __SWIFT_PWA__.invoke('fs.copy',     { from, to });
 await __SWIFT_PWA__.invoke('fs.rename',   { from, to });
 const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });

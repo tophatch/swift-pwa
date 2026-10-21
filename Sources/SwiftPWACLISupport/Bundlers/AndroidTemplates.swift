@@ -1951,21 +1951,22 @@ enum AndroidTemplates {
                         DocumentsContract.getTreeDocumentId(currentUri)
                     }
                     val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
-                    var found: Uri? = null
                     val projection = arrayOf(
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME
                     )
-                    activity.contentResolver.query(children, projection, null, null, null)?.use { cursor ->
-                        while (cursor.moveToNext()) {
-                            val id = cursor.getString(0) ?: continue
-                            val displayName = cursor.getString(1) ?: id.substringAfterLast('/')
-                            if (displayName == name) {
-                                found = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-                                break
-                            }
-                        }
+                    val match = { cursor: android.database.Cursor ->
+                        val id = cursor.getString(0)
+                        val displayName = id?.let { cursor.getString(1) ?: it.substringAfterLast('/') }
+                        if (id != null && displayName == name) DocumentsContract.buildDocumentUriUsingTree(treeUri, id) else null
                     }
+                    // The cache first, so a page load doesn't wait on the
+                    // network for every file it asks for; refreshed only when
+                    // the name isn't there, which is a file added since.
+                    val found = SafChildren.query(activity.contentResolver, children, projection, 0L, refresh = false, row = match)
+                        .rows.firstOrNull()
+                        ?: SafChildren.query(activity.contentResolver, children, projection, 10_000L, row = match)
+                            .rows.firstOrNull()
                     val resolved = found ?: return null
                     currentUri = resolved
                     val prefix = segments.subList(0, index + 1).joinToString("/")
@@ -2350,6 +2351,110 @@ enum AndroidTemplates {
     import okhttp3.WebSocketListener
     import okio.ByteString
     /*__SWIFT_PWA_GENAI_IMPORTS__*/
+
+    /// A folder's children from its `DocumentsProvider`, current rather than
+    /// cached (#316).
+    ///
+    /// A network provider answers a children query from its local cache.
+    /// Measured with Drive: a file uploaded to a picked folder from a computer
+    /// stayed out of every listing for as long as anyone looked, and Drive never
+    /// marks such a listing `EXTRA_LOADING`. What brings it up to date is
+    /// `ContentResolver.refresh`, which Drive answers (true) by fetching the
+    /// folder and notifying the URI it names in the cursor's extras, about a
+    /// second later whether or not anything changed. So: list the cache, ask
+    /// for a refresh, wait for the notification (and for the provider to go
+    /// quiet, since Drive notifies more than once for a change), list again. A
+    /// provider that marks a listing `EXTRA_LOADING` is waited for the same
+    /// way. One that does neither — the local storage provider refuses
+    /// `refresh` — is listed once, with no wait.
+    ///
+    /// `waitMs` bounds the wait; `loading` in the result is true when it ran
+    /// out and the rows are the provider's cache. With `waitMs` 0 the cache is
+    /// returned at once, the refresh still asked for (unless `refresh` is
+    /// false) so the next listing is current.
+    internal object SafChildren {
+        class Listing<T>(val rows: List<T>, val loading: Boolean)
+
+        /// Drive puts the URI it notifies in this extra, the system picker's own,
+        /// and leaves the cursor's notification URI unset.
+        private const val PICKER_NOTIFICATION_URI = "com.android.documentsui.extra.NOTIFICATION_URI"
+
+        private class Read<T>(val rows: List<T>, val loading: Boolean, val notify: Uri?)
+
+        private fun <T> read(
+            resolver: android.content.ContentResolver,
+            children: Uri,
+            projection: Array<String>,
+            row: (android.database.Cursor) -> T?
+        ): Read<T> {
+            val cursor = resolver.query(children, projection, null, null, null)
+                ?: throw IllegalStateException("no provider answered for $children")
+            cursor.use {
+                val extras = it.extras
+                val rows = ArrayList<T>()
+                while (it.moveToNext()) row(it)?.let(rows::add)
+                @Suppress("DEPRECATION")
+                val notify = extras?.getParcelable<Uri>(PICKER_NOTIFICATION_URI) ?: it.notificationUri
+                return Read(rows, extras?.getBoolean(DocumentsContract.EXTRA_LOADING, false) == true, notify)
+            }
+        }
+
+        fun <T> query(
+            resolver: android.content.ContentResolver,
+            children: Uri,
+            projection: Array<String>,
+            waitMs: Long,
+            refresh: Boolean = true,
+            row: (android.database.Cursor) -> T?
+        ): Listing<T> {
+            val deadline = android.os.SystemClock.uptimeMillis() + waitMs
+            var current = read(resolver, children, projection, row)
+            val notify = current.notify
+            // Registered before the refresh is asked for, so its notification
+            // can't arrive first and go unseen.
+            val changes = java.util.concurrent.LinkedBlockingQueue<Long>()
+            val observer = object : android.database.ContentObserver(null) {
+                override fun onChange(selfChange: Boolean) {
+                    changes.offer(android.os.SystemClock.uptimeMillis())
+                }
+            }
+            if (notify != null) resolver.registerContentObserver(notify, true, observer)
+            try {
+                val refreshing = refresh && try {
+                    resolver.refresh(children, null, null)
+                } catch (t: Throwable) {
+                    false
+                }
+                if (!refreshing && !current.loading) return Listing(current.rows, false)
+                if (waitMs <= 0) return Listing(current.rows, false)
+                if (notify == null) return Listing(current.rows, true)
+                android.util.Log.i(
+                    "swift-pwa",
+                    "SAF listing refreshing at the provider ($children); waiting up to $waitMs ms"
+                )
+                while (true) {
+                    val remaining = deadline - android.os.SystemClock.uptimeMillis()
+                    if (remaining <= 0 ||
+                        changes.poll(remaining, java.util.concurrent.TimeUnit.MILLISECONDS) == null
+                    ) {
+                        return Listing(current.rows, true)
+                    }
+                    // Quiet for 300 ms, or the deadline: a change can come in
+                    // several notifications, and the listing between them may
+                    // be partial.
+                    while (changes.poll(300, java.util.concurrent.TimeUnit.MILLISECONDS) != null &&
+                        android.os.SystemClock.uptimeMillis() < deadline
+                    ) {
+                        changes.clear()
+                    }
+                    current = read(resolver, children, projection, row)
+                    if (!current.loading) return Listing(current.rows, false)
+                }
+            } finally {
+                if (notify != null) resolver.unregisterContentObserver(observer)
+            }
+        }
+    }
 
     /// Backing implementation for the System* plugin RPC the Swift
     /// side dispatches via `SwiftPWABridge.rpcCall`. One method per
@@ -4596,31 +4701,25 @@ enum AndroidTemplates {
                         DocumentsContract.Document.COLUMN_SIZE,
                         DocumentsContract.Document.COLUMN_LAST_MODIFIED
                     )
-                    val rows = ArrayList<JSONObject>()
-                    val cursor = activity.contentResolver.query(children, projection, null, null, null)
-                    if (cursor == null) {
-                        done(null, "swift-pwa: fs.readDir: no provider answered for $uriString")
-                        return@execute
+                    val waitMs = json.optLong("loadingTimeoutMs", 10_000L)
+                    val listing = SafChildren.query(activity.contentResolver, children, projection, waitMs) {
+                        val id = it.getString(0) ?: return@query null
+                        // A provider may omit the display name; the
+                        // document id is the only thing guaranteed, and a
+                        // listing with a blank name is worse than one
+                        // showing the id.
+                        val name = it.getString(1) ?: id.substringAfterLast('/')
+                        val isDir = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
+                        val row = JSONObject()
+                            .put("name", name)
+                            .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
+                            .put("isDir", isDir)
+                            .put("isFile", !isDir)
+                        if (!it.isNull(3)) row.put("size", it.getLong(3))
+                        if (!it.isNull(4)) row.put("modified", it.getLong(4))
+                        row
                     }
-                    cursor.use {
-                        while (it.moveToNext()) {
-                            val id = it.getString(0) ?: continue
-                            // A provider may omit the display name; the
-                            // document id is the only thing guaranteed, and a
-                            // listing with a blank name is worse than one
-                            // showing the id.
-                            val name = it.getString(1) ?: id.substringAfterLast('/')
-                            val isDir = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
-                            val row = JSONObject()
-                                .put("name", name)
-                                .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
-                                .put("isDir", isDir)
-                                .put("isFile", !isDir)
-                            if (!it.isNull(3)) row.put("size", it.getLong(3))
-                            if (!it.isNull(4)) row.put("modified", it.getLong(4))
-                            rows.add(row)
-                        }
-                    }
+                    val rows = ArrayList(listing.rows)
                     // Sorted by name, because the path-backed `fs.readDir`
                     // sorts and a page that renders a library shouldn't have to
                     // care which one it got. A provider's own row order is
@@ -4628,7 +4727,11 @@ enum AndroidTemplates {
                     rows.sortBy { it.getString("name") }
                     val entries = JSONArray()
                     rows.forEach { entries.put(it) }
-                    done(JSONObject().put("entries", entries).toString(), null)
+                    // Still loading when the wait ran out: Swift reports that
+                    // as its own error rather than a listing, so an app can't
+                    // prune a library against rows the provider says are
+                    // incomplete.
+                    done(JSONObject().put("entries", entries).put("loading", listing.loading).toString(), null)
                 } catch (t: Throwable) {
                     done(
                         null,

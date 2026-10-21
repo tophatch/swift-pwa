@@ -817,6 +817,20 @@ struct AndroidBundlerUnitTests {
         #expect(plugins.contains(".put(\"files\", activity.filesDir.absolutePath)"))
     }
 
+    @Test("A SAF listing asks the provider to refresh and waits for it, bounded")
+    func safListingRefreshes() {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("internal object SafChildren"))
+        #expect(plugins.contains("resolver.refresh(children, null, null)"))
+        // Drive names the URI it notifies here, not on the cursor.
+        #expect(plugins.contains("\"com.android.documentsui.extra.NOTIFICATION_URI\""))
+        #expect(plugins.contains("val waitMs = json.optLong(\"loadingTimeoutMs\", 10_000L)"))
+        #expect(plugins.contains(".put(\"loading\", listing.loading)"))
+        // Serving looks in the cache before it refreshes.
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        #expect(bridge.contains("projection, 0L, refresh = false, row = match)"))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

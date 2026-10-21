@@ -45,6 +45,11 @@ public protocol Fs: AnyObject, Sendable {
     /// `metadata(path:)` on the entry path if you need that.
     func readDir(path: String) async throws -> [FsEntry]
 
+    /// ``readDir(path:)``, waiting up to `loadingTimeout` for a source that
+    /// says its listing is still loading, rather than the source's default
+    /// wait. Throws `E_STILL_LOADING` when it still is.
+    func readDir(path: String, loadingTimeout: Duration?) async throws -> [FsEntry]
+
     /// Copy `from` to `to`. Behaves like `cp` for files; for
     /// directories the entire tree is copied. `to` must not exist.
     func copy(from: String, to: String) async throws
@@ -97,6 +102,12 @@ public protocol Fs: AnyObject, Sendable {
 /// extractor) overrides these, so `MockFs` and any other `Fs` get the
 /// no-op-but-clear-error behavior for free.
 public extension Fs {
+    /// For an `Fs` written before listings could still be loading: the wait
+    /// is the source's own.
+    func readDir(path: String, loadingTimeout _: Duration?) async throws -> [FsEntry] {
+        try await readDir(path: path)
+    }
+
     var supportsZip: Bool {
         false
     }
@@ -158,6 +169,11 @@ public protocol FsContentResolver: Sendable {
     /// grant to it and can never learn the URIs of anything inside, which is
     /// the whole of a library whose files are the user's own (#246).
     func readDir(uri: String) async throws -> [FsEntry]
+
+    /// ``readDir(uri:)``, waiting up to `loadingTimeout` (nil: the resolver's
+    /// default) for a provider that marks its listing as still loading, and
+    /// throwing `E_STILL_LOADING` if it still is (#316).
+    func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry]
 }
 
 public extension FsContentResolver {
@@ -168,6 +184,10 @@ public extension FsContentResolver {
             code: BridgeError.handler,
             message: "fs.readDir: this content resolver cannot list \(uri)"
         )
+    }
+
+    func readDir(uri: String, loadingTimeout _: Duration?) async throws -> [FsEntry] {
+        try await readDir(uri: uri)
     }
 }
 
@@ -225,6 +245,18 @@ public struct FsMetadata: Sendable, Codable, Equatable {
 public struct FsPathArgs: Sendable, Codable, Equatable {
     public var path: String
     public init(path: String) { self.path = path }
+}
+
+public struct FsReadDirArgs: Sendable, Codable, Equatable {
+    public var path: String
+    /// How long to wait for a source that says its listing is still loading
+    /// (an Android network `DocumentsProvider`), in milliseconds. Absent: the
+    /// source's default, 10 s on Android.
+    public var loadingTimeoutMs: Int?
+    public init(path: String, loadingTimeoutMs: Int? = nil) {
+        self.path = path
+        self.loadingTimeoutMs = loadingTimeoutMs
+    }
 }
 
 public struct FsWriteTextArgs: Sendable, Codable, Equatable {

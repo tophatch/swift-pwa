@@ -855,6 +855,36 @@ Drive — so walk lazily rather than eagerly for a deep tree. Each entry carries
 `size` and `modified` from that same query, under the same rule, so a rescan
 that only wants to know what changed needs no `fs.metadata` per file.
 
+**A listing is current, not the provider's cache.** Drive answers a listing
+from its local cache, and that cache doesn't catch up by itself: a file
+uploaded from a computer stayed out of every listing for as long as anyone
+looked. So `fs.readDir` lists the cache, asks the provider to refresh the folder
+(`ContentResolver.refresh`), waits for the provider to say it has, and lists
+again. On Drive that's about a second a folder — 1.45 s with something new in
+it, 0.65 s with nothing — and a provider that doesn't refresh (local storage,
+an SD card) is listed once, with no wait. A provider that marks a listing
+`EXTRA_LOADING` is waited for the same way. `loadingTimeoutMs` bounds the wait
+(10 s by default); if the provider hasn't answered by then, the call fails with
+**`E_STILL_LOADING`** rather than returning rows the provider says are
+incomplete, so an app reconciling a library against a listing never prunes on a
+stale one. `loadingTimeoutMs: 0` returns the cache at once without the error,
+for a quick first pass, and still asks for the refresh so the next listing is
+current:
+
+```js
+try {
+    const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path: folder });
+    reconcile(entries);                 // current: safe to prune against
+} catch (e) {
+    if (e.code !== 'E_STILL_LOADING') throw e;
+    // The provider didn't answer in time: keep what you have, try later.
+}
+```
+
+A file served from a mounted tree is looked up in the cache first, and the
+folder refreshed only when the name isn't there, so a page load doesn't wait on
+the network for every request.
+
 ### Which device is this?
 
 `ProcessInfo.processInfo.hostName` is `localhost` on every Android device, and

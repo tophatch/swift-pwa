@@ -19,7 +19,9 @@
   bundle that can't load (a missing DLL), can't find what it staged, or
   whose build broke; it can't catch anything in WebView2 or the page.
 
-  Three launches:
+  Two header checks - `dumpbin /headers` has to read each exe (#276) - one
+  that the folder exe carries the Common Controls v6 manifest, and three
+  launches:
 
     folder-control   the folder bundle with PATH as it is. Has to pass, or
                      the portable launch proves nothing.
@@ -272,8 +274,52 @@ Write-Host "folder bundle: $((Get-ChildItem "$relocated\folder" | ForEach-Object
 # Only Windows itself: every Swift, Visual Studio and user entry is gone.
 $windowsOnly = @("$env:SystemRoot\System32", "$env:SystemRoot", "$env:SystemRoot\System32\Wbem") -join ';'
 
+# Every tool that walks the whole file has to be able to read it. The resource
+# edits used to leave the COFF header pointing at a symbol table they had
+# dropped, and dumpbin failed with LNK1106 (#276).
+function Test-PEHeaders([string]$Label, [string]$Exe) {
+    $out = (& dumpbin /nologo /headers $Exe 2>&1 | Out-String)
+    $lnk = ($out -split "`n" | Where-Object { $_ -match 'LNK\d+' }) -join ' '
+    if ($LASTEXITCODE -eq 0 -and -not $lnk) { return "PASS $Label`: dumpbin reads the headers" }
+    return "FAIL $Label`: dumpbin can't read it - $($lnk.Trim())"
+}
+
+# The Common Controls v6 manifest has to be in the exe as RT_MANIFEST #1, or
+# dialog.confirm with custom labels can't reach TaskDialogIndirect.
+Add-Type -TypeDefinition @"
+using System; using System.Runtime.InteropServices; using System.Text;
+public static class ExeManifest {
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern IntPtr LoadLibraryExW(string path, IntPtr file, uint flags);
+    [DllImport("kernel32.dll")] static extern bool FreeLibrary(IntPtr module);
+    [DllImport("kernel32.dll")] static extern IntPtr FindResourceW(IntPtr module, IntPtr name, IntPtr type);
+    [DllImport("kernel32.dll")] static extern IntPtr LoadResource(IntPtr module, IntPtr info);
+    [DllImport("kernel32.dll")] static extern IntPtr LockResource(IntPtr data);
+    [DllImport("kernel32.dll")] static extern uint SizeofResource(IntPtr module, IntPtr info);
+    public static string Read(string path) {
+        IntPtr module = LoadLibraryExW(path, IntPtr.Zero, 0x2 /* LOAD_LIBRARY_AS_DATAFILE */);
+        if (module == IntPtr.Zero) return null;
+        try {
+            IntPtr info = FindResourceW(module, (IntPtr)1, (IntPtr)24);
+            if (info == IntPtr.Zero) return null;
+            var bytes = new byte[SizeofResource(module, info)];
+            Marshal.Copy(LockResource(LoadResource(module, info)), bytes, 0, bytes.Length);
+            return Encoding.UTF8.GetString(bytes);
+        } finally { FreeLibrary(module); }
+    }
+}
+"@
+function Test-Manifest([string]$Label, [string]$Exe) {
+    $xml = [ExeManifest]::Read($Exe)
+    if ($xml -and $xml -match 'Microsoft\.Windows\.Common-Controls') { return "PASS $Label`: RT_MANIFEST #1 names Common-Controls v6" }
+    return "FAIL $Label`: no Common-Controls manifest in the exe"
+}
+
 Write-Host "== launching each bundle headlessly (SWIFT_PWA_DESCRIBE) ==" -ForegroundColor Cyan
 $results = @(
+    (Test-PEHeaders "folder-pe" "$relocated\folder\$target.exe"),
+    (Test-PEHeaders "single-pe" "$relocated\single\$target.exe"),
+    (Test-Manifest "folder-manifest" "$relocated\folder\$target.exe"),
     (Test-Launch "folder-control" "$relocated\folder\$target.exe" $env:Path),
     (Test-Launch "folder-portable" "$relocated\folder\$target.exe" $windowsOnly),
     # No single-file portable leg: the loader can't take a DLL from inside the

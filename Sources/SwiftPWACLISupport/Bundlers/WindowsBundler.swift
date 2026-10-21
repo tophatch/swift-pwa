@@ -183,7 +183,7 @@ struct WindowsBundler {
             // clang-cl + lld-link, not link.exe) silently drops that
             // pragma. The resulting EXE has no resource section, and
             // the manifest never makes it in.
-            try await embedComCtl6Manifest(at: bundledExe)
+            try embedComCtl6Manifest(at: bundledExe)
 
             // Flip the EXE to the WINDOWS subsystem so double-clicking it in
             // Explorer doesn't spawn a console window next to the app's own
@@ -538,20 +538,17 @@ struct WindowsBundler {
     // MARK: - Common Controls v6 manifest embed
 
     /// Embed the `Microsoft.Windows.Common-Controls` v6 manifest
-    /// dependency into the EXE's resource section via `mt.exe`. Runs
-    /// after `swift build` and the bundle copy — the source `.exe`
-    /// SwiftPM produced has no resource section, and `lld-link`
-    /// silently drops the `/manifestdependency` pragma we'd otherwise
-    /// embed at link time.
+    /// dependency into the EXE's resource section, as `RT_MANIFEST` id 1
+    /// (`CREATEPROCESS_MANIFEST_RESOURCE_ID`, the one Windows reads at process
+    /// start). Runs after `swift build` and the bundle copy — the `.exe`
+    /// SwiftPM produced has no resource section, and `lld-link` silently drops
+    /// the `/manifestdependency` pragma we'd otherwise embed at link time.
     ///
-    /// `mt.exe` ships with the Windows SDK; it lands on PATH inside a
-    /// Visual Studio Developer Shell. From a plain PowerShell with no
-    /// SDK setup, the call throws `BundlerError.toolMissing` — we
-    /// warn and continue. `dialog.confirm` with custom labels then
-    /// falls back to `MessageBoxW` (system-localised buttons, no
-    /// themed look) at runtime; the rest of the dialog surface and
-    /// every other plugin keep working.
-    private func embedComCtl6Manifest(at exe: URL) async throws {
+    /// Through `WindowsResources` rather than `mt.exe`: the same kernel32 API,
+    /// so no Windows SDK tool on `PATH` — without one the manifest used to be
+    /// skipped with a warning — and the COFF symbol table `mt.exe` dropped is
+    /// carried across (#276).
+    private func embedComCtl6Manifest(at exe: URL) throws {
         let manifestXML = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -569,29 +566,9 @@ struct WindowsBundler {
           </dependency>
         </assembly>
         """
-        let manifestURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("swift-pwa-comctl6-\(UUID().uuidString).manifest")
-        try manifestXML.write(to: manifestURL, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: manifestURL) }
-
-        do {
-            // `;#1` is `CREATEPROCESS_MANIFEST_RESOURCE_ID` — the
-            // resource id Windows reads at process start. `#2` is the
-            // DLL slot, which we don't care about here.
-            try await Shell.run(
-                "mt.exe",
-                ["-manifest", manifestURL.path, "-outputresource:\(exe.path);#1"]
-            )
-        } catch BundlerError.toolMissing {
-            FileHandle.standardError.write(Data("""
-            swift-pwa: warning — mt.exe not found on PATH; skipping Common \
-            Controls v6 manifest embed. `dialog.confirm` with custom labels \
-            will fall back to MessageBoxW. Run from inside a Visual Studio \
-            Developer Shell (which puts the Windows SDK on PATH) to enable \
-            the themed TaskDialogIndirect path.
-
-            """.utf8))
-        }
+        try WindowsResources.update(exe, with: [.init(
+            type: WindowsResources.rtManifest, id: 1, data: Data(manifestXML.utf8)
+        )])
     }
 
     // MARK: - Console-window suppression

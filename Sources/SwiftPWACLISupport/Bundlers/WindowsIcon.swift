@@ -25,11 +25,9 @@ import Foundation
 ///      `GRPICONDIR` lists them all.
 ///   2. Inject those resources into the linked `.exe` via the Win32
 ///      `BeginUpdateResource` / `UpdateResource` / `EndUpdateResource`
-///      API. That's the same "edit the PE resource section after link"
-///      approach the bundler already uses for the Common Controls v6
-///      manifest (`mt.exe`) and the WINDOWS subsystem flip (`editbin`),
-///      but the API is in `kernel32`, so unlike those two it needs no
-///      tool on `PATH`.
+///      API (`WindowsResources`), which the Common Controls v6 manifest
+///      goes through too. The API is in `kernel32`, so unlike `editbin`
+///      (the WINDOWS subsystem flip) it needs no tool on `PATH`.
 enum WindowsIcon {
     /// The lowest integer resource id wins as a module's shell icon, so
     /// the group goes in at id 1. The individual `RT_ICON` images take ids

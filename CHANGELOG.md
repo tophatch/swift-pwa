@@ -124,6 +124,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **A bundled Windows exe is a well-formed PE again** (#276). lld-link writes
+  a COFF symbol table after the last section — the string table the long
+  debug-section names live in — and the resource edits the bundler makes
+  (the Common Controls manifest through `mt.exe`, then the icon and version
+  through `UpdateResourceW`, which `mt.exe` uses too) drop everything past the
+  last section while leaving the header pointing at it. Measured on an arm64
+  build: 7.8 MB gone, and `dumpbin /headers` failing with `LNK1106: cannot
+  seek` on every bundle, release and debug, folder and single-file. The table
+  is now read before each edit and appended after it, the header pointed at
+  its new place; clearing the pointer alone wasn't enough, since the section
+  headers still name themselves by string-table offset (`LNK1328`). The
+  manifest goes through the same resource API as the icon, so `mt.exe` is no
+  longer needed on PATH — without it the manifest used to be skipped with a
+  warning. The issue's worry about signing didn't hold: a bundle signed and
+  verified with a throwaway certificate before the fix as well as after.
+
+  Verified with `Scripts/bundle-smoke-windows.ps1`, which gains `dumpbin`
+  checks of both bundles and a check that the folder exe carries the
+  manifest, on Windows 11 x64 and arm64; the bundle built before the fix fails
+  the `dumpbin` check. Unit tests cover the table's round trip.
+
 - **Listing a OneDrive folder on Windows no longer downloads every file in
   it.** swift-corelibs-foundation answers `fileExists`, `attributesOfItem`,
   `resolvingSymlinksInPath`, `resourceValues` and a file URL's

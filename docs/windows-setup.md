@@ -1223,17 +1223,17 @@ same file served out of a mount.
   allows custom text), which lives in `comctl32` **v6** — and v6
   only loads when the EXE has a `Microsoft.Windows.Common-Controls`
   manifest dependency baked into its resource section. The CLI
-  bundler embeds that manifest post-build via `mt.exe -manifest ...
-  -outputresource:<exe>;#1` (`WindowsBundler.embedComCtl6Manifest`);
-  the C++ shim cannot do it via `#pragma comment(linker,
+  bundler writes that manifest into the exe post-build as `RT_MANIFEST`
+  id 1, through the same kernel32 resource API as the icon and version
+  (`WindowsBundler.embedComCtl6Manifest`), so it needs no SDK tool on
+  PATH; the C++ shim cannot do it via `#pragma comment(linker,
   "/manifestdependency:...")` because `lld-link` (Swift-on-Windows
   uses clang-cl + lld-link, not MSVC's link.exe) silently drops the
-  pragma at .obj-merge time. If `mt.exe` isn't on PATH (you're in a
-  non-VS shell), the bundler warns and continues — `dialog.confirm`
-  with custom labels falls back to plain `MessageBoxW` at runtime.
-  To get the themed path: launch your build from inside a Visual
-  Studio Developer Shell (the same shell that already needs to be
-  active for `swift build` to find the MSVC + Windows SDK headers).
+  pragma at .obj-merge time. Through 0.11.7 this went through `mt.exe`,
+  was skipped with a warning when `mt.exe` wasn't on PATH, and — like
+  every resource edit then — left the exe's COFF header pointing at a
+  symbol table the edit had dropped, so `dumpbin` couldn't read a
+  bundled exe (#276). The symbol table is now carried across each edit.
 - **`.build\release` symlink warning is cosmetic.** Without
   Developer Mode (Settings → For developers → Developer Mode) or
   Administrator privileges, SwiftPM can't create the

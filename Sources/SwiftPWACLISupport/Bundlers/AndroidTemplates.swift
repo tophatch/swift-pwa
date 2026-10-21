@@ -234,6 +234,7 @@ enum AndroidTemplates {
         packageId: String,
         label: String,
         hasIcon: Bool,
+        alternateIcons: [String] = [],
         customTheme: Bool = false,
         documentTypes: [PWAManifest.AndroidSection.DocumentType] = [],
         urlSchemes: [String] = [],
@@ -362,15 +363,98 @@ enum AndroidTemplates {
                     android:exported="true"
                     android:configChanges="orientation|screenSize|keyboardHidden|screenLayout|smallestScreenSize|uiMode|navigation"
                     android:windowSoftInputMode="adjustResize">
-                    <intent-filter>
-                        <action android:name="android.intent.action.MAIN"/>
-                        <category android:name="android.intent.category.LAUNCHER"/>
-                    </intent-filter>\(documentTypeFilters(documentTypes))\(urlSchemeFilter(urlSchemes))
-                </activity>
+                    \(alternateIcons.isEmpty ? launcherFilter(indent: 12) : launcherMovedComment)\(
+                        documentTypeFilters(documentTypes)
+                    )\(urlSchemeFilter(urlSchemes))
+                </activity>\(launcherAliases(packageId: packageId, alternateIcons: alternateIcons))
             </application>
 
         </manifest>
         """
+    }
+
+    /// An inset over the drawable `source`, by the 18 dp of a 108 dp
+    /// adaptive-icon layer that fall outside the 72 dp the launcher shows —
+    /// so full-bleed art fills the visible icon instead of being cropped.
+    static func insetDrawableXml(source: String) -> String {
+        """
+        <?xml version="1.0" encoding="utf-8"?>
+        <inset xmlns:android="http://schemas.android.com/apk/res/android"
+            android:drawable="@drawable/\(source)"
+            android:inset="16.667%"/>
+
+        """
+    }
+
+    /// The adaptive icon for launcher icon `name`: its inset light art over a
+    /// solid background (seen only where a launcher shows more than the
+    /// 72 dp window, such as during the parallax shift), and its inset tinted
+    /// art as the themed-icon monochrome layer.
+    static func adaptiveIconXml(name: String) -> String {
+        """
+        <?xml version="1.0" encoding="utf-8"?>
+        <adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">
+            <background android:drawable="@color/\(name)_background"/>
+            <foreground android:drawable="@drawable/\(name)_light_inset"/>
+            <monochrome android:drawable="@drawable/\(name)_tinted_inset"/>
+        </adaptive-icon>
+
+        """
+    }
+
+    /// The colour resource behind ``adaptiveIconXml(name:)``.
+    static func adaptiveIconBackgroundXml(name: String, color: String) -> String {
+        """
+        <?xml version="1.0" encoding="utf-8"?>
+        <resources>
+            <color name="\(name)_background">\(color)</color>
+        </resources>
+
+        """
+    }
+
+    /// The `MAIN` / `LAUNCHER` filter that puts the app in the launcher, for
+    /// interpolating after `indent` spaces already in the template.
+    static func launcherFilter(indent: Int) -> String {
+        let pad = String(repeating: " ", count: indent)
+        return """
+        <intent-filter>
+        \(pad)    <action android:name="android.intent.action.MAIN"/>
+        \(pad)    <category android:name="android.intent.category.LAUNCHER"/>
+        \(pad)</intent-filter>
+        """
+    }
+
+    /// Stands in for ``launcherFilter(indent:)`` on `MainActivity` when the
+    /// launcher entries are the icon aliases instead.
+    static let launcherMovedComment = """
+    <!-- The launcher entry is one of the activity-alias elements below,
+                     one per icon (alternate_icons in pwa.json). -->
+    """
+
+    /// One launcher `<activity-alias>` per icon when the app declares
+    /// `alternate_icons`, or `""` so an app without them keeps its manifest
+    /// byte-for-byte. `app.icon.set` enables one and disables the rest; the
+    /// primary starts enabled. The names are what the generated Kotlin looks
+    /// for (`LauncherDefault`, `LauncherIcon_<name>`), and each icon resource
+    /// is what ``AndroidBundler`` stages under the same name.
+    static func launcherAliases(packageId: String, alternateIcons: [String]) -> String {
+        guard !alternateIcons.isEmpty else { return "" }
+        func alias(_ name: String, icon: String, enabled: Bool) -> String {
+            """
+
+                    <activity-alias
+                        android:name="\(packageId).\(name)"
+                        android:targetActivity="\(packageId).MainActivity"
+                        android:icon="@mipmap/\(icon)"
+                        android:enabled="\(enabled)"
+                        android:exported="true">
+                        \(launcherFilter(indent: 12))
+                    </activity-alias>
+            """
+        }
+        return alias("LauncherDefault", icon: "ic_launcher", enabled: true)
+            + alternateIcons.map { alias("LauncherIcon_\($0)", icon: "ic_launcher_\($0)", enabled: false) }.joined()
     }
 
     /// The `<intent-filter>` block(s) that make the activity a handler for
@@ -2706,6 +2790,8 @@ enum AndroidTemplates {
                 "window.snapshot" -> windowSnapshot(done)
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)
+                "app.icon.state" -> appIconState(done)
+                "app.icon.set" -> appIconSet(json, done)
                 "ble.availability" -> bleAvailability(done)
                 "ble.scan.start" -> bleScanStart(json, done)
                 "ble.scan.stop" -> bleScanStop(done)
@@ -2740,6 +2826,83 @@ enum AndroidTemplates {
                 val opened = bridge.openExternally(url)
                 done(JSONObject().put("opened", opened).toString(), null)
             }
+        }
+
+        // -----------------------------------------------------------
+        // App icon (alternate_icons)
+        // -----------------------------------------------------------
+
+        // The bundler emits one launcher <activity-alias> per icon when the app
+        // declares alternate_icons: `.LauncherDefault` for the primary and
+        // `.LauncherIcon_<name>` for each alternate, all targeting MainActivity.
+        // They're read from the installed package rather than a baked-in list,
+        // so this reports what the launcher actually has. An app without
+        // alternates has no aliases, and nothing to switch.
+        private val launcherDefaultAlias get() = "${activity.packageName}.LauncherDefault"
+        private val launcherIconPrefix get() = "${activity.packageName}.LauncherIcon_"
+
+        private fun launcherAliases(): List<android.content.pm.ActivityInfo> {
+            val pm = activity.packageManager
+            val flags = android.content.pm.PackageManager.GET_ACTIVITIES or
+                android.content.pm.PackageManager.MATCH_DISABLED_COMPONENTS
+            @Suppress("DEPRECATION")
+            val info = pm.getPackageInfo(activity.packageName, flags)
+            return (info.activities ?: emptyArray()).filter {
+                it.targetActivity != null &&
+                    (it.name == launcherDefaultAlias || it.name.startsWith(launcherIconPrefix))
+            }
+        }
+
+        // DEFAULT means "as the manifest says", which is the alias's own
+        // android:enabled — true for the primary, false for each alternate.
+        private fun aliasEnabled(alias: android.content.pm.ActivityInfo): Boolean {
+            val state = activity.packageManager.getComponentEnabledSetting(
+                android.content.ComponentName(activity.packageName, alias.name)
+            )
+            return when (state) {
+                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED -> true
+                android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DEFAULT -> alias.enabled
+                else -> false
+            }
+        }
+
+        private fun appIconState(done: (String?, String?) -> Unit) {
+            val aliases = launcherAliases()
+            val alternates = aliases.map { it.name }.filter { it.startsWith(launcherIconPrefix) }
+                .map { it.removePrefix(launcherIconPrefix) }.sorted()
+            val current = aliases.firstOrNull { it.name.startsWith(launcherIconPrefix) && aliasEnabled(it) }
+                ?.name?.removePrefix(launcherIconPrefix)
+            val result = JSONObject()
+                .put("current", current ?: JSONObject.NULL)
+                .put("alternates", JSONArray(alternates))
+                .put("supported", true)
+            done(result.toString(), null)
+        }
+
+        // Enables the chosen alias before disabling the others, so the app is
+        // never left without a launcher entry. DONT_KILL_APP keeps this process
+        // alive — measured on One UI, where the drawer and a pinned home-screen
+        // icon then swap to the new alias within a couple of seconds.
+        private fun appIconSet(json: JSONObject, done: (String?, String?) -> Unit) {
+            val name = if (json.isNull("name")) null else json.optString("name")
+            val target = if (name == null) launcherDefaultAlias else launcherIconPrefix + name
+            val aliases = launcherAliases()
+            if (aliases.none { it.name == target }) {
+                done(null, "swift-pwa: app.icon.set: this build has no launcher alias for ${name ?: "the primary icon"}")
+                return
+            }
+            val pm = activity.packageManager
+            fun setEnabled(alias: String, enabled: Boolean) = pm.setComponentEnabledSetting(
+                android.content.ComponentName(activity.packageName, alias),
+                if (enabled) android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_ENABLED
+                else android.content.pm.PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+                android.content.pm.PackageManager.DONT_KILL_APP
+            )
+            setEnabled(target, true)
+            for (alias in aliases) {
+                if (alias.name != target) setEnabled(alias.name, false)
+            }
+            done("{}", null)
         }
 
         private fun systemMemory(done: (String?, String?) -> Unit) {

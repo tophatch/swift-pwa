@@ -2,7 +2,10 @@ import Foundation
 
 /// Generates `Info.plist` content for macOS / iOS bundles from a `PWAManifest`.
 enum InfoPlistGenerator {
-    static func macOS(manifest: PWAManifest, executableName: String) -> InfoPlist {
+    /// `iconInAssetCatalog` is whether the bundler compiled the icon into
+    /// `Assets.car` (an icon with appearances), which only `CFBundleIconName`
+    /// points macOS at; the `.icns` stays named too, for macOS before 26.
+    static func macOS(manifest: PWAManifest, executableName: String, iconInAssetCatalog: Bool = false) -> InfoPlist {
         var plist = InfoPlist()
         plist["CFBundleDevelopmentRegion"] = "en"
         plist["CFBundleDisplayName"] = manifest.name
@@ -27,6 +30,9 @@ enum InfoPlistGenerator {
         plist["NSPrincipalClass"] = "NSApplication"
         if manifest.icon(for: .macos) != nil {
             plist["CFBundleIconFile"] = "AppIcon.icns"
+        }
+        if iconInAssetCatalog {
+            plist["CFBundleIconName"] = AppleIconCatalog.primaryName
         }
         applyUsageDescriptions(manifest, into: &plist)
         applyURLSchemes(manifest, into: &plist)

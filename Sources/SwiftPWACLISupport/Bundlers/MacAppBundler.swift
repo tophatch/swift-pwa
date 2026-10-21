@@ -5,10 +5,13 @@ import Foundation
 ///   1. `swift build -c <configuration>` (with `--arch` per requested slice) to
 ///      produce the binary.
 ///   2. Lay out `MyApp.app/Contents/{MacOS,Resources}`.
-///   3. Generate `Info.plist` from the manifest.
+///   3. The icon: `actool` from a generated Icon Composer document when it
+///      has appearances, otherwise PNG → `.icns` via `sips`/`iconutil`; then
+///      `Info.plist` from the manifest.
 ///   4. Copy the web bundle into `Contents/Resources/web`.
-///   5. Convert the icon (PNG → .icns) via `sips`/`iconutil` if present.
+///   5. `Credits.html` for the About panel, from `description`.
 ///   6. Codesign with the supplied identity, or ad hoc without one.
+///   7. Notarize and staple, when a `notarytool` profile is given.
 struct MacAppBundler {
     let manifest: PWAManifest
     let projectRoot: URL
@@ -67,8 +70,16 @@ struct MacAppBundler {
             ResourceBundles.stage(ResourceBundles.found(in: binDir), into: resourcesDir)
         )
 
-        // 3. Info.plist
-        var plist = InfoPlistGenerator.macOS(manifest: manifest, executableName: exe)
+        // 3. Icon, ahead of the Info.plist because an icon that lands in the
+        // asset catalog has to be named there (best-effort: a missing tool or
+        // file never fails the build).
+        let icon = await bundleIcon(into: resourcesDir)
+        IconOutcome.report(icon.outcome)
+
+        // Info.plist
+        var plist = InfoPlistGenerator.macOS(
+            manifest: manifest, executableName: exe, iconInAssetCatalog: icon.inAssetCatalog
+        )
         try await plist.addMissing(AppleBuildEnvironment.probe(sdk: "macosx").plistKeys)
         try plist.write(to: app.appendingPathComponent("Contents/Info.plist"))
 
@@ -86,10 +97,7 @@ struct MacAppBundler {
             try FileManager.default.copyItem(at: webSrc, to: webDst)
         }
 
-        // 5. Icon (best-effort: a missing tool or file never fails the build).
-        await IconOutcome.report(bundleIcon(into: resourcesDir))
-
-        // 6. Credits.html for the standard About panel — shown below
+        // 5. Credits.html for the standard About panel — shown below
         // the version + copyright. AppKit picks this up automatically.
         if let description = manifest.description, !description.isEmpty {
             try Self.creditsHTML(description: description).write(
@@ -99,7 +107,7 @@ struct MacAppBundler {
             )
         }
 
-        // 7. Codesign
+        // 6. Codesign
         if let identity = signIdentity {
             var args = ["codesign", "--force", "--sign", identity]
             if let ent = entitlements {
@@ -121,7 +129,7 @@ struct MacAppBundler {
             print("      and --notarize <keychain-profile> for notarization.")
         }
 
-        // 8. Notarize + staple (opt-in, macOS distribution).
+        // 7. Notarize + staple (opt-in, macOS distribution).
         if let profile = notarizeProfile {
             try await notarize(app: app, profile: profile)
         }
@@ -142,18 +150,37 @@ struct MacAppBundler {
         print("swift-pwa: universal binary — \(slices)")
     }
 
-    /// Convert `manifest.icon` (a PNG) into `AppIcon.icns` via
-    /// `sips`/`iconutil`. Best-effort: reports (never throws) so a missing
-    /// tool or file leaves the app with the system default rather than
-    /// failing the build.
-    private func bundleIcon(into resourcesDir: URL) async -> IconOutcome {
-        guard let icon = manifest.icon(for: .macos) else { return .noneSet }
+    /// The app icon. With dark or tinted art it's compiled from a generated
+    /// Icon Composer document into `Assets.car` (plus an `AppIcon.icns` that
+    /// `actool` renders for macOS before 26) — the only input macOS keeps
+    /// appearances from; see ``AppleIconCatalog``. Otherwise, or when this
+    /// `actool` can't read the document, the light PNG becomes `AppIcon.icns`
+    /// via `sips`/`iconutil`, as it always has. Best-effort: reports (never
+    /// throws) so a missing tool or file leaves the app with the system
+    /// default rather than failing the build.
+    private func bundleIcon(into resourcesDir: URL) async -> (outcome: IconOutcome, inAssetCatalog: Bool) {
+        guard let art = manifest.iconArt(for: .macos) else { return (.noneSet, false) }
+        var fallbackNote: String?
+        if art.hasAppearances {
+            switch AppleIconCatalog.resolve(art, name: AppleIconCatalog.primaryName, projectRoot: projectRoot) {
+            case let .failed(outcome):
+                return (outcome, false)
+            case let .icon(icon):
+                switch await compileIconComposerDocument(icon, into: resourcesDir) {
+                case nil:
+                    return (.bundled(source: art.light, detail: AppleIconCatalog.appearanceSummary(icon)), true)
+                case let reason?:
+                    fallbackNote = "light art only: this actool can't compile Icon Composer files (\(reason))"
+                }
+            }
+        }
+        let icon = art.light
         let iconURL = projectRoot.appendingPathComponent(icon)
         guard FileManager.default.fileExists(atPath: iconURL.path) else {
-            return .notFound(source: icon, placeholder: false)
+            return (.notFound(source: icon, placeholder: false), false)
         }
         guard iconURL.pathExtension.lowercased() == "png" else {
-            return .notPNG(source: icon, placeholder: false)
+            return (.notPNG(source: icon, placeholder: false), false)
         }
         do {
             let sizes = try await IconConverter.makeICNS(
@@ -165,9 +192,50 @@ struct MacAppBundler {
                 // by `swift package clean`.
                 cacheDir: projectRoot.appendingPathComponent(".build/swift-pwa/icon-cache")
             )
-            return .bundled(source: icon, detail: "\(sizes) sizes")
+            let detail = ["\(sizes) sizes", fallbackNote].compactMap(\.self).joined(separator: "; ")
+            return (.bundled(source: icon, detail: detail), false)
         } catch {
-            return .toolFailed(source: icon, reason: "sips/iconutil unavailable")
+            return (.toolFailed(source: icon, reason: "sips/iconutil unavailable"), false)
+        }
+    }
+
+    /// Compile `icon` as an Icon Composer document into `resourcesDir`.
+    /// Returns `nil` on success, or why it didn't take — in which case
+    /// nothing it wrote is left behind for the `.icns` path to trip over.
+    private func compileIconComposerDocument(_ icon: AppleIconCatalog.Icon, into resourcesDir: URL) async -> String? {
+        let fm = FileManager.default
+        let tmp = fm.temporaryDirectory.appendingPathComponent("swift-pwa-appicon-\(UUID().uuidString)")
+        defer { try? fm.removeItem(at: tmp) }
+        let outputs = ["Assets.car", "AppIcon.icns"].map { resourcesDir.appendingPathComponent($0) }
+        func discardOutputs() {
+            for output in outputs {
+                try? fm.removeItem(at: output)
+            }
+        }
+        do {
+            try fm.createDirectory(at: tmp, withIntermediateDirectories: true)
+            let document = try AppleIconCatalog.writeIconComposerDocument(icon, in: tmp)
+            let partial = tmp.appendingPathComponent("icon-info.plist")
+            try await Shell.run("/usr/bin/env", [
+                "xcrun", "actool",
+                "--compile", resourcesDir.path,
+                "--platform", "macosx",
+                "--minimum-deployment-target", manifest.macos?.minimumSystemVersion ?? "15.0",
+                "--app-icon", AppleIconCatalog.primaryName,
+                "--output-partial-info-plist", partial.path,
+                document.path
+            ])
+            guard let keys = AppleIconCatalog.readPartialPlist(partial),
+                  AppleIconCatalog.registers(primary: AppleIconCatalog.primaryName, alternates: [], in: keys),
+                  outputs.allSatisfy({ fm.fileExists(atPath: $0.path) })
+            else {
+                discardOutputs()
+                return "actool registered no app icon"
+            }
+            return nil
+        } catch {
+            discardOutputs()
+            return AppleIconCatalog.reason(error)
         }
     }
 

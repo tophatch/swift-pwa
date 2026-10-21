@@ -88,6 +88,35 @@ public struct AppPlugin: Plugin {
                 return await StringResult(value: MainThread.run { app.lastWindowClosed.rawValue })
             }
         )
+
+        // The person's choice of app icon, where the platform has one. The
+        // backend that can't switch supplies no `appIcons`, and the page gets
+        // `supported: false` instead of a setting that does nothing.
+        registry.register("app.icon.list", typed: { (_: EmptyArgs, _) async throws -> AppIconState in
+            guard let icons = await MainThread.run({ app.appIcons }) else { return .unsupported }
+            return try await icons.state()
+        })
+
+        registry.register("app.icon.set", typed: { (args: AppIconSetArgs, _) async throws -> EmptyResult in
+            guard let icons = await MainThread.run({ app.appIcons }) else {
+                throw BridgeError(
+                    code: BridgeError.unimplemented,
+                    message: "app.icon.set: this platform has no alternate app icons (check app.icon.list's supported)"
+                )
+            }
+            if let name = args.name {
+                let declared = try await icons.state().alternates
+                guard declared.contains(name) else {
+                    let known = declared.isEmpty ? "none are declared" : "declared: \(declared.joined(separator: ", "))"
+                    throw BridgeError(
+                        code: BridgeError.notFound,
+                        message: "app.icon.set: no alternate icon named \"\(name)\" (\(known) in pwa.json's alternate_icons)"
+                    )
+                }
+            }
+            try await icons.select(args.name)
+            return EmptyResult()
+        })
     }
 
     private static let displayNameLock = NSLock()

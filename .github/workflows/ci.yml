@@ -101,9 +101,35 @@ jobs:
           # commit under test.
           sed -i '' -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
           grep -n 'package(path' Package.swift
+      - name: Give it an icon with appearances and an alternate
+        # The bundle has to come out with an icon on whatever Xcode the runner
+        # has: the Icon Composer path needs Xcode 26's actool, and an older one
+        # falls back to the light .icns (#314).
+        working-directory: /tmp/bundle-smoke/app
+        run: |
+          python3 - <<'PY'
+          import json, struct, zlib
+          def png(name, rgb):
+              raw = b"".join(b"\x00" + bytes(rgb) * 1024 for _ in range(1024))
+              chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+              open(name, "wb").write(b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 1024, 1024, 8, 2, 0, 0, 0))
+                                     + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b""))
+          for name, rgb in [("icon.png", (40, 90, 220)), ("icon-dark.png", (20, 110, 60)), ("icon-tinted.png", (128, 128, 128)),
+                            ("sketch.png", (240, 140, 20))]:
+              png(name, rgb)
+          data = json.load(open("pwa.json"))
+          data["icon"] = {"light": "icon.png", "dark": "icon-dark.png", "tinted": "icon-tinted.png"}
+          data["alternate_icons"] = [{"name": "sketch", "icon": "sketch.png"}]
+          json.dump(data, open("pwa.json", "w"), indent=2)
+          PY
       - name: Bundle a debug .app (debug so the driver is compiled in)
         working-directory: /tmp/bundle-smoke/app
-        run: "$GITHUB_WORKSPACE/.build/debug/swift-pwa build --target macos --configuration debug"
+        run: |
+          set -euo pipefail
+          "$GITHUB_WORKSPACE/.build/debug/swift-pwa" build --target macos --configuration debug | tee /tmp/build.log
+          xcodebuild -version
+          grep "app icon ←" /tmp/build.log
+          test -s build/macos/BundleSmoke.app/Contents/Resources/AppIcon.icns
       - name: The unsigned build's ad hoc signature covers the whole bundle
         # Without --sign the bundle used to carry only the linker's signature on
         # the executable, which binds neither Info.plist nor the resources, so
@@ -137,6 +163,11 @@ jobs:
             "new Promise(r => setTimeout(() => r('awaited'), 250))")
           echo "$OUT"
           echo "$OUT" | grep -q awaited
+          # macOS has no alternate icons, and says so rather than offering one.
+          OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            '__SWIFT_PWA__.invoke("app.icon.list").then(r => "supported=" + r.supported)')
+          echo "$OUT"
+          echo "$OUT" | grep -q "supported=false"
           # Don't leave it running — the job's cleanup reports it as an orphan,
           # which is noise in the log of the next thing that goes wrong.
           pkill -x BundleSmoke || true

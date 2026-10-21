@@ -274,35 +274,86 @@ struct IPABundler {
         }
     }
 
-    /// Best-effort: compile `manifest.icon` (a single 1024×1024 PNG) into a
-    /// real iOS app icon via `actool`, which generates every required size,
+    /// Best-effort: compile `manifest.icon` — and `alternate_icons` — into
+    /// real iOS app icons via `actool`, which generates every required size,
     /// writes `Assets.car` + the icon files into the `.app`, and emits a
-    /// partial Info.plist with the `CFBundleIcons*` keys. We return those
-    /// keys to merge into the Info.plist we write. A single "universal"
-    /// 1024 icon is the modern (Xcode 14+) single-size app-icon form.
-    /// Skips quietly (no icon, not a failed build) if the icon is missing /
-    /// not a PNG / `actool` errors.
+    /// partial Info.plist with the `CFBundleIcons*` keys. We return those keys
+    /// to merge into the Info.plist we write.
+    ///
+    /// An icon with appearances goes in as a generated Icon Composer document
+    /// (see ``AppleIconCatalog``), retried as a classic icon set when this
+    /// `actool` can't read one; a plain icon goes in as the classic set, as it
+    /// always has. Skips quietly (no icon, not a failed build) if the icon is
+    /// missing / not a PNG / `actool` errors.
     private func compileAppIcon(into app: URL) async -> (keys: [String: Any], outcome: IconOutcome) {
-        guard let iconPath = manifest.icon(for: .ios) else { return ([:], .noneSet) }
-        let iconURL = projectRoot.appendingPathComponent(iconPath)
-        let fm = FileManager.default
-        guard fm.fileExists(atPath: iconURL.path) else {
-            return ([:], .notFound(source: iconPath, placeholder: false))
+        guard let art = manifest.iconArt(for: .ios) else { return ([:], .noneSet) }
+        let primary: AppleIconCatalog.Icon
+        switch AppleIconCatalog.resolve(art, name: AppleIconCatalog.primaryName, projectRoot: projectRoot) {
+        case let .icon(icon): primary = icon
+        case let .failed(outcome): return ([:], outcome)
         }
-        guard iconURL.pathExtension.lowercased() == "png" else {
-            return ([:], .notPNG(source: iconPath, placeholder: false))
+        // An alternate whose art is missing is left out entirely, so the page
+        // is never offered an icon that would switch to nothing.
+        var alternates: [AppleIconCatalog.Icon] = []
+        for alternate in manifest.alternateIcons ?? [] {
+            switch AppleIconCatalog.resolve(alternate.icon, name: alternate.name, projectRoot: projectRoot) {
+            case let .icon(icon): alternates.append(icon)
+            case let .failed(outcome): print("swift-pwa: alternate icon '\(alternate.name)' left out: \(outcome.line)")
+            }
+        }
+        let icons = [primary] + alternates
+        var details = [AppleIconCatalog.appearanceSummary(primary)].compactMap(\.self)
+        if !alternates.isEmpty {
+            details.append("alternates: " + alternates.map(\.name).joined(separator: ", "))
         }
 
+        var documentsFailure: String?
+        if icons.contains(where: \.hasAppearances) {
+            switch await compileIcons(icons, asDocuments: true, into: app) {
+            case let .success(keys):
+                return (
+                    keys,
+                    .bundled(source: art.light, detail: details.isEmpty ? nil : details.joined(separator: "; "))
+                )
+            case let .failure(failure):
+                documentsFailure = failure.reason
+            }
+        }
+        switch await compileIcons(icons, asDocuments: false, into: app) {
+        case let .success(keys):
+            if let documentsFailure {
+                details.append("classic icon set: this actool can't compile Icon Composer files (\(documentsFailure))")
+            }
+            return (keys, .bundled(source: art.light, detail: details.isEmpty ? nil : details.joined(separator: "; ")))
+        case let .failure(failure):
+            return ([:], .toolFailed(source: art.light, reason: failure.reason))
+        }
+    }
+
+    private struct IconCompileFailure: Error {
+        var reason: String
+    }
+
+    /// One `actool` run over `icons`, as Icon Composer documents or classic
+    /// icon sets. Succeeds only when the partial Info.plist registers every
+    /// icon asked for.
+    private func compileIcons(
+        _ icons: [AppleIconCatalog.Icon], asDocuments: Bool, into app: URL
+    ) async -> Result<[String: Any], IconCompileFailure> {
+        let fm = FileManager.default
         let tmp = fm.temporaryDirectory.appendingPathComponent("swift-pwa-appicon-\(UUID().uuidString)")
         let assets = tmp.appendingPathComponent("Assets.xcassets")
-        let iconset = assets.appendingPathComponent("AppIcon.appiconset")
         defer { try? fm.removeItem(at: tmp) }
         do {
-            try fm.createDirectory(at: iconset, withIntermediateDirectories: true)
-            try fm.copyItem(at: iconURL, to: iconset.appendingPathComponent("icon.png"))
-            try Self.appIconContentsJSON.write(
-                to: iconset.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8
-            )
+            try fm.createDirectory(at: assets, withIntermediateDirectories: true)
+            var inputs = [assets.path]
+            for icon in icons {
+                if asDocuments {
+                    try inputs.append(AppleIconCatalog.writeIconComposerDocument(icon, in: tmp).path)
+                } else {
+                    try AppleIconCatalog.writeIconSet(icon, in: assets)
+                }
+            }
             // The launch storyboard's background rides in the same catalog:
             // actool writes one `Assets.car` per `--compile`, so a second run
             // would replace this one. See `compileLaunchScreen`.
@@ -312,38 +363,29 @@ struct IPABundler {
                 try colorset.write(to: dir.appendingPathComponent("Contents.json"), atomically: true, encoding: .utf8)
             }
             let partial = tmp.appendingPathComponent("icon-info.plist")
-            let platform = simulator ? "iphonesimulator" : "iphoneos"
+            let alternateNames = icons.dropFirst().map(\.name)
             try await Shell.run("/usr/bin/env", [
                 "xcrun", "actool",
                 "--compile", app.path,
-                "--platform", platform,
+                "--platform", simulator ? "iphonesimulator" : "iphoneos",
                 "--minimum-deployment-target", manifest.ios?.minimumSystemVersion ?? "18.0",
-                "--app-icon", "AppIcon",
-                "--output-partial-info-plist", partial.path,
-                assets.path
-            ])
-            if let data = try? Data(contentsOf: partial),
-               let dict = try? PropertyListSerialization.propertyList(from: data, format: nil) as? [String: Any]
-            {
-                return (dict, .bundled(source: iconPath, detail: nil))
+                "--app-icon", AppleIconCatalog.primaryName
+            ] + alternateNames.flatMap { ["--alternate-app-icon", $0] } + [
+                "--include-all-app-icons",
+                "--output-partial-info-plist", partial.path
+            ] + inputs)
+            guard let keys = AppleIconCatalog.readPartialPlist(partial),
+                  AppleIconCatalog.registers(
+                      primary: AppleIconCatalog.primaryName, alternates: alternateNames, in: keys
+                  )
+            else {
+                return .failure(IconCompileFailure(reason: "actool registered no app icon"))
             }
-            return ([:], .bundled(source: iconPath, detail: nil))
+            return .success(keys)
         } catch {
-            return ([:], .toolFailed(source: iconPath, reason: "actool unavailable"))
+            return .failure(IconCompileFailure(reason: AppleIconCatalog.reason(error)))
         }
     }
-
-    /// Asset-catalog manifest for a single 1024×1024 universal iOS app
-    /// icon (Xcode 14+ single-size form). `actool` expands it to the full
-    /// size set at compile time.
-    private static let appIconContentsJSON = """
-    {
-      "images" : [
-        { "filename" : "icon.png", "idiom" : "universal", "platform" : "ios", "size" : "1024x1024" }
-      ],
-      "info" : { "author" : "xcode", "version" : 1 }
-    }
-    """
 
     /// Asset name for the launch screen's background colour set. Only
     /// written (and only referenced) for a light/dark pair.

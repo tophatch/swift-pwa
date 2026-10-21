@@ -315,6 +315,7 @@ struct Build: AsyncParsableCommand {
         try Self.validateLastWindowClosed(manifest: pwa)
         try Self.validateExternalURLs(manifest: pwa)
         try Self.validateAndroidPermissions(manifest: pwa)
+        try Self.validateAlternateIcons(manifest: pwa)
         // Both of these build and *run* the app on this host, so they get the
         // tiers' search paths — never the app's own declared ones, which
         // `CommandCatalog` resolves for the host itself (the `--target` here
@@ -918,6 +919,23 @@ struct Build: AsyncParsableCommand {
     /// define their own (`com.samsung.android.permission.…`), new platform
     /// releases add more, and a list here would go stale and start refusing
     /// valid declarations. The shape is what can be checked honestly.
+    /// An `alternate_icons` name becomes an iOS asset name and part of an
+    /// Android component name, and is the id the page switches by — so a name
+    /// either platform would mangle or refuse, or one used twice, is rejected
+    /// before anything is built rather than surfacing as an icon that never
+    /// appears.
+    static func validateAlternateIcons(manifest: PWAManifest) throws {
+        var seen = Set<String>()
+        for alternate in manifest.alternateIcons ?? [] {
+            if let problem = PWAManifest.AlternateIcon.problem(withName: alternate.name) {
+                throw ValidationError("pwa.json: alternate_icons: \(problem).")
+            }
+            guard seen.insert(alternate.name).inserted else {
+                throw ValidationError("pwa.json: alternate_icons names \"\(alternate.name)\" twice.")
+            }
+        }
+    }
+
     static func validateAndroidPermissions(manifest: PWAManifest) throws {
         for permission in manifest.android?.permissions ?? [] {
             let malformed = permission.isEmpty

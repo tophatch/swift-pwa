@@ -146,9 +146,11 @@ struct AndroidBundler {
         // Launcher icon: drop the source PNG into res/mipmap/ic_launcher.png
         // and reference it from the manifest. aapt/Gradle scale it per
         // density at build time, so a single PNG is enough — no pre-resize.
-        let iconOutcome = try stageLauncherIcon(into: main)
-        IconOutcome.report(iconOutcome)
-        let iconStaged = if case .bundled = iconOutcome { true } else { false }
+        // Tinted art adds an adaptive icon with a themed layer, and each
+        // alternate icon gets the same treatment under its own name.
+        let launcherIcons = try stageLauncherIcons(into: main)
+        IconOutcome.report(launcherIcons.outcome)
+        let iconStaged = if case .bundled = launcherIcons.outcome { true } else { false }
 
         // res/xml/network_security_config.xml — the scoped cleartext allow-list
         // for `android.network.cleartext_domains` (e.g. a LAN ComfyUI on plain
@@ -167,7 +169,8 @@ struct AndroidBundler {
         }
 
         try AndroidTemplates.androidManifestXml(
-            packageId: pkg, label: label, hasIcon: iconStaged, customTheme: windowBackground != nil,
+            packageId: pkg, label: label, hasIcon: iconStaged, alternateIcons: launcherIcons.alternates,
+            customTheme: windowBackground != nil,
             documentTypes: manifest.android?.documentTypes ?? [],
             urlSchemes: URLSchemeSupport.declared(manifest),
             networkConfigStaged: networkSecurityConfig != nil,
@@ -318,27 +321,83 @@ struct AndroidBundler {
     /// `lib<TargetName>.so` once the user's package is configured to
     /// build a shared object (see `docs/android-setup.md`); `soBaseName`
     /// is that `<TargetName>`, resolved by `ExecutableNameResolver`.
-    /// Copy the manifest's PNG icon to `res/mipmap/ic_launcher.png`.
-    /// Returns whether an icon was staged (drives the manifest's
-    /// `android:icon` attribute). Best-effort: a missing or non-PNG icon
-    /// just yields the platform-default launcher icon, same as before.
-    private func stageLauncherIcon(into main: URL) throws -> IconOutcome {
-        guard let icon = manifest.icon(for: .android) else { return .noneSet }
-        let src = projectRoot.appendingPathComponent(icon)
-        guard src.pathExtension.lowercased() == "png" else {
-            return .notPNG(source: icon, placeholder: false)
+    /// Stage the launcher icon — and each `alternate_icons` entry — into
+    /// `res/`. Returns the outcome to report and the alternates staged, which
+    /// become launcher aliases in the manifest. Best-effort: a missing or
+    /// non-PNG icon just yields the platform-default launcher icon, and an
+    /// alternate whose art is missing is left out rather than offered.
+    private func stageLauncherIcons(into main: URL) throws -> (outcome: IconOutcome, alternates: [String]) {
+        guard let art = manifest.iconArt(for: .android) else { return (.noneSet, []) }
+        if let problem = art.problem(under: projectRoot) { return (problem, []) }
+        let res = main.appendingPathComponent("res")
+        try stageLauncherIcon(art, as: "ic_launcher", in: res)
+
+        var alternates: [String] = []
+        for alternate in manifest.alternateIcons ?? [] {
+            if let problem = alternate.icon.problem(under: projectRoot) {
+                print("swift-pwa: alternate icon '\(alternate.name)' left out: \(problem.line)")
+                continue
+            }
+            try stageLauncherIcon(alternate.icon, as: "ic_launcher_\(alternate.name)", in: res)
+            alternates.append(alternate.name)
         }
-        guard FileManager.default.fileExists(atPath: src.path) else {
-            return .notFound(source: icon, placeholder: false)
+        let details = [
+            art.tinted.map { _ in "themed icon from tinted" },
+            alternates.isEmpty ? nil : "alternates: " + alternates.joined(separator: ", ")
+        ]
+        .compactMap(\.self)
+        return (
+            .bundled(source: art.light, detail: details.isEmpty ? nil : details.joined(separator: "; ")),
+            alternates
+        )
+    }
+
+    /// One launcher icon under the resource name `name`: the light PNG as
+    /// `mipmap/<name>.png`, and — when there's tinted art — an adaptive icon
+    /// in `mipmap-anydpi-v26/<name>.xml` that takes precedence on every API
+    /// level we support.
+    ///
+    /// The adaptive icon insets the full-bleed art by 18 of the layer's
+    /// 108 dp on each side, so it fills the 72 dp the launcher shows and the
+    /// launcher's mask rounds it, instead of cropping a sixth off each edge.
+    /// The tinted art becomes the monochrome layer with the same inset, since
+    /// that layer is drawn on the same canvas (measured on One UI). Only its
+    /// alpha is used, so an opaque tinted PNG would theme as a solid tile;
+    /// the build says so. `dark` has no Android counterpart and is ignored.
+    private func stageLauncherIcon(_ art: PWAManifest.IconArt, as name: String, in res: URL) throws {
+        let fm = FileManager.default
+        func copy(_ path: String, to destination: URL) throws {
+            try fm.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            if fm.fileExists(atPath: destination.path) { try fm.removeItem(at: destination) }
+            try fm.copyItem(at: projectRoot.appendingPathComponent(path), to: destination)
         }
-        let mipmap = main.appendingPathComponent("res/mipmap")
-        try FileManager.default.createDirectory(at: mipmap, withIntermediateDirectories: true)
-        let dst = mipmap.appendingPathComponent("ic_launcher.png")
-        if FileManager.default.fileExists(atPath: dst.path) {
-            try FileManager.default.removeItem(at: dst)
+        try copy(art.light, to: res.appendingPathComponent("mipmap/\(name).png"))
+        guard let tinted = art.tinted else { return }
+
+        if PNGHeader.hasAlpha((try? Data(contentsOf: projectRoot.appendingPathComponent(tinted))) ?? Data()) == false {
+            print("""
+            swift-pwa: warning: tinted icon '\(tinted)' has no transparency. Android's themed icon \
+            uses only the alpha channel, so it will show as a solid tile; give the tinted art a transparent background.
+            """)
         }
-        try FileManager.default.copyItem(at: src, to: dst)
-        return .bundled(source: icon, detail: nil)
+        try copy(art.light, to: res.appendingPathComponent("drawable-nodpi/\(name)_light.png"))
+        try copy(tinted, to: res.appendingPathComponent("drawable-nodpi/\(name)_tinted.png"))
+        let drawable = res.appendingPathComponent("drawable")
+        let adaptive = res.appendingPathComponent("mipmap-anydpi-v26")
+        try fm.createDirectory(at: drawable, withIntermediateDirectories: true)
+        try fm.createDirectory(at: adaptive, withIntermediateDirectories: true)
+        for layer in ["light", "tinted"] {
+            try AndroidTemplates.insetDrawableXml(source: "\(name)_\(layer)").write(
+                to: drawable.appendingPathComponent("\(name)_\(layer)_inset.xml"), atomically: true, encoding: .utf8
+            )
+        }
+        try AndroidTemplates.adaptiveIconXml(name: name)
+            .write(to: adaptive.appendingPathComponent("\(name).xml"), atomically: true, encoding: .utf8)
+        let values = res.appendingPathComponent("values")
+        try fm.createDirectory(at: values, withIntermediateDirectories: true)
+        try AndroidTemplates.adaptiveIconBackgroundXml(
+            name: name, color: manifest.window.backgroundColor?.light ?? "#FFFFFF"
+        ).write(to: values.appendingPathComponent("\(name)_background.xml"), atomically: true, encoding: .utf8)
     }
 
     private func stageJniLibs(into appModule: URL, soBaseName: String) async throws {

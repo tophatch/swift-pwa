@@ -731,7 +731,12 @@ for before.
   From that single 1024×1024 PNG the bundler compiles a real `AppIcon`
   via `actool` (one "universal" asset — Xcode generates the full size
   set — with the resulting `CFBundleIcons*` keys merged into
-  `Info.plist`), and also generates a minimal `LaunchScreen.storyboard`
+  `Info.plist`). With dark or tinted art (`"icon": { "light", "dark",
+  "tinted" }`) it compiles a generated Icon Composer document instead, so
+  the home screen's Dark, Clear and Tinted styles show your art, and each
+  `alternate_icons` entry becomes an alternate icon `app.icon.set` switches
+  to — see [app-icons.md](app-icons.md). It also generates a minimal
+  `LaunchScreen.storyboard`
   with the icon centered on the `window.background_color` (black when
   none is set), compiled via `ibtool`. A light/dark **pair** is written
   into the same asset catalog as a colour set and referenced from the
@@ -745,8 +750,7 @@ for before.
   icon is missing / not a PNG, or `actool` can't run, the build falls
   back to the system default rather than failing — the build prints a
   one-line icon summary either way (`swift-pwa: app icon ← icon.png`, or
-  the fallback reason). Alternate-icon support
-  and dark/tinted icon variants are still queued. To customize the
+  the fallback reason). To customize the
   launch screen beyond "icon on the background colour", drop your own compiled
   `LaunchScreen.storyboardc` into `<App>.app/` after the build for now.
 

@@ -74,6 +74,14 @@
             try await readDir(uri: uri, loadingTimeout: nil)
         }
 
+        public func mkdir(uri: String, recursive: Bool) async throws {
+            _ = try await AndroidRPC.call(
+                "fs.mkdirContentUri",
+                ContentURIMkdirArgs(uri: uri, recursive: recursive),
+                as: NoResult.self
+            )
+        }
+
         public func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
             let milliseconds = loadingTimeout.map { duration -> Int in
                 let (seconds, attoseconds) = duration.components
@@ -142,6 +150,12 @@
         /// True when the provider still marked the listing as loading once
         /// the wait ran out.
         let loading: Bool?
+    }
+
+    /// `{"uri": "...", "recursive": bool}` for `fs.mkdirContentUri`.
+    struct ContentURIMkdirArgs: Encodable {
+        let uri: String
+        let recursive: Bool
     }
 
     /// `{"uri": "...", "loadingTimeoutMs": n}`; the Kotlin side's default

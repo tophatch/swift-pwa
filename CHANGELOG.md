@@ -46,6 +46,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read an empty drop, and `Scripts/verify-ios-drop.sh` shows what a device
   delivers beside Safari and a Notes control.
 
+### Added
+
+- **Android: an app can write into a folder the user picked** (#318).
+  `dialog.openDirectory` takes a read *and write* grant, yet nothing could
+  create a document in the folder: `fs.mkdir` refused `content://`, and
+  `fs.writeBinary` could only overwrite a document that already existed. So an
+  app syncing a small file per device beside a shared library (in a Drive
+  folder, say) could read every other device's file and never publish its
+  own. Instead of a separate `createDocument` call, the tree URI followed by
+  `/` and a relative path now names a document below the folder for every
+  `fs.*` call, the shape a path has on desktop, and writes create what's
+  missing: `fs.writeText` / `fs.writeBinary` the file, in a folder that exists,
+  and `fs.mkdir` the folders. Each name is looked up first — in a refreshed
+  listing if the provider's cache doesn't have it, since Drive allows two
+  files of one name — so writing again overwrites, never duplicates.
+  `FsContentResolver` gains `mkdir(uri:recursive:)`, with a default that
+  refuses.
+
+  Verified on a Galaxy Z Fold7. `Scripts/verify-android-saf-tree.sh` (local
+  storage): `.sync/progress/phone.json` made, written twice, read back and
+  listed by path, and on the device once with the second write; a write into
+  a missing folder fails. `Scripts/verify-android-saf-drive.sh` (Drive): the
+  file arrives on a Mac through Drive for desktop once, with the second write,
+  including from a fresh install with the file already there. Built by the
+  0.11.7 CLI, `fs.mkdir` refuses the path.
+
 ### Changed
 
 - **`fs.readDir` entries carry `size` and `modified`** (#317), on every

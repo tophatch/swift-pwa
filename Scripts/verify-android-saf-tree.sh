@@ -20,9 +20,14 @@
 #      "is the folder I was given still there?" — reporting a directory.
 #   8. #317: each listed entry carries `size` and `modified`, so a rescan
 #      needs no `fs.metadata` per file.
+#   9. #318: the tree URI plus a relative path names a document below it:
+#      `fs.mkdir` makes `.sync/progress`, `fs.writeText` creates a file there
+#      and overwrites it in place the second time, `fs.readText` and
+#      `fs.readDir` read it back by the same path, a write into a folder that
+#      doesn't exist fails, and the files are really there (checked with adb).
 #
 # With -r the same app is built by the last release's CLI against the
-# released package: the control for 7 and 8, which have to fail there. Both
+# released package: the control for 7, 8 and 9, which have to fail there. Both
 # the local storage provider and Drive's refuse a query on a tree URI
 # ("Unsupported Uri"), so 7 is a control on either.
 #
@@ -120,7 +125,21 @@ if [ "$RELEASED" -eq 1 ]; then
     CLI="$WORK/swift-pwa-macos-$(uname -m)"
     chmod +x "$CLI"
 else
-    # The same, scrolling the list up between tries: a picker shows a folder's
+    # Tap the first node whose content description is exactly $1 (an icon button).
+ui_tap_desc() {
+    local want="$1" bounds x1 y1 x2 y2
+    ui_dump || return 1
+    bounds="$(tr '<' '\n' < "$DUMP" \
+        | grep -F "content-desc=\"$want\"" \
+        | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' \
+        | head -1 || true)"
+    [ -n "$bounds" ] || return 1
+    bounds="${bounds#bounds=\"}"; bounds="${bounds%\"}"
+    IFS=',[]' read -r _ x1 y1 _ x2 y2 _ <<< "$bounds"
+    "${ADB[@]}" shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))
+}
+
+# The same, scrolling the list up between tries: a picker shows a folder's
 # children alphabetically, and on a small screen Download is below the fold.
 ui_tap_text_scrolling() {
     local size w h
@@ -280,6 +299,29 @@ cat > "$APP_DIR/web/index.html" <<HTML
         });
       });
     }).then(function () {
+      // #318: write into the picked folder by path, as on desktop.
+      return step('write', function () {
+        var dir = tree + '/.sync/progress';
+        var file = dir + '/phone.json';
+        return __SWIFT_PWA__.invoke('fs.mkdir', { path: dir, recursive: true })
+          .then(function () { return __SWIFT_PWA__.invoke('fs.writeText', { path: file, contents: '{"page":1}' }); })
+          .then(function () { return __SWIFT_PWA__.invoke('fs.writeText', { path: file, contents: '{"page":2}' }); })
+          .then(function () { return __SWIFT_PWA__.invoke('fs.readText', { path: file }); })
+          .then(function (r) {
+            return __SWIFT_PWA__.invoke('fs.readDir', { path: dir }).then(function (l) {
+              var names = (l.entries || l).map(function (e) { return e.name; }).join(',');
+              return __SWIFT_PWA__.invoke('fs.exists', { path: dir + '/nope.json' }).then(function (e) {
+                return 'read=' + r.contents + ' names=' + names + ' missing-exists=' + e.exists;
+              });
+            });
+          });
+      });
+    }).then(function () {
+      return step('writenoparent', function () {
+        return __SWIFT_PWA__.invoke('fs.writeText', { path: tree + '/no-such-folder/x.json', contents: 'x' })
+          .then(function () { return 'WROTE'; });
+      });
+    }).then(function () {
       return step('metadir', function () {
         var sub = window.__entries.filter(function (e) { return e.isDir; })[0];
         return __SWIFT_PWA__.invoke('fs.metadata', { path: sub.path })
@@ -383,6 +425,25 @@ SKIP_REASON=""
 # The picker opens on "Files on <device>". The library is under Download, so:
 # open Download, open the library folder, then confirm twice.
 drive_picker() {
+    # The picker opens wherever it was last used: already in the library
+    # (a run before this one), or in another root with a Download folder of
+    # its own (Drive). Otherwise go to the device's storage through the roots
+    # drawer.
+    ui_dump || true
+    if grep -qF "text=\"Files in $LIBRARY\"" "$DUMP"; then
+        ui_tap_text "USE THIS FOLDER" || { SKIP_REASON="no 'USE THIS FOLDER' button"; return 1; }
+        "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
+        ui_tap_text "ALLOW" || ui_tap_text "Allow" || {
+            SKIP_REASON="no 'ALLOW' button on the confirmation dialog"; return 1
+        }
+        return 0
+    fi
+    local device
+    device="$("${ADB[@]}" shell settings get global device_name | tr -d '\r')"
+    if ui_tap_desc "Show roots"; then
+        "${ADB[@]}" shell sleep 2 >/dev/null 2>&1 || true
+        ui_tap_text "$device" && "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
+    fi
     ui_tap_text_scrolling "Download" || { SKIP_REASON="no 'Download' row in the picker"; return 1; }
     "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
     ui_tap_text_scrolling "$LIBRARY" || { SKIP_REASON="no '$LIBRARY' row in the picker"; return 1; }
@@ -458,6 +519,11 @@ expect "each entry carries its size and modified time (#317)" \
     'SAFPROBE sizes chapters:[^,]*:time,one.txt:14:time,two.txt:15:time'
 expect "the picked folder's own URI answers metadata and exists (#319)" \
     'SAFPROBE metatree isDir=true exists=true'
+# #318, then the files themselves, read on the device rather than through the
+# app: one phone.json, holding the second write.
+expect "a path below the tree is made, written, overwritten and read back (#318)" \
+    'SAFPROBE write read={"page":2} names=phone.json missing-exists=false'
+expect "a write into a folder that doesn't exist fails (#318)" 'SAFPROBE writenoparent THREW'
 expect "metadata reports a directory as a directory" \
     'SAFPROBE metadir isDir=true isFile=false'
 expect "metadata still reports a file as a file, with its size" \
@@ -472,6 +538,15 @@ expect "a file one directory down serves too, which is where the walk descends" 
 expect "a path that is not in the tree 404s with a body" \
     'SAFPROBE servemissing status=404 body=[1-9][0-9]*'
 expect "the page ran to the end" 'SAFPROBE finished'
+
+on_disk=$("${ADB[@]}" shell "ls $DEVICE_ROOT/.sync/progress && cat $DEVICE_ROOT/.sync/progress/phone.json" 2>/dev/null \
+    | tr -d '\r' | tr '\n' ' ' | sed 's/ *$//' || true)
+if [ "$on_disk" = 'phone.json {"page":2}' ]; then
+    echo "PASS  the file is on the device, once, with the second write (#318)"
+else
+    echo "FAIL  the file on the device: '$on_disk'"
+    failed=1
+fi
 
 echo
 if "${ADB[@]}" shell dumpsys package "$PKG" 2>/dev/null | grep -q "MANAGE_EXTERNAL_STORAGE"; then

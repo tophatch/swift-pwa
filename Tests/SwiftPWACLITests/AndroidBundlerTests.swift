@@ -831,6 +831,18 @@ struct AndroidBundlerUnitTests {
         #expect(bridge.contains("projection, 0L, refresh = false, row = match)"))
     }
 
+    @Test("A content path below a picked tree resolves, and writes create what's missing")
+    func contentPathsCreate() {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("private fun resolveContentPath(raw: String, create: Create = Create.NOTHING"))
+        #expect(plugins.contains("\"fs.mkdirContentUri\" -> fsMkdirContentUri(json, done)"))
+        #expect(plugins.contains("resolveContentPath(uri, Create.FILE, mimeTypeFor(uri))"))
+        // Looked up in a refreshed listing before anything is made.
+        #expect(plugins
+            .contains("SafChildren.query(activity.contentResolver, children, projection, 10_000L, row = named)"))
+        #expect(plugins.contains("DocumentsContract.createDocument("))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

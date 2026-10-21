@@ -1095,10 +1095,13 @@ On **Android**, a `path` can be a `content://` URI from a SAF picker as well as
 a filesystem path, and `fs.readDir` walks a **tree** URI from
 `dialog.openDirectory` — each entry's `path` is its own document URI, which
 `fs.readBinary` and `fs.readDir` both accept, so a folder the user picked is a
-library you can list, descend and read. See
-[android-setup.md](android-setup.md#walking-a-folder-the-user-picked); the
-remaining directory-style calls (`mkdir` / `remove` / `copy` / `rename`) still
-refuse a content URI, because SAF has no POSIX equivalent for them.
+library you can list, descend and read. The tree URI followed by `/` and a
+relative path names a document below it, for every call, and `fs.writeText` /
+`fs.writeBinary` create the file (in a folder that exists) and `fs.mkdir` the
+folders, so writing into a picked folder is the same code as on desktop:
+`tree + '/.sync/progress/phone.json'`. See
+[android-setup.md](android-setup.md#walking-a-folder-the-user-picked); `remove`
+/ `copy` / `rename` still refuse a content URI.
 
 **Zip extraction (content packs)** — available only when an archive
 extractor is injected: `ctx.use(FsPlugin(SystemFs(extractor: ZIPExtractor())))`
@@ -1135,7 +1138,8 @@ On **Android**, `dialog.openFile` returns a `content://` SAF URI, and you can
 pass it straight to `fs.listZip` / `fs.extractZip` as `from` — they read it
 via the system `ContentResolver`, so a user-picked archive extracts off-bridge
 with no `readBinary`/`writeBinary` materialize step. (The destination `to` must
-still be a real path under `app.dataDir()`; SAF exposes no writable tree.)
+still be a real path under `app.dataDir()`: extraction writes through the
+filesystem, not through a provider.)
 
 **Zip creation (authoring / re-exporting a pack)** — the inverse of
 `fs.extractZip`, gated on the same injected extractor. For the common

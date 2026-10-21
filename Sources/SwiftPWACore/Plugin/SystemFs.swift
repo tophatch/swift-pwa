@@ -130,7 +130,8 @@ public final class SystemFs: Fs, @unchecked Sendable {
 
     public func mkdir(path: String, recursive: Bool) async throws {
         if Self.isContentURI(path) {
-            throw contentURIOperationUnsupported("fs.mkdir", path: path)
+            // A folder below a picked tree: `<tree>/<relative path>` (#318).
+            return try await requireContentResolver("fs.mkdir").mkdir(uri: path, recursive: recursive)
         }
         do {
             try FileManager.default.createDirectory(

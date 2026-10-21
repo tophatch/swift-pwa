@@ -150,12 +150,12 @@ public extension Fs {
 /// otherwise platform-agnostic `SystemFs` defers URI-shaped paths to a
 /// resolver supplied by `SwiftPWAAndroid` (see `AndroidContentResolver`).
 ///
-/// `mkdir` / `readDir` / `copy` / `rename` aren't part of the contract:
-/// SAF doesn't expose directory-style operations on content URIs in a
-/// shape that maps cleanly onto the POSIX-flavoured Fs surface, so
-/// those operations throw on a `content://` argument rather than
-/// silently misbehaving. `exists` is satisfied by a successful
-/// `metadata` call.
+/// A picked tree's URI followed by `/` and a relative path names a document
+/// below it — `<tree>/.sync/progress/phone.json` — for every call here, and
+/// ``writeBinary(uri:data:)`` and ``mkdir(uri:recursive:)`` create what's
+/// missing (#318). `remove` / `copy` / `rename` aren't part of the contract
+/// and throw on a `content://` argument rather than silently misbehaving.
+/// `exists` is satisfied by a successful `metadata` call.
 public protocol FsContentResolver: Sendable {
     func readBinary(uri: String) async throws -> Data
     func writeBinary(uri: String, data: Data) async throws
@@ -174,6 +174,11 @@ public protocol FsContentResolver: Sendable {
     /// default) for a provider that marks its listing as still loading, and
     /// throwing `E_STILL_LOADING` if it still is (#316).
     func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry]
+
+    /// Create the folder a content path names, as `mkdir` does: every missing
+    /// folder with `recursive`, otherwise only the last, under a parent that
+    /// exists.
+    func mkdir(uri: String, recursive: Bool) async throws
 }
 
 public extension FsContentResolver {
@@ -188,6 +193,14 @@ public extension FsContentResolver {
 
     func readDir(uri: String, loadingTimeout _: Duration?) async throws -> [FsEntry] {
         try await readDir(uri: uri)
+    }
+
+    /// Default for a resolver written before folders could be created.
+    func mkdir(uri: String, recursive _: Bool) async throws {
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "fs.mkdir: this content resolver cannot create \(uri)"
+        )
     }
 }
 

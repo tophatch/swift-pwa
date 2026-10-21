@@ -2673,6 +2673,7 @@ enum AndroidTemplates {
                 "fs.writeContentUri" -> fsWriteContentUri(json, done)
                 "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
                 "fs.readDirContentUri" -> fsReadDirContentUri(json, done)
+                "fs.mkdirContentUri" -> fsMkdirContentUri(json, done)
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
@@ -4587,7 +4588,10 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val parsed = Uri.parse(uri)
+                    val parsed = resolveContentPath(uri) ?: run {
+                        done(null, "swift-pwa: fs.readContentUri: $uri doesn't exist")
+                        return@execute
+                    }
                     val bytes = activity.contentResolver.openInputStream(parsed)?.use {
                         it.readBytes()
                     } ?: run {
@@ -4613,7 +4617,12 @@ enum AndroidTemplates {
             backgroundExecutor.execute {
                 try {
                     val bytes = Base64.decode(b64, Base64.DEFAULT)
-                    val parsed = Uri.parse(uri)
+                    // A file that isn't there yet is created in its folder,
+                    // which has to exist, as on desktop (#318).
+                    val parsed = resolveContentPath(uri, Create.FILE, mimeTypeFor(uri)) ?: run {
+                        done(null, "swift-pwa: fs.writeContentUri: the folder for $uri doesn't exist")
+                        return@execute
+                    }
                     // Mode "rwt" truncates the existing document
                     // before writing — matches the desktop semantics
                     // of `writeBinary` overwriting in place. SAF
@@ -4684,7 +4693,10 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val tree = Uri.parse(uriString)
+                    val tree = resolveContentPath(uriString) ?: run {
+                        done(null, "swift-pwa: fs.readDir: $uriString doesn't exist")
+                        return@execute
+                    }
                     val documentId = if (DocumentsContract.isDocumentUri(activity, tree)) {
                         DocumentsContract.getDocumentId(tree)
                     } else {
@@ -4755,6 +4767,99 @@ enum AndroidTemplates {
                 uri
             }
 
+        /// A tree or document URI under a picked tree, then optionally `/` and
+        /// a path below it — `<folder>/.sync/progress/phone.json` (#318). A
+        /// provider's document ids are its own (percent-encoded, no `/`), so
+        /// the URI is what an app holds and the path is what it names, the way
+        /// a directory and a relative path are on desktop.
+        private val contentPathPattern =
+            Regex("^(content://[^/?#]+/tree/[^/?#]+(?:/document/[^/?#]+)?)((?:/[^?#]*)?)$")
+
+        /// What `create` may make while resolving a content path.
+        private enum class Create { NOTHING, FILE, FOLDERS, LAST_FOLDER }
+
+        /// The document a content path names, or null where a segment of it
+        /// doesn't exist and `create` doesn't make it. Anything that isn't a
+        /// tree-based URI with a path — a single document from
+        /// `dialog.openFile`, say — is itself.
+        ///
+        /// Each name is looked up in the provider's cache, then, if it isn't
+        /// there, in a refreshed listing (#316) before anything is created:
+        /// Drive allows two files of one name, and a stale cache would
+        /// otherwise get a second `progress.json` beside the first.
+        private fun resolveContentPath(raw: String, create: Create = Create.NOTHING, mimeType: String? = null): Uri? {
+            val match = contentPathPattern.matchEntire(raw) ?: return Uri.parse(raw)
+            var current = folderDocument(Uri.parse(match.groupValues[1]))
+            val names = match.groupValues[2].split('/').filter { it.isNotEmpty() }.map { Uri.decode(it) }
+            for ((index, name) in names.withIndex()) {
+                val last = index == names.size - 1
+                val parentId = DocumentsContract.getDocumentId(current)
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(current, parentId)
+                val projection = arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                )
+                val parent = current
+                val named = { cursor: android.database.Cursor ->
+                    val id = cursor.getString(0)
+                    val display = id?.let { cursor.getString(1) ?: it.substringAfterLast('/') }
+                    if (id != null && display == name) DocumentsContract.buildDocumentUriUsingTree(parent, id) else null
+                }
+                val found = SafChildren.query(
+                    activity.contentResolver, children, projection, 0L, refresh = false, row = named
+                ).rows.firstOrNull()
+                    ?: SafChildren.query(activity.contentResolver, children, projection, 10_000L, row = named)
+                        .rows.firstOrNull()
+                if (found != null) {
+                    current = found
+                    continue
+                }
+                val makeFolder = (!last && create == Create.FOLDERS) ||
+                    (last && (create == Create.FOLDERS || create == Create.LAST_FOLDER))
+                val made = when {
+                    makeFolder -> DocumentsContract.createDocument(
+                        activity.contentResolver, current, DocumentsContract.Document.MIME_TYPE_DIR, name
+                    )
+                    last && create == Create.FILE -> DocumentsContract.createDocument(
+                        activity.contentResolver, current, mimeType ?: "application/octet-stream", name
+                    )
+                    else -> null
+                } ?: return null
+                current = made
+            }
+            return current
+        }
+
+        private fun mimeTypeFor(raw: String): String =
+            android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(raw.substringAfterLast('/').substringAfterLast('.', "").lowercase())
+                ?: "application/octet-stream"
+
+        /// `fs.mkdir` on a content path: the folders it names, made the way
+        /// `mkdir` makes them — every missing one with `recursive`, otherwise
+        /// only the last, under a parent that exists, and an error if it's
+        /// already there.
+        private fun fsMkdirContentUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uri = json.optString("uri", "")
+            val recursive = json.optBoolean("recursive", false)
+            backgroundExecutor.execute {
+                try {
+                    if (!recursive && resolveContentPath(uri) != null) {
+                        done(null, "swift-pwa: fs.mkdir: $uri already exists")
+                        return@execute
+                    }
+                    resolveContentPath(uri, if (recursive) Create.FOLDERS else Create.LAST_FOLDER)
+                        ?: run {
+                            done(null, "swift-pwa: fs.mkdir: a parent of $uri doesn't exist (pass recursive: true)")
+                            return@execute
+                        }
+                    done(null, null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.mkdir failed for $uri: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
         private fun fsContentUriMetadata(json: JSONObject, done: (String?, String?) -> Unit) {
             val uri = json.optString("uri", "")
             if (uri.isEmpty()) {
@@ -4763,7 +4868,10 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val parsed = folderDocument(Uri.parse(uri))
+                    val parsed = resolveContentPath(uri)?.let(::folderDocument) ?: run {
+                        done(null, "swift-pwa: fs.contentUriMetadata: $uri doesn't exist")
+                        return@execute
+                    }
                     // OpenableColumns.SIZE is universally supported
                     // for openable content URIs; LAST_MODIFIED comes
                     // from DocumentsContract.Document and is

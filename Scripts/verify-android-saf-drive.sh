@@ -24,7 +24,10 @@
 #   3. Scripts/verify-android-saf-drive.sh --folder <...>
 #      A file added now has to appear in the first listing. Then the two ends
 #      of `loadingTimeoutMs`: 1 ms has to fail with E_STILL_LOADING, and 0 has
-#      to return the cached listing without an error.
+#      to return the cached listing without an error. And #318: a file written
+#      by path into `.sync/progress` below the folder, twice, has to arrive on
+#      this Mac once, holding the second write — Drive allows two files of one
+#      name, so a stale lookup would make a second one.
 #
 # Usage:
 #   Scripts/verify-android-saf-drive.sh --folder <path> [-s <adb-serial>] [--pick] [--released] [-k]
@@ -105,6 +108,15 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
 <script>
 window.pick = () => { __SWIFT_PWA__.invoke('dialog.openDirectory', {})
   .then((r) => localStorage.setItem('tree', r.path || '')); return 'picking'; };
+window.write = async (stamp) => {
+  const dir = localStorage.getItem('tree') + '/.sync/progress';
+  try {
+    await __SWIFT_PWA__.invoke('fs.mkdir', { path: dir, recursive: true });
+    await __SWIFT_PWA__.invoke('fs.writeText', { path: dir + '/fold7.json', contents: '{"stamp":"' + stamp + '-1"}' });
+    await __SWIFT_PWA__.invoke('fs.writeText', { path: dir + '/fold7.json', contents: '{"stamp":"' + stamp + '-2"}' });
+    return 'written';
+  } catch (e) { return 'THREW ' + (e.code || '') + ' ' + e.message; }
+};
 window.list = async (timeout) => {
   const args = { path: localStorage.getItem('tree') };
   if (timeout != null) args.loadingTimeoutMs = timeout;
@@ -184,6 +196,22 @@ else
         echo "PASS a wait too short to see the refresh fails as E_STILL_LOADING"
     else
         echo "FAIL a 1 ms wait didn't fail as E_STILL_LOADING"
+        FAILED=1
+    fi
+    STAMP=$(date +%H%M%S)
+    wrote=$(js "write('$STAMP')")
+    echo "   write by path: $wrote"
+    progress="$FOLDER/.sync/progress"
+    for _ in $(seq 1 60); do
+        [ -f "$progress/fold7.json" ] && grep -q "$STAMP-2" "$progress/fold7.json" 2>/dev/null && break
+        sleep 3
+    done
+    copies=$(ls "$progress" 2>/dev/null | grep -c "^fold7" || true)
+    echo "   on this Mac: $(ls "$progress" 2>/dev/null | tr '\n' ' ')— $(cat "$progress/fold7.json" 2>/dev/null)"
+    if [ "$wrote" = '"written"' ] && [ "$copies" -eq 1 ] && grep -q "$STAMP-2" "$progress/fold7.json" 2>/dev/null; then
+        echo "PASS a file written by path below the folder reached Drive once, with the second write (#318)"
+    else
+        echo "FAIL the file written by path: $copies copies on Drive"
         FAILED=1
     fi
     cached=$(js "list(0)")

@@ -20,6 +20,7 @@ struct SystemFsContentURITests {
         var metas: [String] = []
         var lists: [String] = []
         var listTimeouts: [Duration?] = []
+        var mkdirs: [String] = []
         var nextRead: Result<Data, any Error> = .success(Data())
         var nextWrite: (any Error)?
         var nextMeta: Result<FsMetadata, any Error> = .success(
@@ -44,6 +45,10 @@ struct SystemFsContentURITests {
 
         func readDir(uri: String) async throws -> [FsEntry] {
             try await readDir(uri: uri, loadingTimeout: nil)
+        }
+
+        func mkdir(uri: String, recursive: Bool) async throws {
+            mkdirs.append("\(uri) recursive=\(recursive)")
         }
 
         func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
@@ -166,6 +171,26 @@ struct SystemFsContentURITests {
         }
     }
 
+    @Test("mkdir below a picked tree goes to the resolver, as mkdir")
+    func mkdirRoutes() async throws {
+        let r = RecordingResolver()
+        try await withResolver(r) {
+            let fs = SystemFs()
+            try await fs.mkdir(path: "content://example/tree/root/.sync/progress", recursive: true)
+            try await fs.mkdir(path: "content://example/tree/root/one", recursive: false)
+            #expect(r.mkdirs == [
+                "content://example/tree/root/.sync/progress recursive=true",
+                "content://example/tree/root/one recursive=false"
+            ])
+        }
+        // A resolver written before folders could be made refuses.
+        SystemFs.setContentResolver(ListlessResolver())
+        defer { SystemFs.setContentResolver(nil) }
+        await #expect(throws: BridgeError.self) {
+            try await SystemFs().mkdir(path: "content://example/tree/root/x", recursive: true)
+        }
+    }
+
     @Test("the remaining directory-style ops on content:// throw unsupported")
     func directoryOpsUnsupported() async throws {
         // These should fail regardless of whether a resolver is
@@ -176,9 +201,6 @@ struct SystemFsContentURITests {
         let r = RecordingResolver()
         try await withResolver(r) {
             let fs = SystemFs()
-            await #expect(throws: BridgeError.self) {
-                try await fs.mkdir(path: "content://example/dir", recursive: false)
-            }
             await #expect(throws: BridgeError.self) {
                 try await fs.remove(path: "content://example/dir", recursive: false)
             }

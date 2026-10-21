@@ -855,6 +855,26 @@ Drive — so walk lazily rather than eagerly for a deep tree. Each entry carries
 `size` and `modified` from that same query, under the same rule, so a rescan
 that only wants to know what changed needs no `fs.metadata` per file.
 
+**Writing into the folder is a path below it.** The tree URI followed by `/`
+and a relative path names a document under the picked folder — the same shape
+a path takes on desktop — for every `fs.*` call, and the writes create what's
+missing: `fs.writeText` / `fs.writeBinary` create the file in a folder that
+exists, and `fs.mkdir` the folders (all of them with `recursive: true`). An app
+that keeps a small file per device beside a shared library writes it the same
+way everywhere:
+
+```js
+const dir = tree + '/.sync/progress';                 // a path on desktop
+await __SWIFT_PWA__.invoke('fs.mkdir', { path: dir, recursive: true });
+await __SWIFT_PWA__.invoke('fs.writeText', { path: dir + '/phone.json', contents });
+const other = await __SWIFT_PWA__.invoke('fs.readText', { path: dir + '/tablet.json' });
+```
+
+Each name is looked up before anything is made, in a refreshed listing if the
+provider's cache doesn't have it, because Drive allows two files of one name
+and a stale lookup would otherwise create a second `phone.json` beside the
+first. Writing to a file that exists overwrites it in place.
+
 **A listing is current, not the provider's cache.** Drive answers a listing
 from its local cache, and that cache doesn't catch up by itself: a file
 uploaded from a computer stayed out of every listing for as long as anyone

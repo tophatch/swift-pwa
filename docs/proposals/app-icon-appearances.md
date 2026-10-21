@@ -194,6 +194,13 @@ examples are not the scaffold), with a control that has to succeed.
   style drew the tinted art (half-black/half-white art kept its split, so it
   wasn't the light art auto-tinted). `set` settled only after the alert's OK,
   and the alternate's own appearances applied.
+- **Clear, on the same iPhone, two builds.** (A) The classic `.appiconset`
+  with dark and tinted entries: the Clear style kept the tinted art's split,
+  so Clear draws from the tinted art. (B) The same art as generated Icon
+  Composer `.icon` files, the alternate included, which is how Apple's
+  alternate-icons article now builds them: Clear kept the split, the
+  alternate switched and showed its own split in Clear, and the Default style
+  looked identical to (A).
 
 What this means for the design:
 
@@ -269,10 +276,17 @@ there.
    `icon` and every per-target `icon`; `alternate_icons`; validating `name`.
 2. **Bridge + Swift:** `app.icon.list` / `app.icon.set`, an `AppContext`
    requirement whose default implementation is unsupported, and typed codegen.
-3. **iOS:** appearance entries and alternate sets in the catalog the bundler
-   already compiles; `setAlternateIconName` in `SwiftPWAWebKit`.
-4. **macOS:** the generated `.icon`, used only when an appearance is set; the
-   alternates behaviour R2 settles.
+3. **Apple, one generator:** when `dark` or `tinted` is set, write one
+   Icon Composer `.icon` per icon (primary and alternates) and compile them
+   with the catalog the bundler already builds. Measured to work on iOS
+   (Clear included) and macOS (all six styles). If `actool` can't read
+   `.icon` (an Xcode older than the documented 26), fall back to the classic
+   `.appiconset` on iOS (measured: dark, tinted and Clear work) and to today's
+   `.icns` on macOS, reporting why through `IconOutcome`. CI's `macos-15`
+   runners default to an older Xcode, so the smoke jobs either select Xcode 26
+   or cover the fallback.
+4. **iOS runtime:** `setAlternateIconName` in `SwiftPWAWebKit`. **macOS:**
+   alternates report `supported: false` (see above).
 5. **Android:** an adaptive icon when `tinted` is set; aliases in the generated
    manifest; the switch in the generated Kotlin; a warning for a tinted PNG
    without alpha.

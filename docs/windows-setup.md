@@ -946,6 +946,13 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**`fs.readDir` and `fs.metadata` report a symbolic link itself, not what it
+names.** They read a file's kind, size and time from its directory entry
+(`GetFileAttributesExW`) rather than through Foundation, which opens the file
+to answer — and opening a OneDrive placeholder downloads it, so listing a
+OneDrive folder used to fetch every file in it. Links are rare on Windows; a
+cloud library isn't.
+
 **A logoff or shutdown gets at most 4.5 s.** Windows ends the process as soon
 as `WM_ENDSESSION` returns, so the runtime pumps messages and the main queue
 inside that handler until every page's teardown and `ctx.beforeClose` (reason

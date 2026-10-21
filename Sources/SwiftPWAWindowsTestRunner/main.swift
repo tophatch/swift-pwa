@@ -456,6 +456,31 @@
         }
     }
 
+    /// What a listing and `metadata` report on Windows comes from the
+    /// directory entry rather than an opened file, which for a OneDrive
+    /// placeholder is a download. The same answers either way.
+    func fsReadsFactsWithoutOpening() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fs = SystemFs()
+        let file = dir.appendingPathComponent("book.pdf").path
+        try await fs.writeText(path: file, contents: "abcdef")
+        try await fs.mkdir(path: dir.appendingPathComponent("series").path, recursive: false)
+        let entries = try await fs.readDir(path: dir.path)
+        let book = try require(entries.first { $0.name == "book.pdf" }, "book.pdf entry")
+        let series = try require(entries.first { $0.name == "series" }, "series entry")
+        try expect(book.isFile && !book.isDir && book.size == 6, "book.pdf: \(book)")
+        try expect(series.isDir && !series.isFile, "series: \(series)")
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        try expect(abs((book.modified ?? 0) - now) < 60000, "book.pdf modified \(book.modified ?? -1), now \(now)")
+        let meta = try await fs.metadata(path: file)
+        try expect(meta.size == 6 && meta.isFile && meta.modified == book.modified, "metadata: \(meta)")
+        let exists = try await fs.exists(path: file)
+        let absentExists = try await fs.exists(path: file + ".absent")
+        try expect(exists, "exists(book.pdf) was false")
+        try expect(!absentExists, "exists(absent) was true")
+    }
+
     let cases: [(String, () async throws -> Void)] = [
         ("installAndRelaunch errors when no update has been staged", installAndRelaunchWithoutStagedUpdate),
         ("currentExecutablePath honours the explicit override", currentExecutablePathOverride),
@@ -476,7 +501,12 @@
         ("WIC encode keeps red and blue where they were (PNG + JPEG)", wicPreservesChannelOrder),
         ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData),
         ("app.openFile names a Windows path by its last component", openFileNamesAWindowsPath),
-        ("a reply's keys are sorted and malformed bytes refused", envelopeSortsAndChecksReplies)
+        ("a reply's keys are sorted and malformed bytes refused", envelopeSortsAndChecksReplies),
+        (
+            "readDir, metadata and exists report kind, size and time from the directory entry",
+            fsReadsFactsWithoutOpening
+        ),
+        ("fs.thumbnail gives the shell's thumbnail, nil for an unknown type", fsThumbnailFromTheShell)
     ]
 
     var passed = 0

@@ -1,4 +1,7 @@
 import Foundation
+#if os(Windows)
+    import WinSDK
+#endif
 
 /// Default `Fs` implementation backed by `FileManager` and
 /// `Data(contentsOf:)`. Portable across every backend: Apple
@@ -125,7 +128,7 @@ public final class SystemFs: Fs, @unchecked Sendable {
                 return false
             }
         }
-        return FileManager.default.fileExists(atPath: path)
+        return Self.facts(atPath: path) != nil
     }
 
     public func mkdir(path: String, recursive: Bool) async throws {
@@ -209,19 +212,17 @@ public final class SystemFs: Fs, @unchecked Sendable {
         let sorted = entries.sorted()
         let baseURL = URL(fileURLWithPath: path, isDirectory: true)
         return sorted.map { name in
-            let full = baseURL.appendingPathComponent(name).path
-            var isDir: ObjCBool = false
-            let exists = fm.fileExists(atPath: full, isDirectory: &isDir)
-            // Through a link to what it names, as `fileExists` does, so a
-            // linked file reports the file's size rather than the link's.
-            let attrs = try? fm.attributesOfItem(atPath: (full as NSString).resolvingSymlinksInPath)
+            // `isDirectory` given, or Foundation stats the path to find out —
+            // on Windows by opening it (see `facts(atPath:)`).
+            let full = baseURL.appendingPathComponent(name, isDirectory: false).path
+            let facts = Self.facts(atPath: full)
             return FsEntry(
                 name: name,
                 path: full,
-                isDir: exists && isDir.boolValue,
-                isFile: exists && !isDir.boolValue,
-                size: (attrs?[.size] as? Int64) ?? (attrs?[.size] as? Int).map(Int64.init),
-                modified: (attrs?[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970 * 1000) }
+                isDir: facts?.isDir ?? false,
+                isFile: facts.map { !$0.isDir } ?? false,
+                size: facts?.size,
+                modified: facts?.modified
             )
         }
     }
@@ -258,29 +259,78 @@ public final class SystemFs: Fs, @unchecked Sendable {
         if Self.isContentURI(path) {
             return try await requireContentResolver("fs.metadata").metadata(uri: path)
         }
-        let fm = FileManager.default
-        let attrs: [FileAttributeKey: Any]
-        do {
-            attrs = try fm.attributesOfItem(atPath: path)
-        } catch {
-            throw BridgeError(
-                code: BridgeError.handler,
-                message: "fs.metadata failed at \(path): \(error.localizedDescription)"
+        #if os(Windows)
+            // Without opening the file, which for a cloud placeholder is a
+            // download (see `facts(atPath:)`).
+            guard let facts = Self.facts(atPath: path) else {
+                throw BridgeError(code: BridgeError.handler, message: "fs.metadata failed at \(path): no such file")
+            }
+            return FsMetadata(size: facts.size, isDir: facts.isDir, isFile: !facts.isDir, modified: facts.modified)
+        #else
+            let fm = FileManager.default
+            let attrs: [FileAttributeKey: Any]
+            do {
+                attrs = try fm.attributesOfItem(atPath: path)
+            } catch {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "fs.metadata failed at \(path): \(error.localizedDescription)"
+                )
+            }
+            let kind = attrs[.type] as? FileAttributeType
+            let isDir = (kind == .typeDirectory)
+            // `typeRegular` is the canonical "plain file"; symlinks /
+            // sockets / devices fall through and report `isFile: false`.
+            let isFile = (kind == .typeRegular)
+            // Nil rather than 0 when the attribute is absent: `size` means
+            // "unknown" now, and a real `stat` always has one — so this never
+            // reports nil for a path, which is what makes nil meaningful when a
+            // content provider does.
+            let size = (attrs[.size] as? Int64) ?? (attrs[.size] as? Int).map(Int64.init)
+            let modified = (attrs[.modificationDate] as? Date)
+                .map { Int64($0.timeIntervalSince1970 * 1000) }
+            return FsMetadata(size: size, isDir: isDir, isFile: isFile, modified: modified)
+        #endif
+    }
+
+    /// What a listing reports of a path — kind, size, modification time — or
+    /// nil when nothing is there.
+    ///
+    /// On Windows, read from the directory entry (`GetFileAttributesExW`)
+    /// rather than through `FileManager`: swift-corelibs-foundation answers
+    /// `fileExists`, `attributesOfItem`, `resolvingSymlinksInPath`,
+    /// `resourceValues` and a file URL's `appendingPathComponent(_:)` (which
+    /// stats the result to learn whether it's a directory) by opening the
+    /// file, and opening a OneDrive placeholder downloads it — measured, each
+    /// of the five turned a placeholder into a local file, where
+    /// `contentsOfDirectory` didn't. So listing a OneDrive folder downloaded
+    /// every file in it. The price is that a symbolic link
+    /// reports itself rather than what it names, which on Windows is rare.
+    static func facts(atPath path: String) -> (isDir: Bool, size: Int64?, modified: Int64?)? {
+        #if os(Windows)
+            var data = WIN32_FILE_ATTRIBUTE_DATA()
+            let found = path.withCString(encodedAs: UTF16.self) {
+                GetFileAttributesExW($0, GetFileExInfoStandard, &data)
+            }
+            guard found else { return nil }
+            let isDir = data.dwFileAttributes & DWORD(FILE_ATTRIBUTE_DIRECTORY) != 0
+            let size = Int64(data.nFileSizeHigh) << 32 | Int64(data.nFileSizeLow)
+            // 100 ns ticks since 1601 to milliseconds since 1970.
+            let ticks = Int64(data.ftLastWriteTime.dwHighDateTime) << 32 | Int64(data.ftLastWriteTime.dwLowDateTime)
+            return (isDir, size, (ticks - 116_444_736_000_000_000) / 10000)
+        #else
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return nil }
+            // Through a link to what it names, as `fileExists` does, so a
+            // linked file reports the file's size rather than the link's.
+            let attrs = try? fm.attributesOfItem(atPath: (path as NSString).resolvingSymlinksInPath)
+            return (
+                isDir.boolValue,
+                (attrs?[.size] as? Int64) ?? (attrs?[.size] as? Int).map(Int64.init),
+                (attrs?[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970 * 1000) }
             )
-        }
-        let kind = attrs[.type] as? FileAttributeType
-        let isDir = (kind == .typeDirectory)
-        // `typeRegular` is the canonical "plain file"; symlinks /
-        // sockets / devices fall through and report `isFile: false`.
-        let isFile = (kind == .typeRegular)
-        // Nil rather than 0 when the attribute is absent: `size` means
-        // "unknown" now, and a real `stat` always has one — so this never
-        // reports nil for a path, which is what makes nil meaningful when a
-        // content provider does.
-        let size = (attrs[.size] as? Int64) ?? (attrs[.size] as? Int).map(Int64.init)
-        let modified = (attrs[.modificationDate] as? Date)
-            .map { Int64($0.timeIntervalSince1970 * 1000) }
-        return FsMetadata(size: size, isDir: isDir, isFile: isFile, modified: modified)
+        #endif
     }
 
     // MARK: - Archive (content packs)

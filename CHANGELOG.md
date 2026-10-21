@@ -88,6 +88,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Listing a OneDrive folder on Windows no longer downloads every file in
+  it.** swift-corelibs-foundation answers `fileExists`, `attributesOfItem`,
+  `resolvingSymlinksInPath`, `resourceValues` and a file URL's
+  `appendingPathComponent(_:)` (which stats the result to learn whether it's a
+  directory) by opening the file, and opening a cloud placeholder makes
+  OneDrive download it. `fs.readDir` made two of those calls per entry, so
+  listing a OneDrive library fetched the whole library; `fs.exists` and
+  `fs.metadata` fetched the one file. Measured on Windows 11 with a 200 KB
+  placeholder: each of the five calls left it a local file, while
+  `contentsOfDirectory` and `GetFileAttributesExW` left it a placeholder.
+  `SystemFs` now reads a file's kind, size and modification time from its
+  directory entry (`GetFileAttributesExW`) on Windows, and `fs.readDir` joins
+  paths without the stat. The answers are the same, with one difference: a
+  symbolic link reports itself rather than what it names.
+
+  Verified on Windows 11 x64 with `Scripts/verify-thumbnail-windows.ps1
+  -OneDrive`, whose probe files stay placeholders through a listing; with
+  `-Released` all three come back local. The Windows test runner gains a check
+  that the listing still reports each entry's kind, size and time.
+
 - **A listing of a Drive folder on Android is current, not Drive's cache**
   (#316). Drive answers a listing from its local cache and doesn't bring it up
   to date on its own, so a file uploaded to a picked folder from a computer

@@ -129,7 +129,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Verified with `Scripts/verify-android-deploy-launch.sh` on a Galaxy Z Fold7:
   an app that runs is reported deployed and one that crashes in `configure` is
-  reported not running; the 0.11.7 CLI reported the crashing one deployed.
+  reported not running; the 0.11.7 CLI reported the crashing one deployed. On
+  the Boox (`--freezes`) both are reported not running, naming the reader that
+  came to the front and the freeze.
 
 - **`fs.metadata` and `fs.exists` answer for the folder `dialog.openDirectory`
   returned** (#319). A tree URI names the grant, not a document, and both

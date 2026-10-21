@@ -826,7 +826,10 @@ asks for neighbours in one folder over and over and each uncached level is a
 Recursion is the caller's business, exactly as it is for a path. `fs.metadata`
 answers for these URIs too, and reports `isDir` honestly — through 0.11.1 it
 claimed every content URI was a file, which was harmless only while nothing
-could produce a directory one.
+could produce a directory one. That includes the tree URI `dialog.openDirectory`
+returned, so `fs.exists(tree)` says whether the picked folder is still there;
+through 0.11.7 a provider refused it ("Unsupported Uri"), because a tree URI
+names the grant rather than a document, and the answer was no.
 
 **This is the route when All-files access isn't available**, and it covers
 three cases at once:
@@ -848,7 +851,74 @@ provider is entitled to omit a row's size and modification time, so
 neither empty nor undated — test with `m.size == null` rather than `!m.size`,
 or a genuinely empty file reads as unknown. And listing is a
 `ContentResolver.query` per directory — cheap locally, a network round trip on
-Drive — so walk lazily rather than eagerly for a deep tree.
+Drive — so walk lazily rather than eagerly for a deep tree. Each entry carries
+`size` and `modified` from that same query, under the same rule, so a rescan
+that only wants to know what changed needs no `fs.metadata` per file.
+
+**Writing into the folder is a path below it.** The tree URI followed by `/`
+and a relative path names a document under the picked folder — the same shape
+a path takes on desktop — for every `fs.*` call, and the writes create what's
+missing: `fs.writeText` / `fs.writeBinary` create the file in a folder that
+exists, and `fs.mkdir` the folders (all of them with `recursive: true`). An app
+that keeps a small file per device beside a shared library writes it the same
+way everywhere:
+
+```js
+const dir = tree + '/.sync/progress';                 // a path on desktop
+await __SWIFT_PWA__.invoke('fs.mkdir', { path: dir, recursive: true });
+await __SWIFT_PWA__.invoke('fs.writeText', { path: dir + '/phone.json', contents });
+const other = await __SWIFT_PWA__.invoke('fs.readText', { path: dir + '/tablet.json' });
+```
+
+Each name is looked up before anything is made, in a refreshed listing if the
+provider's cache doesn't have it, because Drive allows two files of one name
+and a stale lookup would otherwise create a second `phone.json` beside the
+first. Writing to a file that exists overwrites it in place.
+
+**A listing is current, not the provider's cache.** Drive answers a listing
+from its local cache, and that cache doesn't catch up by itself: a file
+uploaded from a computer stayed out of every listing for as long as anyone
+looked. So `fs.readDir` lists the cache, asks the provider to refresh the folder
+(`ContentResolver.refresh`), waits for the provider to say it has, and lists
+again. On Drive that's about a second a folder — 1.45 s with something new in
+it, 0.65 s with nothing — and a provider that doesn't refresh (local storage,
+an SD card) is listed once, with no wait. A provider that marks a listing
+`EXTRA_LOADING` is waited for the same way. `loadingTimeoutMs` bounds the wait
+(10 s by default); if the provider hasn't answered by then, the call fails with
+**`E_STILL_LOADING`** rather than returning rows the provider says are
+incomplete, so an app reconciling a library against a listing never prunes on a
+stale one. `loadingTimeoutMs: 0` returns the cache at once without the error,
+for a quick first pass, and still asks for the refresh so the next listing is
+current:
+
+```js
+try {
+    const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path: folder });
+    reconcile(entries);                 // current: safe to prune against
+} catch (e) {
+    if (e.code !== 'E_STILL_LOADING') throw e;
+    // The provider didn't answer in time: keep what you have, try later.
+}
+```
+
+A file served from a mounted tree is looked up in the cache first, and the
+folder refreshed only when the name isn't there, so a page load doesn't wait on
+the network for every request.
+
+**A cover without the book: `fs.thumbnail`.** Reading any part of a Drive
+document downloads all of it the first time (#320 measured 49 MB received for
+64 KB from the end of a 47 MB PDF), so a page that draws its own covers with
+pdf.js downloads every book on the shelf to show it. A provider renders
+thumbnails itself instead — Drive from its servers — and `fs.thumbnail` asks
+for one, only from a document whose provider declares
+`FLAG_SUPPORTS_THUMBNAIL`, since asking without it makes Android decode an
+image document from its full bytes. Measured on a Galaxy Z Fold7: a 40 MB PDF
+just uploaded to a picked Drive folder gave its page-one thumbnail in a second
+for **12.5 KB** received, where 64 KB of the same file through a served mount
+cost 44 MB. A document whose provider has no thumbnail gives `null`. A file in
+the app's own storage gets `ThumbnailUtils` for an image or a video and page
+one from `PdfRenderer` for a PDF. `Scripts/verify-android-thumbnail.sh`
+measures all of it, counting the device's received bytes around each call.
 
 ### Which device is this?
 
@@ -1496,12 +1566,24 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
-- **The `SWIFT_PWA_*` launch variables don't reach an Android app.**
-  `SWIFT_PWA_WEB_DATA=ephemeral` and `SWIFT_PWA_INITIAL_ROUTE` are read from
-  the process environment, and an Android app is started by the system with
-  none of the caller's: `adb shell am start` has no way to set one. An
-  on-device test that needs clean web storage clears it from the page
-  (`localStorage.clear()`, `indexedDB.deleteDatabase(…)`).
+- **`SWIFT_PWA_*` launch variables are intent extras, in debug builds only,
+  on a cold start only.** Android starts an app with none of its caller's
+  environment, so a debug build copies the launch intent's `SWIFT_PWA_*`
+  string extras into its own before the runtime starts
+  (`adb shell am start -S -n <package>/.MainActivity --es SWIFT_PWA_WEB_DATA ephemeral`;
+  see [android-on-device-testing.md](android-on-device-testing.md#launch-variables)).
+  A release build ignores them, because any app on the device can start
+  another with extras of its choosing. And they apply when the process starts:
+  the runtime outlives its Activity, so a launch into a running app keeps the
+  variables it started with and logs that it ignored the new ones. `-S` stops
+  the app first.
+
+- **An ephemeral web store is on disk, not in memory.** Android's WebView has
+  no in-memory store, so `SWIFT_PWA_WEB_DATA=ephemeral` gives the process a
+  data directory of its own (`WebView.setDataDirectorySuffix`) that starts
+  empty and leaves the app's real store alone. The next launch deletes what
+  earlier ephemeral ones left. It lasts as long as the process does, which on
+  Android can be longer than the Activity you were testing.
 
 - **The flush happens on `onStop`.** A stopped app can be killed without being
   told, so `ctx.beforeClose` runs with reason `.backgrounded` when the Activity

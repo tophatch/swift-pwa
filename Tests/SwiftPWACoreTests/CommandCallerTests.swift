@@ -61,7 +61,13 @@ struct CommandCallerTests {
 
         try webView.sendInvoke(id: 1, command: "stories.list", payload: EmptyArgs())
         try webView.sendInvoke(id: 2, command: "probe.caller", payload: EmptyArgs())
-        try await waitFor { seen.value != nil }
+        // Both: the second invoke's handler can run before the first one's
+        // reply has been delivered.
+        try await waitFor {
+            seen.value != nil && webView.deliveredFrames.contains {
+                if case let .reply(id, _, _) = $0 { id == 1 } else { false }
+            }
+        }
 
         #expect(seen.value == .page(win.id))
         guard case let .reply(_, data, _)? = webView.deliveredFrames.first(where: {

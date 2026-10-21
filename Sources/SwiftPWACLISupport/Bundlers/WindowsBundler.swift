@@ -71,6 +71,39 @@ struct WindowsBundler {
     /// WebView2 / WIL headers below, and needed for the same reason: `INCLUDE`
     /// no longer reaches the compile task (#219, #238).
     var nativeIncludeDirs: [URL] = []
+    /// The build already compiled this configuration for this host — the
+    /// headless permission check `build` runs first is a `swift run -c <same>`
+    /// with the same search paths — so the exe is there and current.
+    ///
+    /// Not built a second time: that build compiled nothing, and on GitHub's
+    /// Windows runners each `swift build` is a chance for Swift 6.4's build
+    /// planner to stall for up to 45 minutes in `[Pre-planning 1 / N]`, in
+    /// about half the runs measured, where a Windows 11 machine takes 4.5 s.
+    /// The build still runs when the exe isn't where it should be.
+    var alreadyBuilt = false
+
+    /// Where the build put the exe, if it's there.
+    ///
+    /// SwiftPM creates `.build/release` as a symlink to the arch-qualified
+    /// output directory (e.g. `.build/x86_64-unknown-windows-msvc/release/`).
+    /// Symlink creation on Windows requires Administrator privileges *or*
+    /// Developer Mode enabled in Settings — without either, SwiftPM emits the
+    /// cosmetic "warning: unable to create symbolic link at .build\release"
+    /// and the symlink simply doesn't exist. So the binary is looked for
+    /// through the symlink first, then in the first `*-windows-msvc` arch
+    /// directory (covers x86_64 and aarch64 hosts). Developer Mode isn't
+    /// required because it's a machine-wide setting, often unavailable on CI
+    /// runners or shared boxes.
+    static func builtBinary(exeName: String, buildDir: URL, configuration: BuildConfiguration) -> URL? {
+        let fm = FileManager.default
+        let symlinkBinary = buildDir.appendingPathComponent(configuration.swiftPMValue).appendingPathComponent(exeName)
+        if fm.fileExists(atPath: symlinkBinary.path) { return symlinkBinary }
+        guard let archDir = (try? fm.contentsOfDirectory(at: buildDir, includingPropertiesForKeys: nil))?
+            .first(where: { $0.lastPathComponent.hasSuffix("-windows-msvc") && !$0.lastPathComponent.hasPrefix(".") })
+        else { return nil }
+        let candidate = archDir.appendingPathComponent(configuration.swiftPMValue).appendingPathComponent(exeName)
+        return fm.fileExists(atPath: candidate.path) ? candidate : nil
+    }
 
     func build() async throws -> URL {
         #if !os(Windows)
@@ -85,57 +118,34 @@ struct WindowsBundler {
             // — measured on a real Windows box, with a control: a header only
             // on INCLUDE is `file not found`, and the same header behind
             // `-Xcc -I` compiles (#219).
-            let packagePaths = Self.resolvePackagePaths(projectRoot: projectRoot)
-            let searchDirs = nativeLibraryDirs + (packagePaths?.libDirs ?? [])
-            try await Shell.run(
-                "swift",
-                ["build", "-c", configuration.swiftPMValue]
-                    + NativeLibrarySearch.compilerArgs(
-                        for: nativeIncludeDirs + (packagePaths?.includeDirs ?? [])
-                    )
-                    + NativeLibrarySearch.linkerArgs(for: searchDirs, target: .windows),
-                cwd: projectRoot
-            )
             // The .exe is named after the SwiftPM target, resolved from
             // the package rather than guessed from the display `name`.
             let resolvedExe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: manifest)
             let exeName = resolvedExe + ".exe"
             let buildDir = projectRoot.appendingPathComponent(".build")
-            // SwiftPM creates `.build/release` as a symlink to the
-            // arch-qualified output directory (e.g.
-            // `.build/x86_64-unknown-windows-msvc/release/`). Symlink
-            // creation on Windows requires Administrator privileges
-            // *or* Developer Mode enabled in Settings — without either,
-            // SwiftPM emits the cosmetic
-            //   "warning: unable to create symbolic link at .build\release"
-            // and the symlink simply doesn't exist. Look for the binary
-            // through the symlink first, then fall back to scanning
-            // `.build` for the first `*-windows-msvc` arch directory
-            // (covers x86_64 and aarch64 hosts) and trying its `release/`.
-            // We don't require Developer Mode because that's a
-            // machine-wide setting, often unavailable on CI runners or
-            // shared boxes.
-            let symlinkBinary = buildDir
-                .appendingPathComponent(configuration.swiftPMValue)
-                .appendingPathComponent(exeName)
-            let binary: URL
-            if FileManager.default.fileExists(atPath: symlinkBinary.path) {
-                binary = symlinkBinary
-            } else if let archDir = (try? FileManager.default.contentsOfDirectory(
-                at: buildDir, includingPropertiesForKeys: nil
-            ))?.first(where: { url in
-                let name = url.lastPathComponent
-                return name.hasSuffix("-windows-msvc") && !name.hasPrefix(".")
-            }) {
-                let candidate = archDir
-                    .appendingPathComponent(configuration.swiftPMValue)
-                    .appendingPathComponent(exeName)
-                guard FileManager.default.fileExists(atPath: candidate.path) else {
-                    throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
-                }
-                binary = candidate
+            if alreadyBuilt,
+               Self.builtBinary(exeName: exeName, buildDir: buildDir, configuration: configuration) != nil
+            {
+                print("swift-pwa: using the \(configuration.swiftPMValue) build the permission check just made")
             } else {
-                throw BundlerError.binaryMissing(symlinkBinary, expectedName: exeName)
+                let packagePaths = Self.resolvePackagePaths(projectRoot: projectRoot)
+                let searchDirs = nativeLibraryDirs + (packagePaths?.libDirs ?? [])
+                try await Shell.run(
+                    "swift",
+                    ["build", "-c", configuration.swiftPMValue]
+                        + NativeLibrarySearch.compilerArgs(
+                            for: nativeIncludeDirs + (packagePaths?.includeDirs ?? [])
+                        )
+                        + NativeLibrarySearch.linkerArgs(for: searchDirs, target: .windows),
+                    cwd: projectRoot
+                )
+            }
+            guard let binary = Self.builtBinary(exeName: exeName, buildDir: buildDir, configuration: configuration)
+            else {
+                throw BundlerError.binaryMissing(
+                    buildDir.appendingPathComponent(configuration.swiftPMValue).appendingPathComponent(exeName),
+                    expectedName: exeName
+                )
             }
 
             let bundleDir = outputDir.appendingPathComponent(manifest.name)
@@ -173,7 +183,7 @@ struct WindowsBundler {
             // clang-cl + lld-link, not link.exe) silently drops that
             // pragma. The resulting EXE has no resource section, and
             // the manifest never makes it in.
-            try await embedComCtl6Manifest(at: bundledExe)
+            try embedComCtl6Manifest(at: bundledExe)
 
             // Flip the EXE to the WINDOWS subsystem so double-clicking it in
             // Explorer doesn't spawn a console window next to the app's own
@@ -528,20 +538,17 @@ struct WindowsBundler {
     // MARK: - Common Controls v6 manifest embed
 
     /// Embed the `Microsoft.Windows.Common-Controls` v6 manifest
-    /// dependency into the EXE's resource section via `mt.exe`. Runs
-    /// after `swift build` and the bundle copy — the source `.exe`
-    /// SwiftPM produced has no resource section, and `lld-link`
-    /// silently drops the `/manifestdependency` pragma we'd otherwise
-    /// embed at link time.
+    /// dependency into the EXE's resource section, as `RT_MANIFEST` id 1
+    /// (`CREATEPROCESS_MANIFEST_RESOURCE_ID`, the one Windows reads at process
+    /// start). Runs after `swift build` and the bundle copy — the `.exe`
+    /// SwiftPM produced has no resource section, and `lld-link` silently drops
+    /// the `/manifestdependency` pragma we'd otherwise embed at link time.
     ///
-    /// `mt.exe` ships with the Windows SDK; it lands on PATH inside a
-    /// Visual Studio Developer Shell. From a plain PowerShell with no
-    /// SDK setup, the call throws `BundlerError.toolMissing` — we
-    /// warn and continue. `dialog.confirm` with custom labels then
-    /// falls back to `MessageBoxW` (system-localised buttons, no
-    /// themed look) at runtime; the rest of the dialog surface and
-    /// every other plugin keep working.
-    private func embedComCtl6Manifest(at exe: URL) async throws {
+    /// Through `WindowsResources` rather than `mt.exe`: the same kernel32 API,
+    /// so no Windows SDK tool on `PATH` — without one the manifest used to be
+    /// skipped with a warning — and the COFF symbol table `mt.exe` dropped is
+    /// carried across (#276).
+    private func embedComCtl6Manifest(at exe: URL) throws {
         let manifestXML = """
         <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
         <assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
@@ -559,29 +566,9 @@ struct WindowsBundler {
           </dependency>
         </assembly>
         """
-        let manifestURL = FileManager.default.temporaryDirectory
-            .appendingPathComponent("swift-pwa-comctl6-\(UUID().uuidString).manifest")
-        try manifestXML.write(to: manifestURL, atomically: true, encoding: .utf8)
-        defer { try? FileManager.default.removeItem(at: manifestURL) }
-
-        do {
-            // `;#1` is `CREATEPROCESS_MANIFEST_RESOURCE_ID` — the
-            // resource id Windows reads at process start. `#2` is the
-            // DLL slot, which we don't care about here.
-            try await Shell.run(
-                "mt.exe",
-                ["-manifest", manifestURL.path, "-outputresource:\(exe.path);#1"]
-            )
-        } catch BundlerError.toolMissing {
-            FileHandle.standardError.write(Data("""
-            swift-pwa: warning — mt.exe not found on PATH; skipping Common \
-            Controls v6 manifest embed. `dialog.confirm` with custom labels \
-            will fall back to MessageBoxW. Run from inside a Visual Studio \
-            Developer Shell (which puts the Windows SDK on PATH) to enable \
-            the themed TaskDialogIndirect path.
-
-            """.utf8))
-        }
+        try WindowsResources.update(exe, with: [.init(
+            type: WindowsResources.rtManifest, id: 1, data: Data(manifestXML.utf8)
+        )])
     }
 
     // MARK: - Console-window suppression

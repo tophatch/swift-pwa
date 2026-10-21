@@ -16,6 +16,20 @@
 #   6. #249: the same tree **serves** — `ctx.serveDirectory` over a tree URI
 #      answers `/<mount>/<rel_path>` and honours a `Range`, which is what a
 #      reader needs to stream a book rather than load it whole.
+#   7. #319: `fs.metadata` and `fs.exists` answer for the tree URI itself —
+#      "is the folder I was given still there?" — reporting a directory.
+#   8. #317: each listed entry carries `size` and `modified`, so a rescan
+#      needs no `fs.metadata` per file.
+#   9. #318: the tree URI plus a relative path names a document below it:
+#      `fs.mkdir` makes `.sync/progress`, `fs.writeText` creates a file there
+#      and overwrites it in place the second time, `fs.readText` and
+#      `fs.readDir` read it back by the same path, a write into a folder that
+#      doesn't exist fails, and the files are really there (checked with adb).
+#
+# With -r the same app is built by the last release's CLI against the
+# released package: the control for 7, 8 and 9, which have to fail there. Both
+# the local storage provider and Drive's refuse a query on a tree URI
+# ("Unsupported Uri"), so 7 is a control on either.
 #
 # **The picker is driven, not tapped by a human.** `uiautomator dump` gives the
 # view hierarchy with bounds, so the folder row and the confirm buttons are
@@ -29,26 +43,30 @@
 # everything is the failure mode this script exists to avoid.
 #
 # Usage:
-#   Scripts/verify-android-saf-tree.sh [-s <adb-serial>] [-k]
+#   Scripts/verify-android-saf-tree.sh [-s <adb-serial>] [-r] [-k]
 #     -s  adb serial to target (default: the only attached device)
+#     -r  build with the last release (the control)
 #     -k  keep the scaffolded app directory for debugging
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 SERIAL=""
 KEEP=0
-while getopts "s:k" opt; do
+RELEASED=0
+while getopts "s:rk" opt; do
     case "$opt" in
         s) SERIAL="$OPTARG" ;;
+        r) RELEASED=1 ;;
         k) KEEP=1 ;;
-        *) echo "usage: $0 [-s serial] [-k]" >&2; exit 2 ;;
+        *) echo "usage: $0 [-s serial] [-r] [-k]" >&2; exit 2 ;;
     esac
 done
 
 ADB=(adb)
-[ -n "$SERIAL" ] && ADB=(adb -s "$SERIAL")
+# Exported, so `swift-pwa deploy` picks the same device when several are attached.
+[ -n "$SERIAL" ] && { ADB=(adb -s "$SERIAL"); export ANDROID_SERIAL="$SERIAL"; }
 
-WORK="${TMPDIR:-/tmp}/swift-pwa-android-saf-tree"
+WORK="${TMPDIR:-/tmp}/swift-pwa-android-saf-tree${SERIAL:+-$SERIAL}"
 APP="SafTreeCheck"
 APP_DIR="$WORK/$APP"
 PKG="com.example.saftreecheck"
@@ -101,23 +119,61 @@ ui_tap_text() {
     return 0
 }
 
+if [ "$RELEASED" -eq 1 ]; then
+    echo "== downloading the last release's CLI =="
+    gh release download --repo tophatch/swift-pwa --pattern "swift-pwa-macos-$(uname -m)" --dir "$WORK"
+    CLI="$WORK/swift-pwa-macos-$(uname -m)"
+    chmod +x "$CLI"
+else
+    # Tap the first node whose content description is exactly $1 (an icon button).
+ui_tap_desc() {
+    local want="$1" bounds x1 y1 x2 y2
+    ui_dump || return 1
+    bounds="$(tr '<' '\n' < "$DUMP" \
+        | grep -F "content-desc=\"$want\"" \
+        | grep -oE 'bounds="\[[0-9]+,[0-9]+\]\[[0-9]+,[0-9]+\]"' \
+        | head -1 || true)"
+    [ -n "$bounds" ] || return 1
+    bounds="${bounds#bounds=\"}"; bounds="${bounds%\"}"
+    IFS=',[]' read -r _ x1 y1 _ x2 y2 _ <<< "$bounds"
+    "${ADB[@]}" shell input tap $(( (x1 + x2) / 2 )) $(( (y1 + y2) / 2 ))
+}
+
+# The same, scrolling the list up between tries: a picker shows a folder's
+# children alphabetically, and on a small screen Download is below the fold.
+ui_tap_text_scrolling() {
+    local size w h
+    size="$("${ADB[@]}" shell wm size | tail -1 | sed 's/.*: //' | tr -d '\r')"
+    w="${size%x*}"; h="${size#*x}"
+    for _ in 1 2 3 4 5 6; do
+        ui_tap_text "$1" && return 0
+        "${ADB[@]}" shell input swipe $(( w / 2 )) $(( h * 3 / 4 )) $(( w / 2 )) $(( h / 3 )) 400
+        # Until the list stops: a tap on a list still moving only stops it.
+        "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
+    done
+    return 1
+}
+
 echo "== building the CLI =="
-(cd "$REPO" && swift build --product swift-pwa >/dev/null)
-CLI="$REPO/.build/debug/swift-pwa"
+    (cd "$REPO" && swift build --product swift-pwa >/dev/null)
+    CLI="$REPO/.build/debug/swift-pwa"
+fi
 
 echo "== scaffolding $APP =="
 (cd "$WORK" && "$CLI" init "$APP" >/dev/null)
 
-python3 - "$APP_DIR" "$REPO" <<'PY'
+python3 - "$APP_DIR" "$REPO" "$RELEASED" <<'PY'
 import pathlib, re, sys
-app_dir, repo = pathlib.Path(sys.argv[1]), sys.argv[2]
+app_dir, repo, released = pathlib.Path(sys.argv[1]), sys.argv[2], sys.argv[3] == "1"
 
-manifest = app_dir / "Package.swift"
-text = manifest.read_text()
-text = re.sub(r'\.package\(url: "https://github\.com/tophatch/swift-pwa", from: "[^"]+"\)',
-              f'.package(path: "{repo}")', text)
-text = text.replace('package: "swift-pwa"', f'package: "{pathlib.Path(repo).name}"')
-manifest.write_text(text)
+if not released:
+    manifest = app_dir / "Package.swift"
+    text = manifest.read_text()
+    text, count = re.subn(r'\.package\(url: "https://github\.com/tophatch/swift-pwa", from: "[^"]+"\)',
+                          f'.package(path: "{repo}")', text)
+    assert count == 1, "the scaffold's package pin moved; this would test the released package"
+    text = text.replace('package: "swift-pwa"', f'package: "{pathlib.Path(repo).name}"')
+    manifest.write_text(text)
 
 # No `permissions` block at all, deliberately: this is the route for an app
 # that cannot have All-files access, so the run proves the SAF path standing
@@ -206,6 +262,23 @@ cat > "$APP_DIR/web/index.html" <<HTML
         });
       });
     }).then(function () {
+      // #317: what a rescan needs, in the listing itself.
+      return step('sizes', function () {
+        return Promise.resolve(window.__entries.map(function (e) {
+          return e.name + ':' + (e.size == null ? '-' : e.size) + ':' +
+                 (typeof e.modified === 'number' && e.modified > 0 ? 'time' : '-');
+        }).join(','));
+      });
+    }).then(function () {
+      // #319: the folder the picker gave, asked about by that very URI.
+      return step('metatree', function () {
+        return __SWIFT_PWA__.invoke('fs.metadata', { path: tree }).then(function (m) {
+          return __SWIFT_PWA__.invoke('fs.exists', { path: tree }).then(function (e) {
+            return 'isDir=' + m.isDir + ' exists=' + e.exists;
+          });
+        });
+      });
+    }).then(function () {
       // The read path that already worked, reached through a URI only the
       // listing could produce.
       return step('read', function () {
@@ -224,6 +297,29 @@ cat > "$APP_DIR/web/index.html" <<HTML
           var entries = r.entries || r;
           return 'names=' + entries.map(function (e) { return e.name; }).join(',');
         });
+      });
+    }).then(function () {
+      // #318: write into the picked folder by path, as on desktop.
+      return step('write', function () {
+        var dir = tree + '/.sync/progress';
+        var file = dir + '/phone.json';
+        return __SWIFT_PWA__.invoke('fs.mkdir', { path: dir, recursive: true })
+          .then(function () { return __SWIFT_PWA__.invoke('fs.writeText', { path: file, contents: '{"page":1}' }); })
+          .then(function () { return __SWIFT_PWA__.invoke('fs.writeText', { path: file, contents: '{"page":2}' }); })
+          .then(function () { return __SWIFT_PWA__.invoke('fs.readText', { path: file }); })
+          .then(function (r) {
+            return __SWIFT_PWA__.invoke('fs.readDir', { path: dir }).then(function (l) {
+              var names = (l.entries || l).map(function (e) { return e.name; }).join(',');
+              return __SWIFT_PWA__.invoke('fs.exists', { path: dir + '/nope.json' }).then(function (e) {
+                return 'read=' + r.contents + ' names=' + names + ' missing-exists=' + e.exists;
+              });
+            });
+          });
+      });
+    }).then(function () {
+      return step('writenoparent', function () {
+        return __SWIFT_PWA__.invoke('fs.writeText', { path: tree + '/no-such-folder/x.json', contents: 'x' })
+          .then(function () { return 'WROTE'; });
       });
     }).then(function () {
       return step('metadir', function () {
@@ -288,7 +384,7 @@ cat > "$APP_DIR/web/index.html" <<HTML
 </script>
 HTML
 
-cp "$REPO/Package.resolved" "$APP_DIR/Package.resolved"
+[ "$RELEASED" -eq 1 ] || cp "$REPO/Package.resolved" "$APP_DIR/Package.resolved"
 rm -rf "$APP_DIR/.build"
 
 echo "== staging the library folder on the device =="
@@ -315,6 +411,9 @@ echo "== cross-compiling, installing and launching on the device =="
 # install, and reusing one would skip the picker this run exists to exercise.
 "${ADB[@]}" uninstall "$PKG" >/dev/null 2>&1 || true
 (cd "$APP_DIR" && "$CLI" deploy --target android --android-abis arm64-v8a)
+# An OEM "auto freeze" (Boox) disables a freshly installed app as it first
+# launches. Enabled by hand, it stays enabled.
+"${ADB[@]}" shell pm enable "$PKG" >/dev/null 2>&1 || true
 
 "${ADB[@]}" logcat -c || true
 "${ADB[@]}" shell am force-stop "$PKG" || true
@@ -326,12 +425,31 @@ SKIP_REASON=""
 # The picker opens on "Files on <device>". The library is under Download, so:
 # open Download, open the library folder, then confirm twice.
 drive_picker() {
-    ui_tap_text "Download" || { SKIP_REASON="no 'Download' row in the picker"; return 1; }
-    "${ADB[@]}" shell sleep 2 >/dev/null 2>&1 || true
-    ui_tap_text "$LIBRARY" || { SKIP_REASON="no '$LIBRARY' row in the picker"; return 1; }
-    "${ADB[@]}" shell sleep 2 >/dev/null 2>&1 || true
+    # The picker opens wherever it was last used: already in the library
+    # (a run before this one), or in another root with a Download folder of
+    # its own (Drive). Otherwise go to the device's storage through the roots
+    # drawer.
+    ui_dump || true
+    if grep -qF "text=\"Files in $LIBRARY\"" "$DUMP"; then
+        ui_tap_text "USE THIS FOLDER" || { SKIP_REASON="no 'USE THIS FOLDER' button"; return 1; }
+        "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
+        ui_tap_text "ALLOW" || ui_tap_text "Allow" || {
+            SKIP_REASON="no 'ALLOW' button on the confirmation dialog"; return 1
+        }
+        return 0
+    fi
+    local device
+    device="$("${ADB[@]}" shell settings get global device_name | tr -d '\r')"
+    if ui_tap_desc "Show roots"; then
+        "${ADB[@]}" shell sleep 2 >/dev/null 2>&1 || true
+        ui_tap_text "$device" && "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
+    fi
+    ui_tap_text_scrolling "Download" || { SKIP_REASON="no 'Download' row in the picker"; return 1; }
+    "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
+    ui_tap_text_scrolling "$LIBRARY" || { SKIP_REASON="no '$LIBRARY' row in the picker"; return 1; }
+    "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
     ui_tap_text "USE THIS FOLDER" || { SKIP_REASON="no 'USE THIS FOLDER' button"; return 1; }
-    "${ADB[@]}" shell sleep 2 >/dev/null 2>&1 || true
+    "${ADB[@]}" shell sleep 3 >/dev/null 2>&1 || true
     # The confirmation dialog ("Allow <app> to access files in <folder>?").
     ui_tap_text "ALLOW" || ui_tap_text "Allow" || {
         SKIP_REASON="no 'ALLOW' button on the confirmation dialog"; return 1
@@ -395,6 +513,17 @@ expect "an entry's URI opens through the read path that already worked" \
     'SAFPROBE read text="the first file"'
 expect "a subdirectory in the listing lists in turn" \
     'SAFPROBE descend names=nested.txt'
+# #317: sizes of the two files ("the first file", "the second file") and a
+# modified time for each; the directory's size is whatever the provider says.
+expect "each entry carries its size and modified time (#317)" \
+    'SAFPROBE sizes chapters:[^,]*:time,one.txt:14:time,two.txt:15:time'
+expect "the picked folder's own URI answers metadata and exists (#319)" \
+    'SAFPROBE metatree isDir=true exists=true'
+# #318, then the files themselves, read on the device rather than through the
+# app: one phone.json, holding the second write.
+expect "a path below the tree is made, written, overwritten and read back (#318)" \
+    'SAFPROBE write read={"page":2} names=phone.json missing-exists=false'
+expect "a write into a folder that doesn't exist fails (#318)" 'SAFPROBE writenoparent THREW'
 expect "metadata reports a directory as a directory" \
     'SAFPROBE metadir isDir=true isFile=false'
 expect "metadata still reports a file as a file, with its size" \
@@ -409,6 +538,15 @@ expect "a file one directory down serves too, which is where the walk descends" 
 expect "a path that is not in the tree 404s with a body" \
     'SAFPROBE servemissing status=404 body=[1-9][0-9]*'
 expect "the page ran to the end" 'SAFPROBE finished'
+
+on_disk=$("${ADB[@]}" shell "ls $DEVICE_ROOT/.sync/progress && cat $DEVICE_ROOT/.sync/progress/phone.json" 2>/dev/null \
+    | tr -d '\r' | tr '\n' ' ' | sed 's/ *$//' || true)
+if [ "$on_disk" = 'phone.json {"page":2}' ]; then
+    echo "PASS  the file is on the device, once, with the second write (#318)"
+else
+    echo "FAIL  the file on the device: '$on_disk'"
+    failed=1
+fi
 
 echo
 if "${ADB[@]}" shell dumpsys package "$PKG" 2>/dev/null | grep -q "MANAGE_EXTERNAL_STORAGE"; then

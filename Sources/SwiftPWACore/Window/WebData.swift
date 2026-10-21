@@ -19,7 +19,9 @@ import Foundation
 /// Each backend uses its engine's own in-memory store: a non-persistent
 /// `WKWebsiteDataStore` on Apple, an ephemeral WebKitGTK context (GTK3) or
 /// network session (GTK4) on Linux, and an InPrivate WebView2 profile on
-/// Windows.
+/// Windows. Android's WebView has no in-memory store: there the generated
+/// Activity reads the variable (a launch extra, in debug builds) and gives the
+/// process a data directory of its own, which the next launch deletes.
 public enum WebData {
     /// The env var a backend checks. `ephemeral` gives the launch its own
     /// in-memory store; unset, or `persistent`, is the normal shared one.

@@ -5,6 +5,260 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **`fs.thumbnail` — a file's cover from the platform, without its bytes**
+  (#320). `{ path, maxSize }` → `{ image }`, a PNG at most `maxSize` on its
+  longer side, or `null` where the platform has none. An app showing a shelf of
+  documents had to draw each cover itself, and off Apple that meant pdf.js
+  rendering page one of the served file — which for a Drive document on
+  Android downloads all of it (#320 measured 49 MB for 64 KB of a 47 MB PDF).
+  The platform can usually draw that cover without the file: QuickLook on
+  Apple, the document's provider on Android (`FLAG_SUPPORTS_THUMBNAIL`, which
+  Drive answers from its servers), the shell on Windows, the freedesktop cache
+  and the desktop's thumbnailers on Linux. It never downloads a cloud file:
+  one that isn't local gets its provider's thumbnail or `null`. `Fs` gains
+  `thumbnail(path:maxSize:)` and `FsContentResolver` the same, both defaulting
+  to `nil`, so existing implementations keep compiling.
+
+  Measured, each with a control built by the 0.11.7 CLI and package (which has
+  no `fs.thumbnail`, so every thumbnail row fails):
+  - **iOS** (iPhone 17 Pro): a PDF and a PNG in iCloud Drive, not on the
+    device, gave full page-one thumbnails in about a second and stayed not
+    downloaded. `Scripts/verify-thumbnail.sh --target ios` (`--pick` once).
+  - **macOS**: the same files evicted from Google Drive for desktop gave
+    Drive's 128×128 crop of the page in 0.6–0.8 s and stayed dataless.
+    `Scripts/verify-thumbnail.sh --folder <a Drive folder>`.
+  - **Android** (Galaxy Z Fold7; local rows on a Boox Note5, Android 11): a
+    40 MB PDF just uploaded to a picked Drive folder gave its page-one
+    thumbnail for 12.5 KB received, where 64 KB of the same file through a
+    served mount cost 44 MB. `Scripts/verify-android-thumbnail.sh`.
+  - **Windows 11** x64 and arm64: a PNG gives a thumbnail; a PDF gives `null`,
+    because Windows has no PDF thumbnailer without a reader that installs one;
+    a OneDrive placeholder gives `null` (the shell won't draw it without its
+    bytes) and stays a placeholder. `Scripts\verify-thumbnail-windows.ps1
+    -OneDrive`, and two new checks in the Windows test runner.
+  - **Linux**, Ubuntu 26.04 GNOME/GTK4 and 25.10 GTK3: page one and a PNG from
+    the installed thumbnailers, written to the shared cache where GIO's own
+    check accepts them. GNOME has no tumbler, so the runtime runs the
+    `.thumbnailer` entries itself rather than going through it.
+
+- **`SWIFT_PWA_*` launch variables reach a debug Android build, and
+  `SWIFT_PWA_WEB_DATA=ephemeral` works there.** Android starts an app with
+  none of its caller's environment, so `SWIFT_PWA_WEB_DATA` and
+  `SWIFT_PWA_INITIAL_ROUTE` could not be set on Android at all, and an
+  on-device test that read storage back had to clear it from the page first.
+  A debug build now copies the launch intent's `SWIFT_PWA_*` string extras
+  into its environment before the Swift runtime starts
+  (`adb shell am start -S … --es SWIFT_PWA_WEB_DATA ephemeral`). Debug only,
+  because any app on the device can start another with extras of its
+  choosing. A cold start only, because the runtime outlives its Activity
+  (#288). A launch into a running app logs that it ignored them.
+  WebView has no in-memory store, so an ephemeral launch gets a data directory
+  of its own (`WebView.setDataDirectorySuffix`, named per launch), apart from
+  the app's real store, and the next launch deletes what earlier ephemeral ones
+  left on disk.
+
+  Verified on a Galaxy Z Fold7 with `Scripts/verify-android-web-data.sh`:
+  localStorage, IndexedDB and a cookie, read back across cold launches, with a
+  control that has to read back what the last persistent launch wrote. The
+  probe waits out WebView's commits before each force-stop: localStorage lands
+  within 2 s, but a cookie only on CookieManager's 30 s flush. Built by the
+  0.11.7 CLI, the same app fails the ephemeral, real-store, route and
+  misspelling rows.
+
+### Documentation
+
+- **An empty Photos drop on iOS is the source, not WebKit** (#300). A photo
+  dragged from Photos was reported reaching the page as `types: ["Files"]`
+  with no files, and the fix asked for was a native loader in front of
+  WebKit's drop. One was built and measured, and it isn't shipping: on an
+  iPhone the drop already arrives with its file from WebKit, with nothing
+  added, and on two iPads on iPadOS 27.0 the loader failed exactly where
+  WebKit did, because Photos' own service failed to provide the item. Notes
+  couldn't take those drops either. `docs/ios-setup.md` says how a page should
+  read an empty drop, and `Scripts/verify-ios-drop.sh` shows what a device
+  delivers beside Safari and a Notes control.
+
+### Added
+
+- **Android: an app can write into a folder the user picked** (#318).
+  `dialog.openDirectory` takes a read *and write* grant, yet nothing could
+  create a document in the folder: `fs.mkdir` refused `content://`, and
+  `fs.writeBinary` could only overwrite a document that already existed. So an
+  app syncing a small file per device beside a shared library (in a Drive
+  folder, say) could read every other device's file and never publish its
+  own. Instead of a separate `createDocument` call, the tree URI followed by
+  `/` and a relative path now names a document below the folder for every
+  `fs.*` call, the shape a path has on desktop, and writes create what's
+  missing: `fs.writeText` / `fs.writeBinary` the file, in a folder that exists,
+  and `fs.mkdir` the folders. Each name is looked up first — in a refreshed
+  listing if the provider's cache doesn't have it, since Drive allows two
+  files of one name — so writing again overwrites, never duplicates.
+  `FsContentResolver` gains `mkdir(uri:recursive:)`, with a default that
+  refuses.
+
+  Verified on a Galaxy Z Fold7. `Scripts/verify-android-saf-tree.sh` (local
+  storage): `.sync/progress/phone.json` made, written twice, read back and
+  listed by path, and on the device once with the second write; a write into
+  a missing folder fails. `Scripts/verify-android-saf-drive.sh` (Drive): the
+  file arrives on a Mac through Drive for desktop once, with the second write,
+  including from a fresh install with the file already there. Built by the
+  0.11.7 CLI, `fs.mkdir` refuses the path.
+
+### Changed
+
+- **`fs.readDir` entries carry `size` and `modified`** (#317), on every
+  platform, as `fs.metadata` reports them: absent where the source doesn't
+  say. An app rescanning a library for what changed asked `fs.metadata` once
+  per file, which on Android's Drive provider is a query each — about 5 ms a
+  file, 20 s for a 4,000-book library on every return to the app — for two
+  columns the listing's own query could carry for nothing. On Android they
+  come from that query; on the desktops from the stat `readDir` already made.
+
+  Verified on a Galaxy Z Fold7 with `Scripts/verify-android-saf-tree.sh`,
+  which now also covers #319 and takes `-r` for a control built by the last
+  release: there every entry's `size` and `modified` are absent.
+
+### Fixed
+
+- **A bundled Windows exe is a well-formed PE again** (#276). lld-link writes
+  a COFF symbol table after the last section — the string table the long
+  debug-section names live in — and the resource edits the bundler makes
+  (the Common Controls manifest through `mt.exe`, then the icon and version
+  through `UpdateResourceW`, which `mt.exe` uses too) drop everything past the
+  last section while leaving the header pointing at it. Measured on an arm64
+  build: 7.8 MB gone, and `dumpbin /headers` failing with `LNK1106: cannot
+  seek` on every bundle, release and debug, folder and single-file. The table
+  is now read before each edit and appended after it, the header pointed at
+  its new place; clearing the pointer alone wasn't enough, since the section
+  headers still name themselves by string-table offset (`LNK1328`). The
+  manifest goes through the same resource API as the icon, so `mt.exe` is no
+  longer needed on PATH — without it the manifest used to be skipped with a
+  warning. The issue's worry about signing didn't hold: a bundle signed and
+  verified with a throwaway certificate before the fix as well as after.
+
+  Verified with `Scripts/bundle-smoke-windows.ps1`, which gains `dumpbin`
+  checks of both bundles and a check that the folder exe carries the
+  manifest, on Windows 11 x64 and arm64; the bundle built before the fix fails
+  the `dumpbin` check. Unit tests cover the table's round trip.
+
+- **Listing a OneDrive folder on Windows no longer downloads every file in
+  it.** swift-corelibs-foundation answers `fileExists`, `attributesOfItem`,
+  `resolvingSymlinksInPath`, `resourceValues` and a file URL's
+  `appendingPathComponent(_:)` (which stats the result to learn whether it's a
+  directory) by opening the file, and opening a cloud placeholder makes
+  OneDrive download it. `fs.readDir` made two of those calls per entry, so
+  listing a OneDrive library fetched the whole library; `fs.exists` and
+  `fs.metadata` fetched the one file, and `fs.remove` downloaded a file in
+  full before deleting it. Measured on Windows 11 with a 200 KB
+  placeholder: each of the five calls left it a local file, while
+  `contentsOfDirectory` and `GetFileAttributesExW` left it a placeholder.
+  `SystemFs` now reads a file's kind, size and modification time from its
+  directory entry (`GetFileAttributesExW`) on Windows, and `fs.readDir` joins
+  paths without the stat. The answers are the same, with one difference: a
+  symbolic link reports itself rather than what it names.
+
+  Verified on Windows 11 x64 with `Scripts/verify-thumbnail-windows.ps1
+  -OneDrive`: its probe files stay placeholders through a listing, and
+  `fs.remove` deletes a 30 MB placeholder in 6 ms for 72 KB received; with
+  `-Released` every file comes back local and the delete receives 31.8 MB.
+  The Windows test runner gains a check that listing, `metadata`, `exists`
+  and `remove` still answer as they did.
+
+- **A listing of a Drive folder on Android is current, not Drive's cache**
+  (#316). Drive answers a listing from its local cache and doesn't bring it up
+  to date on its own, so a file uploaded to a picked folder from a computer
+  stayed out of every `fs.readDir` — five listings over two minutes, measured,
+  and in the report ten over five minutes — until the folder was opened in the
+  system picker. The issue expected Drive to mark such a listing
+  `EXTRA_LOADING`; measured, it never does. What it does is refresh when asked
+  (`ContentResolver.refresh`) and notify about a second later. `fs.readDir`
+  now lists, asks for the refresh, waits for the notification and lists again:
+  about 1.45 s a Drive folder with something new in it and 0.65 s with nothing,
+  and no wait at all for a provider that doesn't refresh, such as local
+  storage. A provider that does mark `EXTRA_LOADING` is waited for the same
+  way. The wait is bounded by a new `loadingTimeoutMs` (10 s by default); past
+  it the call fails with the new `E_STILL_LOADING` rather than returning rows
+  the provider calls incomplete, so an app reconciling a library can't prune
+  against them. `loadingTimeoutMs: 0` returns the cache at once, without the
+  error. A served file is found in the cache first and refreshed only when it
+  isn't there, so page loads don't pay the second. `Fs` and `FsContentResolver`
+  gain a `readDir` overload taking the timeout, with defaults, so existing
+  implementations keep compiling.
+
+  Verified on a Galaxy Z Fold7 against a Drive folder with
+  `Scripts/verify-android-saf-drive.sh`: a file uploaded from this Mac's Drive
+  for desktop is in the first listing after the upload, a 1 ms wait fails with
+  `E_STILL_LOADING`, and 0 returns the cache in 45 ms. Built by the 0.11.7 CLI,
+  the same app never listed the uploaded file in five listings over two
+  minutes.
+
+- **`deploy --target android` no longer says "Deployed" when the app isn't
+  running** (#313). `am start -W` reports `Status: ok` whenever the launch
+  intent was delivered, so an app that crashed at launch, or that the device
+  froze as it started — a Boox Note5's App Freeze disabled a freshly installed
+  app 0.3 s after launch and put its own reader in front — was reported
+  deployed, and the next thing anyone did was look for a bug in their app. Now
+  deploy reads which activity `am start` put in front and, two seconds later,
+  checks for the app's process and whether the package was disabled, and ends
+  `Installed on <serial>; the app is not running:` with the reason, as the iOS
+  deploy does.
+
+  Verified with `Scripts/verify-android-deploy-launch.sh` on a Galaxy Z Fold7:
+  an app that runs is reported deployed and one that crashes in `configure` is
+  reported not running; the 0.11.7 CLI reported the crashing one deployed. On
+  the Boox (`--freezes`) both are reported not running, naming the reader that
+  came to the front and the freeze.
+
+- **`fs.metadata` and `fs.exists` answer for the folder `dialog.openDirectory`
+  returned** (#319). A tree URI names the grant, not a document, and both
+  Drive and the local storage provider refuse a query on one
+  (`UnsupportedOperationException: Unsupported Uri`), so "is the folder I was
+  given still there?" answered no for a folder that was right there. The URI
+  now becomes the folder's own document first, as `fs.readDir` already did.
+  Verified on a Galaxy Z Fold7 with `Scripts/verify-android-saf-tree.sh`,
+  which fails that row when built by the 0.11.7 CLI.
+
+- **An Android 11 app could open to a blank page, unable to write to its own
+  data directory** (#312). `ctx.dataDirectory()` and `ctx.cacheDirectory()`
+  were derived from Foundation's temporary directory, which is the app's cache
+  dir only where `TMPDIR` says so, and nothing set it before Android 12: there
+  Foundation fell back to /data/local/tmp, the data directory became
+  /data/local/files, and the app's first write in `configure` failed with
+  "permission denied". Content packs the Activity extracted into its real
+  `filesDir` were then somewhere other than where Swift looked. The hook meant
+  to hand Swift the Activity's directories was documented and never installed.
+  Now the runtime asks the Activity for `filesDir` and `cacheDir` before
+  `configure`, and the Activity sets `TMPDIR` to `cacheDir` before the library
+  loads, so `NSTemporaryDirectory()` is right for app code too.
+
+  Verified with `Scripts/verify-android-data-dirs.sh` on an Android 11 Boox
+  Note5 and a Galaxy Z Fold7: every row holds on both. Built by the 0.11.7
+  CLI, the same app on the Boox reports /data/local/files and fails every
+  row; on Android 16, which sets `TMPDIR` itself, the old build was right.
+
+- **A Windows build compiles the app once, not twice.** Every `swift-pwa
+  build --target windows` first runs the app headlessly to check its
+  `permissions`, which compiles it in the configuration being built; the
+  bundler then ran `swift build` again and found nothing to compile. Each of
+  those builds is a chance for a stall in Swift 6.4.0's build planner on
+  GitHub's hosted Windows runners: four cores on `[Pre-planning 1 / N]` for up
+  to 45 minutes, in about half of the last 40 runs of our own CI job, while a
+  Windows 11 machine takes 4.5 s for the same step (4 of 4). The bundler now
+  packages the exe the permission check built, and still builds when there
+  isn't one. This takes away one of the builds the stall can hit in an
+  adopter's release workflow; it doesn't stop the stall, which is
+  swift-build's (reported on swiftlang/swift-build#1883) and hit the
+  permission check's build and a plain debug build of the CLI in the very run
+  that verified this.
+
+  Verified with `Scripts/bundle-smoke-windows.ps1` on Windows x64 and in CI:
+  one release build per bundle where the runs before the change show two, and
+  the folder, portable and single-file launches all pass.
+
 ## [0.11.7] - 2026-10-18
 
 ### Added

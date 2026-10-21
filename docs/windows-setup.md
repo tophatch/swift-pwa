@@ -946,6 +946,23 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**`fs.thumbnail` gives no PDF thumbnail without a reader that installs one,
+and none for a OneDrive placeholder.** It asks the shell for the thumbnail
+Explorer shows (`SIIGBF_THUMBNAILONLY`, never the type's icon). Windows 11 has
+no PDF thumbnailer of its own — a PDF answers `null` until Acrobat, PowerToys
+or similar registers a handler — and the shell refuses to draw a file whose
+bytes are in the cloud (`WTS_E_DATAFILEUNAVAILABLE`) rather than download it,
+so a OneDrive placeholder answers `null` too and stays a placeholder.
+Measured on Windows 11 x64 and arm64 with `Scripts\verify-thumbnail-windows.ps1`
+(`-OneDrive` adds the placeholder rows).
+
+**`fs.readDir` and `fs.metadata` report a symbolic link itself, not what it
+names.** They read a file's kind, size and time from its directory entry
+(`GetFileAttributesExW`) rather than through Foundation, which opens the file
+to answer — and opening a OneDrive placeholder downloads it, so listing a
+OneDrive folder used to fetch every file in it. Links are rare on Windows; a
+cloud library isn't.
+
 **A logoff or shutdown gets at most 4.5 s.** Windows ends the process as soon
 as `WM_ENDSESSION` returns, so the runtime pumps messages and the main queue
 inside that handler until every page's teardown and `ctx.beforeClose` (reason
@@ -976,6 +993,20 @@ same change: an app declaring `windows.native_library_dirs` crashed SwiftPM with
 `Duplicate values for key: ProcessEnvironmentKey(value: "PATH")`, because the
 runtime-environment override was keyed `PATH` while Windows spells it `Path` and
 compares the two as equal.
+
+**A Windows build compiles the app once.** The permission check that every
+build runs first (see above) compiles the app in the configuration being built,
+with the same search paths, and the bundler packages that exe rather than
+running `swift build` again. A build whose permission check didn't run, or left
+no exe, still builds.
+
+**On GitHub's hosted Windows runners, any `swift build` can stall for tens of
+minutes.** Swift 6.4.0's build planner sits at four cores on
+`[Pre-planning 1 / N]`, compiling nothing, in about half of our CI runs — up
+to 45 minutes, for the app's build and for a plain debug build alike — where a
+Windows 11 machine takes about 4 s for the same step. It's swift-build's
+(swiftlang/swift-build#1883), and not reproducible off the runners. Budget a
+release workflow's Windows job for an hour rather than fifteen minutes.
 
 **A window moved to a negative coordinate used to kill the app.** `WM_MOVE`
 packs its coordinates as *signed* 16-bit words, and the handler read them
@@ -1192,17 +1223,17 @@ same file served out of a mount.
   allows custom text), which lives in `comctl32` **v6** — and v6
   only loads when the EXE has a `Microsoft.Windows.Common-Controls`
   manifest dependency baked into its resource section. The CLI
-  bundler embeds that manifest post-build via `mt.exe -manifest ...
-  -outputresource:<exe>;#1` (`WindowsBundler.embedComCtl6Manifest`);
-  the C++ shim cannot do it via `#pragma comment(linker,
+  bundler writes that manifest into the exe post-build as `RT_MANIFEST`
+  id 1, through the same kernel32 resource API as the icon and version
+  (`WindowsBundler.embedComCtl6Manifest`), so it needs no SDK tool on
+  PATH; the C++ shim cannot do it via `#pragma comment(linker,
   "/manifestdependency:...")` because `lld-link` (Swift-on-Windows
   uses clang-cl + lld-link, not MSVC's link.exe) silently drops the
-  pragma at .obj-merge time. If `mt.exe` isn't on PATH (you're in a
-  non-VS shell), the bundler warns and continues — `dialog.confirm`
-  with custom labels falls back to plain `MessageBoxW` at runtime.
-  To get the themed path: launch your build from inside a Visual
-  Studio Developer Shell (the same shell that already needs to be
-  active for `swift build` to find the MSVC + Windows SDK headers).
+  pragma at .obj-merge time. Through 0.11.7 this went through `mt.exe`,
+  was skipped with a warning when `mt.exe` wasn't on PATH, and — like
+  every resource edit then — left the exe's COFF header pointing at a
+  symbol table the edit had dropped, so `dumpbin` couldn't read a
+  bundled exe (#276). The symbol table is now carried across each edit.
 - **`.build\release` symlink warning is cosmetic.** Without
   Developer Mode (Settings → For developers → Developer Mode) or
   Administrator privileges, SwiftPM can't create the

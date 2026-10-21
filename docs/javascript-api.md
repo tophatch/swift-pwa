@@ -1066,13 +1066,48 @@ const { exists } = await __SWIFT_PWA__.invoke('fs.exists',   { path });
 await __SWIFT_PWA__.invoke('fs.mkdir',    { path, recursive: true });
 await __SWIFT_PWA__.invoke('fs.remove',   { path, recursive: true });
 const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path });
+// → entries: [{ name, path, isDir, isFile, size, modified }], size and
+//   modified as fs.metadata reports them, so a rescan needs no call per file.
+//   Optional loadingTimeoutMs: how long to wait for an Android network
+//   provider's current listing (default 10 s; 0 = its cache, at once); a
+//   provider that hasn't answered in time fails with E_STILL_LOADING
 await __SWIFT_PWA__.invoke('fs.copy',     { from, to });
 await __SWIFT_PWA__.invoke('fs.rename',   { from, to });
 const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
 // → { size, isDir, isFile, modified }
 // size: bytes, ABSENT when the source doesn't know
 // modified: ms since epoch, absent when the source doesn't record one
+const { image } = await __SWIFT_PWA__.invoke('fs.thumbnail', { path, maxSize: 256 });
+// → image: { dataBase64, mimeType: 'image/png', width, height }, or null
+//   when the platform has no thumbnail for the file
 ```
+
+**`fs.thumbnail`** is the platform's own thumbnail of a file — the cover a
+file manager shows — so a shelf of documents can show covers without the page
+rendering each one, and without reading the file at all where it isn't local.
+A cloud file gets the thumbnail its provider hands out (Drive renders one
+server-side) or `null`; the call never downloads the document. `null` is the
+normal answer for a type nothing thumbnails, and not an error; a path that
+doesn't exist is. `maxSize` (1–4096, default 256) bounds the longer side, and a
+provider may answer smaller: Google Drive for desktop on macOS gives a 128×128
+crop of the page whatever is asked for.
+
+```js
+const { image } = await __SWIFT_PWA__.invoke('fs.thumbnail', { path: book.path });
+cover.src = image ? `data:${image.mimeType};base64,${image.dataBase64}` : genericCover;
+```
+
+| | Where it comes from | A cloud file that isn't local |
+|---|---|---|
+| macOS, iOS | QuickLook (`QLThumbnailGenerator`), thumbnails only, never the type's icon | The provider's thumbnail; the file stays dataless |
+| Android | A document's provider, when it declares `FLAG_SUPPORTS_THUMBNAIL`; `ThumbnailUtils` (images, video) and `PdfRenderer` (page one) for a local file | Drive's server-side render, ~12 KB received for a 40 MB PDF |
+| Windows | The shell (`IShellItemImageFactory`, thumbnails only) | `null`: the shell won't draw a OneDrive placeholder without its bytes |
+| Linux | The freedesktop thumbnail cache, then the desktop's thumbnailer for the type | The cache only, for a file on a FUSE or network mount |
+
+Windows has no PDF thumbnailer of its own — a PDF gives `null` unless a reader
+that installs one (Acrobat, PowerToys) is there. Linux gives what the installed
+thumbnailers draw: GNOME and XFCE ship them for PDFs and images, a minimal
+install may have none. See each platform's setup doc for the detail.
 
 `FsPlugin` does not enforce a path scope. Apps that need a sandbox
 should layer it themselves — typically by gating writes behind
@@ -1090,10 +1125,13 @@ On **Android**, a `path` can be a `content://` URI from a SAF picker as well as
 a filesystem path, and `fs.readDir` walks a **tree** URI from
 `dialog.openDirectory` — each entry's `path` is its own document URI, which
 `fs.readBinary` and `fs.readDir` both accept, so a folder the user picked is a
-library you can list, descend and read. See
-[android-setup.md](android-setup.md#walking-a-folder-the-user-picked); the
-remaining directory-style calls (`mkdir` / `remove` / `copy` / `rename`) still
-refuse a content URI, because SAF has no POSIX equivalent for them.
+library you can list, descend and read. The tree URI followed by `/` and a
+relative path names a document below it, for every call, and `fs.writeText` /
+`fs.writeBinary` create the file (in a folder that exists) and `fs.mkdir` the
+folders, so writing into a picked folder is the same code as on desktop:
+`tree + '/.sync/progress/phone.json'`. See
+[android-setup.md](android-setup.md#walking-a-folder-the-user-picked); `remove`
+/ `copy` / `rename` still refuse a content URI.
 
 **Zip extraction (content packs)** — available only when an archive
 extractor is injected: `ctx.use(FsPlugin(SystemFs(extractor: ZIPExtractor())))`
@@ -1130,7 +1168,8 @@ On **Android**, `dialog.openFile` returns a `content://` SAF URI, and you can
 pass it straight to `fs.listZip` / `fs.extractZip` as `from` — they read it
 via the system `ContentResolver`, so a user-picked archive extracts off-bridge
 with no `readBinary`/`writeBinary` materialize step. (The destination `to` must
-still be a real path under `app.dataDir()`; SAF exposes no writable tree.)
+still be a real path under `app.dataDir()`: extraction writes through the
+filesystem, not through a provider.)
 
 **Zip creation (authoring / re-exporting a pack)** — the inverse of
 `fs.extractZip`, gated on the same injected extractor. For the common

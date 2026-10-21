@@ -42,6 +42,17 @@ unsigned char *swiftpwa_wic_encode_rgb(const unsigned char *pixels, int width,
 // failure. Truncates rather than overflowing `buf`.
 int swiftpwa_wic_decode_extensions(char *buf, int buf_len);
 
+// The shell's thumbnail of the file at `path` (UTF-16, NUL-terminated) — the
+// one Explorer shows — at most `max_size` pixels on its longer side, as a PNG
+// with alpha. Thumbnails only (SIIGBF_THUMBNAILONLY), never the type's icon.
+// Returns a buffer to free with swiftpwa_wic_free, or NULL with the shell's
+// HRESULT in `*out_hr` when there is none: WTS_E_FAILEDEXTRACTION for a type
+// with no thumbnail handler, WTS_E_DATAFILEUNAVAILABLE for a cloud placeholder
+// the shell won't download to draw.
+unsigned char *swiftpwa_shell_thumbnail_png(const unsigned short *path, int max_size,
+                                            int *out_w, int *out_h, int *out_len,
+                                            long *out_hr);
+
 // Free a buffer returned by the decode/encode functions above.
 void swiftpwa_wic_free(unsigned char *data);
 

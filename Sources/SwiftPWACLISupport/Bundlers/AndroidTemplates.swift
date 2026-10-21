@@ -795,6 +795,26 @@ enum AndroidTemplates {
 
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
+                if (!runtimeStarted) {
+                    // Foundation's temporary directory on Android is `TMPDIR`,
+                    // and nothing sets it before Android 12: on Android 11 it
+                    // fell back to /data/local/tmp, which an app can't write
+                    // (#312). Before the library loads, so no Swift code has
+                    // read it yet.
+                    android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, true)
+                }
+                if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    if (!runtimeStarted && runtimeOwner == null) {
+                        copyLaunchEnvironment(intent)
+                        chooseWebData()
+                    } else if (launchEnvironmentKeys(intent).isNotEmpty()) {
+                        android.util.Log.w(
+                            "swift-pwa",
+                            "ignoring this launch's SWIFT_PWA_* extras: the app was already running, and they " +
+                                "only apply when it starts. `am start -S` stops it first."
+                        )
+                    }
+                }
                 // Load the Swift-compiled .so. The base name matches
                 // the SwiftPM target name; the loader prepends `lib`
                 // and appends `.so`. Calling System.loadLibrary again
@@ -1183,6 +1203,58 @@ enum AndroidTemplates {
                     bridge.nativeHostEvent(payload.toString())
                 } catch (t: Throwable) {
                     android.util.Log.e("swift-pwa", "failed to push system.memoryPressure: ${t.message}")
+                }
+            }
+
+            /// Debug builds: the launch intent's `SWIFT_PWA_*` string extras
+            /// become the process's environment variables, which is where the
+            /// runtime reads them on every other platform. Android starts an app
+            /// with none of its caller's environment, so without this a test had
+            /// no way to pass `SWIFT_PWA_WEB_DATA` or `SWIFT_PWA_INITIAL_ROUTE`:
+            /// `adb shell am start -S -n <pkg>/.MainActivity --es
+            /// SWIFT_PWA_WEB_DATA ephemeral` now does it. Debug only, because
+            /// any app on the device can start this one with extras of its
+            /// choosing. Called before the Swift library loads.
+            private fun copyLaunchEnvironment(intent: Intent?) {
+                val extras = intent?.extras ?: return
+                for (key in launchEnvironmentKeys(intent)) {
+                    val value = extras.getString(key)
+                    if (value == null) {
+                        android.util.Log.w("swift-pwa", "ignoring the launch extra $key: pass it as a string (--es)")
+                        continue
+                    }
+                    android.system.Os.setenv(key, value, true)
+                    android.util.Log.i("swift-pwa", "launch environment: $key=$value")
+                }
+            }
+
+            private fun launchEnvironmentKeys(intent: Intent?): List<String> =
+                intent?.extras?.keySet()?.filter { it.startsWith("SWIFT_PWA_") }.orEmpty()
+
+            /// `SWIFT_PWA_WEB_DATA=ephemeral` gives this process web storage of
+            /// its own, as it gives a launch on the other platforms: WebView keeps
+            /// its store in a directory named for a suffix the process sets
+            /// before its first WebView, so a suffix no earlier launch used
+            /// starts empty and leaves the app's real store untouched. Unlike the
+            /// other engines' stores it's on disk rather than in memory, so the
+            /// next launch deletes what earlier ephemeral ones left.
+            private fun chooseWebData() {
+                val prefix = "ephemeral-"
+                val leftovers = listOf(File(applicationInfo.dataDir), cacheDir).flatMap { dir ->
+                    dir.listFiles { file -> file.name.contains("webview_$prefix", ignoreCase = true) }.orEmpty().toList()
+                }
+                if (leftovers.isNotEmpty()) {
+                    thread(name = "swift-pwa-web-data-cleanup") { leftovers.forEach { it.deleteRecursively() } }
+                }
+                val raw = android.system.Os.getenv("SWIFT_PWA_WEB_DATA")
+                when (raw?.trim()?.lowercase()) {
+                    null, "", "persistent" -> {}
+                    "ephemeral" -> WebView.setDataDirectorySuffix(prefix + java.util.UUID.randomUUID().toString().take(8))
+                    else -> android.util.Log.w(
+                        "swift-pwa",
+                        "SWIFT_PWA_WEB_DATA=$raw isn't a setting — use `ephemeral`, or unset it. " +
+                            "Web storage is persistent for this launch."
+                    )
                 }
             }
 
@@ -1879,21 +1951,22 @@ enum AndroidTemplates {
                         DocumentsContract.getTreeDocumentId(currentUri)
                     }
                     val children = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, documentId)
-                    var found: Uri? = null
                     val projection = arrayOf(
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME
                     )
-                    activity.contentResolver.query(children, projection, null, null, null)?.use { cursor ->
-                        while (cursor.moveToNext()) {
-                            val id = cursor.getString(0) ?: continue
-                            val displayName = cursor.getString(1) ?: id.substringAfterLast('/')
-                            if (displayName == name) {
-                                found = DocumentsContract.buildDocumentUriUsingTree(treeUri, id)
-                                break
-                            }
-                        }
+                    val match = { cursor: android.database.Cursor ->
+                        val id = cursor.getString(0)
+                        val displayName = id?.let { cursor.getString(1) ?: it.substringAfterLast('/') }
+                        if (id != null && displayName == name) DocumentsContract.buildDocumentUriUsingTree(treeUri, id) else null
                     }
+                    // The cache first, so a page load doesn't wait on the
+                    // network for every file it asks for; refreshed only when
+                    // the name isn't there, which is a file added since.
+                    val found = SafChildren.query(activity.contentResolver, children, projection, 0L, refresh = false, row = match)
+                        .rows.firstOrNull()
+                        ?: SafChildren.query(activity.contentResolver, children, projection, 10_000L, row = match)
+                            .rows.firstOrNull()
                     val resolved = found ?: return null
                     currentUri = resolved
                     val prefix = segments.subList(0, index + 1).joinToString("/")
@@ -2244,7 +2317,14 @@ enum AndroidTemplates {
     import android.media.AudioFocusRequest
     import android.media.AudioManager
     import android.graphics.BitmapFactory
+    import android.graphics.Color
+    import android.graphics.Point
+    import android.graphics.pdf.PdfRenderer
+    import android.media.ThumbnailUtils
     import android.net.Uri
+    import android.os.ParcelFileDescriptor
+    import android.util.Size
+    import android.webkit.MimeTypeMap
     import android.os.Build
     import android.provider.DocumentsContract
     import android.provider.OpenableColumns
@@ -2265,6 +2345,7 @@ enum AndroidTemplates {
     import java.io.ByteArrayOutputStream
     import java.io.File
     import java.io.FileOutputStream
+    import java.io.IOException
     import java.net.HttpURLConnection
     import java.net.URL
     import java.security.MessageDigest
@@ -2278,6 +2359,110 @@ enum AndroidTemplates {
     import okhttp3.WebSocketListener
     import okio.ByteString
     /*__SWIFT_PWA_GENAI_IMPORTS__*/
+
+    /// A folder's children from its `DocumentsProvider`, current rather than
+    /// cached (#316).
+    ///
+    /// A network provider answers a children query from its local cache.
+    /// Measured with Drive: a file uploaded to a picked folder from a computer
+    /// stayed out of every listing for as long as anyone looked, and Drive never
+    /// marks such a listing `EXTRA_LOADING`. What brings it up to date is
+    /// `ContentResolver.refresh`, which Drive answers (true) by fetching the
+    /// folder and notifying the URI it names in the cursor's extras, about a
+    /// second later whether or not anything changed. So: list the cache, ask
+    /// for a refresh, wait for the notification (and for the provider to go
+    /// quiet, since Drive notifies more than once for a change), list again. A
+    /// provider that marks a listing `EXTRA_LOADING` is waited for the same
+    /// way. One that does neither — the local storage provider refuses
+    /// `refresh` — is listed once, with no wait.
+    ///
+    /// `waitMs` bounds the wait; `loading` in the result is true when it ran
+    /// out and the rows are the provider's cache. With `waitMs` 0 the cache is
+    /// returned at once, the refresh still asked for (unless `refresh` is
+    /// false) so the next listing is current.
+    internal object SafChildren {
+        class Listing<T>(val rows: List<T>, val loading: Boolean)
+
+        /// Drive puts the URI it notifies in this extra, the system picker's own,
+        /// and leaves the cursor's notification URI unset.
+        private const val PICKER_NOTIFICATION_URI = "com.android.documentsui.extra.NOTIFICATION_URI"
+
+        private class Read<T>(val rows: List<T>, val loading: Boolean, val notify: Uri?)
+
+        private fun <T> read(
+            resolver: android.content.ContentResolver,
+            children: Uri,
+            projection: Array<String>,
+            row: (android.database.Cursor) -> T?
+        ): Read<T> {
+            val cursor = resolver.query(children, projection, null, null, null)
+                ?: throw IllegalStateException("no provider answered for $children")
+            cursor.use {
+                val extras = it.extras
+                val rows = ArrayList<T>()
+                while (it.moveToNext()) row(it)?.let(rows::add)
+                @Suppress("DEPRECATION")
+                val notify = extras?.getParcelable<Uri>(PICKER_NOTIFICATION_URI) ?: it.notificationUri
+                return Read(rows, extras?.getBoolean(DocumentsContract.EXTRA_LOADING, false) == true, notify)
+            }
+        }
+
+        fun <T> query(
+            resolver: android.content.ContentResolver,
+            children: Uri,
+            projection: Array<String>,
+            waitMs: Long,
+            refresh: Boolean = true,
+            row: (android.database.Cursor) -> T?
+        ): Listing<T> {
+            val deadline = android.os.SystemClock.uptimeMillis() + waitMs
+            var current = read(resolver, children, projection, row)
+            val notify = current.notify
+            // Registered before the refresh is asked for, so its notification
+            // can't arrive first and go unseen.
+            val changes = java.util.concurrent.LinkedBlockingQueue<Long>()
+            val observer = object : android.database.ContentObserver(null) {
+                override fun onChange(selfChange: Boolean) {
+                    changes.offer(android.os.SystemClock.uptimeMillis())
+                }
+            }
+            if (notify != null) resolver.registerContentObserver(notify, true, observer)
+            try {
+                val refreshing = refresh && try {
+                    resolver.refresh(children, null, null)
+                } catch (t: Throwable) {
+                    false
+                }
+                if (!refreshing && !current.loading) return Listing(current.rows, false)
+                if (waitMs <= 0) return Listing(current.rows, false)
+                if (notify == null) return Listing(current.rows, true)
+                android.util.Log.i(
+                    "swift-pwa",
+                    "SAF listing refreshing at the provider ($children); waiting up to $waitMs ms"
+                )
+                while (true) {
+                    val remaining = deadline - android.os.SystemClock.uptimeMillis()
+                    if (remaining <= 0 ||
+                        changes.poll(remaining, java.util.concurrent.TimeUnit.MILLISECONDS) == null
+                    ) {
+                        return Listing(current.rows, true)
+                    }
+                    // Quiet for 300 ms, or the deadline: a change can come in
+                    // several notifications, and the listing between them may
+                    // be partial.
+                    while (changes.poll(300, java.util.concurrent.TimeUnit.MILLISECONDS) != null &&
+                        android.os.SystemClock.uptimeMillis() < deadline
+                    ) {
+                        changes.clear()
+                    }
+                    current = read(resolver, children, projection, row)
+                    if (!current.loading) return Listing(current.rows, false)
+                }
+            } finally {
+                if (notify != null) resolver.unregisterContentObserver(observer)
+            }
+        }
+    }
 
     /// Backing implementation for the System* plugin RPC the Swift
     /// side dispatches via `SwiftPWABridge.rpcCall`. One method per
@@ -2496,6 +2681,8 @@ enum AndroidTemplates {
                 "fs.writeContentUri" -> fsWriteContentUri(json, done)
                 "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
                 "fs.readDirContentUri" -> fsReadDirContentUri(json, done)
+                "fs.mkdirContentUri" -> fsMkdirContentUri(json, done)
+                "fs.thumbnailNative" -> fsThumbnailNative(json, done)
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
@@ -2511,6 +2698,11 @@ enum AndroidTemplates {
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
                 "app.label" -> done(appLabel(), null)
+                "app.directories" -> done(
+                    JSONObject().put("files", activity.filesDir.absolutePath)
+                        .put("cache", activity.cacheDir.absolutePath).toString(),
+                    null
+                )
                 "window.snapshot" -> windowSnapshot(done)
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)
@@ -4405,7 +4597,10 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val parsed = Uri.parse(uri)
+                    val parsed = resolveContentPath(uri) ?: run {
+                        done(null, "swift-pwa: fs.readContentUri: $uri doesn't exist")
+                        return@execute
+                    }
                     val bytes = activity.contentResolver.openInputStream(parsed)?.use {
                         it.readBytes()
                     } ?: run {
@@ -4431,7 +4626,12 @@ enum AndroidTemplates {
             backgroundExecutor.execute {
                 try {
                     val bytes = Base64.decode(b64, Base64.DEFAULT)
-                    val parsed = Uri.parse(uri)
+                    // A file that isn't there yet is created in its folder,
+                    // which has to exist, as on desktop (#318).
+                    val parsed = resolveContentPath(uri, Create.FILE, mimeTypeFor(uri)) ?: run {
+                        done(null, "swift-pwa: fs.writeContentUri: the folder for $uri doesn't exist")
+                        return@execute
+                    }
                     // Mode "rwt" truncates the existing document
                     // before writing — matches the desktop semantics
                     // of `writeBinary` overwriting in place. SAF
@@ -4502,42 +4702,45 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val tree = Uri.parse(uriString)
+                    val tree = resolveContentPath(uriString) ?: run {
+                        done(null, "swift-pwa: fs.readDir: $uriString doesn't exist")
+                        return@execute
+                    }
                     val documentId = if (DocumentsContract.isDocumentUri(activity, tree)) {
                         DocumentsContract.getDocumentId(tree)
                     } else {
                         DocumentsContract.getTreeDocumentId(tree)
                     }
                     val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)
+                    // Size and modified time come back in the same cursor, so
+                    // an app rescanning a library needn't query each file for
+                    // them (#317). Left out of a row the provider leaves blank.
                     val projection = arrayOf(
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_SIZE,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED
                     )
-                    val rows = ArrayList<JSONObject>()
-                    val cursor = activity.contentResolver.query(children, projection, null, null, null)
-                    if (cursor == null) {
-                        done(null, "swift-pwa: fs.readDir: no provider answered for $uriString")
-                        return@execute
+                    val waitMs = json.optLong("loadingTimeoutMs", 10_000L)
+                    val listing = SafChildren.query(activity.contentResolver, children, projection, waitMs) {
+                        val id = it.getString(0) ?: return@query null
+                        // A provider may omit the display name; the
+                        // document id is the only thing guaranteed, and a
+                        // listing with a blank name is worse than one
+                        // showing the id.
+                        val name = it.getString(1) ?: id.substringAfterLast('/')
+                        val isDir = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
+                        val row = JSONObject()
+                            .put("name", name)
+                            .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
+                            .put("isDir", isDir)
+                            .put("isFile", !isDir)
+                        if (!it.isNull(3)) row.put("size", it.getLong(3))
+                        if (!it.isNull(4)) row.put("modified", it.getLong(4))
+                        row
                     }
-                    cursor.use {
-                        while (it.moveToNext()) {
-                            val id = it.getString(0) ?: continue
-                            // A provider may omit the display name; the
-                            // document id is the only thing guaranteed, and a
-                            // listing with a blank name is worse than one
-                            // showing the id.
-                            val name = it.getString(1) ?: id.substringAfterLast('/')
-                            val isDir = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
-                            rows.add(
-                                JSONObject()
-                                    .put("name", name)
-                                    .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
-                                    .put("isDir", isDir)
-                                    .put("isFile", !isDir)
-                            )
-                        }
-                    }
+                    val rows = ArrayList(listing.rows)
                     // Sorted by name, because the path-backed `fs.readDir`
                     // sorts and a page that renders a library shouldn't have to
                     // care which one it got. A provider's own row order is
@@ -4545,7 +4748,11 @@ enum AndroidTemplates {
                     rows.sortBy { it.getString("name") }
                     val entries = JSONArray()
                     rows.forEach { entries.put(it) }
-                    done(JSONObject().put("entries", entries).toString(), null)
+                    // Still loading when the wait ran out: Swift reports that
+                    // as its own error rather than a listing, so an app can't
+                    // prune a library against rows the provider says are
+                    // incomplete.
+                    done(JSONObject().put("entries", entries).put("loading", listing.loading).toString(), null)
                 } catch (t: Throwable) {
                     done(
                         null,
@@ -4556,6 +4763,266 @@ enum AndroidTemplates {
             }
         }
 
+        /// The folder a tree URI grants, as a document URI; any other URI as it
+        /// is. `dialog.openDirectory` hands back the tree URI, which names the
+        /// grant rather than a document, and a provider is entitled to refuse a
+        /// query on it: Drive answers `UnsupportedOperationException:
+        /// Unsupported Uri`, so asking whether the picked folder still exists
+        /// answered no for a folder that was right there (#319).
+        private fun folderDocument(uri: Uri): Uri =
+            if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(activity, uri)) {
+                DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                uri
+            }
+
+        /// A tree or document URI under a picked tree, then optionally `/` and
+        /// a path below it — `<folder>/.sync/progress/phone.json` (#318). A
+        /// provider's document ids are its own (percent-encoded, no `/`), so
+        /// the URI is what an app holds and the path is what it names, the way
+        /// a directory and a relative path are on desktop.
+        private val contentPathPattern =
+            Regex("^(content://[^/?#]+/tree/[^/?#]+(?:/document/[^/?#]+)?)((?:/[^?#]*)?)$")
+
+        /// What `create` may make while resolving a content path.
+        private enum class Create { NOTHING, FILE, FOLDERS, LAST_FOLDER }
+
+        /// The document a content path names, or null where a segment of it
+        /// doesn't exist and `create` doesn't make it. Anything that isn't a
+        /// tree-based URI with a path — a single document from
+        /// `dialog.openFile`, say — is itself.
+        ///
+        /// Each name is looked up in the provider's cache, then, if it isn't
+        /// there, in a refreshed listing (#316) before anything is created:
+        /// Drive allows two files of one name, and a stale cache would
+        /// otherwise get a second `progress.json` beside the first.
+        private fun resolveContentPath(raw: String, create: Create = Create.NOTHING, mimeType: String? = null): Uri? {
+            val match = contentPathPattern.matchEntire(raw) ?: return Uri.parse(raw)
+            var current = folderDocument(Uri.parse(match.groupValues[1]))
+            val names = match.groupValues[2].split('/').filter { it.isNotEmpty() }.map { Uri.decode(it) }
+            for ((index, name) in names.withIndex()) {
+                val last = index == names.size - 1
+                val parentId = DocumentsContract.getDocumentId(current)
+                val children = DocumentsContract.buildChildDocumentsUriUsingTree(current, parentId)
+                val projection = arrayOf(
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID,
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                )
+                val parent = current
+                val named = { cursor: android.database.Cursor ->
+                    val id = cursor.getString(0)
+                    val display = id?.let { cursor.getString(1) ?: it.substringAfterLast('/') }
+                    if (id != null && display == name) DocumentsContract.buildDocumentUriUsingTree(parent, id) else null
+                }
+                val found = SafChildren.query(
+                    activity.contentResolver, children, projection, 0L, refresh = false, row = named
+                ).rows.firstOrNull()
+                    ?: SafChildren.query(activity.contentResolver, children, projection, 10_000L, row = named)
+                        .rows.firstOrNull()
+                if (found != null) {
+                    current = found
+                    continue
+                }
+                val makeFolder = (!last && create == Create.FOLDERS) ||
+                    (last && (create == Create.FOLDERS || create == Create.LAST_FOLDER))
+                val made = when {
+                    makeFolder -> DocumentsContract.createDocument(
+                        activity.contentResolver, current, DocumentsContract.Document.MIME_TYPE_DIR, name
+                    )
+                    last && create == Create.FILE -> DocumentsContract.createDocument(
+                        activity.contentResolver, current, mimeType ?: "application/octet-stream", name
+                    )
+                    else -> null
+                } ?: return null
+                current = made
+            }
+            return current
+        }
+
+        private fun mimeTypeFor(raw: String): String =
+            android.webkit.MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(raw.substringAfterLast('/').substringAfterLast('.', "").lowercase())
+                ?: "application/octet-stream"
+
+        /// `fs.mkdir` on a content path: the folders it names, made the way
+        /// `mkdir` makes them — every missing one with `recursive`, otherwise
+        /// only the last, under a parent that exists, and an error if it's
+        /// already there.
+        private fun fsMkdirContentUri(json: JSONObject, done: (String?, String?) -> Unit) {
+            val uri = json.optString("uri", "")
+            val recursive = json.optBoolean("recursive", false)
+            backgroundExecutor.execute {
+                try {
+                    if (!recursive && resolveContentPath(uri) != null) {
+                        done(null, "swift-pwa: fs.mkdir: $uri already exists")
+                        return@execute
+                    }
+                    resolveContentPath(uri, if (recursive) Create.FOLDERS else Create.LAST_FOLDER)
+                        ?: run {
+                            done(null, "swift-pwa: fs.mkdir: a parent of $uri doesn't exist (pass recursive: true)")
+                            return@execute
+                        }
+                    done(null, null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.mkdir failed for $uri: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        /// `fs.thumbnail` (#320): the platform's thumbnail, and never the
+        /// document's bytes where they aren't local. A content URI gets its
+        /// provider's thumbnail, asked for only when the provider says it has
+        /// one (`FLAG_SUPPORTS_THUMBNAIL`): without that flag, `loadThumbnail`
+        /// falls back to decoding an image document from its full bytes, which
+        /// for Drive is a download. A local file gets `ThumbnailUtils` for an
+        /// image or a video, and page one from `PdfRenderer` for a PDF.
+        private fun fsThumbnailNative(json: JSONObject, done: (String?, String?) -> Unit) {
+            val path = json.optString("path", "")
+            val maxSize = json.optInt("maxSize", 256)
+            if (path.isEmpty()) {
+                done(null, "swift-pwa: fs.thumbnail: path is empty")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val bitmap = if (path.startsWith("content://")) {
+                        val uri = resolveContentPath(path) ?: run {
+                            done(null, "swift-pwa: fs.thumbnail: $path doesn't exist")
+                            return@execute
+                        }
+                        documentThumbnail(uri, maxSize)
+                    } else {
+                        val file = File(path)
+                        if (!file.exists()) {
+                            done(null, "swift-pwa: fs.thumbnail: $path — no such file")
+                            return@execute
+                        }
+                        fileThumbnail(file, maxSize)
+                    }
+                    val payload = JSONObject()
+                    if (bitmap == null) {
+                        payload.put("image", JSONObject.NULL)
+                    } else {
+                        val fitted = fitWithin(bitmap, maxSize)
+                        val png = ByteArrayOutputStream()
+                        fitted.compress(Bitmap.CompressFormat.PNG, 100, png)
+                        payload.put("image", JSONObject()
+                            .put("dataBase64", Base64.encodeToString(png.toByteArray(), Base64.NO_WRAP))
+                            .put("mimeType", "image/png")
+                            .put("width", fitted.width)
+                            .put("height", fitted.height))
+                    }
+                    done(payload.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.thumbnail failed for $path: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun documentThumbnail(uri: Uri, maxSize: Int): Bitmap? {
+            var flags = 0
+            activity.contentResolver.query(
+                uri, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null
+            )?.use { cursor ->
+                val index = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+                if (cursor.moveToFirst() && index >= 0 && !cursor.isNull(index)) flags = cursor.getInt(index)
+            }
+            if (flags and DocumentsContract.Document.FLAG_SUPPORTS_THUMBNAIL == 0) return null
+            return try {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    activity.contentResolver.loadThumbnail(uri, Size(maxSize, maxSize), null)
+                } else {
+                    DocumentsContract.getDocumentThumbnail(activity.contentResolver, uri, Point(maxSize, maxSize), null)
+                }
+            } catch (e: IOException) {
+                // The provider claimed one and couldn't produce it — offline,
+                // or not for this document after all.
+                android.util.Log.i("swift-pwa", "fs.thumbnail: no thumbnail from the provider for $uri: ${e.message}")
+                null
+            }
+        }
+
+        private fun fileThumbnail(file: File, maxSize: Int): Bitmap? {
+            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: return null
+            return try {
+                when {
+                    mime == "application/pdf" -> pdfFirstPage(file, maxSize)
+                    mime.startsWith("image/") -> if (Build.VERSION.SDK_INT >= 29) {
+                        ThumbnailUtils.createImageThumbnail(file, Size(maxSize, maxSize), null)
+                    } else {
+                        BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply {
+                            inSampleSize = sampleSizeFor(file, maxSize)
+                        })
+                    }
+                    mime.startsWith("video/") -> if (Build.VERSION.SDK_INT >= 29) {
+                        ThumbnailUtils.createVideoThumbnail(file, Size(maxSize, maxSize), null)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        ThumbnailUtils.createVideoThumbnail(file.path, android.provider.MediaStore.Images.Thumbnails.MINI_KIND)
+                    }
+                    else -> null
+                }
+            } catch (e: IOException) {
+                // A file of an image or video type its decoder can't read.
+                android.util.Log.i("swift-pwa", "fs.thumbnail: no thumbnail for ${file.path}: ${e.message}")
+                null
+            }
+        }
+
+        private fun sampleSizeFor(file: File, maxSize: Int): Int {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.path, bounds)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSize) sample *= 2
+            return sample
+        }
+
+        private fun pdfFirstPage(file: File, maxSize: Int): Bitmap? {
+            val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = try {
+                PdfRenderer(descriptor)
+            } catch (e: Exception) {
+                // Password-protected (SecurityException) or not a PDF it can read.
+                descriptor.close()
+                android.util.Log.i("swift-pwa", "fs.thumbnail: PdfRenderer can't open ${file.path}: ${e.message}")
+                return null
+            }
+            try {
+                if (renderer.pageCount == 0) return null
+                val page = renderer.openPage(0)
+                try {
+                    val scale = maxSize.toFloat() / maxOf(page.width, page.height)
+                    val bitmap = Bitmap.createBitmap(
+                        maxOf(1, Math.round(page.width * scale)),
+                        maxOf(1, Math.round(page.height * scale)),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    // A page has no background of its own; a viewer shows it on white.
+                    bitmap.eraseColor(Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    return bitmap
+                } finally {
+                    page.close()
+                }
+            } finally {
+                renderer.close()
+            }
+        }
+
+        /// A provider is entitled to answer larger than asked; `maxSize` is a
+        /// bound the page lays out against.
+        private fun fitWithin(bitmap: Bitmap, maxSize: Int): Bitmap {
+            val longer = maxOf(bitmap.width, bitmap.height)
+            if (longer <= maxSize) return bitmap
+            val scale = maxSize.toFloat() / longer
+            return Bitmap.createScaledBitmap(
+                bitmap,
+                maxOf(1, Math.round(bitmap.width * scale)),
+                maxOf(1, Math.round(bitmap.height * scale)),
+                true
+            )
+        }
+
         private fun fsContentUriMetadata(json: JSONObject, done: (String?, String?) -> Unit) {
             val uri = json.optString("uri", "")
             if (uri.isEmpty()) {
@@ -4564,7 +5031,10 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val parsed = Uri.parse(uri)
+                    val parsed = resolveContentPath(uri)?.let(::folderDocument) ?: run {
+                        done(null, "swift-pwa: fs.contentUriMetadata: $uri doesn't exist")
+                        return@execute
+                    }
                     // OpenableColumns.SIZE is universally supported
                     // for openable content URIs; LAST_MODIFIED comes
                     // from DocumentsContract.Document and is

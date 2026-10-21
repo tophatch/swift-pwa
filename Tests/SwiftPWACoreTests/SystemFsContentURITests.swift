@@ -1,3 +1,4 @@
+import _SwiftPWATestSupport
 import Foundation
 @testable import SwiftPWACore
 import Testing
@@ -18,6 +19,8 @@ struct SystemFsContentURITests {
         var writes: [(String, Data)] = []
         var metas: [String] = []
         var lists: [String] = []
+        var listTimeouts: [Duration?] = []
+        var mkdirs: [String] = []
         var nextRead: Result<Data, any Error> = .success(Data())
         var nextWrite: (any Error)?
         var nextMeta: Result<FsMetadata, any Error> = .success(
@@ -41,7 +44,16 @@ struct SystemFsContentURITests {
         }
 
         func readDir(uri: String) async throws -> [FsEntry] {
+            try await readDir(uri: uri, loadingTimeout: nil)
+        }
+
+        func mkdir(uri: String, recursive: Bool) async throws {
+            mkdirs.append("\(uri) recursive=\(recursive)")
+        }
+
+        func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
             lists.append(uri)
+            listTimeouts.append(loadingTimeout)
             return try nextList.get()
         }
     }
@@ -159,6 +171,26 @@ struct SystemFsContentURITests {
         }
     }
 
+    @Test("mkdir below a picked tree goes to the resolver, as mkdir")
+    func mkdirRoutes() async throws {
+        let r = RecordingResolver()
+        try await withResolver(r) {
+            let fs = SystemFs()
+            try await fs.mkdir(path: "content://example/tree/root/.sync/progress", recursive: true)
+            try await fs.mkdir(path: "content://example/tree/root/one", recursive: false)
+            #expect(r.mkdirs == [
+                "content://example/tree/root/.sync/progress recursive=true",
+                "content://example/tree/root/one recursive=false"
+            ])
+        }
+        // A resolver written before folders could be made refuses.
+        SystemFs.setContentResolver(ListlessResolver())
+        defer { SystemFs.setContentResolver(nil) }
+        await #expect(throws: BridgeError.self) {
+            try await SystemFs().mkdir(path: "content://example/tree/root/x", recursive: true)
+        }
+    }
+
     @Test("the remaining directory-style ops on content:// throw unsupported")
     func directoryOpsUnsupported() async throws {
         // These should fail regardless of whether a resolver is
@@ -169,9 +201,6 @@ struct SystemFsContentURITests {
         let r = RecordingResolver()
         try await withResolver(r) {
             let fs = SystemFs()
-            await #expect(throws: BridgeError.self) {
-                try await fs.mkdir(path: "content://example/dir", recursive: false)
-            }
             await #expect(throws: BridgeError.self) {
                 try await fs.remove(path: "content://example/dir", recursive: false)
             }
@@ -222,6 +251,32 @@ struct SystemFsContentURITests {
             #expect(entries[0].path.hasPrefix("content://"))
             #expect(entries[1].isDir)
         }
+    }
+
+    @Test("fs.readDir's loadingTimeoutMs reaches the resolver, and a listing still loading fails as such")
+    @MainActor
+    func readDirLoadingTimeout() async {
+        let r = RecordingResolver()
+        let app = MockAppContext()
+        app.use(FsPlugin(SystemFs()))
+        func dispatch(_ payload: String) async -> InvocationResult {
+            let inv = Invocation(id: 1, command: "fs.readDir", payload: Data(payload.utf8))
+            return await app.registry.dispatch(CommandContext(invocation: inv, caller: .agent, appContext: app))
+        }
+        SystemFs.setContentResolver(r)
+        defer { SystemFs.setContentResolver(nil) }
+        _ = await dispatch(#"{"path":"content://example/tree/root","loadingTimeoutMs":2500}"#)
+        _ = await dispatch(#"{"path":"content://example/tree/root"}"#)
+        #expect(r.listTimeouts == [.milliseconds(2500), nil])
+
+        // What the Android resolver throws when the provider still says
+        // "loading": the page gets that code, not a generic failure.
+        r.nextList = .failure(BridgeError(code: BridgeError.stillLoading, message: "still loading"))
+        guard case let .failure(error) = await dispatch(#"{"path":"content://example/tree/root"}"#) else {
+            Issue.record("expected a failure")
+            return
+        }
+        #expect(error.code == "E_STILL_LOADING")
     }
 
     @Test("a resolver with no listing refuses rather than reporting an empty folder")

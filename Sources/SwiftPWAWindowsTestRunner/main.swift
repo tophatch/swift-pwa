@@ -456,6 +456,70 @@
         }
     }
 
+    /// What a listing and `metadata` report on Windows comes from the
+    /// directory entry rather than an opened file, which for a OneDrive
+    /// placeholder is a download (#320). The same answers either way.
+    func fsReadsFactsWithoutOpening() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fs = SystemFs()
+        let file = dir.appendingPathComponent("book.pdf").path
+        try await fs.writeText(path: file, contents: "abcdef")
+        try await fs.mkdir(path: dir.appendingPathComponent("series").path, recursive: false)
+        let entries = try await fs.readDir(path: dir.path)
+        let book = try require(entries.first { $0.name == "book.pdf" }, "book.pdf entry")
+        let series = try require(entries.first { $0.name == "series" }, "series entry")
+        try expect(book.isFile && !book.isDir && book.size == 6, "book.pdf: \(book)")
+        try expect(series.isDir && !series.isFile, "series: \(series)")
+        let now = Int64(Date().timeIntervalSince1970 * 1000)
+        try expect(abs((book.modified ?? 0) - now) < 60000, "book.pdf modified \(book.modified ?? -1), now \(now)")
+        let meta = try await fs.metadata(path: file)
+        try expect(meta.size == 6 && meta.isFile && meta.modified == book.modified, "metadata: \(meta)")
+        // remove: refuses a folder with something in it, then takes a file
+        // and the folder.
+        let seriesFile = dir.appendingPathComponent("series").appendingPathComponent("one.pdf").path
+        try await fs.writeText(path: seriesFile, contents: "x")
+        var refused = false
+        do { try await fs.remove(path: series.path, recursive: false) } catch { refused = true }
+        try expect(refused, "remove(non-empty folder) without recursive succeeded")
+        try await fs.remove(path: seriesFile, recursive: false)
+        try await fs.remove(path: series.path, recursive: false)
+        let seriesGone = try await !fs.exists(path: series.path)
+        try expect(seriesGone, "the removed folder still exists")
+        let exists = try await fs.exists(path: file)
+        let absentExists = try await fs.exists(path: file + ".absent")
+        try expect(exists, "exists(book.pdf) was false")
+        try expect(!absentExists, "exists(absent) was true")
+    }
+
+    /// The shell's thumbnail (#320): a PNG gives one within maxSize, a type
+    /// with no thumbnail handler gives nil, a missing path throws.
+    func fsThumbnailFromTheShell() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fs = SystemFs()
+        let png = dir.appendingPathComponent("cover.png")
+        try makeTestPNG(width: 600, height: 400).write(to: png)
+        let thumbnail = try await fs.thumbnail(path: png.path, maxSize: 128)
+        let image = try require(thumbnail, "cover.png thumbnail")
+        try expect(
+            max(image.width, image.height) <= 128 && max(image.width, image.height) >= 64,
+            "cover.png thumbnail is \(image.width)x\(image.height)"
+        )
+        try expect(
+            Data(base64Encoded: image.dataBase64)?.starts(with: [0x89, 0x50, 0x4E, 0x47]) == true,
+            "the thumbnail isn't a PNG"
+        )
+        let unknown = dir.appendingPathComponent("blob.swiftpwa-unknown")
+        try Data(repeating: 7, count: 4096).write(to: unknown)
+        let unknownImage = try await fs.thumbnail(path: unknown.path, maxSize: 128)
+        try expect(unknownImage == nil, "an unknown type gave a thumbnail")
+        do {
+            _ = try await fs.thumbnail(path: dir.appendingPathComponent("absent.png").path, maxSize: 128)
+            try fail("a missing path didn't throw")
+        } catch is BridgeError {}
+    }
+
     let cases: [(String, () async throws -> Void)] = [
         ("installAndRelaunch errors when no update has been staged", installAndRelaunchWithoutStagedUpdate),
         ("currentExecutablePath honours the explicit override", currentExecutablePathOverride),
@@ -476,7 +540,12 @@
         ("WIC encode keeps red and blue where they were (PNG + JPEG)", wicPreservesChannelOrder),
         ("non-image bytes fail as an error rather than a crash", wicRejectsNonImageData),
         ("app.openFile names a Windows path by its last component", openFileNamesAWindowsPath),
-        ("a reply's keys are sorted and malformed bytes refused", envelopeSortsAndChecksReplies)
+        ("a reply's keys are sorted and malformed bytes refused", envelopeSortsAndChecksReplies),
+        (
+            "readDir, metadata and exists report kind, size and time from the directory entry",
+            fsReadsFactsWithoutOpening
+        ),
+        ("fs.thumbnail gives the shell's thumbnail, nil for an unknown type", fsThumbnailFromTheShell)
     ]
 
     var passed = 0

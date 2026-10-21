@@ -7,6 +7,7 @@
 #define NOMINMAX
 
 #include <windows.h>
+#include <shobjidl.h>
 #include <wincodec.h>
 
 #include <algorithm>
@@ -14,6 +15,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -303,6 +305,134 @@ int decode_extensions_impl(char *buf, int buf_len) {
 
 } // namespace
 
+namespace {
+
+// Encodes top-down BGRA (straight alpha) as PNG.
+unsigned char *encode_bgra_png(IWICImagingFactory *factory, std::vector<BYTE> &pixels,
+                               UINT width, UINT height, int *out_len) {
+    IStream *stream = nullptr;
+    IWICBitmapEncoder *encoder = nullptr;
+    IWICBitmapFrameEncode *frame = nullptr;
+    IWICBitmap *bitmap = nullptr;
+    IWICFormatConverter *converter = nullptr;
+    unsigned char *result = nullptr;
+    const UINT stride = width * 4;
+    do {
+        if (FAILED(CreateStreamOnHGlobal(nullptr, TRUE, &stream))) break;
+        if (FAILED(factory->CreateEncoder(GUID_ContainerFormatPng, nullptr, &encoder))) break;
+        if (FAILED(encoder->Initialize(stream, WICBitmapEncoderNoCache))) break;
+        if (FAILED(encoder->CreateNewFrame(&frame, nullptr))) break;
+        if (FAILED(frame->Initialize(nullptr))) break;
+        if (FAILED(frame->SetSize(width, height))) break;
+        if (FAILED(factory->CreateBitmapFromMemory(width, height, GUID_WICPixelFormat32bppBGRA,
+                                                   stride, stride * height, pixels.data(), &bitmap)))
+            break;
+        // As in encode_rgb_impl: convert to whatever the encoder answers.
+        WICPixelFormatGUID format = GUID_WICPixelFormat32bppBGRA;
+        if (FAILED(frame->SetPixelFormat(&format))) break;
+        if (IsEqualGUID(format, GUID_WICPixelFormat32bppBGRA)) {
+            if (FAILED(frame->WriteSource(bitmap, nullptr))) break;
+        } else {
+            if (FAILED(factory->CreateFormatConverter(&converter))) break;
+            if (FAILED(converter->Initialize(bitmap, format, WICBitmapDitherTypeNone, nullptr, 0.0,
+                                             WICBitmapPaletteTypeCustom)))
+                break;
+            if (FAILED(frame->WriteSource(converter, nullptr))) break;
+        }
+        if (FAILED(frame->Commit())) break;
+        if (FAILED(encoder->Commit())) break;
+        HGLOBAL handle = nullptr;
+        if (FAILED(GetHGlobalFromStream(stream, &handle)) || !handle) break;
+        SIZE_T size = GlobalSize(handle);
+        if (size == 0 || size > static_cast<SIZE_T>(INT_MAX)) break;
+        void *locked = GlobalLock(handle);
+        if (!locked) break;
+        result = static_cast<unsigned char *>(std::malloc(size));
+        if (result) {
+            std::memcpy(result, locked, size);
+            *out_len = static_cast<int>(size);
+        }
+        GlobalUnlock(handle);
+    } while (false);
+    release(converter);
+    release(bitmap);
+    release(frame);
+    release(encoder);
+    release(stream);
+    return result;
+}
+
+unsigned char *shell_thumbnail_impl(const wchar_t *path, int max_size, int *out_w, int *out_h,
+                                    int *out_len, long *out_hr) {
+    IShellItemImageFactory *item = nullptr;
+    HRESULT hr = SHCreateItemFromParsingName(path, nullptr, IID_PPV_ARGS(&item));
+    if (FAILED(hr)) {
+        *out_hr = hr;
+        return nullptr;
+    }
+    HBITMAP hbitmap = nullptr;
+    hr = item->GetImage(SIZE{max_size, max_size}, SIIGBF_THUMBNAILONLY, &hbitmap);
+    release(item);
+    if (FAILED(hr) || !hbitmap) {
+        *out_hr = FAILED(hr) ? hr : E_FAIL;
+        return nullptr;
+    }
+
+    BITMAP info = {};
+    GetObject(hbitmap, sizeof(info), &info);
+    const UINT width = static_cast<UINT>(info.bmWidth);
+    const UINT height = static_cast<UINT>(info.bmHeight < 0 ? -info.bmHeight : info.bmHeight);
+    std::vector<BYTE> pixels(static_cast<size_t>(width) * height * 4);
+    BITMAPINFO header = {};
+    header.bmiHeader.biSize = sizeof(BITMAPINFOHEADER);
+    header.bmiHeader.biWidth = static_cast<LONG>(width);
+    header.bmiHeader.biHeight = -static_cast<LONG>(height); // top-down
+    header.bmiHeader.biPlanes = 1;
+    header.bmiHeader.biBitCount = 32;
+    header.bmiHeader.biCompression = BI_RGB;
+    HDC dc = GetDC(nullptr);
+    int rows = GetDIBits(dc, hbitmap, 0, height, pixels.data(), &header, DIB_RGB_COLORS);
+    ReleaseDC(nullptr, dc);
+    DeleteObject(hbitmap);
+    if (rows != static_cast<int>(height) || width == 0) {
+        *out_hr = E_FAIL;
+        return nullptr;
+    }
+
+    // A thumbnail without alpha (a photo, a page) comes back with every alpha
+    // byte zero; one with alpha comes back premultiplied, for AlphaBlend.
+    bool has_alpha = false;
+    for (size_t i = 3; i < pixels.size(); i += 4) {
+        if (pixels[i] != 0) { has_alpha = true; break; }
+    }
+    for (size_t i = 0; i < pixels.size(); i += 4) {
+        BYTE a = pixels[i + 3];
+        if (!has_alpha) {
+            pixels[i + 3] = 255;
+        } else if (a != 0 && a != 255) {
+            for (int c = 0; c < 3; c++) pixels[i + c] = static_cast<BYTE>(std::min(255, pixels[i + c] * 255 / a));
+        }
+    }
+
+    IWICImagingFactory *factory = make_factory();
+    if (!factory) {
+        *out_hr = E_FAIL;
+        return nullptr;
+    }
+    unsigned char *png = encode_bgra_png(factory, pixels, width, height, out_len);
+    release(factory);
+    if (!png) {
+        *out_hr = E_FAIL;
+        return nullptr;
+    }
+    *out_w = static_cast<int>(width);
+    *out_h = static_cast<int>(height);
+    *out_hr = S_OK;
+    return png;
+}
+
+} // namespace
+
 extern "C" {
 
 unsigned char *swiftpwa_wic_decode_rgb(const unsigned char *data, int len,
@@ -331,6 +461,32 @@ int swiftpwa_wic_decode_extensions(char *buf, int buf_len) {
     } catch (...) {
         return 0;
     }
+}
+
+unsigned char *swiftpwa_shell_thumbnail_png(const unsigned short *path, int max_size,
+                                            int *out_w, int *out_h, int *out_len,
+                                            long *out_hr) {
+    *out_hr = E_FAIL;
+    if (!path || max_size <= 0 || !out_w || !out_h || !out_len) return nullptr;
+    unsigned char *result = nullptr;
+    // A thread of its own, in a single-threaded apartment: the shell and its
+    // thumbnail handlers are written for STA, and the caller is a bridge
+    // pool thread in whatever apartment, if any, it happens to have.
+    try {
+        std::thread([&] {
+            HRESULT init = CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
+            try {
+                result = shell_thumbnail_impl(reinterpret_cast<const wchar_t *>(path), max_size, out_w,
+                                              out_h, out_len, out_hr);
+            } catch (...) {
+                result = nullptr;
+            }
+            if (SUCCEEDED(init)) CoUninitialize();
+        }).join();
+    } catch (...) {
+        return nullptr;
+    }
+    return result;
 }
 
 void swiftpwa_wic_free(unsigned char *data) {

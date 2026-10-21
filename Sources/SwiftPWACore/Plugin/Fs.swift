@@ -45,6 +45,11 @@ public protocol Fs: AnyObject, Sendable {
     /// `metadata(path:)` on the entry path if you need that.
     func readDir(path: String) async throws -> [FsEntry]
 
+    /// ``readDir(path:)``, waiting up to `loadingTimeout` for a source that
+    /// says its listing is still loading, rather than the source's default
+    /// wait. Throws `E_STILL_LOADING` when it still is.
+    func readDir(path: String, loadingTimeout: Duration?) async throws -> [FsEntry]
+
     /// Copy `from` to `to`. Behaves like `cp` for files; for
     /// directories the entire tree is copied. `to` must not exist.
     func copy(from: String, to: String) async throws
@@ -56,6 +61,15 @@ public protocol Fs: AnyObject, Sendable {
     /// File / directory metadata. `modified` is millisecond Unix epoch
     /// for compatibility with JS `new Date(...)`.
     func metadata(path: String) async throws -> FsMetadata
+
+    /// The platform's own thumbnail of the file at `path`, at most `maxSize`
+    /// pixels on its longer side, or nil where the platform has none — most
+    /// providers and most file types (#320).
+    ///
+    /// Never a download: a file that isn't local (a cloud placeholder, a
+    /// network document) gets a thumbnail only where its provider hands one
+    /// out without the bytes, and nil otherwise.
+    func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail?
 
     // MARK: - Archive (content packs)
 
@@ -97,6 +111,17 @@ public protocol Fs: AnyObject, Sendable {
 /// extractor) overrides these, so `MockFs` and any other `Fs` get the
 /// no-op-but-clear-error behavior for free.
 public extension Fs {
+    /// For an `Fs` written before listings could still be loading: the wait
+    /// is the source's own.
+    func readDir(path: String, loadingTimeout _: Duration?) async throws -> [FsEntry] {
+        try await readDir(path: path)
+    }
+
+    /// For an `Fs` written before thumbnails: there are none.
+    func thumbnail(path _: String, maxSize _: Int) async throws -> FsThumbnail? {
+        nil
+    }
+
     var supportsZip: Bool {
         false
     }
@@ -139,12 +164,12 @@ public extension Fs {
 /// otherwise platform-agnostic `SystemFs` defers URI-shaped paths to a
 /// resolver supplied by `SwiftPWAAndroid` (see `AndroidContentResolver`).
 ///
-/// `mkdir` / `readDir` / `copy` / `rename` aren't part of the contract:
-/// SAF doesn't expose directory-style operations on content URIs in a
-/// shape that maps cleanly onto the POSIX-flavoured Fs surface, so
-/// those operations throw on a `content://` argument rather than
-/// silently misbehaving. `exists` is satisfied by a successful
-/// `metadata` call.
+/// A picked tree's URI followed by `/` and a relative path names a document
+/// below it — `<tree>/.sync/progress/phone.json` — for every call here, and
+/// ``writeBinary(uri:data:)`` and ``mkdir(uri:recursive:)`` create what's
+/// missing (#318). `remove` / `copy` / `rename` aren't part of the contract
+/// and throw on a `content://` argument rather than silently misbehaving.
+/// `exists` is satisfied by a successful `metadata` call.
 public protocol FsContentResolver: Sendable {
     func readBinary(uri: String) async throws -> Data
     func writeBinary(uri: String, data: Data) async throws
@@ -158,6 +183,20 @@ public protocol FsContentResolver: Sendable {
     /// grant to it and can never learn the URIs of anything inside, which is
     /// the whole of a library whose files are the user's own (#246).
     func readDir(uri: String) async throws -> [FsEntry]
+
+    /// ``readDir(uri:)``, waiting up to `loadingTimeout` (nil: the resolver's
+    /// default) for a provider that marks its listing as still loading, and
+    /// throwing `E_STILL_LOADING` if it still is (#316).
+    func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry]
+
+    /// Create the folder a content path names, as `mkdir` does: every missing
+    /// folder with `recursive`, otherwise only the last, under a parent that
+    /// exists.
+    func mkdir(uri: String, recursive: Bool) async throws
+
+    /// ``Fs/thumbnail(path:maxSize:)`` for a content path and, on Android, for
+    /// a filesystem path too: every thumbnailer there is on the Kotlin side.
+    func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail?
 }
 
 public extension FsContentResolver {
@@ -169,6 +208,23 @@ public extension FsContentResolver {
             message: "fs.readDir: this content resolver cannot list \(uri)"
         )
     }
+
+    func readDir(uri: String, loadingTimeout _: Duration?) async throws -> [FsEntry] {
+        try await readDir(uri: uri)
+    }
+
+    /// Default for a resolver written before folders could be created.
+    func mkdir(uri: String, recursive _: Bool) async throws {
+        throw BridgeError(
+            code: BridgeError.handler,
+            message: "fs.mkdir: this content resolver cannot create \(uri)"
+        )
+    }
+
+    /// Default for a resolver written before thumbnails: there are none.
+    func thumbnail(path _: String, maxSize _: Int) async throws -> FsThumbnail? {
+        nil
+    }
 }
 
 // MARK: - DTOs
@@ -178,12 +234,21 @@ public struct FsEntry: Sendable, Codable, Equatable {
     public var path: String
     public var isDir: Bool
     public var isFile: Bool
+    /// Bytes, as ``FsMetadata/size`` reports them, and nil where the source
+    /// doesn't say. In the listing so an app that rescans a library to find
+    /// what changed needn't ask for each file's metadata, which on a network
+    /// `DocumentsProvider` is a query per file (#317).
+    public var size: Int64?
+    /// Milliseconds since the Unix epoch, as ``FsMetadata/modified``.
+    public var modified: Int64?
 
-    public init(name: String, path: String, isDir: Bool, isFile: Bool) {
+    public init(name: String, path: String, isDir: Bool, isFile: Bool, size: Int64? = nil, modified: Int64? = nil) {
         self.name = name
         self.path = path
         self.isDir = isDir
         self.isFile = isFile
+        self.size = size
+        self.modified = modified
     }
 }
 
@@ -211,11 +276,50 @@ public struct FsMetadata: Sendable, Codable, Equatable {
     }
 }
 
+/// A thumbnail from ``Fs/thumbnail(path:maxSize:)``: a PNG, at the size the
+/// platform drew it, which is at most the `maxSize` asked for and often less —
+/// a cloud provider answers with the size it has.
+public struct FsThumbnail: Sendable, Codable, Equatable {
+    public var dataBase64: String
+    public var mimeType: String
+    public var width: Int
+    public var height: Int
+
+    public init(png: Data, width: Int, height: Int) {
+        dataBase64 = png.base64EncodedString()
+        mimeType = "image/png"
+        self.width = width
+        self.height = height
+    }
+}
+
 // MARK: - Argument DTOs (used by `FsPlugin`)
 
 public struct FsPathArgs: Sendable, Codable, Equatable {
     public var path: String
     public init(path: String) { self.path = path }
+}
+
+public struct FsReadDirArgs: Sendable, Codable, Equatable {
+    public var path: String
+    /// How long to wait for a source that says its listing is still loading
+    /// (an Android network `DocumentsProvider`), in milliseconds. Absent: the
+    /// source's default, 10 s on Android.
+    public var loadingTimeoutMs: Int?
+    public init(path: String, loadingTimeoutMs: Int? = nil) {
+        self.path = path
+        self.loadingTimeoutMs = loadingTimeoutMs
+    }
+}
+
+public struct FsThumbnailArgs: Sendable, Codable, Equatable {
+    public var path: String
+    /// The longer side's bound, in pixels. Absent: 256.
+    public var maxSize: Int?
+    public init(path: String, maxSize: Int? = nil) {
+        self.path = path
+        self.maxSize = maxSize
+    }
 }
 
 public struct FsWriteTextArgs: Sendable, Codable, Equatable {
@@ -278,6 +382,18 @@ public struct FsBinaryResult: Sendable, Codable, Equatable {
 public struct FsExistsResult: Sendable, Codable, Equatable {
     public var exists: Bool
     public init(exists: Bool) { self.exists = exists }
+}
+
+/// `{ image }`, with `image` an explicit `null` where there's no thumbnail, so
+/// the page reads one shape either way.
+public struct FsThumbnailResult: Sendable, Codable, Equatable {
+    public var image: FsThumbnail?
+    public init(image: FsThumbnail?) { self.image = image }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(image, forKey: .image)
+    }
 }
 
 public struct FsReadDirResult: Sendable, Codable, Equatable {

@@ -266,8 +266,9 @@ public enum PlatformDirectories {
     #if os(Android)
         /// Fallback when no hook is installed: `NSTemporaryDirectory()` maps
         /// to `/data/data/<pkg>/cache` on Android, whose sibling `files` is
-        /// the persistent dir. The Android backend should install a `Hook`
-        /// with the Activity's real paths to avoid relying on this layout.
+        /// the persistent dir — where the Activity set `TMPDIR`. The Android
+        /// backend installs a `Hook` with the Activity's real paths at
+        /// startup, so this is only reached if the Activity didn't answer.
         private static func androidFilesFallback() -> URL {
             URL(fileURLWithPath: NSTemporaryDirectory())
                 .deletingLastPathComponent()

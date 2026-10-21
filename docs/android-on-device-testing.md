@@ -88,6 +88,32 @@ Any `FATAL EXCEPTION: main` from `AndroidRuntime:E` is a hard
 launch failure — common ones are documented in
 [android-setup.md](android-setup.md) §8.
 
+### Launch variables
+
+The `SWIFT_PWA_*` variables the other platforms read from a launch's
+environment are intent extras here, since Android starts an app with none of
+its caller's. A debug build copies every `SWIFT_PWA_*` string extra into its
+environment before the Swift runtime starts:
+
+```bash
+# A web store of the launch's own, and a screen to start on
+adb shell am start -S -n com.swiftpwa.hello/.MainActivity \
+  --es SWIFT_PWA_WEB_DATA ephemeral \
+  --es SWIFT_PWA_INITIAL_ROUTE /doc.html?id=42
+```
+
+Pass them with `--es`: an extra of another type is logged and skipped. `-S`
+matters. The variables apply when the process starts, and the runtime outlives
+its Activity, so a launch into an app that's still running keeps what it
+started with (logcat says so). A release build ignores them all, because any
+app on the device can start another with extras of its choosing.
+
+With `SWIFT_PWA_WEB_DATA=ephemeral` the WebView keeps its store in a data
+directory of the process's own, empty at the start and apart from the app's
+real one. WebView has no in-memory store, so it's on disk until the next
+launch deletes it. `Scripts/verify-android-web-data.sh` checks both variables
+on a device, with a control built by the last release's CLI.
+
 ## 3. Hooking up Chrome DevTools Protocol
 
 The WebView's CDP endpoint lives on a per-process abstract socket

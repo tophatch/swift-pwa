@@ -1,0 +1,217 @@
+<!doctype html>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Thumbnail probe</title>
+<style>
+  body { font: 14px system-ui; padding: 16px; }
+  #shelf img { margin: 4px; border: 1px solid #ccc; vertical-align: top; }
+  #rows { white-space: pre-wrap; font: 12px ui-monospace, monospace; }
+</style>
+<p>Thumbnail probe — <span id="state">idle</span></p>
+<div id="shelf"></div>
+<div id="rows"></div>
+<script>
+// fs.thumbnail on every platform (#320). Opened with ?run=1 the page runs its
+// rows itself and sets window.__done, so one `drive eval --wait` collects
+// them; Android's CDP eval calls the functions directly instead.
+//
+// Rows, each reported as a PASS / FAIL line:
+//   - a PDF, a PNG and a file of a type nothing thumbnails, written to the
+//     app's cache: page one, a thumbnail, null;
+//   - a missing path: an error;
+//   - with a cloud folder (?folder=<path>, or one picked with ?pick=1 and kept
+//     as a bookmark), each file in it that isn't local: whatever thumbnail its
+//     provider gives, and still not local afterwards.
+//
+// ?seed=<dir> writes the probe files into <dir> instead (a cloud folder, for
+// the script to make into placeholders), ?remove=<path> deletes one with
+// fs.remove, and ?report=<file> writes the rows to <file> and quits: Windows
+// launches the app where nothing can drive it.
+const invoke = (cmd, args) => __SWIFT_PWA__.invoke(cmd, args || {});
+const params = new URLSearchParams(location.search);
+const rows = [];
+function row(passed, name, detail) {
+  const line = (passed ? 'PASS ' : 'FAIL ') + name + (detail ? ' — ' + detail : '');
+  rows.push(line);
+  document.getElementById('rows').textContent = rows.join('\n');
+}
+
+// The PDF the unit tests and the Android script use: a red block across the
+// upper half, a blue one below on the left. A thumbnail of the page has both
+// where the page has them; a document icon has neither.
+function probePDF() {
+  const content = '1 0 0 rg 72 400 468 300 re f 0 0 1 rg 72 100 200 200 re f '
+    + 'BT /F1 48 Tf 0 0 0 rg 90 740 Td (THUMB PROBE) Tj ET';
+  const objects = [
+    '<< /Type /Catalog /Pages 2 0 R >>',
+    '<< /Type /Pages /Kids [3 0 R] /Count 1 >>',
+    '<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R '
+      + '/Resources << /Font << /F1 5 0 R >> >> >>',
+    '<< /Length ' + content.length + ' >>\nstream\n' + content + '\nendstream',
+    '<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>',
+  ];
+  let out = '%PDF-1.4\n';
+  const offsets = [];
+  objects.forEach((o, i) => { offsets.push(out.length); out += (i + 1) + ' 0 obj\n' + o + '\nendobj\n'; });
+  const xref = out.length;
+  out += 'xref\n0 ' + (objects.length + 1) + '\n0000000000 65535 f \n';
+  for (const o of offsets) out += String(o).padStart(10, '0') + ' 00000 n \n';
+  out += 'trailer\n<< /Size ' + (objects.length + 1) + ' /Root 1 0 R >>\nstartxref\n' + xref + '\n%%EOF\n';
+  return btoa(out);
+}
+function probePNG() {
+  const c = document.createElement('canvas');
+  c.width = 1200; c.height = 800;
+  const g = c.getContext('2d');
+  g.fillStyle = 'rgb(40,160,60)'; g.fillRect(0, 0, c.width, c.height);
+  return c.toDataURL('image/png').split(',')[1];
+}
+function randomBytes() {
+  const b = new Uint8Array(4096);
+  crypto.getRandomValues(b);
+  return btoa(String.fromCharCode(...b));
+}
+
+function colour(d) {
+  if (d[0] > 180 && d[1] < 90 && d[2] < 90) return 'red';
+  if (d[2] > 180 && d[0] < 90 && d[1] < 90) return 'blue';
+  if (d[0] > 200 && d[1] > 200 && d[2] > 200) return 'white';
+  return 'rgb(' + d[0] + ',' + d[1] + ',' + d[2] + ')';
+}
+
+const P = window.thumbProbe = {
+  sep: '/',
+  async setup(into) {
+    const info = await invoke('__platform.info');
+    P.os = info.os;
+    P.sep = info.os === 'windows' ? '\\' : '/';
+    const { value: cache } = await invoke('app.cacheDir');
+    const dir = into || cache + P.sep + 'thumbprobe';
+    await invoke('fs.mkdir', { path: dir, recursive: true });
+    await invoke('fs.writeBinary', { path: dir + P.sep + 'probe.pdf', dataBase64: probePDF() });
+    await invoke('fs.writeBinary', { path: dir + P.sep + 'probe.png', dataBase64: probePNG() });
+    await invoke('fs.writeBinary', { path: dir + P.sep + 'probe.swiftpwa-unknown', dataBase64: randomBytes() });
+    return dir;
+  },
+  // "<w>x<h> top=<colour> low=<colour>", "null" or "THREW <code> <message>".
+  async thumb(path, maxSize) {
+    try {
+      const { image } = await invoke('fs.thumbnail', { path, maxSize });
+      if (!image) return 'null';
+      const img = new Image();
+      img.src = 'data:' + image.mimeType + ';base64,' + image.dataBase64;
+      await img.decode();
+      img.title = path;
+      document.getElementById('shelf').appendChild(img);
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth; c.height = img.naturalHeight;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const at = (x, y) => colour(g.getImageData(Math.floor(x * c.width), Math.floor(y * c.height), 1, 1).data);
+      return image.width + 'x' + image.height + ' top=' + at(0.5, 0.3) + ' low=' + at(0.28, 0.75);
+    } catch (e) {
+      return 'THREW ' + (e.code || '') + ' ' + e.message;
+    }
+  },
+  async cloudState(path) {
+    try { return (await invoke('probe.cloudState', { path })).state; } catch (e) { return 'unknown'; }
+  },
+  async pick() {
+    const r = await invoke('dialog.openDirectory');
+    if (!r.path) return 'cancelled';
+    localStorage.setItem('tree', r.path);
+    if (r.bookmark) localStorage.setItem('bookmark', r.bookmark);
+    return r.path;
+  },
+  async folder() {
+    if (params.get('folder')) return params.get('folder');
+    const bookmark = localStorage.getItem('bookmark');
+    if (bookmark) {
+      const r = await invoke('dialog.resolveBookmark', { bookmark });
+      if (r.path) return r.path;
+    }
+    return localStorage.getItem('tree');
+  },
+  async run() {
+    const dir = await P.setup();
+    const at = (name) => dir + P.sep + name;
+    const maxSize = 256;
+
+    const within = (got) => {
+      const size = /^(\d+)x(\d+)/.exec(got);
+      return !!size && Math.max(+size[1], +size[2]) <= maxSize;
+    };
+    let got = await P.thumb(at('probe.pdf'), maxSize);
+    // Windows has no PDF thumbnailer of its own; a reader installed on the
+    // machine (Acrobat, PowerToys) brings one.
+    if (P.os === 'windows') {
+      row(got === 'null' || (got.includes('top=red low=blue') && within(got)),
+          'a local PDF gives page one, or null on Windows without a PDF handler', got);
+    } else {
+      row(got.includes('top=red low=blue') && within(got), 'a local PDF gives page one, within maxSize', got);
+    }
+    got = await P.thumb(at('probe.png'), maxSize);
+    row(within(got) && got.includes('rgb(40,160,60)'), 'a local PNG gives a thumbnail within maxSize', got);
+    got = await P.thumb(at('probe.swiftpwa-unknown'), maxSize);
+    row(got === 'null', 'a type with no thumbnailer gives null', got);
+    got = await P.thumb(at('absent.pdf'), maxSize);
+    row(/^THREW .*(no such file|doesn.t exist)/.test(got), 'a missing path is an error', got);
+
+    const folder = await P.folder();
+    if (folder) {
+      const { entries } = await invoke('fs.readDir', { path: folder });
+      let tried = 0;
+      const seen = entries.map((e) => e.name + (e.isFile ? '' : ' (not a file)'));
+      for (const e of entries.filter((e) => e.isFile)) {
+        const before = await P.cloudState(e.path);
+        seen[entries.indexOf(e)] += ': ' + before;
+        if (/^(local|current|downloaded)/.test(before)) continue;
+        const start = performance.now();
+        got = await P.thumb(e.path, maxSize);
+        const ms = Math.round(performance.now() - start);
+        const after = await P.cloudState(e.path);
+        row(!got.startsWith('THREW') && after === before,
+            'a cloud file that isn’t local: ' + e.name,
+            got + ' in ' + ms + ' ms; ' + before + ' → ' + after);
+        if (++tried === 6) break;
+      }
+      row(tried > 0, 'the cloud folder has files that aren’t local', folder + ' — ' + seen.join(', '));
+    }
+  },
+};
+
+(async () => {
+  const state = document.getElementById('state');
+  try {
+    if (params.get('remove')) {
+      const start = performance.now();
+      try {
+        await invoke('fs.remove', { path: params.get('remove') });
+        state.textContent = 'removed in ' + Math.round(performance.now() - start) + ' ms';
+      } catch (e) {
+        state.textContent = 'remove THREW ' + (e.code || '') + ' ' + e.message;
+      }
+    } else if (params.get('seed')) {
+      state.textContent = 'seeded ' + await P.setup(params.get('seed'));
+    } else if (params.get('pick')) {
+      state.textContent = 'picking';
+      // A picker presented while the window is still coming up is dismissed
+      // at once, which reads as a cancel.
+      await new Promise((resolve) => setTimeout(resolve, 1500));
+      state.textContent = 'picked ' + await P.pick();
+    } else if (params.get('run')) {
+      state.textContent = 'running';
+      await P.run();
+      state.textContent = 'done';
+    }
+  } catch (e) {
+    row(false, 'the probe itself', (e.code || '') + ' ' + e.message);
+    state.textContent = 'failed';
+  }
+  window.__done = true;
+  if (params.get('report')) {
+    await invoke('fs.writeText', { path: params.get('report'), contents: state.textContent + '\n' + rows.join('\n') + '\n' });
+    await invoke('app.quit');
+  }
+})();
+</script>

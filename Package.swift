@@ -319,7 +319,11 @@ let package = Package(
                 // libsecret (Secret Service) shim for LinuxSecretStore — the
                 // secrets.* plugin's Linux backing. Linux-only; on other
                 // platforms the edge is absent so the C targets aren't built.
-                .target(name: "CSecretShim", condition: .when(platforms: [.linux]))
+                .target(name: "CSecretShim", condition: .when(platforms: [.linux])),
+                // The shell's thumbnails for `fs.thumbnail` (#320), encoded
+                // by WIC. `.windows`, the same condition as `SwiftPWAImageIO`'s
+                // edge onto it: a shared target's edges must agree (#229).
+                .target(name: "CWicShim", condition: .when(platforms: [.windows]))
             ],
             // `Resources/bridge.js` is the canonical source of the JS runtime
             // but is deliberately NOT a SwiftPM resource: the generated
@@ -618,7 +622,12 @@ let package = Package(
             linkerSettings: [
                 .linkedLibrary("windowscodecs", .when(platforms: [.windows])),
                 .linkedLibrary("ole32", .when(platforms: [.windows])),
-                .linkedLibrary("oleaut32", .when(platforms: [.windows]))
+                .linkedLibrary("oleaut32", .when(platforms: [.windows])),
+                // swiftpwa_shell_thumbnail_png: the shell item, then the
+                // HBITMAP it hands back.
+                .linkedLibrary("shell32", .when(platforms: [.windows])),
+                .linkedLibrary("gdi32", .when(platforms: [.windows])),
+                .linkedLibrary("user32", .when(platforms: [.windows]))
             ]
         ),
         .target(

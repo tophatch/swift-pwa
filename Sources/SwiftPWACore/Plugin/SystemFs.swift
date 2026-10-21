@@ -1,4 +1,7 @@
 import Foundation
+#if os(Windows)
+    import WinSDK
+#endif
 
 /// Default `Fs` implementation backed by `FileManager` and
 /// `Data(contentsOf:)`. Portable across every backend: Apple
@@ -125,12 +128,13 @@ public final class SystemFs: Fs, @unchecked Sendable {
                 return false
             }
         }
-        return FileManager.default.fileExists(atPath: path)
+        return Self.facts(atPath: path) != nil
     }
 
     public func mkdir(path: String, recursive: Bool) async throws {
         if Self.isContentURI(path) {
-            throw contentURIOperationUnsupported("fs.mkdir", path: path)
+            // A folder below a picked tree: `<tree>/<relative path>` (#318).
+            return try await requireContentResolver("fs.mkdir").mkdir(uri: path, recursive: recursive)
         }
         do {
             try FileManager.default.createDirectory(
@@ -151,8 +155,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
             throw contentURIOperationUnsupported("fs.remove", path: path)
         }
         let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else {
+        // Not `fileExists`: on Windows that opens the file, and a OneDrive
+        // placeholder was downloaded in full just to be deleted.
+        guard let facts = Self.facts(atPath: path) else {
             throw BridgeError(
                 code: BridgeError.handler,
                 message: "fs.remove: \(path) does not exist"
@@ -161,7 +166,7 @@ public final class SystemFs: Fs, @unchecked Sendable {
         // For directories with content, refuse without `recursive`
         // — matches the `rm -d` / `rmdir` distinction. For an empty
         // directory either flag works.
-        if isDir.boolValue, !recursive {
+        if facts.isDir, !recursive {
             let contents = (try? fm.contentsOfDirectory(atPath: path)) ?? []
             if !contents.isEmpty {
                 throw BridgeError(
@@ -181,12 +186,16 @@ public final class SystemFs: Fs, @unchecked Sendable {
     }
 
     public func readDir(path: String) async throws -> [FsEntry] {
+        try await readDir(path: path, loadingTimeout: nil)
+    }
+
+    public func readDir(path: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
         if Self.isContentURI(path) {
             // A SAF tree the user picked. Each entry comes back with its own
             // document URI as its `path`, so the read that already works can
             // open it and a subdirectory can be listed in turn — recursion is
             // the caller's, exactly as it is for a filesystem path.
-            return try await requireContentResolver("fs.readDir").readDir(uri: path)
+            return try await requireContentResolver("fs.readDir").readDir(uri: path, loadingTimeout: loadingTimeout)
         }
         let fm = FileManager.default
         let entries: [String]
@@ -204,14 +213,17 @@ public final class SystemFs: Fs, @unchecked Sendable {
         let sorted = entries.sorted()
         let baseURL = URL(fileURLWithPath: path, isDirectory: true)
         return sorted.map { name in
-            let full = baseURL.appendingPathComponent(name).path
-            var isDir: ObjCBool = false
-            let exists = fm.fileExists(atPath: full, isDirectory: &isDir)
+            // `isDirectory` given, or Foundation stats the path to find out —
+            // on Windows by opening it (see `facts(atPath:)`).
+            let full = baseURL.appendingPathComponent(name, isDirectory: false).path
+            let facts = Self.facts(atPath: full)
             return FsEntry(
                 name: name,
                 path: full,
-                isDir: exists && isDir.boolValue,
-                isFile: exists && !isDir.boolValue
+                isDir: facts?.isDir ?? false,
+                isFile: facts.map { !$0.isDir } ?? false,
+                size: facts?.size,
+                modified: facts?.modified
             )
         }
     }
@@ -248,29 +260,97 @@ public final class SystemFs: Fs, @unchecked Sendable {
         if Self.isContentURI(path) {
             return try await requireContentResolver("fs.metadata").metadata(uri: path)
         }
-        let fm = FileManager.default
-        let attrs: [FileAttributeKey: Any]
-        do {
-            attrs = try fm.attributesOfItem(atPath: path)
-        } catch {
-            throw BridgeError(
-                code: BridgeError.handler,
-                message: "fs.metadata failed at \(path): \(error.localizedDescription)"
+        #if os(Windows)
+            // Without opening the file, which for a cloud placeholder is a
+            // download (see `facts(atPath:)`).
+            guard let facts = Self.facts(atPath: path) else {
+                throw BridgeError(code: BridgeError.handler, message: "fs.metadata failed at \(path): no such file")
+            }
+            return FsMetadata(size: facts.size, isDir: facts.isDir, isFile: !facts.isDir, modified: facts.modified)
+        #else
+            let fm = FileManager.default
+            let attrs: [FileAttributeKey: Any]
+            do {
+                attrs = try fm.attributesOfItem(atPath: path)
+            } catch {
+                throw BridgeError(
+                    code: BridgeError.handler,
+                    message: "fs.metadata failed at \(path): \(error.localizedDescription)"
+                )
+            }
+            let kind = attrs[.type] as? FileAttributeType
+            let isDir = (kind == .typeDirectory)
+            // `typeRegular` is the canonical "plain file"; symlinks /
+            // sockets / devices fall through and report `isFile: false`.
+            let isFile = (kind == .typeRegular)
+            // Nil rather than 0 when the attribute is absent: `size` means
+            // "unknown" now, and a real `stat` always has one — so this never
+            // reports nil for a path, which is what makes nil meaningful when a
+            // content provider does.
+            let size = (attrs[.size] as? Int64) ?? (attrs[.size] as? Int).map(Int64.init)
+            let modified = (attrs[.modificationDate] as? Date)
+                .map { Int64($0.timeIntervalSince1970 * 1000) }
+            return FsMetadata(size: size, isDir: isDir, isFile: isFile, modified: modified)
+        #endif
+    }
+
+    public func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail? {
+        #if os(Android)
+            // Android's thumbnailers — a provider's, `ThumbnailUtils`,
+            // `PdfRenderer` — are all Kotlin, for a local path as for a
+            // content URI.
+            return try await requireContentResolver("fs.thumbnail").thumbnail(path: path, maxSize: maxSize)
+        #else
+            if Self.isContentURI(path) {
+                return try await requireContentResolver("fs.thumbnail").thumbnail(path: path, maxSize: maxSize)
+            }
+            // A cloud placeholder exists here without its bytes, so this asks
+            // nothing of the provider.
+            guard Self.facts(atPath: path) != nil else {
+                throw BridgeError(code: BridgeError.handler, message: "fs.thumbnail: \(path) — no such file")
+            }
+            return try await PlatformThumbnail.make(path: path, maxSize: maxSize)
+        #endif
+    }
+
+    /// What a listing reports of a path — kind, size, modification time — or
+    /// nil when nothing is there.
+    ///
+    /// On Windows, read from the directory entry (`GetFileAttributesExW`)
+    /// rather than through `FileManager`: swift-corelibs-foundation answers
+    /// `fileExists`, `attributesOfItem`, `resolvingSymlinksInPath`,
+    /// `resourceValues` and a file URL's `appendingPathComponent(_:)` (which
+    /// stats the result to learn whether it's a directory) by opening the
+    /// file, and opening a OneDrive placeholder downloads it — measured, each
+    /// of the five turned a placeholder into a local file, where
+    /// `contentsOfDirectory` didn't. So listing a OneDrive folder downloaded
+    /// every file in it. The price is that a symbolic link
+    /// reports itself rather than what it names, which on Windows is rare.
+    static func facts(atPath path: String) -> (isDir: Bool, size: Int64?, modified: Int64?)? {
+        #if os(Windows)
+            var data = WIN32_FILE_ATTRIBUTE_DATA()
+            let found = path.withCString(encodedAs: UTF16.self) {
+                GetFileAttributesExW($0, GetFileExInfoStandard, &data)
+            }
+            guard found else { return nil }
+            let isDir = data.dwFileAttributes & DWORD(FILE_ATTRIBUTE_DIRECTORY) != 0
+            let size = Int64(data.nFileSizeHigh) << 32 | Int64(data.nFileSizeLow)
+            // 100 ns ticks since 1601 to milliseconds since 1970.
+            let ticks = Int64(data.ftLastWriteTime.dwHighDateTime) << 32 | Int64(data.ftLastWriteTime.dwLowDateTime)
+            return (isDir, size, (ticks - 116_444_736_000_000_000) / 10000)
+        #else
+            let fm = FileManager.default
+            var isDir: ObjCBool = false
+            guard fm.fileExists(atPath: path, isDirectory: &isDir) else { return nil }
+            // Through a link to what it names, as `fileExists` does, so a
+            // linked file reports the file's size rather than the link's.
+            let attrs = try? fm.attributesOfItem(atPath: (path as NSString).resolvingSymlinksInPath)
+            return (
+                isDir.boolValue,
+                (attrs?[.size] as? Int64) ?? (attrs?[.size] as? Int).map(Int64.init),
+                (attrs?[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970 * 1000) }
             )
-        }
-        let kind = attrs[.type] as? FileAttributeType
-        let isDir = (kind == .typeDirectory)
-        // `typeRegular` is the canonical "plain file"; symlinks /
-        // sockets / devices fall through and report `isFile: false`.
-        let isFile = (kind == .typeRegular)
-        // Nil rather than 0 when the attribute is absent: `size` means
-        // "unknown" now, and a real `stat` always has one — so this never
-        // reports nil for a path, which is what makes nil meaningful when a
-        // content provider does.
-        let size = (attrs[.size] as? Int64) ?? (attrs[.size] as? Int).map(Int64.init)
-        let modified = (attrs[.modificationDate] as? Date)
-            .map { Int64($0.timeIntervalSince1970 * 1000) }
-        return FsMetadata(size: size, isDir: isDir, isFile: isFile, modified: modified)
+        #endif
     }
 
     // MARK: - Archive (content packs)

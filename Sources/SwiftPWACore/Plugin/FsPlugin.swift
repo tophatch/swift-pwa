@@ -86,8 +86,10 @@ public struct FsPlugin: Plugin {
 
         registry.register(
             "fs.readDir",
-            typed: { (args: FsPathArgs, _) async throws -> FsReadDirResult in
-                try await FsReadDirResult(entries: fs.readDir(path: args.path))
+            typed: { (args: FsReadDirArgs, _) async throws -> FsReadDirResult in
+                try await FsReadDirResult(entries: fs.readDir(
+                    path: args.path, loadingTimeout: args.loadingTimeoutMs.map { .milliseconds($0) }
+                ))
             }
         )
 
@@ -111,6 +113,20 @@ public struct FsPlugin: Plugin {
             "fs.metadata",
             typed: { (args: FsPathArgs, _) async throws -> FsMetadata in
                 try await fs.metadata(path: args.path)
+            }
+        )
+
+        registry.register(
+            "fs.thumbnail",
+            typed: { (args: FsThumbnailArgs, _) async throws -> FsThumbnailResult in
+                let maxSize = args.maxSize ?? 256
+                guard (1 ... 4096).contains(maxSize) else {
+                    throw BridgeError(
+                        code: BridgeError.decode,
+                        message: "fs.thumbnail: maxSize must be 1–4096 pixels, not \(maxSize)"
+                    )
+                }
+                return try await FsThumbnailResult(image: fs.thumbnail(path: args.path, maxSize: maxSize))
             }
         )
 

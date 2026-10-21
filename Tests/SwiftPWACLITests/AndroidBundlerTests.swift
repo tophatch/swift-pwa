@@ -781,6 +781,80 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBackWatchers.script.contains("window.CloseWatcher = class CloseWatcher extends Native"))
     }
 
+    @Test("A debug cold start takes SWIFT_PWA_* extras as env before the library and the first WebView")
+    func launchExtrasBecomeEnvironment() throws {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        // Debug builds only: any app can start this one with extras.
+        let gate = try #require(activity.range(of: """
+        if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
+                    if (!runtimeStarted && runtimeOwner == null) {
+                        copyLaunchEnvironment(intent)
+                        chooseWebData()
+        """))
+        // Before the runtime can read its environment, and before a WebView
+        // exists, which is when WebView stops taking a data directory suffix.
+        let load = try #require(activity.range(of: "System.loadLibrary(\"Hi\")"))
+        let webView = try #require(activity.range(of: "webView = WebView(this)"))
+        #expect(gate.upperBound < load.lowerBound && load.upperBound < webView.lowerBound)
+        #expect(activity.contains("android.system.Os.setenv(key, value, true)"))
+        #expect(activity.contains("it.startsWith(\"SWIFT_PWA_\")"))
+        #expect(activity.contains("\"ephemeral\" -> WebView.setDataDirectorySuffix(prefix +"))
+    }
+
+    @Test("TMPDIR is the cache dir before the library loads, and Swift can ask for both directories")
+    func androidDirectories() throws {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        let tmpdir = try #require(activity
+            .range(of: "android.system.Os.setenv(\"TMPDIR\", cacheDir.absolutePath, true)"))
+        let load = try #require(activity.range(of: "System.loadLibrary(\"Hi\")"))
+        #expect(tmpdir.upperBound < load.lowerBound)
+        // Not gated on a debug build: a release app on Android 11 needs it most.
+        let gate = try #require(activity.range(of: "FLAG_DEBUGGABLE) != 0) {"))
+        #expect(tmpdir.upperBound < gate.lowerBound)
+
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("\"app.directories\" -> done("))
+        #expect(plugins.contains(".put(\"files\", activity.filesDir.absolutePath)"))
+    }
+
+    @Test("A SAF listing asks the provider to refresh and waits for it, bounded")
+    func safListingRefreshes() {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("internal object SafChildren"))
+        #expect(plugins.contains("resolver.refresh(children, null, null)"))
+        // Drive names the URI it notifies here, not on the cursor.
+        #expect(plugins.contains("\"com.android.documentsui.extra.NOTIFICATION_URI\""))
+        #expect(plugins.contains("val waitMs = json.optLong(\"loadingTimeoutMs\", 10_000L)"))
+        #expect(plugins.contains(".put(\"loading\", listing.loading)"))
+        // Serving looks in the cache before it refreshes.
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        #expect(bridge.contains("projection, 0L, refresh = false, row = match)"))
+    }
+
+    @Test("A content path below a picked tree resolves, and writes create what's missing")
+    func contentPathsCreate() {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("private fun resolveContentPath(raw: String, create: Create = Create.NOTHING"))
+        #expect(plugins.contains("\"fs.mkdirContentUri\" -> fsMkdirContentUri(json, done)"))
+        #expect(plugins.contains("resolveContentPath(uri, Create.FILE, mimeTypeFor(uri))"))
+        // Looked up in a refreshed listing before anything is made.
+        #expect(plugins
+            .contains("SafChildren.query(activity.contentResolver, children, projection, 10_000L, row = named)"))
+        #expect(plugins.contains("DocumentsContract.createDocument("))
+    }
+
+    @Test("fs.thumbnail asks a provider only when it declares thumbnails, and never reads the document")
+    func thumbnails() {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("\"fs.thumbnailNative\" -> fsThumbnailNative(json, done)"))
+        // Without the flag, loadThumbnail decodes an image document from its
+        // full bytes — a download for Drive.
+        #expect(plugins.contains("if (flags and DocumentsContract.Document.FLAG_SUPPORTS_THUMBNAIL == 0) return null"))
+        #expect(plugins.contains("activity.contentResolver.loadThumbnail(uri, Size(maxSize, maxSize), null)"))
+        #expect(plugins.contains("PdfRenderer(descriptor)"))
+        #expect(plugins.contains("payload.put(\"image\", JSONObject.NULL)"))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

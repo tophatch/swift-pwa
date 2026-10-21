@@ -86,6 +86,36 @@
             }
         }
 
+        /// Ask the Activity for its `filesDir` and `cacheDir` and make them
+        /// `ctx.dataDirectory()` / `ctx.cacheDirectory()`.
+        ///
+        /// Without it both were derived from `NSTemporaryDirectory()`, which is
+        /// right only where `TMPDIR` is the app's cache dir: on Android 11
+        /// nothing set it, Foundation fell back to /data/local/tmp, and an
+        /// app's `configure` died writing to /data/local/files (#312). The
+        /// content packs the Activity extracts into its real `filesDir` were
+        /// then somewhere else than where Swift looked for them. Blocking and
+        /// bounded for the same reasons as ``installAppDisplayName()``; the
+        /// Activity now sets `TMPDIR` too, so the fallback is right if this
+        /// doesn't answer.
+        private nonisolated func installDirectories() {
+            struct Directories: Decodable { let files: String; let cache: String }
+            final class Box: @unchecked Sendable { var value: Directories? }
+            let box = Box()
+            let done = DispatchSemaphore(value: 0)
+            Task {
+                defer { done.signal() }
+                box.value = try? await AndroidRPC.call("app.directories", EmptyArgs(), as: Directories.self)
+            }
+            if done.wait(timeout: .now() + 2) != .success {
+                RuntimeDiagnostics.emit("swift-pwa: the Activity didn't answer app.directories in time")
+            }
+            guard let directories = box.value else { return }
+            let files = URL(fileURLWithPath: directories.files, isDirectory: true)
+            let cache = URL(fileURLWithPath: directories.cache, isDirectory: true)
+            PlatformDirectories.setHook(.init(dataDirectory: { files }, cacheDirectory: { cache }))
+        }
+
         public nonisolated func run(
             _ configure: @escaping @MainActor @Sendable (any AppContext) throws -> Void
         ) throws -> Never {
@@ -200,6 +230,7 @@
             // a folder named after the zygote would then exist on the device
             // for good.
             installAppDisplayName()
+            installDirectories()
 
             // After the sink, so a failure to install the watch reaches logcat
             // rather than the discarded stderr — the whole point of the change

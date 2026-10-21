@@ -236,9 +236,70 @@ struct Deploy: AsyncParsableCommand {
             let pkg = AndroidEntryDrift.resolvePackageId(pwa)
             let component = "\(pkg)/.MainActivity"
             print("→ launching \(component)")
-            try await Shell.run("adb", ["-s", serial, "shell", "am", "start", "-n", component, "-W"])
+            let started = try await Shell.capture(
+                "adb", ["-s", serial, "shell", "am", "start", "-n", component, "-W"]
+            )
+            print(started, terminator: "")
+            if let reason = await Self.androidLaunchProblem(amStart: started, package: pkg, serial: serial) {
+                // As on iOS: the install happened, so not an error, but not the
+                // line a running app prints either (#313).
+                print("Installed on \(serial); the app is not running: \(reason)")
+                return
+            }
         }
         print("Deployed to \(serial).")
+    }
+
+    /// Why the app `am start` just launched isn't running, or nil when it is.
+    ///
+    /// `am start -W` reports `Status: ok` whenever the intent was delivered, so
+    /// its exit status says nothing about the app. Measured on a Boox Note5:
+    /// the device's "App Freeze" disabled the freshly installed package 0.3 s
+    /// after launch and the reader came to the front, and `deploy` printed
+    /// "Deployed". An early native crash or an OEM task killer reads the same.
+    /// So what came to the front is taken from `am start`'s own report, and
+    /// two seconds later the package is checked for a process and for having
+    /// been disabled.
+    static func androidLaunchProblem(amStart: String, package: String, serial: String) async -> String? {
+        var problems: [String] = []
+        if let front = launchedActivity(fromAmStart: amStart), !front.hasPrefix(package + "/") {
+            problems.append("\(front) came to the front instead")
+        }
+        try? await Task.sleep(for: .seconds(2))
+        let disabledList = await (try? Shell.capture(
+            "adb", ["-s", serial, "shell", "pm", "list", "packages", "-d"], discardStderr: true
+        )) ?? ""
+        let disabled = disabledList.split(whereSeparator: \.isNewline)
+            .contains { $0.trimmingCharacters(in: .whitespaces) == "package:\(package)" }
+        if disabled {
+            problems.append("""
+            the package was disabled right after it launched, which a device's app-freezing setting does \
+            (Boox: App Freeze). Exempt the app there, or re-enable it with \
+            `adb -s \(serial) shell pm enable \(package)`
+            """)
+        }
+        let pid = await (try? Shell.capture(
+            "adb", ["-s", serial, "shell", "pidof", package], discardStderr: true
+        )) ?? ""
+        if pid.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, !disabled {
+            problems.append(
+                "its process isn't running; if it crashed at launch, `adb -s \(serial) logcat -b crash` says why"
+            )
+        }
+        return problems.isEmpty ? nil : problems.joined(separator: "; ")
+    }
+
+    /// The component on the `Activity:` line `am start -W` prints: the
+    /// activity that ended up in front.
+    static func launchedActivity(fromAmStart output: String) -> String? {
+        for line in output.split(whereSeparator: \.isNewline) {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            if trimmed.hasPrefix("Activity:") {
+                let value = trimmed.dropFirst("Activity:".count).trimmingCharacters(in: .whitespaces)
+                return value.isEmpty ? nil : value
+            }
+        }
+        return nil
     }
 
     /// Invoke the staged Gradle project's `gradlew` — the step `build`

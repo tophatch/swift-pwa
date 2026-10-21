@@ -70,6 +70,16 @@ Wireless adb rotates its port per session, so `--device <ip:port>` is the common
 daily case — deploy runs `adb connect <ip:port>` before installing, so you don't
 have to.
 
+**"Deployed" means the app is running.** `am start -W` says `Status: ok`
+whenever the launch intent was delivered, so deploy checks what it reports came
+to the front and, two seconds later, that the app has a process and wasn't
+disabled. If not, the last line is `Installed on <serial>; the app is not
+running:` and why — another activity in front, a process that's gone (look in
+`adb logcat -b crash`), or a package the device disabled as it launched, which
+an OEM app-freezing setting does (Boox's App Freeze; exempt the app, or
+`adb shell pm enable <package>`). The install still happened, so, as on iOS,
+that isn't an error exit.
+
 `adb` must be on `PATH`; deploy fails fast with an install-the-platform-tools
 hint if it isn't. The build prerequisites (NDK, JDK, the Swift Android SDK) reuse
 `swift-pwa doctor`'s preflight — the same heads-up `build` prints.

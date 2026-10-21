@@ -116,6 +116,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   the same app never listed the uploaded file in five listings over two
   minutes.
 
+- **`deploy --target android` no longer says "Deployed" when the app isn't
+  running** (#313). `am start -W` reports `Status: ok` whenever the launch
+  intent was delivered, so an app that crashed at launch, or that the device
+  froze as it started — a Boox Note5's App Freeze disabled a freshly installed
+  app 0.3 s after launch and put its own reader in front — was reported
+  deployed, and the next thing anyone did was look for a bug in their app. Now
+  deploy reads which activity `am start` put in front and, two seconds later,
+  checks for the app's process and whether the package was disabled, and ends
+  `Installed on <serial>; the app is not running:` with the reason, as the iOS
+  deploy does.
+
+  Verified with `Scripts/verify-android-deploy-launch.sh` on a Galaxy Z Fold7:
+  an app that runs is reported deployed and one that crashes in `configure` is
+  reported not running; the 0.11.7 CLI reported the crashing one deployed.
+
 - **`fs.metadata` and `fs.exists` answer for the folder `dialog.openDirectory`
   returned** (#319). A tree URI names the grant, not a document, and both
   Drive and the local storage provider refuse a query on one

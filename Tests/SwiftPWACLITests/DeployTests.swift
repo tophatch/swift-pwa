@@ -123,4 +123,23 @@ struct DeployTests {
         #expect(IOSDeviceResolver.parse("not json").isEmpty)
         #expect(IOSDeviceResolver.parse(#"{"result":{"devices":[]}}"#).isEmpty)
     }
+
+    // MARK: - am start -W
+
+    @Test("reads which activity ended up in front from am start -W")
+    func launchedActivity() {
+        // What a Boox printed when its App Freeze disabled the app as it launched (#313).
+        let frozen = """
+        Starting: Intent { cmp=com.example.reader/.MainActivity }
+        Status: ok
+        LaunchState: UNKNOWN (-1)
+        Activity: com.onyx/.reader.main.ui.MainActivity
+        WaitTime: 412
+        Complete
+        """
+        #expect(Deploy.launchedActivity(fromAmStart: frozen) == "com.onyx/.reader.main.ui.MainActivity")
+        let ours = "Status: ok\nLaunchState: COLD\nActivity: com.example.reader/.MainActivity\nTotalTime: 1340\n"
+        #expect(Deploy.launchedActivity(fromAmStart: ours) == "com.example.reader/.MainActivity")
+        #expect(Deploy.launchedActivity(fromAmStart: "Status: ok\nComplete\n") == nil)
+    }
 }

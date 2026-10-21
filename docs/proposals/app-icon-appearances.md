@@ -216,6 +216,19 @@ control stays light under the dark theme and gets auto-tinted under the tinted
 themes. One instrument trap: `NSWorkspace.icon(forFile:)` follows the system
 icon theme, not the drawing appearance or `NSApp.appearance`.
 
+**Clear, measured afterwards on macOS 27:** the Clear light and Clear dark
+styles also draw from the **tinted** art. The half-black/half-white split
+survived in both, rendered as grays, while the `.icns` control was flattened
+to one gray. This matches Icon Composer's model in the HIG (you annotate
+"default, dark, and mono" variants, and the system derives Clear and Tinted
+from mono), so the manifest needs no separate `clear` key: `tinted` is the
+mono art. A second instrument trap: from some point on,
+`NSWorkspace.icon(forFile:)` returned the generic *document* icon for any
+bundle outside an Applications folder, on two Macs, through a restart, even
+for a bundle that had rendered correctly earlier and for a copy of
+Calculator. Bundles in `~/Applications` render correctly, so probes go
+there.
+
 **R3, Android (a Samsung foldable, One UI, Android 16).**
 
 - `setComponentEnabledSetting` from inside the app takes ~1 ms per switch.

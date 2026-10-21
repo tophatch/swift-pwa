@@ -82,8 +82,8 @@ a human can read.
 ³ **App icons (#314) — the build and the `app.icon.*` commands are scripted**
 (`Scripts/verify-app-icons.sh` on macOS and the iOS Simulator,
 `Scripts/verify-android-app-icons.sh`, `Scripts\verify-app-icons-windows.ps1`,
-each with a control), first run 2026-10-21 (on Windows, the package rows;
-the taskbar rows need an unlocked desktop). What stays here is how each icon
+each with a control), first run 2026-10-21; the Windows taskbar rows need
+a logged-on, unlocked desktop. What stays here is how each icon
 style *looks*, which only a person can judge — the scripts check that the
 art is in the bundle and the commands answer, not that the home screen draws
 it.

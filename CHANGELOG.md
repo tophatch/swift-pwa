@@ -53,10 +53,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     about two seconds. An app without `alternate_icons` keeps its manifest
     unchanged. `Scripts/verify-android-app-icons.sh`.
   - **Windows** (MSIX): `dark` adds theme-qualified taskbar logos and a
-    `resources.pri` (`makepri.exe`). Built and installed on Windows 11 arm64,
-    the package carries all ten qualified logos and the index resolves them;
-    a hand-built package of the same shape made a Windows 11 x64 taskbar show
-    the dark art dark and the light art light, switching live with the theme.
+    `resources.pri` (`makepri.exe`). Built, installed and launched on
+    Windows 11 arm64, the taskbar showed the dark art with the taskbar dark
+    and the light art with it light, switching live with the theme (an x64
+    box showed the same with a hand-built package of this shape).
     `Scripts\verify-app-icons-windows.ps1`.
   - **Linux**: one icon, `supported: false`.
 

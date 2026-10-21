@@ -112,6 +112,28 @@ Enter-BuildEnv
 if (Test-Path $WorkDir) { cmd /c "rd /s /q `"\\?\$WorkDir`"" }
 New-Item -ItemType Directory -Path $WorkDir | Out-Null
 
+# The build outlasts the display timeout, and a display going off locks the
+# desktop, so hold it awake from the logged-on session until the run ends
+# (or an hour, should the run die before it can say so).
+$awakeStop = Join-Path $WorkDir "awake.stop"
+$awakeScript = Join-Path $WorkDir "awake.ps1"
+[IO.File]::WriteAllText($awakeScript, @"
+Add-Type -Name P -Namespace W -MemberDefinition '[DllImport("kernel32.dll")] public static extern uint SetThreadExecutionState(uint f);'
+[W.P]::SetThreadExecutionState(0x80000003) | Out-Null
+`$deadline = (Get-Date).AddHours(1)
+while (-not (Test-Path '$awakeStop') -and (Get-Date) -lt `$deadline) { Start-Sleep -Seconds 5 }
+"@, (New-Object System.Text.UTF8Encoding($true)))
+$awakeTask = "swift-pwa-app-icons-awake"
+cmd /c "schtasks /delete /tn $awakeTask /f >nul 2>&1"
+cmd /c "schtasks /create /tn $awakeTask /tr `"powershell -NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File '$awakeScript'`" /sc once /st 00:00 /it /f >nul 2>&1"
+cmd /c "schtasks /run /tn $awakeTask >nul 2>&1"
+function Stop-KeepAwake {
+    New-Item $awakeStop -ErrorAction SilentlyContinue | Out-Null
+    Start-Sleep -Seconds 6
+    cmd /c "schtasks /end /tn $awakeTask >nul 2>&1"
+    cmd /c "schtasks /delete /tn $awakeTask /f >nul 2>&1"
+}
+
 Write-Host "== building the CLI ==" -ForegroundColor Cyan
 Push-Location $Repo
 try {
@@ -245,6 +267,7 @@ Get-AppxPackage | Where-Object { `$_.Name -like '*iconprobe*' } | Remove-AppxPac
 "@ | Out-Null
     Get-ChildItem Cert:\LocalMachine\TrustedPeople, Cert:\CurrentUser\My |
         Where-Object Subject -eq "CN=$appId" | Remove-Item
+    Stop-KeepAwake
 }
 
 $rows | ForEach-Object { Write-Host $_ }

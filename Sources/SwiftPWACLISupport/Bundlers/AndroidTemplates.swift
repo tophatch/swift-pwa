@@ -4586,10 +4586,15 @@ enum AndroidTemplates {
                         DocumentsContract.getTreeDocumentId(tree)
                     }
                     val children = DocumentsContract.buildChildDocumentsUriUsingTree(tree, documentId)
+                    // Size and modified time come back in the same cursor, so
+                    // an app rescanning a library needn't query each file for
+                    // them (#317). Left out of a row the provider leaves blank.
                     val projection = arrayOf(
                         DocumentsContract.Document.COLUMN_DOCUMENT_ID,
                         DocumentsContract.Document.COLUMN_DISPLAY_NAME,
-                        DocumentsContract.Document.COLUMN_MIME_TYPE
+                        DocumentsContract.Document.COLUMN_MIME_TYPE,
+                        DocumentsContract.Document.COLUMN_SIZE,
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED
                     )
                     val rows = ArrayList<JSONObject>()
                     val cursor = activity.contentResolver.query(children, projection, null, null, null)
@@ -4606,13 +4611,14 @@ enum AndroidTemplates {
                             // showing the id.
                             val name = it.getString(1) ?: id.substringAfterLast('/')
                             val isDir = it.getString(2) == DocumentsContract.Document.MIME_TYPE_DIR
-                            rows.add(
-                                JSONObject()
-                                    .put("name", name)
-                                    .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
-                                    .put("isDir", isDir)
-                                    .put("isFile", !isDir)
-                            )
+                            val row = JSONObject()
+                                .put("name", name)
+                                .put("path", DocumentsContract.buildDocumentUriUsingTree(tree, id).toString())
+                                .put("isDir", isDir)
+                                .put("isFile", !isDir)
+                            if (!it.isNull(3)) row.put("size", it.getLong(3))
+                            if (!it.isNull(4)) row.put("modified", it.getLong(4))
+                            rows.add(row)
                         }
                     }
                     // Sorted by name, because the path-backed `fs.readDir`

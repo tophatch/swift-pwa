@@ -195,6 +195,29 @@ struct SystemFsTests {
         #expect(allFiles)
     }
 
+    @Test("readDir carries each entry's size and modification time, as metadata reports them")
+    func readDirSizes() async throws {
+        let dir = try makeTempDir()
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let fs = SystemFs()
+        let file = dir.appendingPathComponent("book.pdf").path
+        try await fs.writeText(path: file, contents: "abcdef")
+        try await fs.mkdir(path: dir.appendingPathComponent("series").path, recursive: false)
+        let entries = try await fs.readDir(path: dir.path)
+        let book = try #require(entries.first { $0.name == "book.pdf" })
+        let meta = try await fs.metadata(path: file)
+        #expect(book.size == 6)
+        #expect(book.modified != nil)
+        #expect(book.modified == meta.modified)
+        // Through the wire as fields of their own, absent when unknown.
+        let json = try String(decoding: JSONEncoder().encode(book), as: UTF8.self)
+        #expect(json.contains("\"size\":6"))
+        let unknown = try String(
+            decoding: JSONEncoder().encode(FsEntry(name: "a", path: "a", isDir: false, isFile: true)), as: UTF8.self
+        )
+        #expect(!unknown.contains("size") && !unknown.contains("modified"))
+    }
+
     @Test("metadata reports size and modification time")
     func metadata() async throws {
         let dir = try makeTempDir()

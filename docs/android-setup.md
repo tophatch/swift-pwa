@@ -851,7 +851,9 @@ provider is entitled to omit a row's size and modification time, so
 neither empty nor undated — test with `m.size == null` rather than `!m.size`,
 or a genuinely empty file reads as unknown. And listing is a
 `ContentResolver.query` per directory — cheap locally, a network round trip on
-Drive — so walk lazily rather than eagerly for a deep tree.
+Drive — so walk lazily rather than eagerly for a deep tree. Each entry carries
+`size` and `modified` from that same query, under the same rule, so a rescan
+that only wants to know what changed needs no `fs.metadata` per file.
 
 ### Which device is this?
 

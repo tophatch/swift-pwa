@@ -178,12 +178,21 @@ public struct FsEntry: Sendable, Codable, Equatable {
     public var path: String
     public var isDir: Bool
     public var isFile: Bool
+    /// Bytes, as ``FsMetadata/size`` reports them, and nil where the source
+    /// doesn't say. In the listing so an app that rescans a library to find
+    /// what changed needn't ask for each file's metadata, which on a network
+    /// `DocumentsProvider` is a query per file (#317).
+    public var size: Int64?
+    /// Milliseconds since the Unix epoch, as ``FsMetadata/modified``.
+    public var modified: Int64?
 
-    public init(name: String, path: String, isDir: Bool, isFile: Bool) {
+    public init(name: String, path: String, isDir: Bool, isFile: Bool, size: Int64? = nil, modified: Int64? = nil) {
         self.name = name
         self.path = path
         self.isDir = isDir
         self.isFile = isFile
+        self.size = size
+        self.modified = modified
     }
 }
 

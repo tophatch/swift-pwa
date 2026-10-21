@@ -46,6 +46,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   read an empty drop, and `Scripts/verify-ios-drop.sh` shows what a device
   delivers beside Safari and a Notes control.
 
+### Changed
+
+- **`fs.readDir` entries carry `size` and `modified`** (#317), on every
+  platform, as `fs.metadata` reports them: absent where the source doesn't
+  say. An app rescanning a library for what changed asked `fs.metadata` once
+  per file, which on Android's Drive provider is a query each — about 5 ms a
+  file, 20 s for a 4,000-book library on every return to the app — for two
+  columns the listing's own query could carry for nothing. On Android they
+  come from that query; on the desktops from the stat `readDir` already made.
+
+  Verified on a Galaxy Z Fold7 with `Scripts/verify-android-saf-tree.sh`,
+  which now also covers #319 and takes `-r` for a control built by the last
+  release: there every entry's `size` and `modified` are absent.
+
 ### Fixed
 
 - **`fs.metadata` and `fs.exists` answer for the folder `dialog.openDirectory`

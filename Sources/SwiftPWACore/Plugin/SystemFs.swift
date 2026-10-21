@@ -207,11 +207,16 @@ public final class SystemFs: Fs, @unchecked Sendable {
             let full = baseURL.appendingPathComponent(name).path
             var isDir: ObjCBool = false
             let exists = fm.fileExists(atPath: full, isDirectory: &isDir)
+            // Through a link to what it names, as `fileExists` does, so a
+            // linked file reports the file's size rather than the link's.
+            let attrs = try? fm.attributesOfItem(atPath: (full as NSString).resolvingSymlinksInPath)
             return FsEntry(
                 name: name,
                 path: full,
                 isDir: exists && isDir.boolValue,
-                isFile: exists && !isDir.boolValue
+                isFile: exists && !isDir.boolValue,
+                size: (attrs?[.size] as? Int64) ?? (attrs?[.size] as? Int).map(Int64.init),
+                modified: (attrs?[.modificationDate] as? Date).map { Int64($0.timeIntervalSince1970 * 1000) }
             )
         }
     }

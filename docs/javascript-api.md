@@ -1066,6 +1066,8 @@ const { exists } = await __SWIFT_PWA__.invoke('fs.exists',   { path });
 await __SWIFT_PWA__.invoke('fs.mkdir',    { path, recursive: true });
 await __SWIFT_PWA__.invoke('fs.remove',   { path, recursive: true });
 const { entries } = await __SWIFT_PWA__.invoke('fs.readDir', { path });
+// → entries: [{ name, path, isDir, isFile, size, modified }], size and
+//   modified as fs.metadata reports them, so a rescan needs no call per file
 await __SWIFT_PWA__.invoke('fs.copy',     { from, to });
 await __SWIFT_PWA__.invoke('fs.rename',   { from, to });
 const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });

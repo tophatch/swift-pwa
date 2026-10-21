@@ -82,6 +82,14 @@
             )
         }
 
+        public func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail? {
+            try await AndroidRPC.call(
+                "fs.thumbnailNative",
+                ContentURIThumbnailArgs(path: path, maxSize: maxSize),
+                as: FsThumbnailResult.self
+            ).image
+        }
+
         public func readDir(uri: String, loadingTimeout: Duration?) async throws -> [FsEntry] {
             let milliseconds = loadingTimeout.map { duration -> Int in
                 let (seconds, attoseconds) = duration.components
@@ -150,6 +158,13 @@
         /// True when the provider still marked the listing as loading once
         /// the wait ran out.
         let loading: Bool?
+    }
+
+    /// `{"path": "...", "maxSize": n}` for `fs.thumbnailNative`: a content
+    /// path or a filesystem one.
+    struct ContentURIThumbnailArgs: Encodable {
+        let path: String
+        let maxSize: Int
     }
 
     /// `{"uri": "...", "recursive": bool}` for `fs.mkdirContentUri`.

@@ -590,6 +590,22 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**`fs.thumbnail` gives what the desktop's thumbnailers draw.** It reads the
+shared thumbnail cache (`~/.cache/thumbnails`) first, then runs the
+`.thumbnailer` entry the desktop installed for the file's type and stores what
+it draws in that cache, where the file manager finds it too. GNOME has no
+thumbnail service, only those entries (Ubuntu 26.04 has no tumbler), and XFCE's
+tumbler reads the same ones, so running them covers both. A type with no entry
+answers `null`, as does a minimal install with none at all. A file on a FUSE or
+network mount (a GVFS Google Drive, sshfs) gets the cache only, because a
+thumbnailer reads the whole file. Two quirks it handles: Ubuntu's AppArmor
+profiles let a thumbnailer write only to GNOME's own output path, and atril's
+entry reads the size as a width (256×331 for a page asked for at 256), so the
+runtime runs it once more at the size that fits. Verified on Ubuntu 26.04
+(GNOME, GTK4, no tumbler) and Ubuntu 25.10 (GTK3, tumbler installed) with
+`Scripts/verify-thumbnail.sh`, which also checks the cached thumbnail with GIO's
+own validity test.
+
 **SIGTERM is a quit, not an ending.** A session ending, `systemd` stopping a
 unit, or `kill` goes through the same path as Ctrl+Q — every page gets its
 teardown and `ctx.beforeClose` runs with reason `.system` — so an app ends in

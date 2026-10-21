@@ -843,6 +843,18 @@ struct AndroidBundlerUnitTests {
         #expect(plugins.contains("DocumentsContract.createDocument("))
     }
 
+    @Test("fs.thumbnail asks a provider only when it declares thumbnails, and never reads the document")
+    func thumbnails() {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("\"fs.thumbnailNative\" -> fsThumbnailNative(json, done)"))
+        // Without the flag, loadThumbnail decodes an image document from its
+        // full bytes — a download for Drive.
+        #expect(plugins.contains("if (flags and DocumentsContract.Document.FLAG_SUPPORTS_THUMBNAIL == 0) return null"))
+        #expect(plugins.contains("activity.contentResolver.loadThumbnail(uri, Size(maxSize, maxSize), null)"))
+        #expect(plugins.contains("PdfRenderer(descriptor)"))
+        #expect(plugins.contains("payload.put(\"image\", JSONObject.NULL)"))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

@@ -293,6 +293,25 @@ public final class SystemFs: Fs, @unchecked Sendable {
         #endif
     }
 
+    public func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail? {
+        #if os(Android)
+            // Android's thumbnailers — a provider's, `ThumbnailUtils`,
+            // `PdfRenderer` — are all Kotlin, for a local path as for a
+            // content URI.
+            return try await requireContentResolver("fs.thumbnail").thumbnail(path: path, maxSize: maxSize)
+        #else
+            if Self.isContentURI(path) {
+                return try await requireContentResolver("fs.thumbnail").thumbnail(path: path, maxSize: maxSize)
+            }
+            // A cloud placeholder exists here without its bytes, so this asks
+            // nothing of the provider.
+            guard Self.facts(atPath: path) != nil else {
+                throw BridgeError(code: BridgeError.handler, message: "fs.thumbnail: \(path) — no such file")
+            }
+            return try await PlatformThumbnail.make(path: path, maxSize: maxSize)
+        #endif
+    }
+
     /// What a listing reports of a path — kind, size, modification time — or
     /// nil when nothing is there.
     ///

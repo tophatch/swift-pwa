@@ -2317,7 +2317,14 @@ enum AndroidTemplates {
     import android.media.AudioFocusRequest
     import android.media.AudioManager
     import android.graphics.BitmapFactory
+    import android.graphics.Color
+    import android.graphics.Point
+    import android.graphics.pdf.PdfRenderer
+    import android.media.ThumbnailUtils
     import android.net.Uri
+    import android.os.ParcelFileDescriptor
+    import android.util.Size
+    import android.webkit.MimeTypeMap
     import android.os.Build
     import android.provider.DocumentsContract
     import android.provider.OpenableColumns
@@ -2338,6 +2345,7 @@ enum AndroidTemplates {
     import java.io.ByteArrayOutputStream
     import java.io.File
     import java.io.FileOutputStream
+    import java.io.IOException
     import java.net.HttpURLConnection
     import java.net.URL
     import java.security.MessageDigest
@@ -2674,6 +2682,7 @@ enum AndroidTemplates {
                 "fs.contentUriMetadata" -> fsContentUriMetadata(json, done)
                 "fs.readDirContentUri" -> fsReadDirContentUri(json, done)
                 "fs.mkdirContentUri" -> fsMkdirContentUri(json, done)
+                "fs.thumbnailNative" -> fsThumbnailNative(json, done)
                 "fs.listZipNative" -> fsListZipNative(json, done)
                 "fs.extractZipNative" -> fsExtractZipNative(json, done)
                 "fs.createZipNative" -> fsCreateZipNative(json, done)
@@ -4858,6 +4867,160 @@ enum AndroidTemplates {
                     done(null, "swift-pwa: fs.mkdir failed for $uri: ${t.javaClass.simpleName}: ${t.message}")
                 }
             }
+        }
+
+        /// `fs.thumbnail` (#320): the platform's thumbnail, and never the
+        /// document's bytes where they aren't local. A content URI gets its
+        /// provider's thumbnail, asked for only when the provider says it has
+        /// one (`FLAG_SUPPORTS_THUMBNAIL`): without that flag, `loadThumbnail`
+        /// falls back to decoding an image document from its full bytes, which
+        /// for Drive is a download. A local file gets `ThumbnailUtils` for an
+        /// image or a video, and page one from `PdfRenderer` for a PDF.
+        private fun fsThumbnailNative(json: JSONObject, done: (String?, String?) -> Unit) {
+            val path = json.optString("path", "")
+            val maxSize = json.optInt("maxSize", 256)
+            if (path.isEmpty()) {
+                done(null, "swift-pwa: fs.thumbnail: path is empty")
+                return
+            }
+            backgroundExecutor.execute {
+                try {
+                    val bitmap = if (path.startsWith("content://")) {
+                        val uri = resolveContentPath(path) ?: run {
+                            done(null, "swift-pwa: fs.thumbnail: $path doesn't exist")
+                            return@execute
+                        }
+                        documentThumbnail(uri, maxSize)
+                    } else {
+                        val file = File(path)
+                        if (!file.exists()) {
+                            done(null, "swift-pwa: fs.thumbnail: $path — no such file")
+                            return@execute
+                        }
+                        fileThumbnail(file, maxSize)
+                    }
+                    val payload = JSONObject()
+                    if (bitmap == null) {
+                        payload.put("image", JSONObject.NULL)
+                    } else {
+                        val fitted = fitWithin(bitmap, maxSize)
+                        val png = ByteArrayOutputStream()
+                        fitted.compress(Bitmap.CompressFormat.PNG, 100, png)
+                        payload.put("image", JSONObject()
+                            .put("dataBase64", Base64.encodeToString(png.toByteArray(), Base64.NO_WRAP))
+                            .put("mimeType", "image/png")
+                            .put("width", fitted.width)
+                            .put("height", fitted.height))
+                    }
+                    done(payload.toString(), null)
+                } catch (t: Throwable) {
+                    done(null, "swift-pwa: fs.thumbnail failed for $path: ${t.javaClass.simpleName}: ${t.message}")
+                }
+            }
+        }
+
+        private fun documentThumbnail(uri: Uri, maxSize: Int): Bitmap? {
+            var flags = 0
+            activity.contentResolver.query(
+                uri, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null
+            )?.use { cursor ->
+                val index = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_FLAGS)
+                if (cursor.moveToFirst() && index >= 0 && !cursor.isNull(index)) flags = cursor.getInt(index)
+            }
+            if (flags and DocumentsContract.Document.FLAG_SUPPORTS_THUMBNAIL == 0) return null
+            return try {
+                if (Build.VERSION.SDK_INT >= 29) {
+                    activity.contentResolver.loadThumbnail(uri, Size(maxSize, maxSize), null)
+                } else {
+                    DocumentsContract.getDocumentThumbnail(activity.contentResolver, uri, Point(maxSize, maxSize), null)
+                }
+            } catch (e: IOException) {
+                // The provider claimed one and couldn't produce it — offline,
+                // or not for this document after all.
+                android.util.Log.i("swift-pwa", "fs.thumbnail: no thumbnail from the provider for $uri: ${e.message}")
+                null
+            }
+        }
+
+        private fun fileThumbnail(file: File, maxSize: Int): Bitmap? {
+            val mime = MimeTypeMap.getSingleton().getMimeTypeFromExtension(file.extension.lowercase()) ?: return null
+            return try {
+                when {
+                    mime == "application/pdf" -> pdfFirstPage(file, maxSize)
+                    mime.startsWith("image/") -> if (Build.VERSION.SDK_INT >= 29) {
+                        ThumbnailUtils.createImageThumbnail(file, Size(maxSize, maxSize), null)
+                    } else {
+                        BitmapFactory.decodeFile(file.path, BitmapFactory.Options().apply {
+                            inSampleSize = sampleSizeFor(file, maxSize)
+                        })
+                    }
+                    mime.startsWith("video/") -> if (Build.VERSION.SDK_INT >= 29) {
+                        ThumbnailUtils.createVideoThumbnail(file, Size(maxSize, maxSize), null)
+                    } else {
+                        @Suppress("DEPRECATION")
+                        ThumbnailUtils.createVideoThumbnail(file.path, android.provider.MediaStore.Images.Thumbnails.MINI_KIND)
+                    }
+                    else -> null
+                }
+            } catch (e: IOException) {
+                // A file of an image or video type its decoder can't read.
+                android.util.Log.i("swift-pwa", "fs.thumbnail: no thumbnail for ${file.path}: ${e.message}")
+                null
+            }
+        }
+
+        private fun sampleSizeFor(file: File, maxSize: Int): Int {
+            val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.path, bounds)
+            var sample = 1
+            while (maxOf(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSize) sample *= 2
+            return sample
+        }
+
+        private fun pdfFirstPage(file: File, maxSize: Int): Bitmap? {
+            val descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY)
+            val renderer = try {
+                PdfRenderer(descriptor)
+            } catch (e: Exception) {
+                // Password-protected (SecurityException) or not a PDF it can read.
+                descriptor.close()
+                android.util.Log.i("swift-pwa", "fs.thumbnail: PdfRenderer can't open ${file.path}: ${e.message}")
+                return null
+            }
+            try {
+                if (renderer.pageCount == 0) return null
+                val page = renderer.openPage(0)
+                try {
+                    val scale = maxSize.toFloat() / maxOf(page.width, page.height)
+                    val bitmap = Bitmap.createBitmap(
+                        maxOf(1, Math.round(page.width * scale)),
+                        maxOf(1, Math.round(page.height * scale)),
+                        Bitmap.Config.ARGB_8888
+                    )
+                    // A page has no background of its own; a viewer shows it on white.
+                    bitmap.eraseColor(Color.WHITE)
+                    page.render(bitmap, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                    return bitmap
+                } finally {
+                    page.close()
+                }
+            } finally {
+                renderer.close()
+            }
+        }
+
+        /// A provider is entitled to answer larger than asked; `maxSize` is a
+        /// bound the page lays out against.
+        private fun fitWithin(bitmap: Bitmap, maxSize: Int): Bitmap {
+            val longer = maxOf(bitmap.width, bitmap.height)
+            if (longer <= maxSize) return bitmap
+            val scale = maxSize.toFloat() / longer
+            return Bitmap.createScaledBitmap(
+                bitmap,
+                maxOf(1, Math.round(bitmap.width * scale)),
+                maxOf(1, Math.round(bitmap.height * scale)),
+                true
+            )
         }
 
         private fun fsContentUriMetadata(json: JSONObject, done: (String?, String?) -> Unit) {

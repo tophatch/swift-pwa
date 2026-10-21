@@ -1077,7 +1077,37 @@ const meta = await __SWIFT_PWA__.invoke('fs.metadata', { path });
 // → { size, isDir, isFile, modified }
 // size: bytes, ABSENT when the source doesn't know
 // modified: ms since epoch, absent when the source doesn't record one
+const { image } = await __SWIFT_PWA__.invoke('fs.thumbnail', { path, maxSize: 256 });
+// → image: { dataBase64, mimeType: 'image/png', width, height }, or null
+//   when the platform has no thumbnail for the file
 ```
+
+**`fs.thumbnail`** is the platform's own thumbnail of a file — the cover a
+file manager shows — so a shelf of documents can show covers without the page
+rendering each one, and without reading the file at all where it isn't local.
+A cloud file gets the thumbnail its provider hands out (Drive renders one
+server-side) or `null`; the call never downloads the document. `null` is the
+normal answer for a type nothing thumbnails, and not an error; a path that
+doesn't exist is. `maxSize` (1–4096, default 256) bounds the longer side, and a
+provider may answer smaller: Google Drive for desktop on macOS gives a 128×128
+crop of the page whatever is asked for.
+
+```js
+const { image } = await __SWIFT_PWA__.invoke('fs.thumbnail', { path: book.path });
+cover.src = image ? `data:${image.mimeType};base64,${image.dataBase64}` : genericCover;
+```
+
+| | Where it comes from | A cloud file that isn't local |
+|---|---|---|
+| macOS, iOS | QuickLook (`QLThumbnailGenerator`), thumbnails only, never the type's icon | The provider's thumbnail; the file stays dataless |
+| Android | A document's provider, when it declares `FLAG_SUPPORTS_THUMBNAIL`; `ThumbnailUtils` (images, video) and `PdfRenderer` (page one) for a local file | Drive's server-side render, ~12 KB received for a 40 MB PDF |
+| Windows | The shell (`IShellItemImageFactory`, thumbnails only) | `null`: the shell won't draw a OneDrive placeholder without its bytes |
+| Linux | The freedesktop thumbnail cache, then the desktop's thumbnailer for the type | The cache only, for a file on a FUSE or network mount |
+
+Windows has no PDF thumbnailer of its own — a PDF gives `null` unless a reader
+that installs one (Acrobat, PowerToys) is there. Linux gives what the installed
+thumbnailers draw: GNOME and XFCE ship them for PDFs and images, a minimal
+install may have none. See each platform's setup doc for the detail.
 
 `FsPlugin` does not enforce a path scope. Apps that need a sandbox
 should layer it themselves — typically by gating writes behind

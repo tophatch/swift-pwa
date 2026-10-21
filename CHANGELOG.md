@@ -9,6 +9,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`fs.thumbnail` — a file's cover from the platform, without its bytes**
+  (#320). `{ path, maxSize }` → `{ image }`, a PNG at most `maxSize` on its
+  longer side, or `null` where the platform has none. An app showing a shelf of
+  documents had to draw each cover itself, and off Apple that meant pdf.js
+  rendering page one of the served file — which for a Drive document on
+  Android downloads all of it (#320 measured 49 MB for 64 KB of a 47 MB PDF).
+  The platform can usually draw that cover without the file: QuickLook on
+  Apple, the document's provider on Android (`FLAG_SUPPORTS_THUMBNAIL`, which
+  Drive answers from its servers), the shell on Windows, the freedesktop cache
+  and the desktop's thumbnailers on Linux. It never downloads a cloud file:
+  one that isn't local gets its provider's thumbnail or `null`. `Fs` gains
+  `thumbnail(path:maxSize:)` and `FsContentResolver` the same, both defaulting
+  to `nil`, so existing implementations keep compiling.
+
+  Measured, each with a control built by the 0.11.7 CLI and package (which has
+  no `fs.thumbnail`, so every thumbnail row fails):
+  - **iOS** (iPhone 17 Pro): a PDF and a PNG in iCloud Drive, not on the
+    device, gave full page-one thumbnails in about a second and stayed not
+    downloaded. `Scripts/verify-thumbnail.sh --target ios` (`--pick` once).
+  - **macOS**: the same files evicted from Google Drive for desktop gave
+    Drive's 128×128 crop of the page in 0.6–0.8 s and stayed dataless.
+    `Scripts/verify-thumbnail.sh --folder <a Drive folder>`.
+  - **Android** (Galaxy Z Fold7; local rows on a Boox Note5, Android 11): a
+    40 MB PDF just uploaded to a picked Drive folder gave its page-one
+    thumbnail for 12.5 KB received, where 64 KB of the same file through a
+    served mount cost 44 MB. `Scripts/verify-android-thumbnail.sh`.
+  - **Windows 11** x64 and arm64: a PNG gives a thumbnail; a PDF gives `null`,
+    because Windows has no PDF thumbnailer without a reader that installs one;
+    a OneDrive placeholder gives `null` (the shell won't draw it without its
+    bytes) and stays a placeholder. `Scripts\verify-thumbnail-windows.ps1
+    -OneDrive`, and two new checks in the Windows test runner.
+  - **Linux**, Ubuntu 26.04 GNOME/GTK4 and 25.10 GTK3: page one and a PNG from
+    the installed thumbnailers, written to the shared cache where GIO's own
+    check accepts them. GNOME has no tumbler, so the runtime runs the
+    `.thumbnailer` entries itself rather than going through it.
+
 - **`SWIFT_PWA_*` launch variables reach a debug Android build, and
   `SWIFT_PWA_WEB_DATA=ephemeral` works there.** Android starts an app with
   none of its caller's environment, so `SWIFT_PWA_WEB_DATA` and

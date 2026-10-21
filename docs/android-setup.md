@@ -905,6 +905,21 @@ A file served from a mounted tree is looked up in the cache first, and the
 folder refreshed only when the name isn't there, so a page load doesn't wait on
 the network for every request.
 
+**A cover without the book: `fs.thumbnail`.** Reading any part of a Drive
+document downloads all of it the first time (#320 measured 49 MB received for
+64 KB from the end of a 47 MB PDF), so a page that draws its own covers with
+pdf.js downloads every book on the shelf to show it. A provider renders
+thumbnails itself instead — Drive from its servers — and `fs.thumbnail` asks
+for one, only from a document whose provider declares
+`FLAG_SUPPORTS_THUMBNAIL`, since asking without it makes Android decode an
+image document from its full bytes. Measured on a Galaxy Z Fold7: a 40 MB PDF
+just uploaded to a picked Drive folder gave its page-one thumbnail in a second
+for **12.5 KB** received, where 64 KB of the same file through a served mount
+cost 44 MB. A document whose provider has no thumbnail gives `null`. A file in
+the app's own storage gets `ThumbnailUtils` for an image or a video and page
+one from `PdfRenderer` for a PDF. `Scripts/verify-android-thumbnail.sh`
+measures all of it, counting the device's received bytes around each call.
+
 ### Which device is this?
 
 `ProcessInfo.processInfo.hostName` is `localhost` on every Android device, and

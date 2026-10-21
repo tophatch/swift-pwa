@@ -946,6 +946,16 @@ reports `FAIL folder - /packs/photo.png (expected 200)`.
 
 ## Known limitations (Windows-specific)
 
+**`fs.thumbnail` gives no PDF thumbnail without a reader that installs one,
+and none for a OneDrive placeholder.** It asks the shell for the thumbnail
+Explorer shows (`SIIGBF_THUMBNAILONLY`, never the type's icon). Windows 11 has
+no PDF thumbnailer of its own — a PDF answers `null` until Acrobat, PowerToys
+or similar registers a handler — and the shell refuses to draw a file whose
+bytes are in the cloud (`WTS_E_DATAFILEUNAVAILABLE`) rather than download it,
+so a OneDrive placeholder answers `null` too and stays a placeholder.
+Measured on Windows 11 x64 and arm64 with `Scripts\verify-thumbnail-windows.ps1`
+(`-OneDrive` adds the placeholder rows).
+
 **`fs.readDir` and `fs.metadata` report a symbolic link itself, not what it
 names.** They read a file's kind, size and time from its directory entry
 (`GetFileAttributesExW`) rather than through Foundation, which opens the file

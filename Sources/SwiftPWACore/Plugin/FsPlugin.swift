@@ -116,6 +116,20 @@ public struct FsPlugin: Plugin {
             }
         )
 
+        registry.register(
+            "fs.thumbnail",
+            typed: { (args: FsThumbnailArgs, _) async throws -> FsThumbnailResult in
+                let maxSize = args.maxSize ?? 256
+                guard (1 ... 4096).contains(maxSize) else {
+                    throw BridgeError(
+                        code: BridgeError.decode,
+                        message: "fs.thumbnail: maxSize must be 1–4096 pixels, not \(maxSize)"
+                    )
+                }
+                return try await FsThumbnailResult(image: fs.thumbnail(path: args.path, maxSize: maxSize))
+            }
+        )
+
         // Archive commands are registered only when the injected `Fs` has an
         // extractor (`SystemFs(extractor: ZIPExtractor())`), so an app that
         // doesn't import content packs neither links ZIPFoundation nor

@@ -62,6 +62,15 @@ public protocol Fs: AnyObject, Sendable {
     /// for compatibility with JS `new Date(...)`.
     func metadata(path: String) async throws -> FsMetadata
 
+    /// The platform's own thumbnail of the file at `path`, at most `maxSize`
+    /// pixels on its longer side, or nil where the platform has none — most
+    /// providers and most file types (#320).
+    ///
+    /// Never a download: a file that isn't local (a cloud placeholder, a
+    /// network document) gets a thumbnail only where its provider hands one
+    /// out without the bytes, and nil otherwise.
+    func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail?
+
     // MARK: - Archive (content packs)
 
     /// Whether `fs.extractZip` / `fs.listZip` are available — true only
@@ -106,6 +115,11 @@ public extension Fs {
     /// is the source's own.
     func readDir(path: String, loadingTimeout _: Duration?) async throws -> [FsEntry] {
         try await readDir(path: path)
+    }
+
+    /// For an `Fs` written before thumbnails: there are none.
+    func thumbnail(path _: String, maxSize _: Int) async throws -> FsThumbnail? {
+        nil
     }
 
     var supportsZip: Bool {
@@ -179,6 +193,10 @@ public protocol FsContentResolver: Sendable {
     /// folder with `recursive`, otherwise only the last, under a parent that
     /// exists.
     func mkdir(uri: String, recursive: Bool) async throws
+
+    /// ``Fs/thumbnail(path:maxSize:)`` for a content path and, on Android, for
+    /// a filesystem path too: every thumbnailer there is on the Kotlin side.
+    func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail?
 }
 
 public extension FsContentResolver {
@@ -201,6 +219,11 @@ public extension FsContentResolver {
             code: BridgeError.handler,
             message: "fs.mkdir: this content resolver cannot create \(uri)"
         )
+    }
+
+    /// Default for a resolver written before thumbnails: there are none.
+    func thumbnail(path _: String, maxSize _: Int) async throws -> FsThumbnail? {
+        nil
     }
 }
 
@@ -253,6 +276,23 @@ public struct FsMetadata: Sendable, Codable, Equatable {
     }
 }
 
+/// A thumbnail from ``Fs/thumbnail(path:maxSize:)``: a PNG, at the size the
+/// platform drew it, which is at most the `maxSize` asked for and often less —
+/// a cloud provider answers with the size it has.
+public struct FsThumbnail: Sendable, Codable, Equatable {
+    public var dataBase64: String
+    public var mimeType: String
+    public var width: Int
+    public var height: Int
+
+    public init(png: Data, width: Int, height: Int) {
+        dataBase64 = png.base64EncodedString()
+        mimeType = "image/png"
+        self.width = width
+        self.height = height
+    }
+}
+
 // MARK: - Argument DTOs (used by `FsPlugin`)
 
 public struct FsPathArgs: Sendable, Codable, Equatable {
@@ -269,6 +309,16 @@ public struct FsReadDirArgs: Sendable, Codable, Equatable {
     public init(path: String, loadingTimeoutMs: Int? = nil) {
         self.path = path
         self.loadingTimeoutMs = loadingTimeoutMs
+    }
+}
+
+public struct FsThumbnailArgs: Sendable, Codable, Equatable {
+    public var path: String
+    /// The longer side's bound, in pixels. Absent: 256.
+    public var maxSize: Int?
+    public init(path: String, maxSize: Int? = nil) {
+        self.path = path
+        self.maxSize = maxSize
     }
 }
 
@@ -332,6 +382,18 @@ public struct FsBinaryResult: Sendable, Codable, Equatable {
 public struct FsExistsResult: Sendable, Codable, Equatable {
     public var exists: Bool
     public init(exists: Bool) { self.exists = exists }
+}
+
+/// `{ image }`, with `image` an explicit `null` where there's no thumbnail, so
+/// the page reads one shape either way.
+public struct FsThumbnailResult: Sendable, Codable, Equatable {
+    public var image: FsThumbnail?
+    public init(image: FsThumbnail?) { self.image = image }
+
+    public func encode(to encoder: any Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(image, forKey: .image)
+    }
 }
 
 public struct FsReadDirResult: Sendable, Codable, Equatable {

@@ -1,7 +1,8 @@
 # Proposal: `fs.thumbnail` — a file's thumbnail from the platform, without its bytes
 
-Status: **accepted** (#320), 2026-10-21 — shape, platform-thumbnails-only and
-Linux best-effort as below. Built only after the per-platform measurement.
+Status: **implemented** (#320), 2026-10-21 — shape and platform-thumbnails-only
+as accepted; Linux runs the desktop's `.thumbnailer` entries itself instead of
+asking tumbler, because the GNOME box had no tumbler at all (see the table).
 
 ## The problem
 
@@ -51,13 +52,18 @@ func thumbnail(path: String, maxSize: Int) async throws -> FsThumbnail?
 
 ## Per platform
 
-| Platform | Source | Cloud file without download | Status |
+| Platform | Source | Cloud file without download | Measured |
 |---|---|---|---|
-| macOS | `QLThumbnailGenerator`, `.thumbnail` representations only (never the icon) | **Yes, measured**: a 7.3 MB PDF in a Google Drive for desktop folder, not downloaded (`dataless`), gave a 128×128 page-one thumbnail in ~1 s (10 ms cached) and stayed `dataless` | measured |
-| iOS | `QLThumbnailGenerator`, same | To measure: an iCloud Drive file not on the device; a file in a picked folder | to measure |
-| Android | `content://`: `ContentResolver.loadThumbnail` (API 29+), `DocumentsContract.getDocumentThumbnail` (28), only when the document has `FLAG_SUPPORTS_THUMBNAIL`. A local path: `ThumbnailUtils` for images and video, `PdfRenderer` page one for a PDF | To measure: a Drive PDF never opened, received bytes counted as in #320 | to measure |
-| Windows | `IShellItemImageFactory::GetImage` with `SIIGBF_THUMBNAILONLY`; with `SIIGBF_INCACHEONLY` first for a cloud placeholder | To measure: a OneDrive placeholder; and whether Windows 11 thumbnails a PDF at all without a third-party handler | to measure |
-| Linux | The freedesktop thumbnail cache (GIO's `thumbnail::path`), then the thumbnailer D-Bus service (tumbler) where one runs; `null` otherwise | To measure on both boxes: is tumbler present; what a GVFS Drive mount gives | to measure |
+| macOS | `QLThumbnailGenerator`, `.thumbnail` representations only (never the icon) | **Yes**: Drive for desktop files evicted to dataless gave Drive's 128×128 page crop in 0.6–0.8 s and stayed dataless | `Scripts/verify-thumbnail.sh --folder` |
+| iOS | `QLThumbnailGenerator`, same | **Yes**: iCloud Drive files not on the device gave full page-one thumbnails in ~1 s and stayed not downloaded | `Scripts/verify-thumbnail.sh --target ios` |
+| Android | The provider (`loadThumbnail` / `getDocumentThumbnail`) only with `FLAG_SUPPORTS_THUMBNAIL`; `ThumbnailUtils` and `PdfRenderer` for a local file | **Yes**: a 40 MB Drive PDF never opened → page-one thumbnail for 12.5 KB received (control: 44 MB for 64 KB of it) | `Scripts/verify-android-thumbnail.sh` |
+| Windows | `IShellItemImageFactory::GetImage(SIIGBF_THUMBNAILONLY)` | **null, no download**: the shell answers `WTS_E_DATAFILEUNAVAILABLE` for a OneDrive placeholder. No PDF thumbnailer without a reader that installs one | `Scripts\verify-thumbnail-windows.ps1 -OneDrive` |
+| Linux | The freedesktop cache (validated by `Thumb::URI`/`Thumb::MTime`), then the `.thumbnailer` entry for the type, stored back to the cache; cache only on a FUSE/network mount | Cache only (no GVFS Drive mount on the boxes to measure) | `Scripts/verify-thumbnail.sh` on both boxes |
+
+Measuring turned up one thing outside the API: on Windows, listing a OneDrive
+folder with `fs.readDir` downloaded every file in it, because
+swift-corelibs-foundation opens a file to stat it. Fixed alongside (see the
+CHANGELOG).
 
 ## What the measurement has to show before this ships
 

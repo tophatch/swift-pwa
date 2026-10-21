@@ -30,6 +30,18 @@ struct FsPluginTests {
         #expect(fs.actions == [.readText(path: "/x.txt")])
     }
 
+    @Test("fs.thumbnail answers { image: null } where there's none, and bounds maxSize")
+    func thumbnailWire() async {
+        let (app, _) = makeApp()
+        let result = await dispatch(app, "fs.thumbnail", #"{"path":"/book.pdf"}"#)
+        guard case let .ok(data) = result else { Issue.record("expected ok"); return }
+        // One shape either way: the key is there, holding null.
+        #expect(String(decoding: data, as: UTF8.self) == #"{"image":null}"#)
+        let tooBig = await dispatch(app, "fs.thumbnail", #"{"path":"/book.pdf","maxSize":100000}"#)
+        guard case let .failure(err) = tooBig else { Issue.record("expected failure"); return }
+        #expect(err.message.contains("maxSize"))
+    }
+
     @Test("fs.writeText stores the contents and reports an empty result")
     func writeText() async {
         let (app, fs) = makeApp()
@@ -216,6 +228,57 @@ struct SystemFsTests {
             decoding: JSONEncoder().encode(FsEntry(name: "a", path: "a", isDir: false, isFile: true)), as: UTF8.self
         )
         #expect(!unknown.contains("size") && !unknown.contains("modified"))
+    }
+
+    #if canImport(QuickLookThumbnailing)
+        @Test("thumbnail draws a PDF's first page within maxSize, and gives nil for a type with no thumbnailer")
+        func thumbnailApple() async throws {
+            let dir = try makeTempDir()
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let fs = SystemFs()
+            let pdf = dir.appendingPathComponent("cover.pdf")
+            try Self.onePagePDF().write(to: pdf)
+            let image = try #require(try await fs.thumbnail(path: pdf.path, maxSize: 200))
+            #expect(image.mimeType == "image/png")
+            #expect(max(image.width, image.height) <= 200 && max(image.width, image.height) >= 100)
+            #expect(Data(base64Encoded: image.dataBase64)?.starts(with: [0x89, 0x50, 0x4E, 0x47]) == true)
+
+            let unknown = dir.appendingPathComponent("blob.swiftpwa-unknown")
+            try Data((0 ..< 4096).map { UInt8(truncatingIfNeeded: $0 &* 2_654_435_761 >> 7) }).write(to: unknown)
+            #expect(try await fs.thumbnail(path: unknown.path, maxSize: 200) == nil)
+
+            await #expect(throws: BridgeError.self) {
+                _ = try await fs.thumbnail(path: dir.appendingPathComponent("absent.pdf").path, maxSize: 200)
+            }
+        }
+    #endif
+
+    /// A one-page PDF: a red block and a blue one under a line of text, so its
+    /// thumbnail is unmistakably the page rather than a document icon.
+    static func onePagePDF() -> Data {
+        let content = "1 0 0 rg 72 400 468 300 re f 0 0 1 rg 72 100 200 200 re f "
+            + "BT /F1 48 Tf 0 0 0 rg 90 740 Td (THUMB PROBE) Tj ET"
+        let objects = [
+            "<< /Type /Catalog /Pages 2 0 R >>",
+            "<< /Type /Pages /Kids [3 0 R] /Count 1 >>",
+            "<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents 4 0 R "
+                + "/Resources << /Font << /F1 5 0 R >> >> >>",
+            "<< /Length \(content.utf8.count) >>\nstream\n\(content)\nendstream",
+            "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>"
+        ]
+        var out = "%PDF-1.4\n"
+        var offsets: [Int] = []
+        for (index, object) in objects.enumerated() {
+            offsets.append(out.utf8.count)
+            out += "\(index + 1) 0 obj\n\(object)\nendobj\n"
+        }
+        let xref = out.utf8.count
+        out += "xref\n0 \(objects.count + 1)\n0000000000 65535 f \n"
+        for offset in offsets {
+            out += String(repeating: "0", count: 10 - String(offset).count) + "\(offset) 00000 n \n"
+        }
+        out += "trailer\n<< /Size \(objects.count + 1) /Root 1 0 R >>\nstartxref\n\(xref)\n%%EOF\n"
+        return Data(out.utf8)
     }
 
     @Test("metadata reports size and modification time")

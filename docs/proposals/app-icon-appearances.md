@@ -1,8 +1,8 @@
 # Proposal: app icon appearances and alternate icons
 
 Status: **de-risking** (#314), 2026-10-21. All five platforms in one change.
-All four probes are measured on real hardware; the macOS alternates option is
-the one open decision. See
+All four probes are measured on real hardware, including the macOS
+alternates options. See
 [De-risking](#de-risking-before-any-cli-code).
 
 ## The problem
@@ -91,22 +91,51 @@ The route is used only when `dark` or `tinted` is set. An app with a single
 string `icon` keeps today's `.icns` pipeline exactly, so pre-masked Mac art
 someone already ships doesn't get a second mask.
 
-### macOS alternates: the open question
+### macOS alternates: measured
 
-Every option has a catch:
+macOS has no alternate-icon API. The macOS 27 SDK's AppKit headers have
+nothing for it (only UIKit does), and `actool --alternate-app-icon` for
+`macosx` compiles the alternate's renditions into the car but writes no
+alternate-icon keys into `Info.plist`. The icon shows in two places fed from
+different sources:
 
-1. **`supported: false`.** Honest and simple.
-2. **Dock only, while the app runs.** `NSApp.applicationIconImage`, reapplied
-   at each launch. The Dock and ⌘-Tab show the chosen icon while the app runs.
-   Finder, Launchpad and a quit app's Dock tile show the primary.
-3. **An `NSDockTilePlugIn`**, which keeps the Dock tile after quit. It is a
-   compiled plug-in bundle inside the `.app`: a second build product for the CLI
-   to produce and sign, and Finder still shows the primary.
-4. Writing a custom icon onto the bundle is ruled out: it breaks the signature.
+| Surface | Source |
+| --- | --- |
+| Finder, Launchpad/Apps, Spotlight, Get Info, a quit app's Dock tile | The bundle's icon, via LaunchServices |
+| A running app's Dock tile, ⌘-Tab, the About panel | `NSApp.applicationIconImage` |
 
-Recommendation: **(1) for this round.** (2) is a half-switch the person will
-notice the first time they quit, and (3) costs a build product for the same
-half. It can be revisited if a consumer asks for the Mac specifically.
+The options, each probed on macOS 27 with a control:
+
+1. **`supported: false`.** The page leaves the setting out.
+2. **Set `NSApp.applicationIconImage` at each launch.** **Measured:** the
+   alternate `.icon`, loaded by name from the app's own catalog, draws its
+   flat *light* art under every appearance and every system icon theme. The
+   control, an ordinary image set with a dark variant in the same catalog,
+   draws light under `aqua` and dark under `darkAqua`, so the lookup itself
+   does follow appearance. A runtime switch therefore shows the light art in
+   dark and tinted mode. It also leaves Finder, Launchpad and Spotlight on the
+   primary, and the tile reverts once the app quits (from the API's design;
+   the Dock wasn't captured).
+3. **An `NSDockTilePlugIn`.** Not probed. It's a second compiled product that
+   only extends (2)'s Dock tile past quit, and it draws a flat image too.
+4. **`NSWorkspace.setIcon(_:forFile:)` on the app's own bundle.**
+   **Measured:** it succeeds from inside the app and writes `Icon\r` into the
+   bundle root. `codesign --verify --strict` then fails ("resource fork,
+   Finder information, or similar detritus not allowed"), although the
+   un-quarantined app still relaunches. The custom icon is one flat image in
+   light, dark *and* tinted (the system doesn't even tint it). `setIcon(nil)`
+   removes the file and restores both the signature and the appearances.
+   Unmeasured: whether Gatekeeper refuses a notarized Developer ID app in that
+   state (the probe's Apple Development signature is rejected by `spctl`
+   before and after, so it can't tell). Also inferred, not measured: the
+   choice is lost whenever an update replaces the bundle, so the app would
+   re-break its own seal at every launch to restore it, and App Store
+   installs are root-owned, so the write would fail there.
+
+So every option that does something loses dark and tinted, which is what this
+issue adds, and covers only some of the places the icon appears.
+Recommendation: **`supported: false`**, documented in `docs/macos-setup.md`
+as a known limitation with the reason.
 
 ### Android
 
@@ -143,7 +172,7 @@ examples are not the scaffold), with a control that has to succeed.
 | # | Question | Method | Control | Status |
 | --- | --- | --- | --- | --- |
 | R1 | Does `setAlternateIconName` switch an icon compiled by our `actool` call, in a bundle not built by Xcode? Do dark and tinted reach the home screen? | Simulator, then an iPhone: the probe app's asset catalog recompiled with an alternate, a custom command calling the API, home-screen screenshots per appearance | The primary icon shows before switching | **works**: simulator, then an iPhone |
-| R2 | Does macOS draw the light and tinted art from the generated `.icon`, and which macOS alternate option holds up? | A second Mac: switch the system icon theme and render; measure the Dock-only switch and an `NSDockTilePlugIn` built with `swiftc` | A `.icns`-only bundle that doesn't follow the theme | **appearances work**; alternates option undecided |
+| R2 | Does macOS draw the light and tinted art from the generated `.icon`, and which macOS alternate option holds up? | A second Mac: switch the system icon theme and render; measure the Dock-only switch and an `NSDockTilePlugIn` built with `swiftc` | A `.icns`-only bundle that doesn't follow the theme | **appearances work**; alternates: every workable option loses dark/tinted |
 | R3 | Android: how does One UI handle switching `<activity-alias>`es (delay, app killed, pinned shortcut), and does it draw a themed icon from a `<monochrome>` layer? | A Samsung foldable: hand-edited Gradle project from a scaffolded app; switch from inside the app with `DONT_KILL_APP` | The launcher icon before switching; the theming setting off | **both work** on One UI |
 | R4 | Windows: does the taskbar pick theme-qualified MSIX logos (`altform-unplated` / `altform-lightunplated`) per light/dark mode? | An x64 Windows 11 machine: hand-built MSIX, toggle the system theme, screenshot the taskbar and Start | An unqualified-only MSIX | **works**: the taskbar follows the theme live |
 

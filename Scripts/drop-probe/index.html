@@ -5,8 +5,8 @@
 <!--
   What a drop delivers to a page (#300). The same file is opened in the app and
   in Safari, so the two can be compared on one device with one drag. Each drop
-  lists what the page could see at dragenter and at drop, and whether each
-  File's bytes could be read. Scripts/verify-ios-drop.sh installs and serves it.
+  lists what the page could see at dragenter and at drop, whether the event
+  was the engine's own (trusted), and whether each File's bytes could be read. Scripts/verify-ios-drop.sh installs and serves it.
 -->
 <style>
   body { font: 16px -apple-system, system-ui; margin: 0; padding: calc(16px + env(safe-area-inset-top)) 16px 16px; }
@@ -26,13 +26,13 @@ const zone = document.getElementById('zone');
 const line = (text) => { out.textContent = text + '\n' + out.textContent; };
 const describe = (dt) =>
   `types=${JSON.stringify([...dt.types])} items=${JSON.stringify([...dt.items].map((i) => i.kind + ':' + i.type))} files=${dt.files.length}`;
-zone.addEventListener('dragenter', (e) => { e.preventDefault(); zone.classList.add('over'); line('dragenter ' + describe(e.dataTransfer)); });
+zone.addEventListener('dragenter', (e) => { e.preventDefault(); zone.classList.add('over'); line('dragenter trusted=' + e.isTrusted + ' ' + describe(e.dataTransfer)); });
 zone.addEventListener('dragover', (e) => e.preventDefault());
 zone.addEventListener('dragleave', () => zone.classList.remove('over'));
 zone.addEventListener('drop', async (e) => {
   e.preventDefault();
   zone.classList.remove('over');
-  line('drop ' + describe(e.dataTransfer));
+  line('drop trusted=' + e.isTrusted + ' ' + describe(e.dataTransfer));
   for (const file of e.dataTransfer.files) {
     let read;
     try { read = (await file.arrayBuffer()).byteLength + ' bytes read'; } catch (err) { read = 'unreadable: ' + err; }

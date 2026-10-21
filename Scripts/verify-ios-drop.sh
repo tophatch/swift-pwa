@@ -3,20 +3,18 @@
 # What a drag from Photos delivers to a page on iOS / iPadOS (#300). Needs a
 # person to do the dragging: nothing can start a drag session between two apps.
 #
-# The report: a drop from Photos reaches the page as `types=["Files"]` with no
-# items and no files, where a drop from the Files app works. Whether that is
-# WebKit's behaviour or this app's is the question, so the same probe page is
-# opened twice on the same device:
+# The report was a Photos drop reaching the page as `types: ["Files"]` with no
+# files. Measured with this: on an iPhone the drop arrives with its file, from
+# WebKit (`trusted=true`); on iPadOS 27.0 it arrives empty in Safari too, and
+# Notes can't take it either — Photos itself fails to provide the item. So run
+# two controls beside the app:
 #
-#   - in Safari, served from this Mac over the LAN: the CONTROL. If Safari's
-#     page gets the photo as a File, WebKit can deliver it, and the app is
-#     missing something; if Safari gets nothing too, WebKit can't, and a native
-#     loader is the only way.
-#   - in a scaffolded app installed on the device (or the Simulator).
+#   - the same page in Safari, served from this Mac: what WebKit does alone;
+#   - the same photo dragged into Notes: whether Photos can provide it at all.
 #
-# Drag one photo, then several, from Photos onto the dashed box in each, and
-# the same from the Files app as a second control. Each page lists what it saw
-# at dragenter and at drop, and whether each File's bytes could be read.
+# Drag from Photos (one photo, then several), from Files, and some text onto
+# the dashed box. The page lists, for each drop, what it saw at dragenter and
+# at drop and whether each File's bytes could be read.
 #
 # Usage:
 #   Scripts/verify-ios-drop.sh --team <apple-team-id> [--device <name|udid>]

@@ -33,6 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   0.11.7 CLI, the same app fails the ephemeral, real-store, route and
   misspelling rows.
 
+### Documentation
+
+- **An empty Photos drop on iOS is the source, not WebKit** (#300). A photo
+  dragged from Photos was reported reaching the page as `types: ["Files"]`
+  with no files, and the fix asked for was a native loader in front of
+  WebKit's drop. One was built and measured, and it isn't shipping: on an
+  iPhone the drop already arrives with its file from WebKit, with nothing
+  added, and on two iPads on iPadOS 27.0 the loader failed exactly where
+  WebKit did, because Photos' own service failed to provide the item. Notes
+  couldn't take those drops either. `docs/ios-setup.md` says how a page should
+  read an empty drop, and `Scripts/verify-ios-drop.sh` shows what a device
+  delivers beside Safari and a Notes control.
+
 ### Fixed
 
 - **A Windows build no longer compiles the app twice, which stalled for up to

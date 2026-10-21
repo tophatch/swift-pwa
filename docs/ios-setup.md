@@ -636,10 +636,11 @@ for before.
   arrives with its file, from WebKit, with nothing added; on two iPads on
   iPadOS 27.0 it arrives empty in Safari too, every way a native app can ask
   Photos for the item fails inside Photos' own service, and Notes can't take
-  the drop either (#300). Those photos had been taken on the iPhone a day
-  before, and iCloud Photos with Optimize Storage keeps only a preview on
-  another device until something downloads the original, which may be why
-  (unconfirmed). Treat an empty
+  the drop either (#300). Why is open: the originals could be fetched (export
+  to Files worked) and the drag still failed, on an iPad whose iCloud storage
+  was full. The same photo saved to Files and dragged from there reached
+  Notes, and a drop from Files reaches a page through WebKit with its files,
+  so that's the workaround to offer. Treat an empty
   `drop` that advertised `Files` as "the source couldn't provide it" and say
   so; `Scripts/verify-ios-drop.sh` installs a probe page that shows what a
   device delivers, beside Safari and a Notes control.

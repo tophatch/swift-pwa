@@ -48,6 +48,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`fs.metadata` and `fs.exists` answer for the folder `dialog.openDirectory`
+  returned** (#319). A tree URI names the grant, not a document, and both
+  Drive and the local storage provider refuse a query on one
+  (`UnsupportedOperationException: Unsupported Uri`), so "is the folder I was
+  given still there?" answered no for a folder that was right there. The URI
+  now becomes the folder's own document first, as `fs.readDir` already did.
+  Verified on a Galaxy Z Fold7 with `Scripts/verify-android-saf-tree.sh`,
+  which fails that row when built by the 0.11.7 CLI.
+
 - **An Android 11 app could open to a blank page, unable to write to its own
   data directory** (#312). `ctx.dataDirectory()` and `ctx.cacheDirectory()`
   were derived from Foundation's temporary directory, which is the app's cache

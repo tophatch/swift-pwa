@@ -4633,6 +4633,19 @@ enum AndroidTemplates {
             }
         }
 
+        /// The folder a tree URI grants, as a document URI; any other URI as it
+        /// is. `dialog.openDirectory` hands back the tree URI, which names the
+        /// grant rather than a document, and a provider is entitled to refuse a
+        /// query on it: Drive answers `UnsupportedOperationException:
+        /// Unsupported Uri`, so asking whether the picked folder still exists
+        /// answered no for a folder that was right there (#319).
+        private fun folderDocument(uri: Uri): Uri =
+            if (DocumentsContract.isTreeUri(uri) && !DocumentsContract.isDocumentUri(activity, uri)) {
+                DocumentsContract.buildDocumentUriUsingTree(uri, DocumentsContract.getTreeDocumentId(uri))
+            } else {
+                uri
+            }
+
         private fun fsContentUriMetadata(json: JSONObject, done: (String?, String?) -> Unit) {
             val uri = json.optString("uri", "")
             if (uri.isEmpty()) {
@@ -4641,7 +4654,7 @@ enum AndroidTemplates {
             }
             backgroundExecutor.execute {
                 try {
-                    val parsed = Uri.parse(uri)
+                    val parsed = folderDocument(Uri.parse(uri))
                     // OpenableColumns.SIZE is universally supported
                     // for openable content URIs; LAST_MODIFIED comes
                     // from DocumentsContract.Document and is

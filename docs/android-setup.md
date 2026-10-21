@@ -826,7 +826,10 @@ asks for neighbours in one folder over and over and each uncached level is a
 Recursion is the caller's business, exactly as it is for a path. `fs.metadata`
 answers for these URIs too, and reports `isDir` honestly — through 0.11.1 it
 claimed every content URI was a file, which was harmless only while nothing
-could produce a directory one.
+could produce a directory one. That includes the tree URI `dialog.openDirectory`
+returned, so `fs.exists(tree)` says whether the picked folder is still there;
+through 0.11.7 a provider refused it ("Unsupported Uri"), because a tree URI
+names the grant rather than a document, and the answer was no.
 
 **This is the route when All-files access isn't available**, and it covers
 three cases at once:

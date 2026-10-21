@@ -133,7 +133,8 @@ struct IconAppearanceBundlerTests {
             packageId: "com.example.hi", label: "Hi", hasIcon: true, alternateIcons: ["sketch", "night"]
         )
         let activity = try #require(xml.range(of: "<activity\n").map { xml[$0.lowerBound...] })
-        let mainActivity = try String(activity[..<(#require(activity.range(of: "</activity>")?.upperBound))])
+        let activityEnd = try #require(activity.range(of: "</activity>"))
+        let mainActivity = String(activity[..<activityEnd.upperBound])
         #expect(!mainActivity.contains("LAUNCHER"))
         #expect(xml.components(separatedBy: "android.intent.category.LAUNCHER").count - 1 == 3)
         #expect(xml.contains(#"android:name="com.example.hi.LauncherDefault""#))

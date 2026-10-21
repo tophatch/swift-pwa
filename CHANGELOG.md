@@ -131,7 +131,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   directory) by opening the file, and opening a cloud placeholder makes
   OneDrive download it. `fs.readDir` made two of those calls per entry, so
   listing a OneDrive library fetched the whole library; `fs.exists` and
-  `fs.metadata` fetched the one file. Measured on Windows 11 with a 200 KB
+  `fs.metadata` fetched the one file, and `fs.remove` downloaded a file in
+  full before deleting it. Measured on Windows 11 with a 200 KB
   placeholder: each of the five calls left it a local file, while
   `contentsOfDirectory` and `GetFileAttributesExW` left it a placeholder.
   `SystemFs` now reads a file's kind, size and modification time from its
@@ -140,9 +141,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   symbolic link reports itself rather than what it names.
 
   Verified on Windows 11 x64 with `Scripts/verify-thumbnail-windows.ps1
-  -OneDrive`, whose probe files stay placeholders through a listing; with
-  `-Released` all three come back local. The Windows test runner gains a check
-  that the listing still reports each entry's kind, size and time.
+  -OneDrive`: its probe files stay placeholders through a listing, and
+  `fs.remove` deletes a 30 MB placeholder in 6 ms for 72 KB received; with
+  `-Released` every file comes back local and the delete receives 31.8 MB.
+  The Windows test runner gains a check that listing, `metadata`, `exists`
+  and `remove` still answer as they did.
 
 - **A listing of a Drive folder on Android is current, not Drive's cache**
   (#316). Drive answers a listing from its local cache and doesn't bring it up

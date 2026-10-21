@@ -13,7 +13,9 @@
   %OneDrive%, uploaded, and made into cloud placeholders (attrib +U -P). Each
   then has to give a thumbnail or null and still be a placeholder afterwards
   (FILE_ATTRIBUTE_RECALL_ON_DATA_ACCESS) - the shell never downloads one to
-  draw it.
+  draw it, and listing the folder mustn't either. Then fs.remove deletes a
+  30 MB placeholder, which has to cost well under 30 MB received (summed over
+  every network adapter): Foundation's fileExists downloaded it first.
 
   Launched through a scheduled task with /IT: an SSH session lands in Session
   0, where a WebView2 controller can't be created and OneDrive isn't running.
@@ -151,9 +153,16 @@ if ($OneDrive) {
     New-Item -ItemType Directory -Path $cloud | Out-Null
     Write-Host "== seeding $cloud ==" -ForegroundColor Cyan
     Invoke-Page "seed" "seed=$([uri]::EscapeDataString($cloud))" | Out-Null
+    # Random, so it can't compress: removing it must not cost its size.
+    $bulk = Join-Path $WorkDir "remove-me.bin"
+    $bytes = New-Object byte[] (30MB)
+    (New-Object Random).NextBytes($bytes)
+    [IO.File]::WriteAllBytes($bulk, $bytes)
+    $removeMe = Join-Path $cloud "remove-me.bin"
+    Move-Item $bulk $removeMe
     # Unpinning fails until OneDrive has uploaded a file, so keep asking.
     Write-Host "== waiting for OneDrive to upload, then making placeholders ==" -ForegroundColor Cyan
-    $deadline = (Get-Date).AddSeconds(240)
+    $deadline = (Get-Date).AddSeconds(600)
     do {
         Get-ChildItem $cloud -File | ForEach-Object { cmd /c "attrib -P +U `"$($_.FullName)`" >nul 2>&1" }
         Start-Sleep -Seconds 4
@@ -163,9 +172,26 @@ if ($OneDrive) {
     $query += "&folder=$([uri]::EscapeDataString($cloud))"
 }
 
+function Get-Received { (Get-NetAdapterStatistics | Measure-Object -Property ReceivedBytes -Sum).Sum }
+
 try {
     Write-Host "== running the probe page ==" -ForegroundColor Cyan
     $rows = Invoke-Page "run" $query
+    if ($cloud) {
+        # A placeholder again, whatever the listing did to it, so this row
+        # measures fs.remove alone.
+        $deadline = (Get-Date).AddSeconds(120)
+        do {
+            cmd /c "attrib -P +U `"$removeMe`" >nul 2>&1"
+            Start-Sleep -Seconds 3
+        } while ((([int](Get-Item $removeMe).Attributes) -band 0x400000) -eq 0 -and (Get-Date) -lt $deadline)
+        if ((([int](Get-Item $removeMe).Attributes) -band 0x400000) -eq 0) { throw "remove-me.bin never went back to a placeholder" }
+        $before = Get-Received
+        $removed = (Invoke-Page "remove" "remove=$([uri]::EscapeDataString($removeMe))").Trim()
+        $received = (Get-Received) - $before
+        $ok = ($removed -like 'removed*') -and -not (Test-Path $removeMe) -and $received -lt 3MB
+        $rows += "$(if ($ok) { 'PASS' } else { 'FAIL' }) fs.remove deletes a 30 MB placeholder without downloading it - $removed; received $received bytes`n"
+    }
     Write-Host $rows
 } finally {
     if ($cloud -and -not $Keep) { cmd /c "rd /s /q `"$cloud`"" }

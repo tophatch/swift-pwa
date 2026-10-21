@@ -155,8 +155,9 @@ public final class SystemFs: Fs, @unchecked Sendable {
             throw contentURIOperationUnsupported("fs.remove", path: path)
         }
         let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: path, isDirectory: &isDir) else {
+        // Not `fileExists`: on Windows that opens the file, and a OneDrive
+        // placeholder was downloaded in full just to be deleted.
+        guard let facts = Self.facts(atPath: path) else {
             throw BridgeError(
                 code: BridgeError.handler,
                 message: "fs.remove: \(path) does not exist"
@@ -165,7 +166,7 @@ public final class SystemFs: Fs, @unchecked Sendable {
         // For directories with content, refuse without `recursive`
         // — matches the `rm -d` / `rmdir` distinction. For an empty
         // directory either flag works.
-        if isDir.boolValue, !recursive {
+        if facts.isDir, !recursive {
             let contents = (try? fm.contentsOfDirectory(atPath: path)) ?? []
             if !contents.isEmpty {
                 throw BridgeError(

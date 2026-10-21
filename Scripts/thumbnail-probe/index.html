@@ -24,8 +24,9 @@
 //     provider gives, and still not local afterwards.
 //
 // ?seed=<dir> writes the probe files into <dir> instead (a cloud folder, for
-// the script to make into placeholders), and ?report=<file> writes the rows to
-// <file> and quits: Windows launches the app where nothing can drive it.
+// the script to make into placeholders), ?remove=<path> deletes one with
+// fs.remove, and ?report=<file> writes the rows to <file> and quits: Windows
+// launches the app where nothing can drive it.
 const invoke = (cmd, args) => __SWIFT_PWA__.invoke(cmd, args || {});
 const params = new URLSearchParams(location.search);
 const rows = [];
@@ -182,7 +183,15 @@ const P = window.thumbProbe = {
 (async () => {
   const state = document.getElementById('state');
   try {
-    if (params.get('seed')) {
+    if (params.get('remove')) {
+      const start = performance.now();
+      try {
+        await invoke('fs.remove', { path: params.get('remove') });
+        state.textContent = 'removed in ' + Math.round(performance.now() - start) + ' ms';
+      } catch (e) {
+        state.textContent = 'remove THREW ' + (e.code || '') + ' ' + e.message;
+      }
+    } else if (params.get('seed')) {
       state.textContent = 'seeded ' + await P.setup(params.get('seed'));
     } else if (params.get('pick')) {
       state.textContent = 'picking';

@@ -475,6 +475,17 @@
         try expect(abs((book.modified ?? 0) - now) < 60000, "book.pdf modified \(book.modified ?? -1), now \(now)")
         let meta = try await fs.metadata(path: file)
         try expect(meta.size == 6 && meta.isFile && meta.modified == book.modified, "metadata: \(meta)")
+        // remove: refuses a folder with something in it, then takes a file
+        // and the folder.
+        let seriesFile = dir.appendingPathComponent("series").appendingPathComponent("one.pdf").path
+        try await fs.writeText(path: seriesFile, contents: "x")
+        var refused = false
+        do { try await fs.remove(path: series.path, recursive: false) } catch { refused = true }
+        try expect(refused, "remove(non-empty folder) without recursive succeeded")
+        try await fs.remove(path: seriesFile, recursive: false)
+        try await fs.remove(path: series.path, recursive: false)
+        let seriesGone = try await !fs.exists(path: series.path)
+        try expect(seriesGone, "the removed folder still exists")
         let exists = try await fs.exists(path: file)
         let absentExists = try await fs.exists(path: file + ".absent")
         try expect(exists, "exists(book.pdf) was false")

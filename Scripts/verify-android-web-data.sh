@@ -47,9 +47,11 @@ CDP=("$REPO/Scripts/android-cdp-eval.py")
 if [ -n "$SERIAL" ]; then
     ADB=(adb -s "$SERIAL")
     CDP+=(-s "$SERIAL")
+    # So `swift-pwa deploy` picks the same device when several are attached.
+    export ANDROID_SERIAL="$SERIAL"
 fi
 
-WORK="${TMPDIR:-/tmp}/swift-pwa-android-web-data"
+WORK="${TMPDIR:-/tmp}/swift-pwa-android-web-data${SERIAL:+-$SERIAL}"
 APP="WebDataCheck"
 APP_DIR="$WORK/$APP"
 PKG="com.example.webdatacheck"

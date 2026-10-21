@@ -386,8 +386,8 @@
             // Android apps' cache dir is `<context>.getCacheDir()` —
             // typically `/data/data/<pkg>/cache`. We don't have the
             // Context handy from Swift, but `NSTemporaryDirectory` on
-            // Android resolves to the per-app cache via the runtime's
-            // `TMPDIR` env var, which the JNI bootstrap sets up. As a
+            // Android resolves to the per-app cache via `TMPDIR`, which
+            // the generated Activity sets before the library loads. As a
             // belt-and-braces fallback we use `/data/local/tmp` — that
             // path exists on every Android build but isn't the right
             // long-term home (it's writable only on rooted / debug

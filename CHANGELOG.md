@@ -48,6 +48,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An Android 11 app could open to a blank page, unable to write to its own
+  data directory** (#312). `ctx.dataDirectory()` and `ctx.cacheDirectory()`
+  were derived from Foundation's temporary directory, which is the app's cache
+  dir only where `TMPDIR` says so, and nothing set it before Android 12: there
+  Foundation fell back to /data/local/tmp, the data directory became
+  /data/local/files, and the app's first write in `configure` failed with
+  "permission denied". Content packs the Activity extracted into its real
+  `filesDir` were then somewhere other than where Swift looked. The hook meant
+  to hand Swift the Activity's directories was documented and never installed.
+  Now the runtime asks the Activity for `filesDir` and `cacheDir` before
+  `configure`, and the Activity sets `TMPDIR` to `cacheDir` before the library
+  loads, so `NSTemporaryDirectory()` is right for app code too.
+
+  Verified with `Scripts/verify-android-data-dirs.sh` on an Android 11 Boox
+  Note5 and a Galaxy Z Fold7: every row holds on both. Built by the 0.11.7
+  CLI, the same app on the Boox reports /data/local/files and fails every
+  row; on Android 16, which sets `TMPDIR` itself, the old build was right.
+
 - **A Windows build no longer compiles the app twice, which stalled for up to
   45 minutes on GitHub's Windows runners.** Every `swift-pwa build --target
   windows` first runs the app headlessly to check its `permissions`, which

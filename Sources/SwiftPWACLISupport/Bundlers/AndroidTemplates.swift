@@ -795,6 +795,14 @@ enum AndroidTemplates {
 
             override fun onCreate(savedInstanceState: Bundle?) {
                 super.onCreate(savedInstanceState)
+                if (!runtimeStarted) {
+                    // Foundation's temporary directory on Android is `TMPDIR`,
+                    // and nothing sets it before Android 12: on Android 11 it
+                    // fell back to /data/local/tmp, which an app can't write
+                    // (#312). Before the library loads, so no Swift code has
+                    // read it yet.
+                    android.system.Os.setenv("TMPDIR", cacheDir.absolutePath, true)
+                }
                 if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
                     if (!runtimeStarted && runtimeOwner == null) {
                         copyLaunchEnvironment(intent)
@@ -2575,6 +2583,11 @@ enum AndroidTemplates {
                 "secrets.set" -> secretsSet(json, done)
                 "secrets.delete" -> secretsDelete(json, done)
                 "app.label" -> done(appLabel(), null)
+                "app.directories" -> done(
+                    JSONObject().put("files", activity.filesDir.absolutePath)
+                        .put("cache", activity.cacheDir.absolutePath).toString(),
+                    null
+                )
                 "window.snapshot" -> windowSnapshot(done)
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)

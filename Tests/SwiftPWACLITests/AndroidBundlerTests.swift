@@ -801,6 +801,22 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("\"ephemeral\" -> WebView.setDataDirectorySuffix(prefix +"))
     }
 
+    @Test("TMPDIR is the cache dir before the library loads, and Swift can ask for both directories")
+    func androidDirectories() throws {
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        let tmpdir = try #require(activity
+            .range(of: "android.system.Os.setenv(\"TMPDIR\", cacheDir.absolutePath, true)"))
+        let load = try #require(activity.range(of: "System.loadLibrary(\"Hi\")"))
+        #expect(tmpdir.upperBound < load.lowerBound)
+        // Not gated on a debug build: a release app on Android 11 needs it most.
+        let gate = try #require(activity.range(of: "FLAG_DEBUGGABLE) != 0) {"))
+        #expect(tmpdir.upperBound < gate.lowerBound)
+
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("\"app.directories\" -> done("))
+        #expect(plugins.contains(".put(\"files\", activity.filesDir.absolutePath)"))
+    }
+
     @Test("build.serve mounts become InternalStoragePathHandler entries in MainActivity")
     func mainActivityServeMounts() throws {
         let activity = AndroidTemplates.mainActivityKt(

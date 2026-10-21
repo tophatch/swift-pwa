@@ -988,7 +988,7 @@ minutes.** Swift 6.4.0's build planner sits at four cores on
 `[Pre-planning 1 / N]`, compiling nothing, in about half of our CI runs — up
 to 45 minutes, for the app's build and for a plain debug build alike — where a
 Windows 11 machine takes about 4 s for the same step. It's swift-build's
-(swiftlang/swift-build#322), and not reproducible off the runners. Budget a
+(swiftlang/swift-build#1883), and not reproducible off the runners. Budget a
 release workflow's Windows job for an hour rather than fifteen minutes.
 
 **A window moved to a negative coordinate used to kill the app.** `WM_MOVE`

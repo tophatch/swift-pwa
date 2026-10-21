@@ -100,7 +100,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   packages the exe the permission check built, and still builds when there
   isn't one. This takes away one of the builds the stall can hit in an
   adopter's release workflow; it doesn't stop the stall, which is
-  swift-build's (reported on swiftlang/swift-build#322) and hit the
+  swift-build's (reported on swiftlang/swift-build#1883) and hit the
   permission check's build and a plain debug build of the CLI in the very run
   that verified this.
 

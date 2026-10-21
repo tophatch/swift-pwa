@@ -89,22 +89,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   CLI, the same app on the Boox reports /data/local/files and fails every
   row; on Android 16, which sets `TMPDIR` itself, the old build was right.
 
-- **A Windows build no longer compiles the app twice, which stalled for up to
-  45 minutes on GitHub's Windows runners.** Every `swift-pwa build --target
-  windows` first runs the app headlessly to check its `permissions`, which
-  compiles it in the configuration being built; the bundler then ran
-  `swift build` again, found nothing to compile, and on hosted runners Swift
-  6.4.0's build planner sat in that second build at four cores on
-  `[Pre-planning 1 / N]` for 15 to 45 minutes in about half of the last 40
-  runs of our own CI job. That is the step an adopter's release workflow runs
-  too. The bundler now packages the exe the permission check built, and still
-  builds when there isn't one. The stall itself is swift-build's, and isn't
-  reproducible on a Windows 11 machine (4.5 s in 4 of 4 runs), so the step is
-  skipped rather than hidden behind a longer timeout.
+- **A Windows build compiles the app once, not twice.** Every `swift-pwa
+  build --target windows` first runs the app headlessly to check its
+  `permissions`, which compiles it in the configuration being built; the
+  bundler then ran `swift build` again and found nothing to compile. Each of
+  those builds is a chance for a stall in Swift 6.4.0's build planner on
+  GitHub's hosted Windows runners: four cores on `[Pre-planning 1 / N]` for up
+  to 45 minutes, in about half of the last 40 runs of our own CI job, while a
+  Windows 11 machine takes 4.5 s for the same step (4 of 4). The bundler now
+  packages the exe the permission check built, and still builds when there
+  isn't one. This takes away one of the builds the stall can hit in an
+  adopter's release workflow; it doesn't stop the stall, which is
+  swift-build's (reported on swiftlang/swift-build#322) and hit the
+  permission check's build and a plain debug build of the CLI in the very run
+  that verified this.
 
-  Verified with `Scripts/bundle-smoke-windows.ps1` on Windows x64: one release
-  build per bundle where the runs before the change show two, and the folder,
-  portable and single-file launches all pass.
+  Verified with `Scripts/bundle-smoke-windows.ps1` on Windows x64 and in CI:
+  one release build per bundle where the runs before the change show two, and
+  the folder, portable and single-file launches all pass.
 
 ## [0.11.7] - 2026-10-18
 

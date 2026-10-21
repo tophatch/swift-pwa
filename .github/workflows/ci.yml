@@ -246,14 +246,13 @@ jobs:
     # Not a required check yet: it runs on every PR so its duration and flake
     # rate can be measured before it's allowed to block a merge. It has no
     # paths filter, and must not get one once it is required — a required check
-    # that never runs leaves a PR waiting forever. What kept it advisory: about
-    # half of runs took 23-60 minutes instead of ~12, every one of them with
+    # that never runs leaves a PR waiting forever. What keeps it advisory: about
+    # half of runs take 23-60 minutes instead of ~12, every one of them with
     # swift-build at four cores on "[Pre-planning 1 / N]" for up to 45 minutes
-    # in the bundler's second `swift build`, then finding nothing to compile.
-    # The bundler now reuses the permission check's build instead of running
-    # that one; promote this once its runs stay at ~12 minutes. The script logs
-    # each phase's time and samples the build processes once a minute, to say
-    # why if they don't.
+    # and then compiling normally (swiftlang/swift-build#322). Any build here
+    # can do it, the CLI's own debug build included, so the job can't be
+    # required until that's fixed upstream. The script logs each phase's time
+    # and samples the build processes once a minute, to say where.
     runs-on: windows-2022
     timeout-minutes: 60
     steps:

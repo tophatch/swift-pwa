@@ -75,12 +75,11 @@ struct WindowsBundler {
     /// headless permission check `build` runs first is a `swift run -c <same>`
     /// with the same search paths — so the exe is there and current.
     ///
-    /// Not built a second time because the second `swift build` is where
-    /// Swift 6.4's build planner stalls on GitHub's Windows runners: 15 to 45
-    /// minutes at four cores in `[Pre-planning 1 / N]` before it compiles
-    /// nothing, in about half the runs measured, where a Windows 11 machine
-    /// takes 4.5 s every time. The build still runs when the exe isn't where
-    /// it should be.
+    /// Not built a second time: that build compiled nothing, and on GitHub's
+    /// Windows runners each `swift build` is a chance for Swift 6.4's build
+    /// planner to stall for up to 45 minutes in `[Pre-planning 1 / N]`, in
+    /// about half the runs measured, where a Windows 11 machine takes 4.5 s.
+    /// The build still runs when the exe isn't where it should be.
     var alreadyBuilt = false
 
     /// Where the build put the exe, if it's there.

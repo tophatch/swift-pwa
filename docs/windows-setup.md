@@ -980,11 +980,16 @@ compares the two as equal.
 **A Windows build compiles the app once.** The permission check that every
 build runs first (see above) compiles the app in the configuration being built,
 with the same search paths, and the bundler packages that exe rather than
-running `swift build` again. The second build compiled nothing, and on GitHub's
-hosted Windows runners Swift 6.4.0's build planner stalled in it about half the
-time: up to 45 minutes at four cores on `[Pre-planning 1 / N]`, where the same
-step on a Windows 11 machine takes about 4 s. Not ours to fix, so it's not run.
-A build whose permission check didn't run, or left no exe, still builds.
+running `swift build` again. A build whose permission check didn't run, or left
+no exe, still builds.
+
+**On GitHub's hosted Windows runners, any `swift build` can stall for tens of
+minutes.** Swift 6.4.0's build planner sits at four cores on
+`[Pre-planning 1 / N]`, compiling nothing, in about half of our CI runs — up
+to 45 minutes, for the app's build and for a plain debug build alike — where a
+Windows 11 machine takes about 4 s for the same step. It's swift-build's
+(swiftlang/swift-build#322), and not reproducible off the runners. Budget a
+release workflow's Windows job for an hour rather than fifteen minutes.
 
 **A window moved to a negative coordinate used to kill the app.** `WM_MOVE`
 packs its coordinates as *signed* 16-bit words, and the handler read them

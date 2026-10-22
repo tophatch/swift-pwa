@@ -996,7 +996,7 @@ struct AndroidBundlerUnitTests {
     /// half is Kotlin — the WebView belongs to the bridge, and `View.draw` is
     /// UI-thread-only, so the Swift adapter can only ask.
     @Test("the bridge can snapshot its WebView, and the RPC reaches it")
-    func bridgeSnapshotsTheWebView() {
+    func bridgeSnapshotsTheWebView() throws {
         let bridge = AndroidTemplates.swiftPWABridgeKt()
         // Drawing the view, not capturing the screen: the app's own pixels,
         // available while the window is occluded and with no permission.
@@ -1016,6 +1016,24 @@ struct AndroidBundlerUnitTests {
         // leaking one per frame of an animation would be the whole feature's
         // cost.
         #expect(bridge.contains("bitmap.recycle()"))
+        // The encode is off the UI thread: a WebView draws no frames while that
+        // thread is busy, and on a Pixel 3a the encode froze it for ~400 ms
+        // per snapshot (#325).
+        #expect(bridge
+            .contains("private val snapshotEncoder = java.util.concurrent.Executors.newSingleThreadExecutor()"))
+        let handOff = try #require(bridge.range(of: "snapshotEncoder.execute {"))
+        let encode = try #require(bridge.range(of: "val encoded = encodeBitmapToPng(bitmap)"))
+        #expect(handOff.upperBound < encode.lowerBound)
+        // …and so is quoting the reply, which for a snapshot is hundreds of
+        // kilobytes. One serial thread, then the post, so frames keep the order
+        // they were sent in.
+        let afterPost = try #require(bridge.components(separatedBy: "fun postToPage(json: String) {").last)
+        let post = try #require(afterPost.components(separatedBy: "fun loadUrl(").first)
+        let serial = try #require(post.range(of: "outbound.execute {"))
+        let quote = try #require(post.range(of: "org.json.JSONObject.quote(json)"))
+        let toMain = try #require(post.range(of: "main.post {"))
+        #expect(serial.upperBound < quote.lowerBound && quote.upperBound < toMain.lowerBound)
+        #expect(bridge.contains("private val outbound = java.util.concurrent.Executors.newSingleThreadExecutor()"))
 
         let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
         #expect(plugins.contains("\"window.snapshot\" -> windowSnapshot(done)"))

@@ -1616,9 +1616,12 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   the DOM but not `<canvas>`, WebGL or video. It is also the slowest of the six
   backends — a full-window PNG of a page of body text measured **406 ms** at
   1968×2056, against ~60 ms on Apple and Linux, nearly all of it inside the
-  call (a four-megapixel surface, PNG-encoded and base64'd across JNI). Snapshot
-  something smaller, or take the picture when a gesture *begins* rather than
-  when the page flips. Measured by `Scripts/verify-android-window-snapshot.sh`.
+  call (a four-megapixel surface, PNG-encoded and base64'd across JNI). The
+  encode, and quoting the reply for the page, run off the UI thread, so the
+  page keeps drawing while it waits: only the copy (~30–60 ms) and the
+  `evaluateJavascript` call (~5 ms) hold the thread the WebView draws on. Snapshot something smaller, or take the
+  picture when a gesture *begins* rather than when the page flips. Measured
+  by `Scripts/verify-android-window-snapshot.sh`.
 
 - **Camera, microphone and location need a declaration in two places.**
   `permissions.web` in `pwa.json` emits the `uses-permission` entries;

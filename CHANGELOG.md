@@ -60,6 +60,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Scripts\verify-app-icons-windows.ps1`.
   - **Linux**: one icon, `supported: false`.
 
+### Fixed
+
+- **`window.snapshot` no longer stops an Android webview drawing** (#325).
+  On a Pixel 3a (1080×2011) the page drew nothing for 366–433 ms of every
+  ~480 ms call. An app that photographs itself mid-animation, the case the
+  command exists for, lost that many frames each time. Two jobs were on the
+  UI thread, and a WebView draws no frames while that thread is busy:
+  - **The PNG encode and base64.** `PixelCopy` answers on the main looper,
+    and the encode ran in that callback. It now runs on a thread of its own.
+    The `View.draw` fallback stays on the UI thread, which it needs.
+  - **Quoting the reply for the page.** `postToPage` quoted every frame on
+    the UI thread before `evaluateJavascript`. For a snapshot that's
+    hundreds of kilobytes, and a system trace caught it holding the thread
+    for ~400 ms once the encode had moved. Frames are now quoted on one
+    serial thread, so they still arrive in the order they were sent, and
+    only the evaluate is posted (3–5 ms).
+
+  The UI thread now does the copy (28–63 ms) and the evaluate. The longest
+  frame gap during a capture measured 33–66 ms. The round trip is unchanged,
+  so this fixes the freeze, not the latency.
+  `Scripts/verify-android-window-snapshot.sh` gains a check that the page
+  keeps drawing during a capture, with an absolute bound of 150 ms. It
+  failed on 0.11.8 (433 ms) and passes on this change (33 ms). A page that
+  draws nothing at all, such as one behind the keyguard, now fails the check
+  rather than hanging.
+
 ## [0.11.8] - 2026-10-21
 
 ### Added

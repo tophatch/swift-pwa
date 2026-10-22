@@ -21,6 +21,10 @@
 #      detail the page's own canvas holds — an accelerated layer that came
 #      back smoothed, or a canvas that never composited into the view's draw
 #      pass, shows up here and only here.
+#   5. The page keeps drawing while it is photographed. A capture that holds
+#      the UI thread stops the WebView producing frames for as long as it
+#      does, which is invisible to every check above and is the whole cost to
+#      an app that snapshots mid-animation (#325).
 #
 # There is no `swift-pwa drive` for Android, so the page runs the checks itself
 # and reports through `RuntimeDiagnostics` into logcat. That caps what can be
@@ -197,6 +201,43 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     });
   }
 
+  // A snapshot with every frame's time recorded around it. The span runs from
+  // the last frame before the call to the first one after it, so a call that
+  // no frame landed inside reports its whole length rather than nothing. A
+  // page that isn't drawing at all (the screen off, the keyguard up) gets no
+  // frame after the call, and reports -1 rather than waiting for one forever.
+  function snapshotWatchingFrames() {
+    var frames = [];
+    var live = true;
+    function tick(t) { frames.push(t); if (live) requestAnimationFrame(tick); }
+    requestAnimationFrame(tick);
+    var t0, t1, taken;
+    return new Promise(function (r) { setTimeout(r, 200); }).then(function () {
+      t0 = performance.now();
+      return snapshot();
+    }).then(function (m) {
+      t1 = performance.now();
+      taken = m;
+      return new Promise(function (r) {
+        requestAnimationFrame(function () { r(); });
+        setTimeout(r, 1000);
+      });
+    }).then(function () {
+      live = false;
+      if (!frames.some(function (t) { return t >= t1; })) {
+        taken.gapMs = -1;
+        return taken;
+      }
+      var span = frames.filter(function (t, k) {
+        return (k === 0 || frames[k - 1] <= t1) && (k === frames.length - 1 || frames[k + 1] >= t0);
+      });
+      var gap = 0;
+      for (var i = 1; i < span.length; i++) gap = Math.max(gap, span[i] - span[i - 1]);
+      taken.gapMs = Math.round(gap);
+      return taken;
+    });
+  }
+
   __SWIFT_PWA__.invoke('window.canSnapshot').then(function (can) {
     return report('can ' + can.value).then(function () {
       if (!can.value) throw new Error('canSnapshot is false');
@@ -226,11 +267,11 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     document.getElementById('text').style.display = 'block';
     return new Promise(function (r) { setTimeout(r, 300); });
   }).then(function () {
-    return snapshot();
+    return snapshotWatchingFrames();
   }).then(function (m) {
     m.bitmap.close();
     return report('text ms=' + m.ms + ' bridgeMs=' + m.bridgeMs +
-                  ' kib=' + Math.round(m.shot.bytes / 1024));
+                  ' kib=' + Math.round(m.shot.bytes / 1024) + ' gapMs=' + m.gapMs);
   }).then(function () {
     document.getElementById('text').style.display = 'none';
     noise.style.display = 'block';
@@ -341,6 +382,16 @@ check("the noise frame carries the canvas's own detail",
       detail is not None and canvas_detail and detail >= canvas_detail * 0.5,
       "%s distinct colours in a 32x32 patch against %s in the page's own canvas"
       % (detail, canvas_detail))
+
+gap, text_ms = field("text", "gapMs"), field("text", "ms")
+# An absolute bound, not a share of the round trip: a capture that is slow
+# all over makes any share look small. Holding the UI thread for the encode
+# left 366-450 ms on a Pixel 3a; holding it only for the copy and the
+# hand-off leaves 33-72 ms.
+check("the page kept drawing while it was photographed",
+      gap is not None and 0 <= gap < 150,
+      "no frames at all: is the screen on and unlocked?" if gap == -1
+      else "longest frame gap %s ms in a %s ms round trip" % (gap, text_ms))
 
 print()
 print("      round trip, page to page — snapshot, encode, bridge, decode, at %dx%d:" % (w, h))

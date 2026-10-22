@@ -1486,6 +1486,13 @@ enum AndroidTemplates {
         ) {
             private val main = Handler(Looper.getMainLooper())
             private val systemPlugins: SwiftPWASystemPlugins = SwiftPWASystemPlugins(activity, this)
+            // `window.snapshot`'s PNG encode, off the UI thread: a WebView
+            // draws no frames while that thread is busy, and the encode is
+            // most of the call (#325).
+            private val snapshotEncoder = java.util.concurrent.Executors.newSingleThreadExecutor()
+            // Frames to the page are quoted here rather than on the UI thread,
+            // one at a time so they still arrive in the order they were sent.
+            private val outbound = java.util.concurrent.Executors.newSingleThreadExecutor()
 
             // SPA history-routing fallback, baked in from pwa.json's
             // web.spa_fallback / web.entry (see AndroidTemplates.swiftPWABridgeKt).
@@ -1753,23 +1760,32 @@ enum AndroidTemplates {
 
             @Suppress("unused") // called from JNI
             fun postToPage(json: String) {
-                main.post {
-                    // PostWebMessage equivalent: deliver via the global
-                    // resolver in bridge.js. Build the argument as a double-quoted
-                    // JS string literal (via org.json.JSONObject.quote), NOT a
-                    // template literal: a template literal treats `${…}` as
-                    // interpolation, so a payload whose text contains `${…}` — e.g.
-                    // fs.readText of a file with a `${secret}` REST-header template —
-                    // made JS evaluate `${secret}` → ReferenceError inside
-                    // evaluateJavascript, so __deliver never ran and the JS promise
-                    // hung forever (readBinary was unaffected — base64 has no `${`).
-                    // Inside double quotes `${…}` is inert; this matches how the
-                    // Apple/GTK/WebView2 backends already escape the payload.
+                // PostWebMessage equivalent: deliver via the global
+                // resolver in bridge.js. Build the argument as a double-quoted
+                // JS string literal (via org.json.JSONObject.quote), NOT a
+                // template literal: a template literal treats `${…}` as
+                // interpolation, so a payload whose text contains `${…}` — e.g.
+                // fs.readText of a file with a `${secret}` REST-header template —
+                // made JS evaluate `${secret}` → ReferenceError inside
+                // evaluateJavascript, so __deliver never ran and the JS promise
+                // hung forever (readBinary was unaffected — base64 has no `${`).
+                // Inside double quotes `${…}` is inert; this matches how the
+                // Apple/GTK/WebView2 backends already escape the payload.
+                //
+                // Quoted on `outbound` and only the evaluate is posted: quoting
+                // is a walk over every character, and a `window.snapshot` reply
+                // is hundreds of kilobytes of base64 — ~400 ms on the UI thread
+                // of a Pixel 3a, which drew nothing for that long (#325). One
+                // serial thread, because callers arrive on several and the page
+                // relies on frames landing in the order they were posted.
+                outbound.execute {
                     val arg = org.json.JSONObject.quote(json)
-                    webView.evaluateJavascript(
-                        "globalThis.__SWIFT_PWA__.__deliver($arg)",
-                        null
-                    )
+                    main.post {
+                        webView.evaluateJavascript(
+                            "globalThis.__SWIFT_PWA__.__deliver($arg)",
+                            null
+                        )
+                    }
                 }
             }
 
@@ -2232,19 +2248,14 @@ enum AndroidTemplates {
             /// their renderer and have neither limitation.
             ///
             /// Asynchronous, because `PixelCopy` is. Called on the UI thread —
-            /// every RPC already arrives there via `main.post` — and `done` is
-            /// called on a background thread. Answers null before the view has
-            /// been laid out, which is a real state early in startup rather
-            /// than an error.
-            ///
-            /// **The encode runs off the UI thread.** PNG-compressing and
-            /// Base64-encoding a two-megapixel bitmap takes most of the call's
-            /// ~400 ms, and a WebView produces no frames while its UI thread is
-            /// busy: a page animating through a snapshot froze for that long
-            /// (#325). Only the `View.draw` fallback needs the UI thread; once
-            /// `PixelCopy` has answered, the bitmap is ours. Its own thread, not
-            /// the plugins' file executor, so a slow provider listing there
-            /// can't hold a snapshot back.
+            /// every RPC already arrives there via `main.post` — but the PNG
+            /// encode runs on `snapshotEncoder` and `done` is called from
+            /// there: encoding a 2-megapixel window took ~400 ms on a Pixel 3a
+            /// and froze the WebView for all of it (#325). Answers null before
+            /// the view has been laid out, which is a real state early in
+            /// startup rather than an error. `snapshotEncoder` is its own
+            /// executor, not the plugins' file executor, so a slow provider
+            /// listing there can't hold a snapshot back.
             fun snapshotPngBase64(done: (String?) -> Unit) {
                 val width = webView.width
                 val height = webView.height
@@ -2254,11 +2265,11 @@ enum AndroidTemplates {
                 )
                 val finish = { copied: Boolean ->
                     if (!copied) webView.draw(android.graphics.Canvas(bitmap))
-                    Thread({
+                    snapshotEncoder.execute {
                         val encoded = encodeBitmapToPng(bitmap)
                         bitmap.recycle()
                         done(encoded)
-                    }, "swift-pwa-snapshot").start()
+                    }
                 }
                 val window = activity.window
                 if (window == null || !webView.isAttachedToWindow) { finish(false); return }

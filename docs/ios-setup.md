@@ -650,7 +650,8 @@ for before.
   and home indicator, while the webview covers the whole screen — so the
   snapshot's `height` exceeds `innerHeight * devicePixelRatio` and the content
   sits offset inside the picture. Use `viewport-fit=cover`, or account for
-  `env(safe-area-inset-top)` yourself. The speed is Apple's best: a full-window
+  `env(safe-area-inset-top)` yourself. A `rect` is placed in the page's own
+  viewport either way. The speed is Apple's best: a full-window
   PNG of a page of body text measured ~60 ms at 1206×2622. See
   [docs/javascript-api.md](javascript-api.md#a-picture-of-your-own-content).
 

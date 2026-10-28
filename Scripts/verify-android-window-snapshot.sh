@@ -190,9 +190,9 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     return n;
   }
 
-  function snapshot() {
+  function snapshot(rect) {
     var t0 = performance.now();
-    return __SWIFT_PWA__.invoke('window.snapshot').then(function (shot) {
+    return __SWIFT_PWA__.invoke('window.snapshot', rect ? { rect: rect } : {}).then(function (shot) {
       var bridgeMs = performance.now() - t0;
       return fetch('data:image/png;base64,' + shot.pngBase64)
         .then(function (r) { return r.blob(); })
@@ -292,6 +292,45 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     return report('noise detail=' + detail + ' canvasDetail=' + canvasDetail +
                   ' ms=' + m.ms + ' bridgeMs=' + m.bridgeMs +
                   ' kib=' + Math.round(m.shot.bytes / 1024));
+  }).then(function () {
+    // `rect` (#255), timed first over the noise still on screen: the top-left
+    // quarter, against the whole-window `noise` line above.
+    return snapshot({ x: 0, y: 0, width: innerWidth / 2, height: innerHeight / 2 });
+  }).then(function (m) {
+    m.bitmap.close();
+    return report('rectq noise size=' + m.shot.width + 'x' + m.shot.height + ' ms=' + m.ms + ' kib=' + Math.round(m.shot.bytes / 1024));
+  }).then(function () {
+    noise.style.display = 'none';
+    document.getElementById('text').style.display = 'block';
+    return new Promise(function (r) { setTimeout(r, 300); });
+  }).then(function () {
+    return snapshot({ x: 0, y: 0, width: innerWidth / 2, height: innerHeight / 2 });
+  }).then(function (m) {
+    m.bitmap.close();
+    return report('rectq text size=' + m.shot.width + 'x' + m.shot.height + ' ms=' + m.ms + ' kib=' + Math.round(m.shot.bytes / 1024));
+  }).then(function () {
+    document.getElementById('text').style.display = 'none';
+    return new Promise(function (r) { setTimeout(r, 300); });
+  }).then(function () {
+    // 80 CSS px square on the mark's bottom-right corner: only its top-left
+    // quadrant is the mark, so a crop 20 px off in any direction shows.
+    var cx = Math.floor(innerWidth / 2), cy = Math.floor(innerHeight / 2);
+    return snapshot({ x: cx - 40, y: cy - 40, width: 80, height: 80 });
+  }).then(function (m) {
+    var w = m.bitmap.width, h = m.bitmap.height;
+    var ctx = draw(m.bitmap, w, h);
+    var q = function (fx, fy) { return hexAt(ctx, Math.floor(w * fx), Math.floor(h * fy)); };
+    m.bitmap.close();
+    return report('rect size=' + m.shot.width + 'x' + m.shot.height +
+                  ' expected=' + Math.round(80 * devicePixelRatio) + 'x' + Math.round(80 * devicePixelRatio) +
+                  ' tl=' + q(0.25, 0.25) + ' tr=' + q(0.75, 0.25) +
+                  ' bl=' + q(0.25, 0.75) + ' br=' + q(0.75, 0.75));
+  }).then(function () {
+    // Hanging 70 px off the right edge: the picture is the part inside.
+    return snapshot({ x: innerWidth - 30, y: 0, width: 100, height: 40 });
+  }).then(function (m) {
+    m.bitmap.close();
+    return report('edge width=' + m.shot.width + ' expected=' + Math.round(30 * devicePixelRatio));
   }).then(function () {
     document.body.textContent = 'done';
     return report('finished');
@@ -399,6 +438,29 @@ check("the page kept drawing while it was photographed",
       "no frames at all: is the screen on and unlocked?" if gap == -1
       else "longest frame gap %s ms in a %s ms round trip" % (gap, text_ms))
 
+m = re.search(r"SNAPPROBE rect size=(\d+)x(\d+) expected=(\d+)x(\d+) tl=(\S+) tr=(\S+) bl=(\S+) br=(\S+)", log)
+if m:
+    rw, rh, rew, reh = (int(g) for g in m.groups()[:4])
+    tl, tr, bl, br = m.groups()[4:]
+    check("rect: its own size at the backing scale",
+          abs(rw - rew) <= 2 and abs(rh - reh) <= 2, "got=%dx%d expected~%dx%d" % (rw, rh, rew, reh))
+    check("rect: the mark only in its top-left quadrant",
+          tl == "#ff0000" and tr == br == bl == "#0000ff", "tl=%s tr=%s bl=%s br=%s" % (tl, tr, bl, br))
+else:
+    check("rect: reported", False, "(no rect line)")
+# Each quarter rect has to be a quarter of the window. The noise one runs with
+# the page zoomed out to fit the canvas (Android does that the moment content
+# overflows), where a rect scaled by devicePixelRatio came back as the whole
+# window while every quadrant check still passed.
+for name in ("text", "noise"):
+    m = re.search(r"SNAPPROBE rectq %s size=(\d+)x(\d+)" % name, log)
+    qw, qh = (int(g) for g in m.groups()) if m else (0, 0)
+    check("rect: a quarter of the window is a quarter (%s)" % name,
+          abs(qw - w / 2) <= 3 and abs(qh - h / 2) <= 3, "got=%dx%d window=%dx%d" % (qw, qh, w, h))
+edge, edge_expected = field("edge", "width"), field("edge", "expected")
+check("rect off the edge is clipped to the viewport",
+      edge is not None and abs(edge - edge_expected) <= 2, "width=%s expected~%s" % (edge, edge_expected))
+
 print()
 print("      round trip, page to page — snapshot, encode, bridge, decode, at %dx%d:" % (w, h))
 print("      " + "content".ljust(12) + "total".rjust(8) + "bridge".rjust(9) + "PNG".rjust(11))
@@ -408,6 +470,14 @@ for name, label in (("flat", "flat"), ("text", "body text"), ("noise", "noise"))
         continue
     print("      " + label.ljust(12) + ("%d ms" % ms).rjust(8)
           + ("%d ms" % bridge).rjust(9) + ("%d KiB" % kib).rjust(11))
+print()
+print("      a rect of the top-left quarter against the whole window:")
+for name, label in (("text", "body text"), ("noise", "noise")):
+    q_ms, q_kib = field("rectq " + name, "ms"), field("rectq " + name, "kib")
+    if q_ms is None:
+        continue
+    print("      " + label.ljust(12) + ("%d ms / %d KiB" % (field(name, "ms"), field(name, "kib"))).rjust(18)
+          + ("%d ms / %d KiB" % (q_ms, q_kib)).rjust(18))
 print()
 sys.exit(failed)
 PY

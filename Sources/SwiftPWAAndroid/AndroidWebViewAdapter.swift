@@ -106,19 +106,18 @@
             swiftpwa_android_open_devtools()
         }
 
-        /// Android has no equivalent of `WKWebView.takeSnapshot`, but
-        /// `View.draw` into a software `Canvas` re-renders through the view's
-        /// own draw path — the app's pixels, not the screen's, so it works
-        /// while the window is occluded and needs no capture permission. The
-        /// Kotlin side does the drawing because it owns the `WebView`; the RPC
-        /// already lands on the UI thread, which is the only place `draw` may
-        /// be called.
+        /// Android has no equivalent of `WKWebView.takeSnapshot`. The Kotlin
+        /// side owns the `WebView`, so it takes the picture: `PixelCopy` of
+        /// the composited window (which catches `<canvas>`, WebGL and video),
+        /// falling back to `View.draw` when the window isn't on screen. See
+        /// `snapshotPngBase64` in the generated bridge for why in that order.
         public var supportsSnapshot: Bool {
             true
         }
 
-        public func captureSnapshot() async throws -> Data {
-            let result: SnapshotResult = try await AndroidRPC.call("window.snapshot", EmptyArgs())
+        public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
+            let args = SnapshotArgs(rect: region?.rect, viewport: region?.viewport)
+            let result: SnapshotResult = try await AndroidRPC.call("window.snapshot", args)
             guard let png = Data(base64Encoded: result.pngBase64) else {
                 throw BridgeError(
                     code: BridgeError.handler,
@@ -126,6 +125,11 @@
                 )
             }
             return png
+        }
+
+        private struct SnapshotArgs: Encodable {
+            let rect: Rect?
+            let viewport: Size?
         }
 
         private struct SnapshotResult: Decodable {

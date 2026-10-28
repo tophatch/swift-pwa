@@ -320,7 +320,11 @@
         ///
         /// The C shim writes the PNG to a temp file (see the shim for why);
         /// we read and delete it here.
-        public func captureSnapshot() async throws -> Data {
+        public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
+            // The visible region *is* the viewport, so the region's share of
+            // the page's viewport is its share of the snapshot's pixels —
+            // whatever the scale factor and zoom.
+            let share = region.map { $0.scaled(toWidth: 1, height: 1) }
             let path = NSTemporaryDirectory()
                 .appending("/swift-pwa-snapshot-\(UUID().uuidString).png")
             let viewRaw = UInt(bitPattern: viewWidget)
@@ -347,7 +351,12 @@
                         let webView = UnsafeMutableRawPointer(view)
                             .assumingMemoryBound(to: WebKitWebView.self)
                         target.withCString { cstr in
-                            swiftpwa_webview_snapshot_png(webView, cstr, snapshotCallback, boxPtr)
+                            swiftpwa_webview_snapshot_png(
+                                webView, cstr, share == nil ? 0 : 1,
+                                share?.x ?? 0, share?.y ?? 0,
+                                (share?.x ?? 0) + (share?.width ?? 1), (share?.y ?? 0) + (share?.height ?? 1),
+                                snapshotCallback, boxPtr
+                            )
                         }
                     }
                 }

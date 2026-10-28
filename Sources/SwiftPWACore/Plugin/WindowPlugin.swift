@@ -108,7 +108,12 @@ public struct WindowPlugin: Plugin {
         // grant. Take it **before** mutating the DOM you want pictured — the
         // backends flush pending layout first, so a snapshot taken after the
         // mutation shows the new state, not the old one.
-        registry.register("window.snapshot", typed: { (args: TargetOnlyArgs, ctx) async throws -> WindowSnapshot in
+        //
+        // `rect` asks for one region, in CSS pixels relative to the viewport.
+        // On Windows and Android a whole window took 240-400 ms, nearly all of
+        // it encoding three to four megapixels, so a smaller picture is what
+        // makes the call fast enough to animate there.
+        registry.register("window.snapshot", typed: { (args: SnapshotArgs, ctx) async throws -> WindowSnapshot in
             // Out of the UI thread before encoding: `PWAWebView` is
             // deliberately not main-actor isolated (each backend hops
             // internally), so a full-window PNG doesn't hold up the frame the
@@ -120,7 +125,11 @@ public struct WindowPlugin: Plugin {
                     message: "this backend can't snapshot its webview contents — check window.canSnapshot"
                 )
             }
-            let png = try await webView.captureSnapshot()
+            var region: SnapshotRegion?
+            if let rect = args.rect {
+                region = try await SnapshotRegion.clip(rect, toViewportOf: webView)
+            }
+            let png = try await webView.captureSnapshot(region: region)
             guard let size = PNGDimensions.read(png) else {
                 throw BridgeError(
                     code: BridgeError.handler,
@@ -184,6 +193,83 @@ public struct WindowPlugin: Plugin {
 public struct TargetOnlyArgs: Sendable, Codable {
     public var id: String?
     public init(id: String? = nil) { self.id = id }
+}
+
+public struct SnapshotArgs: Sendable, Codable {
+    public var id: String?
+    /// One region of the viewport, in CSS pixels — the coordinates
+    /// `getBoundingClientRect()` returns. `nil` pictures the whole webview.
+    public var rect: Rect?
+
+    public init(id: String? = nil, rect: Rect? = nil) {
+        self.id = id
+        self.rect = rect
+    }
+}
+
+/// Part of the viewport to snapshot: `rect` in CSS pixels — the coordinates
+/// `getBoundingClientRect()` returns — inside a viewport of `viewport` CSS
+/// pixels, clipped to it and on whole pixels.
+///
+/// The viewport travels with the rect so a backend can place it as a share of
+/// its own viewport (`rect.x / viewport.width` of the way across) without
+/// knowing the page's zoom. Android zooms a page out when its content
+/// overflows, and then a CSS pixel is no longer `devicePixelRatio` device
+/// pixels; an engine's idea of the zoom and the page's can disagree, but the
+/// viewport the page reports and the one the backend draws are the same box.
+public struct SnapshotRegion: Sendable, Hashable {
+    public var rect: Rect
+    public var viewport: Size
+
+    public init(rect: Rect, viewport: Size) {
+        self.rect = rect
+        self.viewport = viewport
+    }
+
+    /// `rect` scaled into a viewport that is `width` x `height` in some other
+    /// unit — a backend's points or device pixels.
+    public func scaled(toWidth width: Double, height: Double) -> Rect {
+        let sx = width / viewport.width
+        let sy = height / viewport.height
+        return Rect(x: rect.x * sx, y: rect.y * sy, width: rect.width * sx, height: rect.height * sy)
+    }
+
+    /// `rect` clipped to the viewport and widened to whole CSS pixels, so a
+    /// backend never has to decide what a region hanging off the edge means,
+    /// and the picture is `width * devicePixelRatio` wide on every engine.
+    static func clip(_ rect: Rect, toViewportOf webView: any PWAWebView) async throws -> SnapshotRegion {
+        let values = [rect.x, rect.y, rect.width, rect.height]
+        guard values.allSatisfy(\.isFinite), rect.width > 0, rect.height > 0 else {
+            throw BridgeError(
+                code: BridgeError.decode,
+                message: "rect needs finite numbers and a positive width and height"
+            )
+        }
+        let reply = try await webView.evaluateJavaScript("[innerWidth, innerHeight]")
+        guard let data = reply?.data(using: .utf8),
+              let viewport = try? JSONDecoder().decode([Double].self, from: data), viewport.count == 2
+        else {
+            throw BridgeError(code: BridgeError.handler, message: "couldn't read the viewport's size")
+        }
+        return try clip(rect, toViewport: Size(width: viewport[0], height: viewport[1]))
+    }
+
+    static func clip(_ rect: Rect, toViewport viewport: Size) throws -> SnapshotRegion {
+        let left = max(0, rect.x.rounded(.down))
+        let top = max(0, rect.y.rounded(.down))
+        let right = min(viewport.width.rounded(.down), (rect.x + rect.width).rounded(.up))
+        let bottom = min(viewport.height.rounded(.down), (rect.y + rect.height).rounded(.up))
+        guard right > left, bottom > top else {
+            throw BridgeError(
+                code: BridgeError.decode,
+                message: "rect lies outside the \(Int(viewport.width))x\(Int(viewport.height)) viewport"
+            )
+        }
+        return SnapshotRegion(
+            rect: Rect(x: left, y: top, width: right - left, height: bottom - top),
+            viewport: viewport
+        )
+    }
 }
 
 public struct SetTitleArgs: Sendable, Codable {

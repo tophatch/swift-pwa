@@ -2256,15 +2256,36 @@ enum AndroidTemplates {
             /// startup rather than an error. `snapshotEncoder` is its own
             /// executor, not the plugins' file executor, so a slow provider
             /// listing there can't hold a snapshot back.
-            fun snapshotPngBase64(done: (String?) -> Unit) {
+            ///
+            /// `region` is a share of the viewport, 0 to 1 on each axis (#255).
+            /// The copy itself is cropped, so a smaller region is a smaller
+            /// bitmap to encode — the encode is most of the cost. A share
+            /// rather than CSS pixels times the density, because a page whose
+            /// content overflows is zoomed out to fit, and then a CSS pixel is
+            /// no longer `devicePixelRatio` device pixels: on a Galaxy Z Fold7
+            /// a probe page went from 750 to 1966 CSS pixels wide that way, and
+            /// a density-scaled quarter of it was the whole window.
+            fun snapshotPngBase64(region: android.graphics.RectF?, done: (String?) -> Unit) {
                 val width = webView.width
                 val height = webView.height
                 if (width <= 0 || height <= 0) { done(null); return }
+                val crop = android.graphics.Rect(0, 0, width, height)
+                if (region != null) {
+                    crop.set(
+                        Math.round(region.left * width), Math.round(region.top * height),
+                        Math.round(region.right * width), Math.round(region.bottom * height)
+                    )
+                    if (!crop.intersect(0, 0, width, height)) { done(null); return }
+                }
                 val bitmap = android.graphics.Bitmap.createBitmap(
-                    width, height, android.graphics.Bitmap.Config.ARGB_8888
+                    crop.width(), crop.height(), android.graphics.Bitmap.Config.ARGB_8888
                 )
                 val finish = { copied: Boolean ->
-                    if (!copied) webView.draw(android.graphics.Canvas(bitmap))
+                    if (!copied) {
+                        val canvas = android.graphics.Canvas(bitmap)
+                        canvas.translate(-crop.left.toFloat(), -crop.top.toFloat())
+                        webView.draw(canvas)
+                    }
                     snapshotEncoder.execute {
                         val encoded = encodeBitmapToPng(bitmap)
                         bitmap.recycle()
@@ -2277,9 +2298,7 @@ enum AndroidTemplates {
                 // and the WebView sits somewhere inside it.
                 val origin = IntArray(2)
                 webView.getLocationInWindow(origin)
-                val source = android.graphics.Rect(
-                    origin[0], origin[1], origin[0] + width, origin[1] + height
-                )
+                val source = android.graphics.Rect(crop).apply { offset(origin[0], origin[1]) }
                 try {
                     android.view.PixelCopy.request(
                         window, source, bitmap,
@@ -2822,7 +2841,7 @@ enum AndroidTemplates {
                         .put("cache", activity.cacheDir.absolutePath).toString(),
                     null
                 )
-                "window.snapshot" -> windowSnapshot(done)
+                "window.snapshot" -> windowSnapshot(json, done)
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)
                 "app.icon.state" -> appIconState(done)
@@ -4884,8 +4903,22 @@ enum AndroidTemplates {
         // picture; this only shapes the reply. A view with no size yet is
         // reported as such rather than as an empty image, which would reach the
         // page as a transparent canvas and look like a rendering bug.
-        private fun windowSnapshot(done: (String?, String?) -> Unit) {
-            bridge.snapshotPngBase64 { encoded ->
+        private fun windowSnapshot(json: JSONObject, done: (String?, String?) -> Unit) {
+            // The region as a share of the viewport, so it lands where the
+            // page meant at any zoom (see snapshotPngBase64).
+            val region = json.optJSONObject("rect")?.let { rect ->
+                val viewport = json.getJSONObject("viewport")
+                val vw = viewport.getDouble("width")
+                val vh = viewport.getDouble("height")
+                val x = rect.getDouble("x")
+                val y = rect.getDouble("y")
+                android.graphics.RectF(
+                    (x / vw).toFloat(), (y / vh).toFloat(),
+                    ((x + rect.getDouble("width")) / vw).toFloat(),
+                    ((y + rect.getDouble("height")) / vh).toFloat()
+                )
+            }
+            bridge.snapshotPngBase64(region) { encoded ->
                 if (encoded == null) {
                     done(null, "swift-pwa: the webview has no size yet, nothing to snapshot")
                 } else {

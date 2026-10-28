@@ -56,7 +56,9 @@ if [[ "$(uname)" != "Darwin" && -z "${DISPLAY:-}" ]] && command -v xvfb-run >/de
 fi
 
 echo "== building the CLI =="
-(cd "$REPO" && swift build --product swift-pwa >/dev/null)
+# Compile errors go to stdout, so a quiet build has to keep it somewhere.
+(cd "$REPO" && swift build --product swift-pwa >"${TMPDIR:-/tmp}/swift-pwa-snapshot-cli.log" 2>&1) \
+    || { grep -E "error" "${TMPDIR:-/tmp}/swift-pwa-snapshot-cli.log" | head -20 >&2; exit 1; }
 
 echo "== scaffolding $APP_NAME =="
 rm -rf "$WORK"; mkdir -p "$WORK"

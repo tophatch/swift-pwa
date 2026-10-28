@@ -1021,14 +1021,21 @@ struct AndroidBundlerUnitTests {
         let bridge = AndroidTemplates.swiftPWABridgeKt()
         // Drawing the view, not capturing the screen: the app's own pixels,
         // available while the window is occluded and with no permission.
-        #expect(bridge.contains("fun snapshotPngBase64(done: (String?) -> Unit)"))
+        #expect(bridge.contains("fun snapshotPngBase64(region: android.graphics.RectF?, done: (String?) -> Unit)"))
         // PixelCopy reads the composited surface; `View.draw` alone misses
         // every GPU layer, which on a Fold7 turned a full-screen canvas of
         // noise into one flat colour while the DOM around it came through.
         #expect(bridge.contains("android.view.PixelCopy.request("))
         #expect(bridge.contains("webView.getLocationInWindow(origin)"))
-        // …and it still falls back, because PixelCopy needs a window on screen.
-        #expect(bridge.contains("if (!copied) webView.draw(android.graphics.Canvas(bitmap))"))
+        // …and it still falls back, because PixelCopy needs a window on screen,
+        // drawing the same region the copy would have read.
+        #expect(bridge.contains("canvas.translate(-crop.left.toFloat(), -crop.top.toFloat())"))
+        #expect(bridge.contains("webView.draw(canvas)"))
+        // A region is a share of the view, not CSS pixels times the density: a
+        // page zoomed out to fit wide content made a density-scaled quarter the
+        // whole window (#255). The copy itself is cropped, ahead of the encode.
+        #expect(bridge.contains("Math.round(region.left * width), Math.round(region.top * height)"))
+        #expect(bridge.contains("val source = android.graphics.Rect(crop).apply { offset(origin[0], origin[1]) }"))
         #expect(bridge.contains("android.graphics.Bitmap.CompressFormat.PNG"))
         // NO_WRAP: a base64 string with newlines in it is not what
         // `Data(base64Encoded:)` accepts on the Swift side by default.
@@ -1057,7 +1064,8 @@ struct AndroidBundlerUnitTests {
         #expect(bridge.contains("private val outbound = java.util.concurrent.Executors.newSingleThreadExecutor()"))
 
         let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
-        #expect(plugins.contains("\"window.snapshot\" -> windowSnapshot(done)"))
+        #expect(plugins.contains("\"window.snapshot\" -> windowSnapshot(json, done)"))
+        #expect(plugins.contains("val viewport = json.getJSONObject(\"viewport\")"))
         // The reply shape the Swift adapter decodes.
         #expect(plugins.contains("JSONObject().put(\"pngBase64\", encoded)"))
     }

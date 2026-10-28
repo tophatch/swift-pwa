@@ -89,5 +89,95 @@
     out.outside = sample(m.bitmap, 0.75, 0.75);  // the blue page behind it
     m.bitmap.close();
   }
+  // `rect` (#255). The checks read *where* the picture came from, not just its
+  // size: a crop taken from the wrong place decodes and measures perfectly.
+  const shoot = async (rect) => {
+    const t0 = performance.now();
+    const shot = await __SWIFT_PWA__.invoke('window.snapshot', { rect });
+    const blob = await (await fetch('data:image/png;base64,' + shot.pngBase64)).blob();
+    const bitmap = await createImageBitmap(blob);
+    return { shot, bitmap, ms: Math.round(performance.now() - t0) };
+  };
+  // 80 CSS px square on the mark's bottom-right corner: only the top-left
+  // quadrant is the mark, so a crop 20 px or more off in any direction turns
+  // a quadrant the wrong colour.
+  const quadrants = async () => {
+    await window.__showVariant('flat');
+    const cx = Math.floor(innerWidth / 2), cy = Math.floor(innerHeight / 2);
+    const m = await shoot({ x: cx - 40, y: cy - 40, width: 80, height: 80 });
+    const q = {
+      width: m.shot.width, height: m.shot.height,
+      expectedWidth: Math.round(80 * devicePixelRatio), expectedHeight: Math.round(80 * devicePixelRatio),
+      tl: sample(m.bitmap, 0.25, 0.25), tr: sample(m.bitmap, 0.75, 0.25),
+      bl: sample(m.bitmap, 0.25, 0.75), br: sample(m.bitmap, 0.75, 0.75)
+    };
+    m.bitmap.close();
+    return q;
+  };
+  out.rect = await quadrants();
+
+  // Hanging 70 px off the right edge: the picture is the part inside.
+  const edge = await shoot({ x: innerWidth - 30, y: 0, width: 100, height: 40 });
+  out.rectEdge = { width: edge.shot.width, expectedWidth: Math.round(30 * devicePixelRatio) };
+  edge.bitmap.close();
+
+  // What a region saves: the top-left quarter of the window against the
+  // whole of it, for the same content.
+  out.rectTiming = {};
+  for (const name of ['text', 'noise']) {
+    await window.__showVariant(name);
+    const whole = await measure();
+    whole.bitmap.close();
+    const quarter = await shoot({ x: 0, y: 0, width: innerWidth / 2, height: innerHeight / 2 });
+    quarter.bitmap.close();
+    out.rectTiming[name] = {
+      wholeMs: whole.ms, wholeKib: Math.round(whole.shot.bytes / 1024),
+      quarterMs: quarter.ms, quarterKib: Math.round(quarter.shot.bytes / 1024)
+    };
+  }
+
+  // Scrolled: the rect is in viewport coordinates wherever the document is.
+  // Windows crops through CDP, whose clip is in *document* coordinates, so a
+  // missing scroll offset shows only on a page that has scrolled.
+  document.getElementById('mark').style.display = 'none';
+  for (const el of [document.documentElement, document.body]) {
+    el.style.overflow = 'auto';
+    el.style.height = 'auto';
+  }
+  const tall = document.createElement('div');
+  tall.style.cssText = 'position:absolute;left:0;top:0;width:1px;height:' + innerHeight * 3 + 'px';
+  const block = document.createElement('div');
+  block.style.cssText = 'position:absolute;left:0;top:' + (innerHeight + 200) +
+    'px;width:200px;height:200px;background:#ff0000';
+  document.body.append(tall, block);
+  scrollTo(0, innerHeight);
+  await new Promise(r => setTimeout(r, 300));
+  const scrolled = await shoot({ x: 160, y: 360, width: 80, height: 80 });
+  out.rectScrolled = {
+    scrollY: Math.round(scrollY),
+    width: scrolled.shot.width, height: scrolled.shot.height,
+    expectedWidth: Math.round(80 * devicePixelRatio), expectedHeight: Math.round(80 * devicePixelRatio),
+    tl: sample(scrolled.bitmap, 0.25, 0.25), tr: sample(scrolled.bitmap, 0.75, 0.25),
+    bl: sample(scrolled.bitmap, 0.25, 0.75), br: sample(scrolled.bitmap, 0.75, 0.75)
+  };
+  scrolled.bitmap.close();
+  scrollTo(0, 0);
+  tall.remove();
+  block.remove();
+  for (const el of [document.documentElement, document.body]) {
+    el.style.overflow = '';
+    el.style.height = '';
+  }
+  document.getElementById('mark').style.display = '';
+  await new Promise(r => setTimeout(r, 300));
+
+  // Last, because it changes the page: without `viewport-fit=cover` an iOS
+  // layout viewport is inset by the status bar and home indicator while the
+  // webview covers the screen, so CSS (0, 0) is not the view's corner. Every
+  // other engine ignores the key.
+  const meta = document.querySelector('meta[name=viewport]');
+  meta.setAttribute('content', meta.getAttribute('content').replace(/,\s*viewport-fit=cover/, ''));
+  await new Promise(r => setTimeout(r, 400));
+  out.rectNoCover = await quadrants();
   return JSON.stringify(out);
 })()

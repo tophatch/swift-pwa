@@ -59,6 +59,28 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     box showed the same with a hand-built package of this shape).
     `Scripts\verify-app-icons-windows.ps1`.
   - **Linux**: one icon, `supported: false`.
+- **`window.snapshot` takes a `rect`** (#255). A whole-window snapshot of a
+  page of body text took 240–400 ms on Windows and Android, nearly all of it
+  encoding three to four megapixels, which is too slow to start a page curl
+  under the finger. `{ rect: { x, y, width, height } }`, in CSS pixels relative
+  to the viewport, pictures one region and is cut out *before* the encode, so
+  the top-left quarter of that page measured 120 ms against 316 ms on a Galaxy
+  Z Fold7 and 131 ms against 209–578 ms on a Windows 11 arm64 laptop (15 ms
+  against 47 ms on GTK3, 19 against 69 on macOS). The rect is clipped to the
+  viewport and widened to whole pixels, so the picture is
+  `width * devicePixelRatio` wide everywhere; one wholly outside fails with
+  `E_DECODE`. Each backend crops natively: `WKSnapshotConfiguration.rect`,
+  `PixelCopy`'s source rect, a crop of the GTK surface or texture before its
+  PNG write, and on Windows CDP's `Page.captureScreenshot` with a clip, since
+  `CapturePreview` takes no region. A backend places the region as a *share*
+  of its viewport rather than CSS pixels times the density: the first Android
+  build did the latter, and a page Android had zoomed out to fit wide content
+  (750 CSS pixels became 1966) got the whole window for a quarter of it. The
+  verify scripts read the crop's colours back from all four quadrants of a
+  region straddling a known edge, on a scrolled page, and on iOS without
+  `viewport-fit=cover`; shifting the macOS crop by 30 points, and dropping the
+  iOS safe-area inset, each fail them. `PWAWebView.captureSnapshot()` became
+  `captureSnapshot(region:)`, with the no-argument form kept as an extension.
 - **CI drives a bundled Windows app** (#277). `bundle-smoke-windows` only
   launched its bundles with `SWIFT_PWA_DESCRIBE`, which exits before any
   window, on the assumption that a hosted runner has no desktop for WebView2

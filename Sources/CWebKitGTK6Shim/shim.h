@@ -138,7 +138,17 @@ typedef struct {
     swiftpwa_snapshot_callback cb;
     void *user_data;
     char *path;
+    /// The region to keep, as shares of the snapshot (0...1): left, top,
+    /// right, bottom. `has_region` 0 keeps the whole picture.
+    int has_region;
+    double share[4];
 } swiftpwa_snapshot_box;
+
+/// A share of `size` pixels, as a whole pixel inside it.
+static inline int swiftpwa_snapshot_edge(double share, int size) {
+    int px = (int)(share * size + 0.5);
+    return px < 0 ? 0 : (px > size ? size : px);
+}
 
 /// GAsyncReadyCallback trampoline for `swiftpwa_webview_snapshot_png`.
 ///
@@ -154,6 +164,8 @@ static inline void swiftpwa_snapshot_finish(
     swiftpwa_snapshot_callback cb = box->cb;
     void *swift_ud = box->user_data;
     char *path = box->path;
+    int has_region = box->has_region;
+    double share[4] = { box->share[0], box->share[1], box->share[2], box->share[3] };
     g_free(box);
 
     GError *error = NULL;
@@ -167,8 +179,37 @@ static inline void swiftpwa_snapshot_finish(
         err_msg = g_strdup(error->message);
         g_error_free(error);
     } else if (texture) {
-        ok = gdk_texture_save_to_png(texture, path) ? 1 : 0;
-        if (!ok) err_msg = g_strdup("gdk_texture_save_to_png failed");
+        // A region is cut out before the PNG write, which is most of the
+        // cost (#255): the texture is downloaded once and the region wrapped
+        // as a memory texture over the same bytes, with the full row stride.
+        GdkTexture *picture = texture;
+        if (has_region) {
+            int w = gdk_texture_get_width(texture);
+            int h = gdk_texture_get_height(texture);
+            int x0 = swiftpwa_snapshot_edge(share[0], w), y0 = swiftpwa_snapshot_edge(share[1], h);
+            int x1 = swiftpwa_snapshot_edge(share[2], w), y1 = swiftpwa_snapshot_edge(share[3], h);
+            if (x1 <= x0 || y1 <= y0) {
+                err_msg = g_strdup("the region is empty at this size");
+                picture = NULL;
+            } else {
+                gsize stride = (gsize)w * 4;
+                guchar *pixels = g_malloc(stride * h);
+                // GDK_MEMORY_DEFAULT is the format gdk_texture_download writes.
+                gdk_texture_download(texture, pixels, stride);
+                GBytes *all = g_bytes_new_take(pixels, stride * h);
+                gsize offset = (gsize)y0 * stride + (gsize)x0 * 4;
+                gsize length = (gsize)(y1 - y0 - 1) * stride + (gsize)(x1 - x0) * 4;
+                GBytes *region = g_bytes_new_from_bytes(all, offset, length);
+                picture = gdk_memory_texture_new(x1 - x0, y1 - y0, GDK_MEMORY_DEFAULT, region, stride);
+                g_bytes_unref(region);
+                g_bytes_unref(all);
+            }
+        }
+        if (picture) {
+            ok = gdk_texture_save_to_png(picture, path) ? 1 : 0;
+            if (!ok) err_msg = g_strdup("gdk_texture_save_to_png failed");
+            if (picture != texture) g_object_unref(picture);
+        }
         g_object_unref(texture);
     } else {
         err_msg = g_strdup("snapshot produced no texture");
@@ -182,6 +223,8 @@ static inline void swiftpwa_snapshot_finish(
 static inline void swiftpwa_webview_snapshot_png(
     WebKitWebView *web_view,
     const char *path,
+    int has_region,
+    double left, double top, double right, double bottom,
     swiftpwa_snapshot_callback cb,
     void *user_data
 ) {
@@ -190,6 +233,11 @@ static inline void swiftpwa_webview_snapshot_png(
     box->cb = cb;
     box->user_data = user_data;
     box->path = g_strdup(path);
+    box->has_region = has_region;
+    box->share[0] = left;
+    box->share[1] = top;
+    box->share[2] = right;
+    box->share[3] = bottom;
     webkit_web_view_get_snapshot(
         web_view,
         WEBKIT_SNAPSHOT_REGION_VISIBLE,

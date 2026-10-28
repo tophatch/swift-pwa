@@ -263,15 +263,19 @@
         /// driver can screenshot an app that is backgrounded, occluded or on
         /// another Space — and without the Screen Recording TCC grant that
         /// `CGWindowListCreateImage` / `screencapture` demand.
-        public nonisolated func captureSnapshot() async throws -> Data {
-            try await snapshotOnMain()
+        public nonisolated func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
+            try await snapshotOnMain(region: region)
         }
 
-        @MainActor private func snapshotOnMain() async throws -> Data {
+        @MainActor private func snapshotOnMain(region: SnapshotRegion?) async throws -> Data {
             let config = WKSnapshotConfiguration()
             // Flush pending layout/paint first, so a snapshot taken right
             // after an `eval` that mutated the DOM shows the mutation.
             config.afterScreenUpdates = true
+            if let region {
+                // WebKit renders only this rect, in the view's points.
+                config.rect = viewRect(for: region)
+            }
             let image = try await webView.takeSnapshot(configuration: config)
             guard let png = Self.encodePNG(image) else {
                 throw BridgeError(
@@ -280,6 +284,21 @@
                 )
             }
             return png
+        }
+
+        /// Where the region sits in the view, in points: the same share of
+        /// the view's viewport as of the page's. On iOS a page without
+        /// `viewport-fit=cover` has its layout viewport inset by the status
+        /// bar and home indicator while the view covers the whole screen, so
+        /// the viewport is the bounds less the scroll view's adjusted inset.
+        @MainActor private func viewRect(for region: SnapshotRegion) -> CGRect {
+            var viewport = webView.bounds
+            #if os(iOS)
+                let inset = webView.scrollView.adjustedContentInset
+                viewport = viewport.inset(by: inset)
+            #endif
+            let rect = region.scaled(toWidth: viewport.width, height: viewport.height)
+            return CGRect(x: viewport.minX + rect.x, y: viewport.minY + rect.y, width: rect.width, height: rect.height)
         }
 
         #if os(macOS)

@@ -496,9 +496,64 @@
         /// window is frontmost — and without the system-wide screen capture
         /// the alternative would need.
         ///
+        /// A region goes through CDP's `Page.captureScreenshot` instead:
+        /// `CapturePreview` takes no region, and decoding, cropping and
+        /// re-encoding its PNG would make a region dearer than the whole
+        /// window (#255).
+        public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
+            guard let region else { return try await capturePreview() }
+            return try await captureScreenshot(clip: region.rect)
+        }
+
+        /// `clip` is in CSS pixels relative to the viewport. CDP's clip is in
+        /// the *document's* CSS pixels, so the viewport's scroll position is
+        /// added first; its output is in device pixels, like the whole-window
+        /// path's.
+        private func captureScreenshot(clip: Rect) async throws -> Data {
+            let metrics = try await callDevTools("Page.getLayoutMetrics", [:])
+            guard let data = metrics?.data(using: .utf8),
+                  let layout = try? JSONDecoder().decode(LayoutMetrics.self, from: data)
+            else {
+                throw BridgeError(code: BridgeError.handler, message: "couldn't read the page's layout metrics")
+            }
+            let origin = layout.cssVisualViewport ?? layout.layoutViewport
+            let reply = try await callDevTools("Page.captureScreenshot", [
+                "format": .string("png"),
+                "captureBeyondViewport": .bool(false),
+                "clip": .object([
+                    "x": .number(origin.pageX + clip.x),
+                    "y": .number(origin.pageY + clip.y),
+                    "width": .number(clip.width),
+                    "height": .number(clip.height),
+                    "scale": .number(1)
+                ])
+            ])
+            guard let replyData = reply?.data(using: .utf8),
+                  let shot = try? JSONDecoder().decode(Screenshot.self, from: replyData),
+                  let png = Data(base64Encoded: shot.data)
+            else {
+                throw BridgeError(code: BridgeError.handler, message: "Page.captureScreenshot returned no image")
+            }
+            return png
+        }
+
+        private struct LayoutMetrics: Decodable {
+            struct Viewport: Decodable {
+                let pageX: Double
+                let pageY: Double
+            }
+
+            let layoutViewport: Viewport
+            let cssVisualViewport: Viewport?
+        }
+
+        private struct Screenshot: Decodable {
+            let data: String
+        }
+
         /// The C shim writes the PNG to a temp file (see the shim for why);
         /// we read and delete it here.
-        public func captureSnapshot() async throws -> Data {
+        private func capturePreview() async throws -> Data {
             // `NSTemporaryDirectory()` already ends in a separator here, so
             // appending another one yields `…\Temp\\swift-pwa-snapshot-….png`.
             // Win32 normalizes the doubled separator, so `CapturePreview`

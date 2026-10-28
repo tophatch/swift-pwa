@@ -62,9 +62,9 @@ struct WindowPluginTests {
     }
 
     private func dispatch(
-        _ command: String, on app: MockAppContext, from win: MockWindow
+        _ command: String, on app: MockAppContext, from win: MockWindow, payload: String = "{}"
     ) async -> InvocationResult {
-        let inv = Invocation(id: 1, command: command, payload: Data("{}".utf8))
+        let inv = Invocation(id: 1, command: command, payload: Data(payload.utf8))
         return await app.registry.dispatch(
             CommandContext(invocation: inv, caller: .page(win.id), appContext: app)
         )
@@ -85,6 +85,77 @@ struct WindowPluginTests {
         #expect(shot.height == 1000)
         #expect(shot.bytes == png.count)
         #expect(Data(base64Encoded: shot.pngBase64) == png)
+    }
+
+    @Test("a whole-window snapshot asks the backend for no region and doesn't read the viewport")
+    func snapshotWholeWindow() async throws {
+        let (app, win) = await makeApp()
+        let webView = try #require(win.webView as? MockWebView)
+        webView.stubbedSnapshot = pngHeader(width: 4, height: 4)
+        _ = await dispatch("window.snapshot", on: app, from: win)
+        #expect(webView.snapshotRegions == [nil])
+        #expect(webView.evaluatedScripts.isEmpty)
+    }
+
+    /// The backend gets a region it can crop to without deciding anything:
+    /// inside the viewport and on whole CSS pixels, so the picture is
+    /// `width * devicePixelRatio` wide on every engine.
+    @Test("rect reaches the backend clipped to the viewport, on whole pixels")
+    func snapshotRect() async throws {
+        let (app, win) = await makeApp()
+        let webView = try #require(win.webView as? MockWebView)
+        webView.stubbedSnapshot = pngHeader(width: 4, height: 4)
+        webView.evaluationResults = ["[800,600]", "[800,600]"]
+
+        _ = await dispatch(
+            "window.snapshot",
+            on: app,
+            from: win,
+            payload: #"{"rect":{"x":10.4,"y":20.6,"width":100.2,"height":50}}"#
+        )
+        // Off the right and bottom edges, and before the origin.
+        _ = await dispatch(
+            "window.snapshot",
+            on: app,
+            from: win,
+            payload: #"{"rect":{"x":-20,"y":550,"width":900,"height":100}}"#
+        )
+        let viewport = Size(width: 800, height: 600)
+        #expect(webView.snapshotRegions == [
+            SnapshotRegion(rect: Rect(x: 10, y: 20, width: 101, height: 51), viewport: viewport),
+            SnapshotRegion(rect: Rect(x: 0, y: 550, width: 800, height: 50), viewport: viewport)
+        ])
+    }
+
+    /// How a backend places the region: as a share of its own viewport, so a
+    /// page zoomed out to fit wide content (Android does that) still crops
+    /// where the page meant.
+    @Test("a region scales into a viewport measured in another unit")
+    func snapshotRegionScales() {
+        let region = SnapshotRegion(
+            rect: Rect(x: 100, y: 50, width: 200, height: 100),
+            viewport: Size(width: 800, height: 400)
+        )
+        #expect(region.scaled(toWidth: 1600, height: 800) == Rect(x: 200, y: 100, width: 400, height: 200))
+    }
+
+    @Test("a rect outside the viewport, or with no area, fails as a bad argument")
+    func snapshotRectRefused() async throws {
+        let (app, win) = await makeApp()
+        let webView = try #require(win.webView as? MockWebView)
+        webView.stubbedSnapshot = pngHeader(width: 4, height: 4)
+        webView.evaluationResults = ["[800,600]"]
+
+        for payload in [
+            #"{"rect":{"x":900,"y":0,"width":50,"height":50}}"#,
+            #"{"rect":{"x":0,"y":0,"width":0,"height":50}}"#,
+            #"{"rect":{"x":0,"y":0,"width":-5,"height":50}}"#
+        ] {
+            let result = await dispatch("window.snapshot", on: app, from: win, payload: payload)
+            guard case let .failure(err) = result else { Issue.record("expected failure for \(payload)"); continue }
+            #expect(err.code == BridgeError.decode)
+        }
+        #expect(webView.snapshotRegions.isEmpty)
     }
 
     /// A backend with no snapshot has to say so as a clean error, not as a

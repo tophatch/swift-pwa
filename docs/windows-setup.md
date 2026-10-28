@@ -453,7 +453,11 @@ built with the same Swift toolchain as the version it replaces — see
 
 `Scripts/bundle-smoke-windows.ps1` (and CI's `bundle-smoke-windows` job) checks
 this: it bundles a fresh `init` app, moves the bundle away from the build,
-and launches it with only Windows on `PATH`.
+and launches it with only Windows on `PATH`. With `-Drive` it also builds a
+debug bundle, launches it with a window and drives the page (`typeof
+__SWIFT_PWA__`, an awaited promise), which needs an interactive desktop: CI's
+hosted runner has one, an SSH session doesn't (see
+[app-driver.md](app-driver.md)).
 
 **A bundled app takes its name from the `.exe`'s version resource; a bare
 binary doesn't have one.** There is no `Info.plist` here, so `swift-pwa build
@@ -925,9 +929,9 @@ after a C-shim header change, as on Linux.
 
 ## Verifying that the bundle origin actually serves
 
-CI builds this target but never launches it -- `swift test` can't run on
-Windows and a hosted runner has no interactive session -- so **nothing
-automated ever fetches a URL on the bundle origin**. That is precisely how
+CI launches a bundled app and drives its page (`bundle-smoke-windows`), but
+`swift test` can't run on Windows, so **nothing automated fetches a mount on
+the bundle origin** -- only the page itself. That is precisely how
 [#159](https://github.com/tophatch/swift-pwa/issues/159) shipped: every
 `ctx.serveDirectory(_:at:)` mount was unreachable for several releases while
 the build stayed green.

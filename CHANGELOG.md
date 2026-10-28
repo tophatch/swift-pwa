@@ -59,6 +59,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     box showed the same with a hand-built package of this shape).
     `Scripts\verify-app-icons-windows.ps1`.
   - **Linux**: one icon, `supported: false`.
+- **CI drives a bundled Windows app** (#277). `bundle-smoke-windows` only
+  launched its bundles with `SWIFT_PWA_DESCRIBE`, which exits before any
+  window, on the assumption that a hosted runner has no desktop for WebView2
+  — never measured, and a screenshot from the job showed one. With `-Drive`,
+  `Scripts/bundle-smoke-windows.ps1` also builds a debug bundle, launches it
+  with a window and asks the page `typeof __SWIFT_PWA__` and an awaited
+  promise, as the macOS and Linux jobs do, so a page that never loads or a
+  bridge that never injects fails a PR on Windows too. Over SSH (session 0)
+  the same leg fails with `CreateCoreWebView2Controller failed: 0x80070578`,
+  which is the control that it can tell.
+- **`bundle-smoke` keeps the evidence when a launch is killed** (#329). The
+  catalog dump sometimes dies with status 9 the moment the freshly linked app
+  starts, and what killed it is recorded only on the runner. On failure the
+  job now prints each crash report's `termination` (`CODESIGNING` for a
+  refused signature, a `JetsamEvent` for memory pressure), the matching
+  unified-log lines and the binary's signature, and uploads the reports.
 
 ### Fixed
 

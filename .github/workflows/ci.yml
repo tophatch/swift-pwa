@@ -171,6 +171,42 @@ jobs:
           # Don't leave it running — the job's cleanup reports it as an orphan,
           # which is noise in the log of the next thing that goes wrong.
           pkill -x BundleSmoke || true
+      - name: Collect evidence of a killed launch (#329)
+        # The build's catalog dump sometimes dies with status 9 the instant the
+        # freshly linked BundleSmoke execs. Whatever killed it is named only on
+        # the runner, which goes away with the job: a crash report's
+        # `termination` (CODESIGNING for a refused signature, or a JetsamEvent
+        # report for memory pressure), the unified log, and the binary's
+        # signature. A deliberately tampered binary on a Mac produces the
+        # first; the unified log there says only that the report was saved.
+        if: failure()
+        working-directory: /tmp/bundle-smoke/app
+        run: |
+          mkdir -p /tmp/bundle-smoke-evidence
+          for report in ~/Library/Logs/DiagnosticReports/BundleSmoke* /Library/Logs/DiagnosticReports/BundleSmoke* \
+                        /Library/Logs/DiagnosticReports/JetsamEvent*; do
+            [ -e "$report" ] || continue
+            sudo cp "$report" /tmp/bundle-smoke-evidence/
+            echo "== $report"
+            sudo grep -E '"termination"|"largestProcess"' "$report" || true
+          done
+          echo "== unified log"
+          { sudo log show --last 30m --style compact \
+              --predicate 'process == "kernel" OR process == "amfid" OR process == "syspolicyd" OR eventMessage CONTAINS "BundleSmoke"' \
+              | grep -i -E "BundleSmoke|code signing|cs_invalid|memorystatus|jetsam" | tail -100; } || true
+          echo "== the binary's signature"
+          find .build -name BundleSmoke -type f -perm -u+x 2>/dev/null | while read -r binary; do
+            ls -la "$binary"
+            codesign -dv --verbose=4 "$binary" 2>&1 || true
+            codesign --verify --strict --verbose=4 "$binary" 2>&1 || true
+          done
+      - name: Upload the crash reports
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: bundle-smoke-crash-reports
+          path: /tmp/bundle-smoke-evidence
+          if-no-files-found: ignore
 
   bundle-smoke-linux:
     # The same question on Linux, and it went unasked for far longer: the two
@@ -261,14 +297,15 @@ jobs:
     # ran `swift-pwa build --target windows`, and two faults shipped through
     # that gap — under 6.4 no Windows build could complete at all (#238).
     #
-    # Weaker than the other two, and deliberately so: they drive their app,
-    # this launches each bundle with SWIFT_PWA_DESCRIBE, which runs the app's
-    # `configure` and exits before any window. WebView2 won't create a
-    # controller without an interactive desktop, so a driven check isn't
-    # available here; this still catches a bundle that can't load, can't find
-    # what it staged, or didn't build. It also launches each bundle with only
-    # Windows on PATH, because the docs promise it runs on a machine with no
-    # Swift toolchain. See Scripts/bundle-smoke-windows.ps1.
+    # The release bundles launch with SWIFT_PWA_DESCRIBE, which runs the app's
+    # `configure` and exits before any window: that catches a bundle that
+    # can't load, can't find what it staged, or didn't build, and the folder
+    # bundle also launches with only Windows on PATH, because the docs promise
+    # it runs on a machine with no Swift toolchain. -Drive then builds a debug
+    # bundle and drives it, as the other two jobs drive theirs (#277): the
+    # hosted runner has an interactive desktop, which WebView2 needs for a
+    # controller and an SSH session doesn't have. See
+    # Scripts/bundle-smoke-windows.ps1.
     #
     # Swift 6.4, where the gating `windows` job stays on its 6.3.1 floor: both
     # faults were 6.4-only, and 6.4 is what an adopter installs today. Same
@@ -307,7 +344,7 @@ jobs:
           nuget install Microsoft.Windows.ImplementationLibrary -OutputDirectory packages -ExcludeVersion
       - name: Bundle a fresh app, relocate it, launch it
         shell: pwsh
-        run: ./Scripts/bundle-smoke-windows.ps1 -Packages "$pwd\packages" -WorkDir "$env:RUNNER_TEMP\bundle-smoke"
+        run: ./Scripts/bundle-smoke-windows.ps1 -Packages "$pwd\packages" -WorkDir "$env:RUNNER_TEMP\bundle-smoke" -Drive
       - name: Upload what was on screen when a launch hung
         if: failure()
         uses: actions/upload-artifact@v7

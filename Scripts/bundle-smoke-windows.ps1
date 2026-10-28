@@ -10,14 +10,15 @@
   headers under Swift 6.4 (no Windows build could complete at all), and an app
   declaring native_library_dirs crashed SwiftPM (#238).
 
-  Weaker than the macOS and Linux jobs, on purpose: they drive their app, and
-  this can't. WebView2 won't create a controller without an interactive
-  desktop, and neither an SSH session nor (as far as anyone has measured) a
-  hosted runner has one. So each bundle is launched with SWIFT_PWA_DESCRIBE,
-  which loads the exe from its bundle folder, runs the app's `configure`,
-  writes the command catalog and exits before any window. That catches a
-  bundle that can't load (a missing DLL), can't find what it staged, or
-  whose build broke; it can't catch anything in WebView2 or the page.
+  The release bundles are launched with SWIFT_PWA_DESCRIBE, which loads the
+  exe from its bundle folder, runs the app's `configure`, writes the command
+  catalog and exits before any window. That catches a bundle that can't load
+  (a missing DLL), can't find what it staged, or whose build broke, and it
+  needs no desktop. With -Drive, a debug folder bundle (debug, so the driver
+  is compiled in) is also launched for real and driven, as the macOS and
+  Linux jobs drive theirs: that is what reaches WebView2 and the page.
+  WebView2 won't create a controller without an interactive desktop, so
+  -Drive fails over SSH (session 0); a hosted runner has one (#277).
 
   Two header checks - `dumpbin /headers` has to read each exe (#276) - one
   that the folder exe carries the Common Controls v6 manifest, and three
@@ -32,6 +33,13 @@
     single-control   the `--single-file` exe with PATH as it is. There is no
                      portable leg for it: the loader can't take a DLL from
                      inside the exe, so a single file can't carry the runtime.
+
+  and, with -Drive, one driven launch:
+
+    folder-driven    the debug folder bundle with SWIFT_PWA_DRIVE=0: it has to
+                     announce a driver port, `typeof __SWIFT_PWA__` has to be
+                     "object" (bridge.js found and injected into a live page),
+                     and an awaited promise has to come back.
 
   A GUI-subsystem exe that can't load a DLL doesn't exit - csrss shows a
   "System Error" dialog and waits for a click - so a launch that hangs lists
@@ -55,6 +63,10 @@
 .PARAMETER Configuration
   release (default: what an adopter ships) or debug.
 
+.PARAMETER Drive
+  Also build a debug folder bundle and drive it. Needs an interactive
+  desktop: a hosted runner or a logged-on session, not an SSH shell.
+
 .EXAMPLE
   powershell -File Scripts\bundle-smoke-windows.ps1 -Packages C:\src\swift-pwa\packages
 #>
@@ -63,7 +75,8 @@ param(
     [string]$Repo,
     [string]$Packages,
     [string]$WorkDir = "$env:TEMP\spwa-bundle-smoke",
-    [ValidateSet("release", "debug")] [string]$Configuration = "release"
+    [ValidateSet("release", "debug")] [string]$Configuration = "release",
+    [switch]$Drive
 )
 
 $ErrorActionPreference = "Stop"
@@ -251,6 +264,12 @@ try {
     Invoke-Native "single-file bundle" {
         & $cli build --target windows --configuration $Configuration --single-file --output "out\single"
     }
+    if ($Drive) {
+        Write-Host "== swift-pwa build --target windows (debug, to drive) ==" -ForegroundColor Cyan
+        Invoke-Native "driven bundle" {
+            & $cli build --target windows --configuration debug --output "out\driven"
+        }
+    }
 } finally {
     Pop-Location
     Stop-Process -Id $sampler.Id -ErrorAction SilentlyContinue
@@ -267,6 +286,11 @@ if (-not $singleExe) { throw "the single-file build left no $target.exe in out\s
 Move-Item $folderExe.Directory.FullName "$relocated\folder"
 New-Item -ItemType Directory "$relocated\single" | Out-Null
 Move-Item $singleExe.FullName "$relocated\single\$target.exe"
+if ($Drive) {
+    $drivenExe = Get-ChildItem "$appDir\out\driven" -Recurse -Filter "$target.exe" | Select-Object -First 1
+    if (-not $drivenExe) { throw "the debug bundle has no $target.exe under out\driven" }
+    Move-Item $drivenExe.Directory.FullName "$relocated\driven"
+}
 Remove-Tree "$appDir\.build"
 Remove-Tree "$appDir\out"
 Write-Host "folder bundle: $((Get-ChildItem "$relocated\folder" | ForEach-Object Name) -join ', ')"
@@ -315,6 +339,65 @@ function Test-Manifest([string]$Label, [string]$Exe) {
     return "FAIL $Label`: no Common-Controls manifest in the exe"
 }
 
+# Launch `$Exe` for real - a window, a WebView2 controller, the page - and drive
+# it through the CLI, as the macOS and Linux jobs do. Without a desktop the
+# app starts and announces its port, and then every page verb times out behind
+# "CreateCoreWebView2Controller failed: 0x80070578" on stderr, which is why
+# stderr is printed on any failure.
+function Test-Drive([string]$Label, [string]$Exe) {
+    $ErrorActionPreference = "Continue"
+    $out = Join-Path $WorkDir "drive-$Label.out"
+    $err = Join-Path $WorkDir "drive-$Label.err"
+    $env:SWIFT_PWA_DRIVE = "0"
+    try {
+        $process = Start-Process -FilePath $Exe -WorkingDirectory $WorkDir -PassThru `
+            -RedirectStandardOutput $out -RedirectStandardError $err
+    } finally {
+        Remove-Item Env:SWIFT_PWA_DRIVE
+    }
+    $verdict = $null
+    try {
+        $match = $null
+        for ($i = 0; $i -lt 60 -and -not $match -and -not $process.HasExited; $i++) {
+            Start-Sleep -Seconds 1
+            $match = Get-Content $out -ErrorAction SilentlyContinue |
+                Select-String 'driver listening port=(\d+) token=([0-9a-f]+)' | Select-Object -First 1
+        }
+        if (-not $match) {
+            $state = if ($process.HasExited) { "exited 0x{0:X8}" -f $process.ExitCode } else { "still running" }
+            $verdict = "FAIL  $Label - announced no driver port within 60 s ($state)"
+            return $verdict
+        }
+        $port = $match.Matches[0].Groups[1].Value
+        $token = $match.Matches[0].Groups[2].Value
+        $checks = @(
+            @{ Script = "typeof __SWIFT_PWA__"; Expect = "object" },
+            # The delay makes at least one poll come back pending, so awaiting
+            # is exercised rather than a promise that has already settled.
+            @{ Script = "new Promise(r => setTimeout(() => r('awaited'), 250))"; Expect = "awaited" }
+        )
+        foreach ($check in $checks) {
+            $answer = (& $cli drive eval --attach $port --token $token $check.Script 2>&1 | ForEach-Object {
+                if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.TargetObject)" } else { "$_" }
+            } | Out-String).Trim()
+            Write-Host "  drive eval $($check.Script) -> $answer"
+            if ($LASTEXITCODE -ne 0 -or $answer -notmatch $check.Expect) {
+                $verdict = "FAIL  $Label - drive eval $($check.Script) answered '$answer'"
+                return $verdict
+            }
+        }
+        $verdict = "PASS  $Label - driven on port $port"
+        return $verdict
+    } finally {
+        if ($verdict -notlike "PASS*") {
+            Get-Content $out, $err -ErrorAction SilentlyContinue |
+                Select-Object -First 40 | ForEach-Object { Write-Host "  | $_" }
+            if (-not $process.HasExited) { Save-HangEvidence $Label }
+        }
+        if (-not $process.HasExited) { $process.Kill() }
+    }
+}
+
 Write-Host "== launching each bundle headlessly (SWIFT_PWA_DESCRIBE) ==" -ForegroundColor Cyan
 $results = @(
     (Test-PEHeaders "folder-pe" "$relocated\folder\$target.exe"),
@@ -327,6 +410,10 @@ $results = @(
     # says so. What's checked is that it starts.
     (Test-Launch "single-control" "$relocated\single\$target.exe" $env:Path)
 )
+if ($Drive) {
+    Write-Host "== launching the debug bundle and driving it ==" -ForegroundColor Cyan
+    $results += Test-Drive "folder-driven" "$relocated\driven\$target.exe"
+}
 $results | ForEach-Object {
     Write-Host $_ -ForegroundColor $(if ($_ -like "PASS*") { "Green" } else { "Red" })
 }

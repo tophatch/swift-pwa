@@ -109,6 +109,17 @@ struct DriveLaunchTests {
         }
     }
 
+    /// Every target but the host's own and iOS used to fall through to
+    /// building and driving the host app, answering for the wrong platform
+    /// without a word (#323).
+    @Test("a target drive can't reach is refused, not run on the host", .enabled(if: isMacOS))
+    func unreachableTargetIsRefused() throws {
+        for target in ["android", "linux", "windows"] {
+            #expect(throws: (any Error).self, "\(target)") { try DriveInfo.parse(["--target", target]) }
+        }
+        #expect(try DriveInfo.parse(["--target", "macos"]).options.target == .macos)
+    }
+
     @Test("a normal run asks for nothing")
     func backgroundIsOffByDefault() throws {
         #expect(try !(DriveInfo.parse([]).options.background))

@@ -2231,10 +2231,20 @@ enum AndroidTemplates {
             /// picture available. The other four backends snapshot through
             /// their renderer and have neither limitation.
             ///
-            /// Asynchronous, because `PixelCopy` is. UI thread only — every RPC
-            /// already arrives there via `main.post`. Answers null before the
-            /// view has been laid out, which is a real state early in startup
-            /// rather than an error.
+            /// Asynchronous, because `PixelCopy` is. Called on the UI thread —
+            /// every RPC already arrives there via `main.post` — and `done` is
+            /// called on a background thread. Answers null before the view has
+            /// been laid out, which is a real state early in startup rather
+            /// than an error.
+            ///
+            /// **The encode runs off the UI thread.** PNG-compressing and
+            /// Base64-encoding a two-megapixel bitmap takes most of the call's
+            /// ~400 ms, and a WebView produces no frames while its UI thread is
+            /// busy: a page animating through a snapshot froze for that long
+            /// (#325). Only the `View.draw` fallback needs the UI thread; once
+            /// `PixelCopy` has answered, the bitmap is ours. Its own thread, not
+            /// the plugins' file executor, so a slow provider listing there
+            /// can't hold a snapshot back.
             fun snapshotPngBase64(done: (String?) -> Unit) {
                 val width = webView.width
                 val height = webView.height
@@ -2244,9 +2254,11 @@ enum AndroidTemplates {
                 )
                 val finish = { copied: Boolean ->
                     if (!copied) webView.draw(android.graphics.Canvas(bitmap))
-                    val encoded = encodeBitmapToPng(bitmap)
-                    bitmap.recycle()
-                    done(encoded)
+                    Thread({
+                        val encoded = encodeBitmapToPng(bitmap)
+                        bitmap.recycle()
+                        done(encoded)
+                    }, "swift-pwa-snapshot").start()
                 }
                 val window = activity.window
                 if (window == null || !webView.isAttachedToWindow) { finish(false); return }

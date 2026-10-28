@@ -60,6 +60,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     `Scripts\verify-app-icons-windows.ps1`.
   - **Linux**: one icon, `supported: false`.
 
+### Fixed
+
+- **macOS showed WebKit's gray and white before the first paint, never
+  `window.background_color`** (#327). `WKWebView` fills its bounds with its
+  own background until the page paints, over the window, layer and
+  under-page colours the window sets, so #174's "before first paint on every
+  backend" was untrue on macOS. With a colour set, the web view now leaves
+  that fill off (`drawsBackground`, set by key: macOS has no public setter;
+  iOS's `isOpaque = false` is the counterpart). A page that sets no background
+  of its own now shows the configured colour behind it rather than white, as
+  it already did on iOS, GTK, WebView2 and Android. An app with no colour is
+  unchanged. `Scripts/verify-mac-background-before-paint.sh` holds a page's
+  first paint for two seconds and reads the window mid-hold: the configured
+  colour, where the 0.11.8 package (the `--released` control) shows gray.
+- **Android `window.snapshot` froze the page for most of the call** (#325).
+  The PNG encode and Base64 of a two-megapixel bitmap ran on the UI thread,
+  where a WebView can't produce a frame, so a page animating through a
+  snapshot stalled (the issue measured ~400 ms a call on a Pixel 3a). The
+  encode now runs on its own thread; only the `View.draw` fallback still
+  needs the UI thread. On a Galaxy Z Fold7 the longest frame gap during a
+  snapshot went from 167 ms to 42 ms (one snapshot each, 8 ms baseline); the
+  call itself takes as long as before. `Scripts/verify-android-window-snapshot.sh`
+  gains the frame-gap row, and now passes `-s` through to the deploy so a run
+  with two phones attached touches only the one asked for.
+- **`drive --target android` drove the macOS app** (#323), and so did any
+  desktop target that isn't the machine running it: only iOS changed what
+  `drive` ran, and every other target fell through to the host, answering for
+  the wrong platform without a word. Those targets are now refused, with
+  Android pointed at `Scripts/android-cdp-eval.py`.
+
 ## [0.11.8] - 2026-10-21
 
 ### Added

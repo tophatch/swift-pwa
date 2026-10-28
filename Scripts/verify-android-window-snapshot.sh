@@ -21,6 +21,10 @@
 #      detail the page's own canvas holds — an accelerated layer that came
 #      back smoothed, or a canvas that never composited into the view's draw
 #      pass, shows up here and only here.
+#   5. The page keeps producing frames while a snapshot runs: the longest gap
+#      between requestAnimationFrame callbacks during one stays under 100 ms.
+#      Encoding on the UI thread froze the WebView for ~400 ms a call (#325);
+#      the same gap over a quiet stretch is reported beside it as the baseline.
 #
 # There is no `swift-pwa drive` for Android, so the page runs the checks itself
 # and reports through `RuntimeDiagnostics` into logcat. That caps what can be
@@ -45,7 +49,13 @@ while getopts "s:k" opt; do
 done
 
 ADB=(adb)
-[ -n "$SERIAL" ] && ADB=(adb -s "$SERIAL")
+DEVICE_FLAG=()
+if [ -n "$SERIAL" ]; then
+    ADB=(adb -s "$SERIAL")
+    DEVICE_FLAG=(--device "$SERIAL")
+    # Anything that shells out to adb without -s goes to the same device.
+    export ANDROID_SERIAL="$SERIAL"
+fi
 
 WORK="${TMPDIR:-/tmp}/swift-pwa-android-snapshot"
 APP="SnapshotCheck"
@@ -197,6 +207,21 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     });
   }
 
+  // The longest gap between animation frames while `during` runs.
+  function frameGap(during) {
+    var last = performance.now(), worst = 0, running = true;
+    function tick(now) {
+      worst = Math.max(worst, now - last);
+      last = now;
+      if (running) requestAnimationFrame(tick);
+    }
+    requestAnimationFrame(tick);
+    return during().then(function () {
+      running = false;
+      return Math.round(worst);
+    });
+  }
+
   __SWIFT_PWA__.invoke('window.canSnapshot').then(function (can) {
     return report('can ' + can.value).then(function () {
       if (!can.value) throw new Error('canSnapshot is false');
@@ -232,6 +257,14 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     return report('text ms=' + m.ms + ' bridgeMs=' + m.bridgeMs +
                   ' kib=' + Math.round(m.shot.bytes / 1024));
   }).then(function () {
+    return frameGap(function () { return new Promise(function (r) { setTimeout(r, 600); }); });
+  }).then(function (baseline) {
+    return frameGap(function () {
+      return snapshot().then(function (m) { m.bitmap.close(); });
+    }).then(function (gap) {
+      return report('frames gap=' + gap + ' baseline=' + baseline);
+    });
+  }).then(function () {
     document.getElementById('text').style.display = 'none';
     noise.style.display = 'block';
     paintNoise();
@@ -266,7 +299,7 @@ fi
 
 echo "== cross-compiling, installing and launching on the device =="
 "${ADB[@]}" uninstall "$PKG" >/dev/null 2>&1 || true
-(cd "$APP_DIR" && "$CLI" deploy --target android --android-abis arm64-v8a)
+(cd "$APP_DIR" && "$CLI" deploy --target android --android-abis arm64-v8a ${DEVICE_FLAG[@]+"${DEVICE_FLAG[@]}"})
 
 "${ADB[@]}" logcat -c || true
 "${ADB[@]}" shell am force-stop "$PKG" || true
@@ -298,6 +331,13 @@ expect "the PNG header agrees with the decoded image" \
     'SNAPPROBE flat size=([0-9]+)x([0-9]+) decoded=\1x\2'
 expect "a pixel inside the mark is the mark's colour" 'SNAPPROBE flat .*inside=#ff0000'
 expect "a pixel outside it is the page behind" 'SNAPPROBE flat .*outside=#0000ff'
+gap="$(grep -oE 'SNAPPROBE frames gap=[0-9]+' "$LOG" | grep -oE '[0-9]+$' | head -1 || true)"
+if [ -n "$gap" ] && [ "$gap" -lt 100 ]; then
+    echo "PASS  the page keeps animating through a snapshot (longest frame gap ${gap} ms)"
+else
+    echo "FAIL  the page keeps animating through a snapshot (longest frame gap ${gap:-unreported} ms)"
+    failed=1
+fi
 expect "the page ran to the end" 'SNAPPROBE finished'
 
 # The size and detail checks need the numbers compared, not matched.

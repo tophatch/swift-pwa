@@ -2588,7 +2588,19 @@ enum AndroidTemplates {
         private var notificationsChannelInstalled = false
         private val notificationChannelId = "swift-pwa.default"
 
-        private val backgroundExecutor = Executors.newSingleThreadExecutor()
+        // Off-UI-thread work for the plugins: content-resolver file calls, zip,
+        // image and vision, `net.*` and `secrets.*`. A pool, not one thread
+        // (#322): a SAF listing waits on its provider's refresh for up to
+        // `loadingTimeoutMs` (10 s by default), and on one shared thread every
+        // other call in the app — a thumbnail, a local read, a network request
+        // — waited behind it, and parallel listings ran one at a time. Eight
+        // lets parallel listings overlap their waits and leaves room for
+        // everything else; threads idle out after 30 s. Calls no longer run in
+        // the order they were sent, which matches every other backend: the
+        // bridge has dispatched invokes concurrently since 0.10.1.
+        private val backgroundExecutor = java.util.concurrent.ThreadPoolExecutor(
+            8, 8, 30L, java.util.concurrent.TimeUnit.SECONDS, java.util.concurrent.LinkedBlockingQueue()
+        ).apply { allowCoreThreadTimeOut(true) }
 
         // Pending callbacks for the Activity-result launchers. Only
         // one of each can be in flight at a time, which matches the
@@ -4697,6 +4709,8 @@ enum AndroidTemplates {
             }
         }
 
+        // Synchronized: installs run on the plugins' pool, so two can reach this together.
+        @Synchronized
         private fun registerInstallerReceiverIfNeeded() {
             if (packageInstallerReceiverRegistered) return
             packageInstallerReceiverRegistered = true

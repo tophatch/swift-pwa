@@ -892,7 +892,10 @@ an SD card) is listed once, with no wait. A provider that marks a listing
 incomplete, so an app reconciling a library against a listing never prunes on a
 stale one. `loadingTimeoutMs: 0` returns the cache at once without the error,
 for a quick first pass, and still asks for the refresh so the next listing is
-current:
+current. A listing's wait holds none of the app's other file, network or
+secrets calls, and listings sent together wait side by side: six of one Drive
+folder at once took 1.7 s, the time of one (#322). Up to eight such calls run
+at a time; more queue for the next free slot:
 
 ```js
 try {

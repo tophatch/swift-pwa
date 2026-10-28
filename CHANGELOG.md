@@ -100,6 +100,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   On a Galaxy Z Fold7 the check measured 17 ms in a 306 ms round trip. The
   script also passes `-s` through to the deploy, so a run with two phones
   attached touches only the one asked for.
+- **Android: one slow provider stalled every file, network and secrets call**
+  (#322). The plugins ran all of that on one shared thread, and since #316 a
+  SAF listing waits there for its provider's refresh, up to
+  `loadingTimeoutMs`. Everything else in the app queued behind it, including
+  covers, local reads, `net.request` and `secrets.get`. Listings sent together
+  ran one at a time, and a cold Drive turned a library walk into minutes. The
+  plugins now use a pool of eight threads. On a Galaxy Z Fold7 with a Drive
+  folder, six listings sent together took 1.7 s (11.0 s on 0.11.8, where they
+  serialized), and a metadata call sent during a listing answered in 10 ms
+  (1.6 s on 0.11.8, the listing's remainder). Calls no longer run in the order
+  they were sent, as on every other backend.
+  `Scripts/verify-android-fs-concurrency.sh` measures both, with the release
+  as its control.
 - **`drive --target android` drove the macOS app** (#323), and so did any
   desktop target that isn't the machine running it: only iOS changed what
   `drive` ran, and every other target fell through to the host, answering for

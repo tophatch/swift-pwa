@@ -108,6 +108,11 @@
                 adapter.webView.underPageBackgroundColor = color
                 adapter.webView.wantsLayer = true
                 Self.applyLayerBackground(color, to: adapter.webView, in: window)
+                // Until the page paints, WKWebView fills its bounds with its
+                // own gray, then white, over every colour set above (#327).
+                // `drawsBackground` has no public setter on macOS; this is the
+                // counterpart of the `isOpaque = false` the iOS window sets.
+                adapter.webView.setValue(false, forKey: "drawsBackground")
             }
 
             nsWindow = window

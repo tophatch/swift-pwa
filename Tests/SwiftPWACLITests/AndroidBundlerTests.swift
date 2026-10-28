@@ -995,6 +995,27 @@ struct AndroidBundlerUnitTests {
     /// #255: `window.snapshot` is the one page-facing capability whose Android
     /// half is Kotlin — the WebView belongs to the bridge, and `View.draw` is
     /// UI-thread-only, so the Swift adapter can only ask.
+    /// One shared thread made every file, network and secrets call wait
+    /// behind a SAF listing's refresh wait (up to 10 s), and ran parallel
+    /// listings one at a time (#322).
+    @Test("the plugins run off-UI-thread work on a pool, not one shared thread")
+    func pluginsUseAPool() throws {
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        let declaration = try #require(
+            plugins.range(of: "private val backgroundExecutor = java.util.concurrent.ThreadPoolExecutor(")
+        )
+        let pool = plugins[declaration.upperBound...].prefix(160)
+        #expect(pool.contains("8, 8, 30L, java.util.concurrent.TimeUnit.SECONDS"))
+        #expect(pool.contains("allowCoreThreadTimeOut(true)"))
+        #expect(!plugins.contains("backgroundExecutor = Executors.newSingleThreadExecutor()"))
+        // The one piece of state an executor job set unguarded: two installs
+        // on the pool could register the installer receiver twice.
+        let register = try #require(plugins.range(of: "private fun registerInstallerReceiverIfNeeded()"))
+        let annotation = try #require(plugins[..<register.lowerBound].range(of: "@Synchronized", options: .backwards))
+        let adjacent = plugins[annotation.upperBound ..< register.lowerBound].allSatisfy(\.isWhitespace)
+        #expect(adjacent)
+    }
+
     @Test("the bridge can snapshot its WebView, and the RPC reaches it")
     func bridgeSnapshotsTheWebView() throws {
         let bridge = AndroidTemplates.swiftPWABridgeKt()

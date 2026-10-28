@@ -196,7 +196,17 @@ if ($Dump) {
     New-Item -ItemType Directory -Force -Path $Dump | Out-Null
     $reportArgs += @("--dump", $Dump)
 }
-Get-Content $replyFile -Raw | & python @reportArgs
+# The Microsoft Store's `python.exe` stub in WindowsApps answers `Get-Command`
+# and then refuses to run, so it doesn't count.
+$python = Get-Command python -ErrorAction SilentlyContinue |
+    Where-Object { $_.Source -notlike "*\WindowsApps\*" } | Select-Object -First 1
+if (-not $python) {
+    Write-Output "no Python on this machine: the reply is kept at $replyFile -"
+    Write-Output "run Scripts/report-window-snapshot.py on it elsewhere (it reads stdin)."
+    Stop-Probe
+    exit 2
+}
+Get-Content $replyFile -Raw | & $python.Source @reportArgs
 $status = $LASTEXITCODE
 
 Remove-Item $replyFile -ErrorAction SilentlyContinue

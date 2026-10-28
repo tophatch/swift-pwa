@@ -3,6 +3,7 @@
 
 #include <webkit2/webkit2.h>
 #include <jsc/jsc.h>
+#include <string.h>
 
 /// Returns the GType name of a GObject instance, or NULL.
 /// Owned by GLib — do *not* free the returned pointer.
@@ -126,7 +127,17 @@ typedef struct {
     swiftpwa_snapshot_callback cb;
     void *user_data;
     char *path;
+    /// The region to keep, as shares of the snapshot (0...1): left, top,
+    /// right, bottom. `has_region` 0 keeps the whole picture.
+    int has_region;
+    double share[4];
 } swiftpwa_snapshot_box;
+
+/// A share of `size` pixels, as a whole pixel inside it.
+static inline int swiftpwa_snapshot_edge(double share, int size) {
+    int px = (int)(share * size + 0.5);
+    return px < 0 ? 0 : (px > size ? size : px);
+}
 
 /// GAsyncReadyCallback trampoline for `swiftpwa_webview_snapshot_png`.
 static inline void swiftpwa_snapshot_finish(
@@ -138,6 +149,8 @@ static inline void swiftpwa_snapshot_finish(
     swiftpwa_snapshot_callback cb = box->cb;
     void *swift_ud = box->user_data;
     char *path = box->path;
+    int has_region = box->has_region;
+    double share[4] = { box->share[0], box->share[1], box->share[2], box->share[3] };
     g_free(box);
 
     GError *error = NULL;
@@ -151,11 +164,48 @@ static inline void swiftpwa_snapshot_finish(
         err_msg = g_strdup(error->message);
         g_error_free(error);
     } else if (surface) {
-        cairo_status_t status = cairo_surface_write_to_png(surface, path);
-        if (status == CAIRO_STATUS_SUCCESS) {
-            ok = 1;
-        } else {
-            err_msg = g_strdup(cairo_status_to_string(status));
+        // A region is cut out before the PNG write, which is most of the
+        // cost (#255). Rows are copied rather than painted through cairo, so
+        // the surface's device scale can't move the crop: the shares apply to
+        // the surface's own pixels.
+        cairo_surface_t *picture = surface;
+        if (has_region) {
+            cairo_format_t format = cairo_image_surface_get_format(surface);
+            if (cairo_surface_get_type(surface) != CAIRO_SURFACE_TYPE_IMAGE
+                || (format != CAIRO_FORMAT_ARGB32 && format != CAIRO_FORMAT_RGB24)) {
+                err_msg = g_strdup("snapshot surface isn't a 32-bit image; can't crop it");
+                picture = NULL;
+            } else {
+                int w = cairo_image_surface_get_width(surface);
+                int h = cairo_image_surface_get_height(surface);
+                int x0 = swiftpwa_snapshot_edge(share[0], w), y0 = swiftpwa_snapshot_edge(share[1], h);
+                int x1 = swiftpwa_snapshot_edge(share[2], w), y1 = swiftpwa_snapshot_edge(share[3], h);
+                if (x1 <= x0 || y1 <= y0) {
+                    err_msg = g_strdup("the region is empty at this size");
+                    picture = NULL;
+                } else {
+                    cairo_surface_flush(surface);
+                    picture = cairo_image_surface_create(format, x1 - x0, y1 - y0);
+                    const unsigned char *src = cairo_image_surface_get_data(surface);
+                    unsigned char *dst = cairo_image_surface_get_data(picture);
+                    int src_stride = cairo_image_surface_get_stride(surface);
+                    int dst_stride = cairo_image_surface_get_stride(picture);
+                    for (int row = 0; row < y1 - y0; row++) {
+                        memcpy(dst + row * dst_stride, src + (y0 + row) * src_stride + x0 * 4,
+                               (size_t)(x1 - x0) * 4);
+                    }
+                    cairo_surface_mark_dirty(picture);
+                }
+            }
+        }
+        if (picture) {
+            cairo_status_t status = cairo_surface_write_to_png(picture, path);
+            if (status == CAIRO_STATUS_SUCCESS) {
+                ok = 1;
+            } else {
+                err_msg = g_strdup(cairo_status_to_string(status));
+            }
+            if (picture != surface) cairo_surface_destroy(picture);
         }
         cairo_surface_destroy(surface);
     } else {
@@ -175,6 +225,8 @@ static inline void swiftpwa_snapshot_finish(
 static inline void swiftpwa_webview_snapshot_png(
     WebKitWebView *web_view,
     const char *path,
+    int has_region,
+    double left, double top, double right, double bottom,
     swiftpwa_snapshot_callback cb,
     void *user_data
 ) {
@@ -183,6 +235,11 @@ static inline void swiftpwa_webview_snapshot_png(
     box->cb = cb;
     box->user_data = user_data;
     box->path = g_strdup(path);
+    box->has_region = has_region;
+    box->share[0] = left;
+    box->share[1] = top;
+    box->share[2] = right;
+    box->share[3] = bottom;
     webkit_web_view_get_snapshot(
         web_view,
         WEBKIT_SNAPSHOT_REGION_VISIBLE,

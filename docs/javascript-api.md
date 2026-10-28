@@ -279,7 +279,17 @@ canvas.height = height;
 canvas.getContext('2d').drawImage(bitmap, 0, 0);
 ```
 
-Four things worth knowing:
+Pass `rect` to picture one part of the window — in CSS pixels relative to the
+viewport, which is what `getBoundingClientRect()` returns:
+
+```js
+const r = page.getBoundingClientRect();
+const shot = await __SWIFT_PWA__.invoke('window.snapshot', {
+    rect: { x: r.x, y: r.y, width: r.width, height: r.height }
+});
+```
+
+Five things worth knowing:
 
 - **`width` / `height` are device pixels.** On a Retina or high-DPI display
   they are `devicePixelRatio` times the window's CSS size. Size the canvas in
@@ -287,6 +297,13 @@ Four things worth knowing:
 - **Take it before you mutate the DOM.** Every backend flushes pending layout
   first, so a snapshot taken *after* the change shows the change — which is the
   opposite of what a transition wants.
+- **A `rect` is cut out before the PNG is encoded**, and the encode is most of
+  what a snapshot costs, so a quarter of the window costs roughly a quarter.
+  It is clipped to the viewport and widened to whole CSS pixels, so the
+  picture is `width * devicePixelRatio` wide; a rect wholly outside the
+  viewport, or with no area, fails with `E_DECODE`. It lands where the page
+  meant at any zoom (Android zooms a page out when its content overflows) and,
+  on iOS, whether or not the page is `viewport-fit=cover`.
 - **Ask `window.canSnapshot` first** rather than catching `E_UNIMPLEMENTED` per
   call. It answers without rendering anything, so an app can offer the feature
   or fall back once at startup.
@@ -304,9 +321,12 @@ driving an animation with it.
 **What it costs, measured.** A full-window PNG of a page of body text is ~60 ms
 on macOS, iOS and both Linux backends. **Windows (239 ms) and Android (406 ms)
 are four to seven times slower** — a bigger surface, PNG-encoded and, on
-Android, base64'd across the JNI boundary. Design for that: on those two,
-snapshot something smaller, or prepare the picture before the gesture starts
-rather than during it. The per-platform table is in the README's footnote 35.
+Android, base64'd across the JNI boundary. Design for that: on those two, pass
+a `rect` for the part you animate, and take the picture when the gesture starts
+rather than during it. The top-left quarter of a page of body text measured
+120 ms against 316 ms for the whole window on a Galaxy Z Fold7, and 131 ms
+against 209–578 ms on a Windows 11 arm64 laptop. The per-platform table is in
+the README's footnote 35.
 
 **Android captures the composited surface**, through `PixelCopy` rather than
 the view's own draw, because a software `View.draw` misses every GPU layer —
@@ -320,13 +340,17 @@ backends snapshot through their renderer and have neither limitation.
 display's colour space with that display's ICC profile embedded in the PNG, so
 on a wide-gamut monitor a page's `#0000ff` comes back as `#2200ff` — the same
 colour, different numbers. Drawing it renders correctly; sampling the bytes and
-expecting your own sRGB values back does not work there.
+expecting your own sRGB values back does not work there. A `rect` goes through
+a different capture (DevTools' `Page.captureScreenshot`, since `CapturePreview`
+takes no region), and how that one handles a wide-gamut display hasn't been
+measured: on an sRGB display both return the page's own values.
 
 **On iOS the picture can be taller than your page thinks.** A page that is not
 `viewport-fit=cover` has a layout viewport inset by the status bar and home
 indicator, while the webview covers the whole screen — so `height` exceeds
 `innerHeight * devicePixelRatio` and the content is offset within the picture.
 Use `viewport-fit=cover`, or account for `env(safe-area-inset-top)` yourself.
+A `rect` doesn't have this problem: it is placed in the page's own viewport.
 
 ### `app.*`
 

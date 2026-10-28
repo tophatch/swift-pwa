@@ -45,11 +45,11 @@
         public func send(_ input: SyntheticInput) async throws {
             switch input {
             case let .pointer(pointer):
-                try await dispatch("Input.dispatchMouseEvent", Self.pointerParameters(pointer))
+                try await callDevTools("Input.dispatchMouseEvent", Self.pointerParameters(pointer))
             case let .key(key):
-                try await dispatch("Input.dispatchKeyEvent", Self.keyParameters(key))
+                try await callDevTools("Input.dispatchKeyEvent", Self.keyParameters(key))
             case let .wheel(wheel):
-                try await dispatch("Input.dispatchMouseEvent", Self.wheelParameters(wheel))
+                try await callDevTools("Input.dispatchMouseEvent", Self.wheelParameters(wheel))
             }
         }
 
@@ -192,9 +192,13 @@
         // MARK: - Transport
 
         /// One CDP call, awaited so a failure surfaces instead of vanishing.
-        private func dispatch(_ method: String, _ parameters: [String: JSONValue]) async throws {
+        /// Returns the method's result object as JSON. Shared with
+        /// `captureSnapshot(region:)`, whose regions go through
+        /// `Page.captureScreenshot`.
+        @discardableResult
+        func callDevTools(_ method: String, _ parameters: [String: JSONValue]) async throws -> String? {
             let json = try String(data: JSONValue.object(parameters).encoded(), encoding: .utf8) ?? "{}"
-            _ = try await withCheckedThrowingContinuation {
+            return try await withCheckedThrowingContinuation {
                 (cont: CheckedContinuation<String?, any Error>) in
                 let box = EvalBox(continuation: cont)
                 Task { [self] in
@@ -202,7 +206,7 @@
                         guard let view = self.driverView else {
                             box.continuation.resume(throwing: BridgeError(
                                 code: BridgeError.handler,
-                                message: "the webview went away before the event was delivered"
+                                message: "the webview went away before the DevTools call was made"
                             ))
                             return
                         }

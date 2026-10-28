@@ -16,7 +16,8 @@ import sys
 
 def decode(raw):
     # `drive` narrates its build on stdout; the result is the last line.
-    value = raw.strip().splitlines()[-1].strip()
+    # A reply saved by Windows PowerShell 5.1 starts with a UTF-8 BOM.
+    value = raw.lstrip("\ufeff").strip().splitlines()[-1].strip()
     for _ in range(4):
         if isinstance(value, dict):
             return value
@@ -47,7 +48,7 @@ def main():
 
     def check(label, ok, detail):
         nonlocal failed
-        print(("PASS  " if ok else "FAIL  ") + label.ljust(48) + detail)
+        print(("PASS  " if ok else "FAIL  ") + label.ljust(48) + "  " + detail)
         if not ok:
             failed = 1
 
@@ -106,6 +107,30 @@ def main():
           "%d KiB against %d KiB for text"
           % (detail, canvas_detail, variants["noise"]["kib"], variants["text"]["kib"]))
 
+    # `rect` (#255): the region's own size, and the region the page asked for
+    # rather than one beside it.
+    def region(label, q):
+        check(label + ": its own size at the backing scale",
+              abs(q["width"] - q["expectedWidth"]) <= 2 and abs(q["height"] - q["expectedHeight"]) <= 2,
+              "got=%dx%d expected~%dx%d" % (q["width"], q["height"], q["expectedWidth"], q["expectedHeight"]))
+        check(label + ": the mark only in its top-left quadrant",
+              dominant(q["tl"], "r") and all(dominant(q[k], "b") for k in ("tr", "bl", "br")),
+              "tl=%s tr=%s bl=%s br=%s" % (q["tl"], q["tr"], q["bl"], q["br"]))
+
+    if "rect" in value:
+        region("rect", value["rect"])
+        edge = value["rectEdge"]
+        check("rect off the edge is clipped to the viewport",
+              abs(edge["width"] - edge["expectedWidth"]) <= 2,
+              "width=%d expected~%d" % (edge["width"], edge["expectedWidth"]))
+        scrolled = value["rectScrolled"]
+        # The control for the row under it: a page that never scrolled can't
+        # tell a viewport crop from a document one.
+        check("rect on a scrolled page: the page scrolled", scrolled["scrollY"] > 0,
+              "scrollY=%d" % scrolled["scrollY"])
+        region("rect on a scrolled page", scrolled)
+        region("rect without viewport-fit=cover", value["rectNoCover"])
+
     print()
     print("      round trip, page to page: snapshot, encode, bridge, decode, at %dx%d:" % (w, h))
     print("      " + "content".ljust(12) + "total".rjust(8) + "bridge".rjust(9) + "PNG".rjust(11))
@@ -121,6 +146,15 @@ def main():
               + ("%d ms" % v["bridgeMs"]).rjust(9)
               + ("%d KiB" % v["kib"]).rjust(11) + delivered)
     print("      `flat` is a floor no real page reaches; `noise` is the ceiling.")
+    if "rectTiming" in value:
+        print()
+        print("      a rect of the top-left quarter against the whole window:")
+        print("      " + "content".ljust(12) + "whole".rjust(18) + "quarter".rjust(18))
+        for name, label in (("text", "body text"), ("noise", "noise")):
+            t = value["rectTiming"][name]
+            print("      " + label.ljust(12)
+                  + ("%d ms / %d KiB" % (t["wholeMs"], t["wholeKib"])).rjust(18)
+                  + ("%d ms / %d KiB" % (t["quarterMs"], t["quarterKib"])).rjust(18))
     print()
     sys.exit(failed)
 

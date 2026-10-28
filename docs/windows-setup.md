@@ -991,9 +991,15 @@ page's `#0000ff` reads back as `#2200ff` — the same colour, different numbers.
 Drawing the snapshot renders correctly; a page that samples the bytes expecting
 its own sRGB values will not get them. The cost is also four times Apple's or
 Linux's: a page of body text at 2022×1466 measured **239 ms** against ~60 ms
-there, nearly all of it inside the call. `Scripts\verify-window-snapshot.ps1`
-measures both (it needs `-PackagesDir` pointing at the WebView2 / WIL NuGet
-packages, since the probe app builds `CWebView2Shim` like any Windows app).
+there, nearly all of it inside the call. A `rect` costs much less (a quarter
+of the window: 131 ms against 209–578 ms on an arm64 laptop) and goes through
+DevTools' `Page.captureScreenshot` with a clip rather than `CapturePreview`,
+which takes no region; its colour handling on a wide-gamut display hasn't been
+measured. `Scripts\verify-window-snapshot.ps1` measures all of it (it needs
+`-PackagesDir` pointing at the WebView2 / WIL NuGet packages, since the probe
+app builds `CWebView2Shim` like any Windows app). On a machine with no Python
+it keeps the probe's reply and says where, for
+`Scripts/report-window-snapshot.py` to read elsewhere.
 
 **Through 0.11.0, `swift-pwa build --target windows` could not complete on a
 Swift 6.4 box.** Every build runs a headless catalog dump to check `permissions`

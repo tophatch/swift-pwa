@@ -1622,9 +1622,14 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   call (a four-megapixel surface, PNG-encoded and base64'd across JNI). The
   encode, and quoting the reply for the page, run off the UI thread, so the
   page keeps drawing while it waits: only the copy (~30–60 ms) and the
-  `evaluateJavascript` call (~5 ms) hold the thread the WebView draws on. Snapshot something smaller, or take the
-  picture when a gesture *begins* rather than when the page flips. Measured
-  by `Scripts/verify-android-window-snapshot.sh`.
+  `evaluateJavascript` call (~5 ms) hold the thread the WebView draws on. Pass
+  a `rect` for the part you need, since the copy is cropped before the encode
+  (a quarter of the window: 120 ms against 316 ms), and take the picture when
+  a gesture *begins* rather than when the page flips. The rect is placed as a
+  share of the viewport rather than CSS pixels times the density, because a
+  page whose content overflows is zoomed out to fit, and then a CSS pixel is
+  no longer `devicePixelRatio` device pixels. Measured by
+  `Scripts/verify-android-window-snapshot.sh`.
 
 - **Camera, microphone and location need a declaration in two places.**
   `permissions.web` in `pwa.json` emits the `uses-permission` entries;

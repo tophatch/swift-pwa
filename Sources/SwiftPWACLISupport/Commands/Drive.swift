@@ -147,6 +147,19 @@ struct DriveOptions: ParsableArguments {
         if simulator, target != .ios, target != .host {
             throw ValidationError("--simulator is iOS-only; drop --target \(target.rawValue).")
         }
+        // Refused rather than ignored: every other target used to fall through
+        // to building and driving the *host* app, so `--target android` on a
+        // Mac printed the macOS answer with nothing to say the phone was never
+        // involved (#323).
+        if target != .host, target != .ios {
+            let hint = target == .android
+                ? "On Android, drive the page over DevTools instead: Scripts/android-cdp-eval.py <package-id> '<js>'."
+                : "Run drive on a \(target.rawValue) machine, where that's the default."
+            throw ValidationError("""
+            drive runs the app on this machine (--target \(BuildTarget.host.rawValue), the default) or on iOS \
+            (--target ios), and can't reach --target \(target.rawValue) from here. \(hint)
+            """)
+        }
         // Refused rather than ignored on iOS: the platform's own answer to a
         // backgrounded app is to suspend it, and a verb sent to a suspended app
         // doesn't fail — it queues and answers when the app comes forward. A

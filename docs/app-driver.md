@@ -224,7 +224,7 @@ best-effort `setPosition`.
 | **Linux GTK3** | Yes | Yes | `webkit_web_view_get_snapshot` → cairo PNG |
 | **Linux GTK4** | Yes | Yes | `webkit_web_view_get_snapshot` → `GdkTexture` → PNG. Wayland has no screen-grab fallback, so the renderer snapshot is the only option |
 | **Windows** | Yes | Yes | `ICoreWebView2.CapturePreview`. Verified against a running app on Windows 11 x64 — but the app has to be on an interactive desktop, see below |
-| **Android** | — | — | Already scriptable over CDP — see [android-on-device-testing.md](android-on-device-testing.md) |
+| **Android** | — | — | Already scriptable over CDP — see [android-on-device-testing.md](android-on-device-testing.md). `drive --target android` is refused with that pointer, as is a desktop target other than the machine you're on |
 
 The same pixels are reachable from the **page**, as `window.snapshot` — an app
 animating its own content needs a picture of itself, and the web has no API

@@ -231,29 +231,6 @@ public final class AssetProvider: @unchecked Sendable {
         return nil
     }
 
-    /// Whether `url` falls under a mount added via ``mount(_:at:)`` (a
-    /// served pack), as opposed to the bundle `/` root or no mount at all.
-    /// Scheme/host must still match.
-    ///
-    /// Used to tell a mount apart from the bundle where the two are served
-    /// from different places: in a single-file Windows build the bundle lives
-    /// in an exe overlay while a mount is still a real directory on disk, so
-    /// the mount has to win. ``resolve(_:)`` alone answers both otherwise.
-    public func isServedPrefix(_ url: URL) -> Bool {
-        guard url.scheme?.lowercased() == scheme else { return false }
-        guard let urlHost = url.host?.lowercased(), urlHost == host else { return false }
-        var path = url.path
-        if path.isEmpty { path = "/" }
-        let servedPrefixes: [String] = {
-            lock.lock(); defer { lock.unlock() }
-            return mounts.compactMap { $0.prefix == "/" ? nil : $0.prefix }
-        }()
-        for prefix in servedPrefixes where path == prefix || path.hasPrefix(prefix + "/") {
-            return true
-        }
-        return false
-    }
-
     /// The SPA-fallback resolution for `url` **only**: the bundle entry
     /// document when `url` names no file on disk, the bundle `/` mount opted
     /// into SPA fallback, and the path looks like a client-side route. Returns

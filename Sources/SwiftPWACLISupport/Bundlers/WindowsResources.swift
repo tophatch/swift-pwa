@@ -7,9 +7,9 @@ import Foundation
 /// already there (the Common Controls manifest, an icon written earlier).
 ///
 /// The Win32 update API lives in `kernel32`, so unlike `mt.exe` and `editbin`
-/// it needs no tool on `PATH`. It must run before the single-file overlay is
-/// appended: rewriting resources drops everything after the last section,
-/// which is also why the COFF symbol table is carried across it (#276).
+/// it needs no tool on `PATH`. Rewriting resources drops everything after the
+/// last section, which is why the COFF symbol table is carried across it
+/// (#276).
 enum WindowsResources {
     static let rtIcon: UInt16 = 3
     static let rtGroupIcon: UInt16 = 14

@@ -101,6 +101,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   refused signature, a `JetsamEvent` for memory pressure), the matching
   unified-log lines and the binary's signature, and uploads the reports.
 
+### Removed
+
+- **`swift-pwa build --target windows --single-file`** (#279). Windows' loader
+  resolves an exe's DLL imports before any of the app's code runs and won't
+  take one from inside the exe, and `--static-swift-stdlib` is ignored on
+  Windows, so a single-file app could never carry the Swift runtime: it started
+  only on a machine with Swift installed, which the build already warned about.
+  Making it portable meant a self-extracting launcher with its own signing and
+  antivirus questions, for a mode nobody is known to use. The portable folder
+  (zipped) and MSIX both carry the runtime and are the ways to ship. With it go
+  the in-exe web overlay (`EmbeddedWebAssets`) and
+  `AssetProvider.isServedPrefix`, which existed only to serve it; an app passing
+  the flag now gets the CLI's unknown-option error.
+
 ### Fixed
 
 - **macOS showed WebKit's gray and white before the first paint, never

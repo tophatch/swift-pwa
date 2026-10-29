@@ -195,15 +195,6 @@ struct Build: AsyncParsableCommand {
     )
     var bootstrapWebview2: Bool = false
 
-    @Flag(
-        help: """
-        Windows portable only: embed web/ into the .exe and emit a single \
-        self-contained .exe instead of a folder. The runtime serves the bundle \
-        from memory. Not compatible with --package-format msix.
-        """
-    )
-    var singleFile: Bool = false
-
     @Option(
         help: """
         Comma-separated Android ABIs to include (e.g. arm64-v8a,x86_64). Overrides pwa.json's \
@@ -484,12 +475,6 @@ struct Build: AsyncParsableCommand {
                 )
             }
             let archValue = try AppxManifestGenerator.Architecture.parse(arch.first ?? "x64")
-            if singleFile, format == .msix {
-                throw ValidationError(
-                    "swift-pwa: --single-file is for the portable format; MSIX already packages "
-                        + "everything into one installable. Drop --single-file or --package-format msix."
-                )
-            }
             let bundler = WindowsBundler(
                 manifest: pwa,
                 projectRoot: cwd,
@@ -498,7 +483,6 @@ struct Build: AsyncParsableCommand {
                 arch: archValue,
                 bootstrapWebView2: bootstrapWebview2,
                 signIdentity: sign,
-                singleFile: singleFile,
                 configuration: configuration,
                 nativeLibraryDirs: nativeLibraryDirs,
                 nativeIncludeDirs: nativeIncludeDirs,
@@ -1319,8 +1303,7 @@ struct Build: AsyncParsableCommand {
     ///
     /// Runs *after* `build.prebuild`, since that step is the declared place
     /// to *generate* `web/`; `prebuildRan` tunes the failure hint toward the
-    /// likely cause. Applies to every target — even a Windows `--single-file`
-    /// build reads `web/` off disk to embed it.
+    /// likely cause. Applies to every target.
     static func checkWebBundle(manifest: PWAManifest, projectRoot: URL, prebuildRan: Bool) throws {
         let fm = FileManager.default
         let dir = manifest.web.directory

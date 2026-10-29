@@ -401,7 +401,7 @@ target name — and put the user's folder in `Documents\ExampleReader`. Now:
 - **Windows**: `swift-pwa build --target windows` writes a version resource into
   the `.exe` — `ProductName` and `FileDescription` from `pwa.json`'s `name`, the
   version from `version` — and the runtime reads `ProductName` back. It is also
-  what Explorer and Task Manager show. Single-file builds included.
+  what Explorer and Task Manager show.
 - **Linux**: the runtime reads `Name=` from the `.desktop` entry installed at
   `<prefix>/share/applications/<exe>.desktop` beside `<prefix>/bin/<exe>` —
   where the AppImage bundler puts it, and where a distro package would.

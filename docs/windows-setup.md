@@ -363,29 +363,6 @@ framework or external server needed. Run it inside a VS Developer shell so the
 `--port` (default 4321) keeps a stable dev origin so per-origin web storage
 (OPFS / localStorage / IndexedDB) persists across launches.
 
-### Single-file distribution
-
-To ship the portable app as **one self-contained `.exe`** instead of a folder,
-add `--single-file`:
-
-```powershell
-swift run swift-pwa build --target windows --single-file   # → build\MyApp.exe (just the exe)
-```
-
-This embeds `web/` as an overlay appended to the exe; at runtime the app reads
-its own executable and serves the bundle from memory (no extraction, no sibling
-`web/`/`pwa.json`). A `.bundled(directory:)` app needs no code change — the
-runtime serves the embedded assets when present and falls back to disk `web/`
-otherwise. Current limits: assets are served as full-body responses (no HTTP
-range — ship large media via `ctx.serveDirectory(_:at:)`, which stays
-range-aware off disk), the overlay is uncompressed, and there's no SPA
-deep-link fallback (a request for an unknown path 404s rather than returning
-`index.html`). Not combinable with `--package-format msix` (MSIX already
-packages everything into one installable). Code-signing a single-file exe
-(Authenticode over the overlay) isn't wired yet. And it doesn't carry the
-Swift runtime, so it starts only where Swift is installed; see
-[What travels in the bundle](#what-travels-in-the-bundle).
-
 For an MSIX/Appx package instead of a portable folder:
 
 ```powershell
@@ -442,10 +419,10 @@ toolchain. Three things make that true:
   happened, so a bundle read its runtime out of the build machine's `.build/`
   directory and crashed on launch on any other box.
 
-**A single-file `.exe` doesn't carry the Swift runtime**, because the loader
-can't take a DLL from inside the exe. It starts only where a Swift toolchain
-or runtime is installed, and the build says so. To hand an app to someone,
-ship the folder (zipped) or an MSIX, which packages the same folder.
+**There is no single-file build.** The loader can't take a DLL from inside an
+exe, so one file can't carry the Swift runtime, and an exe without it starts
+only where Swift is installed. To hand an app to someone, ship the folder
+(zipped) or an MSIX, which packages the same folder.
 
 The portable auto-updater replaces only the `.exe`, so an update must be
 built with the same Swift toolchain as the version it replaces — see
@@ -464,12 +441,11 @@ binary doesn't have one.** There is no `Info.plist` here, so `swift-pwa build
 --target windows` writes `pwa.json`'s `name` and `version` into the exe's
 `VS_VERSIONINFO` (`ProductName`, `FileDescription`, `ProductVersion`) and the
 runtime reads `ProductName` back, so `app.documentsDir` is `Documents\Example
-Reader` rather than `Documents\ExampleReader` (#263). Folder and single-file
-builds both carry it. A `swift build` binary run outside `swift-pwa dev` /
+Reader` rather than `Documents\ExampleReader` (#263). A `swift build` binary run outside `swift-pwa dev` /
 `drive` has no resource and answers its executable name. `app.dataDir` and the
 WebView2 profile stay scoped by executable name either way, as they always were.
-`Scripts\verify-app-identity.ps1` measures the bare, folder and single-file
-cases against a fresh scaffold.
+`Scripts\verify-app-identity.ps1` measures the bare and folder cases against a
+fresh scaffold.
 See [javascript-api.md](javascript-api.md#what-an-app-is-called-when-theres-no-bundle).
 
 ### Vendoring a native library (`windows.native_library_dirs`)
@@ -604,8 +580,7 @@ llama:
 `onnxruntime.lib` + `onnxruntime.dll` for the host's architecture (cached under
 `%LOCALAPPDATA%\swift-pwa\onnxruntime-windows\`), puts the lib dir on `LIB` for
 the link step, and **stages `onnxruntime.dll` next to the built `.exe`** so it
-loads at launch (even for a `--single-file` build — a shared lib can't live in
-the exe overlay). No SDK is needed (image decode uses a vendored stb_image, not
+loads at launch. No SDK is needed (image decode uses a vendored stb_image, not
 any Windows imaging API). See [docs/ai-plugin.md](ai-plugin.md) and the
 [segmentation proposal](proposals/segmentation-plugin.md) for the API.
 
@@ -631,8 +606,8 @@ Windows uses **DirectML**, which is genuinely **cross-vendor** — any Direct3D
 external runtime to install (unlike Linux CUDA). `swift-pwa build --target
 windows` vendors the checksum-pinned DirectML ONNX Runtime and stages
 `onnxruntime.dll` (the DirectML build, which keeps the CPU EP for fallback),
-`onnxruntime_providers_shared.dll`, and `DirectML.dll` next to the `.exe`
-(including `--single-file`). At runtime the DirectML EP is tried first with a
+`onnxruntime_providers_shared.dll`, and `DirectML.dll` next to the `.exe`.
+At runtime the DirectML EP is tried first with a
 **transparent CPU fallback** if no usable GPU is present; `ai.vision.info`
 reports the active `provider` (`"directml"` or `"cpu"`).
 
@@ -943,11 +918,10 @@ bytes, and has the page assert the bundle, the mount and a 404 -- reporting by
 to print and the box may well be locked:
 
 ```powershell
-powershell -File Scripts/verify-windows-serving.ps1 -Repo C:\src\swift-pwa -SingleFile
+powershell -File Scripts/verify-windows-serving.ps1 -Repo C:\src\swift-pwa
 ```
 
-`-SingleFile` adds the embedded-overlay build, where the bundle comes out of the
-exe while mounts still come off disk. Run it after touching `WebView2Adapter`'s
+Run it after touching `WebView2Adapter`'s
 serving path, `AssetProvider`, or anything about how the bundle origin is
 served. It is checked against the bug it was written for: on the pre-fix code it
 reports `FAIL folder - /packs/photo.png (expected 200)`.
@@ -1053,9 +1027,8 @@ JPEG XL and camera RAW, but a bare install can be much shorter. A format that
 isn't there fails with `E_IMAGE_UNSUPPORTED` rather than a broken image.
 
 This table now governs **every** file on the bundle origin — the bundle itself
-as well as `serveDirectory` mounts, the SPA fallback and single-file embedded
-assets — because all of them are served through the interception path. It used
-to cover only the latter, with the bundle served natively by
+as well as `serveDirectory` mounts and the SPA fallback — because all of them
+are served through the interception path. It used to cover only the mounts, with the bundle served natively by
 `SetVirtualHostNameToFolderMapping` and Chromium picking its own `Content-Type`
 (measured then: `.avif` → `image/avif`, `.heic` → `application/octet-stream`).
 So a bundled file's type is ours to get right, and it no longer differs from the

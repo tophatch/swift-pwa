@@ -160,11 +160,10 @@ First, a one-time thing: **run your build inside a Visual Studio Developer Shell
 ### Portable — the no-installer option
 
 ```powershell
-swift-pwa build --target windows                 # → build\MyApp\  (a folder you can zip and share)
-swift-pwa build --target windows --single-file   # → build\MyApp.exe  (one file, web assets embedded)
+swift-pwa build --target windows   # → build\MyApp\  (a folder you can zip and share)
 ```
 
-The portable folder runs on any Windows 10 21H2+/Windows 11 box — **as long as the WebView2 Runtime is installed** (it ships with recent Windows and Edge, so most machines have it). It carries the Swift runtime beside the `.exe`, so the machine needs no Swift. The single-file `.exe` can't carry it, so it only starts where Swift is installed: hand people the folder. To be safe about WebView2, bundle a self-installer:
+The portable folder runs on any Windows 10 21H2+/Windows 11 box — **as long as the WebView2 Runtime is installed** (it ships with recent Windows and Edge, so most machines have it). It carries the Swift runtime beside the `.exe`, so the machine needs no Swift. To be safe about WebView2, bundle a self-installer:
 
 ```powershell
 swift-pwa build --target windows --bootstrap-webview2
@@ -185,7 +184,7 @@ Signing (`--sign`) matters for MSIX: an **unsigned** MSIX only installs on machi
 
 Portable: zip the folder (or hand over the single `.exe`) and put it on your download page. MSIX: distribute the `.msix` for a real install/uninstall experience, or use it as the basis for a Microsoft Store submission.
 
-> **Building for Windows on ARM (`--arch arm64`):** cross-compiling isn't supported yet — the `--arch` flag sets the package identity, but the actual binary is whatever architecture your Swift toolchain is. To ship both x64 and arm64, build each on a matching machine. (And `--single-file` can't be combined with `--package-format msix` — the CLI will tell you.)
+> **Building for Windows on ARM (`--arch arm64`):** cross-compiling isn't supported yet — the `--arch` flag sets the package identity, but the actual binary is whatever architecture your Swift toolchain is. To ship both x64 and arm64, build each on a matching machine.
 
 > Full toolchain setup (Swift for Windows, VS Build Tools, WebView2/WIL NuGet) is in [docs/windows-setup.md](../windows-setup.md).
 

@@ -83,20 +83,6 @@
         /// resolves served mounts through it.
         private nonisolated(unsafe) var assetProvider: AssetProvider
 
-        /// Set in `load(_:)` when this is a single-file build (the exe carries
-        /// a web-asset overlay): bundle-origin requests are then served from
-        /// memory instead of the disk virtual-host mapping. `nil` for a normal
-        /// folder build. Read/written only on the UI thread.
-        private nonisolated(unsafe) var embeddedAssets: EmbeddedWebAssets?
-
-        /// SPA history-routing fallback, seeded from `WindowContent.bundled`'s
-        /// `spaFallback` in `load(_:)`. For the disk build the fallback lives in
-        /// the shared router (`assetProvider.spaFallback(for:)`); these two hold
-        /// the policy for the single-file (embedded) build, whose bundle has no
-        /// disk root to consult. Read/written only on the UI thread.
-        private nonisolated(unsafe) var spaFallbackEnabled = false
-        private nonisolated(unsafe) var spaFallbackDocument = "index.html"
-
         // The shim hands out `swiftpwa_w2_view *` per-call. We cache
         // the most recently issued one so `respond` can find its way
         // back to the owner; freeing happens with the controller.
@@ -239,18 +225,10 @@
         /// every request to the bundle origin — the bundle's own files and
         /// every `serveDirectory` mount alike, since nothing else serves this
         /// origin. Resolved through the shared router and answered range-aware
-        /// off disk (or out of the exe overlay in a single-file build).
+        /// off disk.
         func _onResourceRequested(uri: String, token: UInt64) {
             guard let view, let url = URL(string: uri) else {
                 if let view { swiftpwa_w2_resource_passthrough(view, token) }
-                return
-            }
-            // A `serveDirectory` mount is a real directory on disk in every
-            // build, so it takes precedence over an in-exe overlay: the
-            // overlay only ever carries the bundle, and a single-file app can
-            // still mount a content pack it downloaded.
-            if !assetProvider.isServedPrefix(url), let embedded = embeddedAssets {
-                serveEmbedded(url: url, token: token, embedded: embedded, view: view)
                 return
             }
             // One lookup covers both roles: the router holds the bundle as its
@@ -288,40 +266,6 @@
                     case .unsatisfiable:
                         swiftpwa_w2_resource_respond_file(view, token, 416, mime, pathW, 0, 0, total)
                     }
-                }
-            }
-        }
-
-        /// Serve a bundle-origin request from the in-exe overlay (single-file
-        /// build). Full-body responses (200) — range serving isn't needed for
-        /// the typical html/js/css/small-image bundle; large media should ship
-        /// via `serveDirectory` (disk, range-aware) instead. A request to `/`
-        /// maps to `index.html`.
-        private func serveEmbedded(
-            url: URL, token: UInt64, embedded: EmbeddedWebAssets, view: OpaquePointer
-        ) {
-            var path = url.path
-            if path.isEmpty || path == "/" { path = "/index.html" }
-            var data = embedded.data(for: path)
-            // SPA history routing: a client-side route with no overlay entry →
-            // serve the bundle entry document from the overlay instead of 404.
-            if data == nil, spaFallbackEnabled, AssetProvider.looksLikeNavigation(path) {
-                data = embedded.data(for: "/" + spaFallbackDocument)
-                if data != nil { path = "/" + spaFallbackDocument }
-            }
-            guard let data else {
-                "text/plain; charset=utf-8".withCString { mime in
-                    swiftpwa_w2_resource_respond(view, token, 404, mime, nil, 0)
-                }
-                return
-            }
-            let mime = embedded.mimeType(for: path)
-            mime.withCString { mimeC in
-                data.withUnsafeBytes { raw in
-                    swiftpwa_w2_resource_respond(
-                        view, token, 200, mimeC,
-                        raw.bindMemory(to: UInt8.self).baseAddress, Int32(data.count)
-                    )
                 }
             }
         }
@@ -400,33 +344,14 @@
                 // window is its own origin, so only *leaving that* counts as
                 // leaving the app.
                 appOrigin = WebOrigin(scheme: "https", host: "swift-pwa.local")
-                // Record the SPA-fallback policy for the interception path
-                // (both the embedded and disk branches consult it below).
-                spaFallbackEnabled = spaFallback
-                spaFallbackDocument = entry
                 // `SWIFT_PWA_INITIAL_ROUTE` can send the first window somewhere
                 // other than the entry. Only the navigation target changes —
                 // `entry` stays the SPA-fallback document and the bundle root's
                 // fallback, which is exactly what a router-only route needs.
                 let route = InitialRoute.take(declared: entry)
-                // Single-file build: the web bundle is an overlay in our own
-                // exe, not a folder on disk. Serve it from memory through the
-                // resource-interception hook (set up in `_onControllerReady`)
-                // and skip the disk virtual-host mapping. Detected transparently
-                // so a `.bundled(directory:)` app needs no code change — the
-                // (absent) `directory` is simply ignored.
-                if let embedded = EmbeddedWebAssets.current {
-                    embeddedAssets = embedded
-                    let urlString = "https://swift-pwa.local/\(route)"
-                    urlString.withCString(encodedAs: UTF16.self) { urlW in
-                        swiftpwa_w2_view_navigate(view, urlW)
-                    }
-                    return
-                }
                 // The bundle is served from the shared router through resource
-                // interception, exactly like a `serveDirectory` mount and like
-                // the single-file branch above — **not** through
-                // `SetVirtualHostNameToFolderMapping`.
+                // interception, exactly like a `serveDirectory` mount — **not**
+                // through `SetVirtualHostNameToFolderMapping`.
                 //
                 // The mapping is the obvious tool here and we used it until it
                 // was measured: a host that has one answers requests *before*

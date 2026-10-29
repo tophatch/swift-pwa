@@ -241,8 +241,13 @@ jobs:
             dist/swift-pwa-windows-x86_64.zip
             dist/swift-pwa-windows-x86_64.exe
 
+  # A fresh app cross-compiled for Android and run on an emulator: the one path
+  # the PR gate doesn't take (#278).
+  bundle-smoke-android:
+    uses: ./.github/workflows/bundle-smoke-android.yml
+
   release:
-    needs: [cli-binaries, cli-binary-windows]
+    needs: [cli-binaries, cli-binary-windows, bundle-smoke-android]
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-24.04
     permissions:

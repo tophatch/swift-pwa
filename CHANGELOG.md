@@ -116,6 +116,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An APK cross-compiled on Linux had no Swift runtime in it** (#278), and
+  said so only in a note. SwiftPM keeps its Swift SDKs in `~/.config/swiftpm`
+  on a Linux host with no `~/.swiftpm` — a fresh machine, or CI without
+  swiftly — and that was the one place the bundler didn't look. The build
+  succeeded, staged nothing but the app's own `.so`, and the app died at
+  `System.loadLibrary`. The bundler now looks there, and a missing SDK bundle
+  is a hard error naming every directory it searched, like a missing
+  `libc++_shared.so` already was. Found by the new release check above, on its
+  first run.
 - **macOS showed WebKit's gray and white before the first paint, never
   `window.background_color`** (#327). `WKWebView` fills its bounds with its
   own background until the page paints, over the window, layer and

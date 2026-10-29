@@ -50,6 +50,10 @@ jobs:
           swift --version
           swift sdk install "$SWIFT_ANDROID_SDK_URL" --checksum "$SWIFT_ANDROID_SDK_CHECKSUM"
           swift sdk list
+          # Where SwiftPM put it: the bundler has to find the same directory to
+          # stage the Swift runtime into the APK.
+          swift sdk configure --show-configuration swift-6.4.0-RELEASE_android x86_64-unknown-linux-android28 \
+            | grep swiftResourcesPath
       - name: Use the runner's newest NDK
         run: |
           echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"

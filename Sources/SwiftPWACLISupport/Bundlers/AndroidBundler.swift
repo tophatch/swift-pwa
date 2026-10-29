@@ -931,10 +931,12 @@ struct AndroidBundler {
     ) async throws {
         let bundleRoot = swiftSDKBundleRoot(id: sdkBundleId)
         guard FileManager.default.fileExists(atPath: bundleRoot.path) else {
-            print(
-                "note: \(abi): Swift Android SDK bundle not found at \(bundleRoot.path); skipping runtime stdlib bundling. The APK will crash at System.loadLibrary unless you ship the runtime .so files yourself."
+            throw AndroidBundlerError.swiftSDKBundleMissing(
+                abi: abi,
+                searched: swiftSDKRootCandidates().map {
+                    $0.appendingPathComponent("\(sdkBundleId).artifactbundle/swift-android").path
+                }
             )
-            return
         }
 
         // Map ABI to the SDK's arch directory naming.
@@ -1395,6 +1397,7 @@ enum AndroidBundlerError: Error, CustomStringConvertible {
     case signingUnknownStoreType(String)
     case crossCompileFailed([String])
     case cxxSharedMissing(abi: String, searched: [String])
+    case swiftSDKBundleMissing(abi: String, searched: [String])
     case staleEntryPoint(String)
 
     var description: String {
@@ -1419,6 +1422,15 @@ enum AndroidBundlerError: Error, CustomStringConvertible {
             \(searched.map { "  - " + $0 }.joined(separator: "\n"))
             Swift Android SDKs from 6.4 no longer vendor an `ndk-sysroot/`, so it comes from \
             the installed NDK. Set ANDROID_NDK_ROOT, or install one under $ANDROID_HOME/ndk/.
+            """
+        case let .swiftSDKBundleMissing(abi, searched):
+            """
+            swift-pwa: \(abi): the Swift Android SDK built the app, but its bundle isn't in any \
+            swift-sdks directory this CLI knows, so the Swift runtime can't be staged. An APK \
+            without it installs fine and dies at `System.loadLibrary`, so this is a hard error.
+            Searched:
+            \(searched.map { "  - " + $0 }.joined(separator: "\n"))
+            `swift sdk configure --show-configuration <bundle> <triple>` prints where SwiftPM keeps it.
             """
         case let .crossCompileFailed(failures):
             """

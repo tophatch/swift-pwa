@@ -139,6 +139,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   is a hard error naming every directory it searched, like a missing
   `libc++_shared.so` already was. Found by the new release check above, on its
   first run.
+- **Every Android APK carried Swift Testing and XCTest** — four libraries,
+  about 2.3 MB per ABI after stripping. The Swift Android SDK ships them beside
+  the stdlib so `swift test` can cross-compile, and the bundler copied that
+  directory wholesale. Nothing outside the four depends on them, so they are no
+  longer staged, with or without `--prune-android-runtime`, and the release's
+  Android check fails if one comes back.
 - **macOS showed WebKit's gray and white before the first paint, never
   `window.background_color`** (#327). `WKWebView` fills its bounds with its
   own background until the page paints, over the window, layer and

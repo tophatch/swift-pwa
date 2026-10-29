@@ -79,15 +79,19 @@ jobs:
           { yes || true; } | "$sdk/sdkmanager" --licenses > /dev/null
           "$sdk/sdkmanager" "emulator" "platform-tools" "$EMULATOR_IMAGE" > /dev/null
           echo no | "$sdk/avdmanager" create avd -n smoke -k "$EMULATOR_IMAGE" --device pixel_6
+          log="$RUNNER_TEMP/emulator.log"
           nohup "$ANDROID_HOME/emulator/emulator" -avd smoke -no-window -no-audio -no-boot-anim \
-            -no-snapshot -gpu swiftshader_indirect > "$RUNNER_TEMP/emulator.log" 2>&1 &
-          adb wait-for-device
+            -no-snapshot -gpu swiftshader_indirect > "$log" 2>&1 &
+          emu=$!
+          # Bounded, and watching the emulator itself: `adb wait-for-device`
+          # waits forever for one that already exited.
+          booted=0
           for _ in $(seq 1 120); do
-            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && break
+            kill -0 "$emu" 2>/dev/null || { echo "::error::the emulator exited"; cat "$log"; exit 1; }
+            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && { booted=1; break; }
             sleep 5
           done
-          [ "$(adb shell getprop sys.boot_completed | tr -d '\r')" = 1 ] \
-            || { tail -50 "$RUNNER_TEMP/emulator.log"; echo "::error::the emulator never finished booting"; exit 1; }
+          [ "$booted" = 1 ] || { tail -80 "$log"; echo "::error::the emulator never finished booting"; exit 1; }
           adb shell getprop ro.build.version.release
       - name: Cross-compile, deploy and drive a fresh app
         run: Scripts/bundle-smoke-android.sh --cli "$GITHUB_WORKSPACE/.build/debug/swift-pwa" --work "$RUNNER_TEMP/smoke" -k

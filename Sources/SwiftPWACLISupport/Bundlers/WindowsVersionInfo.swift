@@ -10,7 +10,7 @@ import Foundation
 /// name can't contain a space, so an app called "Example Reader" put the user's
 /// library in `Documents\ExampleReader` (#263). The runtime reads
 /// `ProductName` back at startup. A resource rather than the `pwa.json` staged
-/// beside the exe, because a single-file build has no `pwa.json` beside it.
+/// beside the exe, so the name travels with the exe itself.
 enum WindowsVersionInfo {
     /// US English, Unicode — the pair nearly every Windows binary declares, and
     /// the one `\VarFileInfo\Translation` points a reader at.

@@ -301,33 +301,8 @@ struct AssetProviderTests {
         let photo = try provider.resolve(#require(URL(string: "https://swift-pwa.local/packs/photo.png")))
         #expect(photo?.mimeType == "image/png")
         #expect(photo?.fileSize == 7)
-        #expect(try provider.isServedPrefix(#require(URL(string: "https://swift-pwa.local/packs/photo.png"))))
-        #expect(try !provider.isServedPrefix(#require(URL(string: "https://swift-pwa.local/index.html"))))
         // A different host on the same scheme is not ours.
         #expect(try provider.resolve(#require(URL(string: "https://example.com/packs/photo.png"))) == nil)
-    }
-
-    @Test("isServedPrefix distinguishes served mounts from the bundle")
-    func isServedPrefix() throws {
-        let bundle = try tempBundle()
-        defer { try? FileManager.default.removeItem(at: bundle) }
-        let packs = URL(fileURLWithPath: NSTemporaryDirectory())
-            .appendingPathComponent("swift-pwa-packs-\(UUID().uuidString)")
-        try FileManager.default.createDirectory(at: packs, withIntermediateDirectories: true)
-        defer { try? FileManager.default.removeItem(at: packs) }
-
-        let provider = AssetProvider(root: bundle)
-        provider.mount(packs, at: "/packs")
-        // Under a served prefix (even for a file that doesn't exist) → true.
-        #expect(try provider.isServedPrefix(#require(URL(string: "pwa://localhost/packs/missing.webm"))))
-        #expect(try provider.isServedPrefix(#require(URL(string: "pwa://localhost/packs"))))
-        // Bundle paths and the root → false (native serving handles those).
-        #expect(try !provider.isServedPrefix(#require(URL(string: "pwa://localhost/index.html"))))
-        #expect(try !provider.isServedPrefix(#require(URL(string: "pwa://localhost/"))))
-        // A near-miss prefix that isn't a path-segment boundary → false.
-        #expect(try !provider.isServedPrefix(#require(URL(string: "pwa://localhost/packsextra/x"))))
-        // Wrong origin → false.
-        #expect(try !provider.isServedPrefix(#require(URL(string: "https://evil/packs/x"))))
     }
 
     @Test("unmount removes a prefix but never the bundle root")

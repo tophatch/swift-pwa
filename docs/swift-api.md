@@ -688,8 +688,8 @@ The generated `App.swift` needs one line to locate the app's web directory:
 content = try WindowContent.bundledWeb(entry: "index.html", spaFallback: false)
 ```
 
-It resolves, in order: a single-file exe's embedded overlay, `SWIFT_PWA_WEB_ROOT`
-(driver builds only — what `swift-pwa drive` sets), Android's asset host,
+It resolves, in order: `SWIFT_PWA_WEB_ROOT` (driver builds only — what
+`swift-pwa drive` sets), Android's asset host,
 `Bundle.main.resourceURL/web` (where `swift-pwa build` puts it), then any
 `fallbacks` you pass. It **throws** listing every path it tried rather than
 handing you a blank window.

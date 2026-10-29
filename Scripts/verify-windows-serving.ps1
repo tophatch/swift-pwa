@@ -32,22 +32,17 @@
 .PARAMETER WorkDir
   Where the throwaway app is scaffolded. Wiped on each run.
 
-.PARAMETER SingleFile
-  Also verify a `--single-file` build, where the bundle comes from the exe
-  overlay while mounts still come from disk.
-
 .PARAMETER KeepWorkDir
   Leave the scaffolded app in place for debugging.
 
 .EXAMPLE
-  pwsh -File Scripts/verify-windows-serving.ps1 -Repo C:\src\swift-pwa -SingleFile
+  pwsh -File Scripts/verify-windows-serving.ps1 -Repo C:\src\swift-pwa
 #>
 [CmdletBinding()]
 param(
     [string]$Repo,
     [string]$Packages,
     [string]$WorkDir = "$env:TEMP\swift-pwa-serving-check",
-    [switch]$SingleFile,
     [switch]$KeepWorkDir
 )
 
@@ -69,14 +64,21 @@ $expectations = @(
     @{ url = "/index.html";      status = 200; len = -1 }   # the bundle itself
 )
 
+$arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
+
 function Enter-BuildEnv {
-    $vcvars = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -Recurse -Filter vcvars64.bat `
-        -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
-    if (-not $vcvars) { throw "vcvars64.bat not found - install VS Build Tools (docs/windows-setup.md section 2)." }
-    # `cmd /c ... & set` is the only way to lift vcvars' environment into this
-    # session; it edits dozens of variables and has no PowerShell equivalent.
-    cmd /c "call `"$vcvars`" >nul 2>&1 & set" | ForEach-Object {
-        if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+    # A shell that already has the MSVC environment (CI, Scripts/remote-windows.sh)
+    # keeps it; a bare SSH shell loads the one for this machine's architecture.
+    if (-not (Get-Command cl.exe -ErrorAction SilentlyContinue)) {
+        $bat = if ($arch -eq 'arm64') { 'vcvarsarm64.bat' } else { 'vcvars64.bat' }
+        $vcvars = Get-ChildItem "C:\Program Files*\Microsoft Visual Studio" -Recurse -Filter $bat `
+            -ErrorAction SilentlyContinue | Select-Object -First 1 -ExpandProperty FullName
+        if (-not $vcvars) { throw "$bat not found - install VS Build Tools (docs/windows-setup.md section 2)." }
+        # `cmd /c ... & set` is the only way to lift vcvars' environment into this
+        # session; it edits dozens of variables and has no PowerShell equivalent.
+        cmd /c "call `"$vcvars`" >nul 2>&1 & set" | ForEach-Object {
+            if ($_ -match '^([^=]+)=(.*)$') { Set-Item -Path "env:$($matches[1])" -Value $matches[2] }
+        }
     }
     $wv2 = Join-Path $Packages "Microsoft.Web.WebView2\build\native\include"
     $wil = Join-Path $Packages "Microsoft.Windows.ImplementationLibrary\include"
@@ -87,7 +89,7 @@ function Enter-BuildEnv {
     $script:BuildFlags = @(
         "-Xcc", "-I$wv2",
         "-Xcc", "-I$wil",
-        "-Xlinker", "/LIBPATH:$(Join-Path $Packages 'Microsoft.Web.WebView2\build\native\x64')"
+        "-Xlinker", "/LIBPATH:$(Join-Path $Packages "Microsoft.Web.WebView2\build\native\$arch")"
     )
 }
 
@@ -153,21 +155,24 @@ function Invoke-App([string]$RunnerCmd) {
     throw "could not read the task's exit code"
 }
 
-function Test-Build([string]$Label, [string]$ExtraBuildArgs, [string]$ExeDir) {
+function Test-Build([string]$Label, [string]$ExeDir) {
     Write-Host "== $Label ==" -ForegroundColor Cyan
     Push-Location $appDir
     try {
         $cli = Join-Path $Repo ".build\debug\swift-pwa.exe"
         # --configuration debug so the app driver is compiled in and the build
         # matches what a developer would be debugging.
-        $buildArgs = @("build", "--target", "windows", "--configuration", "debug") + `
-            ($ExtraBuildArgs -split ' ' | Where-Object { $_ })
-        & $cli @buildArgs | Out-Null
+        & $cli build --target windows --configuration debug | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "$Label build failed" }
     } finally { Pop-Location }
 
+    # The app's own output and exit code, kept for a failure: the task's result
+    # alone can't tell a page that reported from a process that never got there.
     $runner = Join-Path $WorkDir "run-$Label.cmd"
-    Write-Utf8NoBom $runner "@echo off`r`ncd /d `"$ExeDir`"`r`n$appName.exe`r`n"
+    $appLog = Join-Path $WorkDir "app-$Label.log"
+    $appCode = Join-Path $WorkDir "app-$Label.code"
+    Write-Utf8NoBom $runner ("@echo off`r`ncd /d `"$ExeDir`"`r`n$appName.exe > `"$appLog`" 2>&1`r`n" + `
+        "echo %ERRORLEVEL% > `"$appCode`"`r`nexit /b %ERRORLEVEL%`r`n")
     $code = Invoke-App $runner
 
     if ($code -eq 0) {
@@ -179,6 +184,9 @@ function Test-Build([string]$Label, [string]$ExtraBuildArgs, [string]$ExeDir) {
         "$($expectations[$which].url) (expected $($expectations[$which].status))"
     } else { "app exited $code before reporting" }
     Write-Host "FAIL  $Label - $detail" -ForegroundColor Red
+    $exeCode = if (Test-Path $appCode) { (Get-Content $appCode -Raw).Trim() } else { "none - it never returned" }
+    Write-Host "  the app's own exit code: $exeCode"
+    if (Test-Path $appLog) { Get-Content $appLog | Select-Object -Last 30 | ForEach-Object { Write-Host "  | $_" } }
     return $false
 }
 
@@ -211,6 +219,13 @@ $repoLeaf = Split-Path $Repo -Leaf
 Write-Utf8NoBom $manifest (([IO.File]::ReadAllText($manifest) `
     -replace '\.package\(url: "https://github\.com/tophatch/swift-pwa", from: "[^"]+"\)', ".package(path: `"$repoForSwift`")") `
     -replace 'package: "swift-pwa"', "package: `"$repoLeaf`"")
+# The bundler looks for the NuGet packages beside or above the project, and the
+# work directory is neither. A copy, not a junction, so the cleanup's recursive
+# delete can't reach the originals.
+New-Item -ItemType Directory "$appDir\packages" | Out-Null
+foreach ($pkg in "Microsoft.Web.WebView2", "Microsoft.Windows.ImplementationLibrary") {
+    Copy-Item -Recurse -Path (Join-Path $Packages $pkg) -Destination "$appDir\packages\$pkg"
+}
 
 $appSwift = Join-Path $appDir "Sources\$appName\App.swift"
 $packsForSwift = $packsDir.Replace('\', '\\')
@@ -221,10 +236,7 @@ Write-Utf8NoBom $appSwift ([IO.File]::ReadAllText($appSwift) -replace `
 Write-Utf8NoBom (Join-Path $appDir "web\index.html") (New-SelfTestPage)
 
 $results = @()
-$results += Test-Build "folder" "" (Join-Path $appDir "build\windows\$appName")
-if ($SingleFile) {
-    $results += Test-Build "single-file" "--single-file" (Join-Path $appDir "build\windows")
-}
+$results += Test-Build "folder" (Join-Path $appDir "build\windows\$appName")
 
 if (-not $KeepWorkDir) { Remove-Item -Recurse -Force $WorkDir -ErrorAction SilentlyContinue }
 if ($results -contains $false) { exit 1 }

@@ -20,9 +20,8 @@
   WebView2 won't create a controller without an interactive desktop, so
   -Drive fails over SSH (session 0); a hosted runner has one (#277).
 
-  Two header checks - `dumpbin /headers` has to read each exe (#276) - one
-  that the folder exe carries the Common Controls v6 manifest, and three
-  launches:
+  A header check - `dumpbin /headers` has to read the exe (#276) - one that
+  it carries the Common Controls v6 manifest, and two launches:
 
     folder-control   the folder bundle with PATH as it is. Has to pass, or
                      the portable launch proves nothing.
@@ -30,9 +29,6 @@
                      machine with no Swift toolchain: the bundle has to carry
                      the Swift runtime itself. Without it, this died
                      "FoundationNetworking.dll was not found".
-    single-control   the `--single-file` exe with PATH as it is. There is no
-                     portable leg for it: the loader can't take a DLL from
-                     inside the exe, so a single file can't carry the runtime.
 
   and, with -Drive, one driven launch:
 
@@ -260,10 +256,6 @@ try {
     Invoke-Native "folder bundle" {
         & $cli build --target windows --configuration $Configuration --output "out\folder"
     }
-    Write-Host "== swift-pwa build --target windows --single-file ==" -ForegroundColor Cyan
-    Invoke-Native "single-file bundle" {
-        & $cli build --target windows --configuration $Configuration --single-file --output "out\single"
-    }
     if ($Drive) {
         Write-Host "== swift-pwa build --target windows (debug, to drive) ==" -ForegroundColor Cyan
         Invoke-Native "driven bundle" {
@@ -280,12 +272,8 @@ $Timings | ForEach-Object { Write-Host "  $_" }
 # Move both artifacts out of the project, then delete its build tree, so a
 # bundle that reaches back into .build fails here rather than on a user's box.
 $folderExe = Get-ChildItem "$appDir\out\folder" -Recurse -Filter "$target.exe" | Select-Object -First 1
-$singleExe = Get-ChildItem "$appDir\out\single" -Filter "$target.exe" | Select-Object -First 1
 if (-not $folderExe) { throw "the folder bundle has no $target.exe under out\folder" }
-if (-not $singleExe) { throw "the single-file build left no $target.exe in out\single" }
 Move-Item $folderExe.Directory.FullName "$relocated\folder"
-New-Item -ItemType Directory "$relocated\single" | Out-Null
-Move-Item $singleExe.FullName "$relocated\single\$target.exe"
 if ($Drive) {
     $drivenExe = Get-ChildItem "$appDir\out\driven" -Recurse -Filter "$target.exe" | Select-Object -First 1
     if (-not $drivenExe) { throw "the debug bundle has no $target.exe under out\driven" }
@@ -401,14 +389,9 @@ function Test-Drive([string]$Label, [string]$Exe) {
 Write-Host "== launching each bundle headlessly (SWIFT_PWA_DESCRIBE) ==" -ForegroundColor Cyan
 $results = @(
     (Test-PEHeaders "folder-pe" "$relocated\folder\$target.exe"),
-    (Test-PEHeaders "single-pe" "$relocated\single\$target.exe"),
     (Test-Manifest "folder-manifest" "$relocated\folder\$target.exe"),
     (Test-Launch "folder-control" "$relocated\folder\$target.exe" $env:Path),
-    (Test-Launch "folder-portable" "$relocated\folder\$target.exe" $windowsOnly),
-    # No single-file portable leg: the loader can't take a DLL from inside the
-    # exe, so a single-file build can't carry the Swift runtime, and the build
-    # says so. What's checked is that it starts.
-    (Test-Launch "single-control" "$relocated\single\$target.exe" $env:Path)
+    (Test-Launch "folder-portable" "$relocated\folder\$target.exe" $windowsOnly)
 )
 if ($Drive) {
     Write-Host "== launching the debug bundle and driving it ==" -ForegroundColor Cyan

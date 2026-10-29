@@ -1,6 +1,6 @@
 import ArgumentParser
 import Foundation
-import SwiftPWACore // EmbeddedWebAssets (single-file overlay)
+import SwiftPWACore
 
 // On Apple, `URLSession` lives in Foundation; on swift-corelibs-foundation
 // (Linux + Windows) the networking pieces moved to a separate
@@ -57,9 +57,6 @@ struct WindowsBundler {
     var arch: AppxManifestGenerator.Architecture = .x64
     var bootstrapWebView2: Bool = false
     var signIdentity: String?
-    /// Embed `web/` as an overlay in the exe and emit a single `.exe` instead
-    /// of a folder (portable format only). See `embedWebOverlay`.
-    var singleFile: Bool = false
     var configuration: BuildConfiguration = .release
     /// Directories holding vendored native libraries this build links against
     /// — the llama.cpp / ONNX Runtime tiers swift-pwa resolves, the Vulkan
@@ -168,7 +165,7 @@ struct WindowsBundler {
             // with resource-carrying dependencies works off the build machine.
             try ResourceBundles.stage(
                 ResourceBundles.found(in: binary.deletingLastPathComponent()),
-                into: singleFile ? outputDir : bundleDir
+                into: bundleDir
             )
 
             // Embed the Common Controls v6 manifest into the bundled
@@ -191,54 +188,18 @@ struct WindowsBundler {
             try await suppressConsoleWindow(at: bundledExe)
 
             // App icon: inject an RT_GROUP_ICON/RT_ICON from pwa.json's PNG
-            // into the EXE's resource section. Must run before the
-            // single-file overlay below — appending the overlay grows the
-            // file past the PE image, and rewriting resources afterwards
-            // would corrupt or drop that trailing data.
+            // into the EXE's resource section.
             await IconOutcome.report(embedPortableIcon(at: bundledExe))
 
             // Name and version, where Windows keeps them. Also what the
             // runtime reads `app.name` from, so it can't be best-effort like
             // the icon: without it `app.documentsDir` is named after the
-            // executable. Same before-the-overlay constraint as the icon.
+            // executable.
             try WindowsResources.update(bundledExe, with: [.init(
                 type: WindowsResources.rtVersion,
                 id: 1,
                 data: WindowsVersionInfo.build(name: manifest.name, version: manifest.version, exeName: exeName)
             )])
-
-            // Single-file: embed web/ as an exe overlay and emit one `.exe`,
-            // no sibling web/ or pwa.json. The runtime reads its own overlay
-            // and serves the bundle from memory (EmbeddedWebAssets).
-            if singleFile {
-                try embedWebOverlay(into: bundledExe)
-                let singleExe = outputDir.appendingPathComponent(exeName)
-                if FileManager.default.fileExists(atPath: singleExe.path) {
-                    try FileManager.default.removeItem(at: singleExe)
-                }
-                try FileManager.default.moveItem(at: bundledExe, to: singleExe)
-                try? FileManager.default.removeItem(at: bundleDir)
-                // A shared-lib dependency can't live in the exe overlay — the
-                // OS loader needs it as a real file beside the exe. So even a
-                // "single-file" build emits onnxruntime.dll alongside when
-                // ai.local_onnx_runtime is on.
-                try await stageOnnxRuntimeDLLIfNeeded(nextTo: outputDir)
-                try stageDeclaredNativeLibraries(nextTo: outputDir)
-                try writeFileAssociationScripts(into: outputDir, exeName: exeName)
-                try writeURLSchemeScripts(into: outputDir, exeName: exeName)
-                print("swift-pwa: single-file build — web/ embedded into \(exeName)")
-                // The loader can't take a DLL from inside the exe, so the
-                // runtime can't travel in one file. Said at build time, since
-                // on the developer's own machine it starts either way.
-                if !runtimeDLLs.isEmpty {
-                    print("""
-                    swift-pwa: warning — a single-file exe can't carry the Swift runtime \
-                    (\(runtimeDLLs.count) DLLs), so it starts only where a Swift toolchain or runtime \
-                    is installed. Build without --single-file for a folder that runs on any machine.
-                    """)
-                }
-                return singleExe
-            }
 
             let webSrc = projectRoot.appendingPathComponent(manifest.web.directory)
             if FileManager.default.fileExists(atPath: webSrc.path) {
@@ -331,11 +292,6 @@ struct WindowsBundler {
         print("swift-pwa: wrote register-url-schemes.cmd (\(scripts.register.count) lines) for URL schemes")
     }
 
-    /// Append the project's `web/` directory to the exe as an
-    /// `EmbeddedWebAssets` overlay (the runtime serves it from memory). Walks
-    /// `web/` recursively, preserving relative paths (forward-slashed, the form
-    /// request URLs use). A no-op-safe append after the PE image — the loader
-    /// ignores trailing bytes.
     /// Stage the ONNX Runtime runtime DLLs into `dir` when the tier is on. The
     /// segmentation backend links ONNX Runtime as a *shared* lib, so its DLL(s)
     /// must be resolvable at launch — Windows searches the exe's own directory
@@ -373,10 +329,6 @@ struct WindowsBundler {
         print("swift-pwa: staged \(dlls.joined(separator: ", ")) next to the app (\(reason))")
     }
 
-    /// Copy the app's own vendored DLLs (`windows.native_library_dirs`) next to
-    /// the exe, which is where Windows' loader looks first. Without this the
-    /// build links cleanly against the import lib and the app dies at launch on
-    /// the user's machine with a missing-DLL dialog naming no fix.
     /// The Swift runtime DLLs `binary` needs, from the toolchain it was built
     /// with. See ``SwiftRuntimeStaging``.
     private func swiftRuntimeDLLs(for binary: URL) throws -> [URL] {
@@ -395,6 +347,10 @@ struct WindowsBundler {
         )
     }
 
+    /// Copy the app's own vendored DLLs (`windows.native_library_dirs`) next to
+    /// the exe, which is where Windows' loader looks first. Without this the
+    /// build links cleanly against the import lib and the app dies at launch on
+    /// the user's machine with a missing-DLL dialog naming no fix.
     private func stageDeclaredNativeLibraries(nextTo dir: URL) throws {
         for src in try NativeLibrarySearch.declaredDirs(
             manifest: manifest, target: .windows, projectRoot: projectRoot
@@ -406,37 +362,6 @@ struct WindowsBundler {
             try FileManager.default.copyItem(at: src, to: dest)
             print("swift-pwa: staged \(src.lastPathComponent) next to the app (windows.native_library_dirs)")
         }
-    }
-
-    private func embedWebOverlay(into exe: URL) throws {
-        let webRoot = projectRoot.appendingPathComponent(manifest.web.directory)
-        guard FileManager.default.fileExists(atPath: webRoot.path) else {
-            throw ValidationError(
-                "swift-pwa: --single-file needs a web bundle at \(webRoot.path), but it's missing."
-            )
-        }
-        var files: [(path: String, data: Data)] = []
-        let base = webRoot.standardizedFileURL.path
-        if let walker = FileManager.default.enumerator(at: webRoot, includingPropertiesForKeys: [.isRegularFileKey]) {
-            for case let url as URL in walker {
-                let values = try? url.resourceValues(forKeys: [.isRegularFileKey])
-                guard values?.isRegularFile == true else { continue }
-                let full = url.standardizedFileURL.path
-                guard full.hasPrefix(base) else { continue }
-                var rel = String(full.dropFirst(base.count))
-                while rel.hasPrefix("/") || rel.hasPrefix("\\") { rel.removeFirst() }
-                rel = rel.replacingOccurrences(of: "\\", with: "/")
-                try files.append((path: rel, data: Data(contentsOf: url)))
-            }
-        }
-        guard !files.isEmpty else {
-            throw ValidationError("swift-pwa: --single-file found no files under \(webRoot.path).")
-        }
-        let overlay = try EmbeddedWebAssets.makeOverlay(files: files)
-        let handle = try FileHandle(forWritingTo: exe)
-        defer { try? handle.close() }
-        try handle.seekToEnd()
-        try handle.write(contentsOf: overlay)
     }
 
     // MARK: - swift-pwa NuGet packages auto-detect

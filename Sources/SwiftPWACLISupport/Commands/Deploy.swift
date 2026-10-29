@@ -621,8 +621,7 @@ struct Deploy: AsyncParsableCommand {
 
     /// Best-effort locate the runnable artifact `build` produced for a desktop
     /// target. Linux: the newest `*.AppImage` in the output dir. Windows: the
-    /// single-file `<exe>.exe` in the output dir, else the portable folder's
-    /// `<name>/<exe>.exe`.
+    /// portable folder's `<name>/<exe>.exe`.
     private static func resolveDesktopArtifact(
         target: BuildTarget, projectRoot: URL, outputDir: URL, pwa: PWAManifest
     ) async -> URL? {
@@ -644,8 +643,6 @@ struct Deploy: AsyncParsableCommand {
             }
         case .windows:
             let exe = await ExecutableNameResolver.resolve(projectRoot: projectRoot, manifest: pwa)
-            let singleFile = outputDir.appendingPathComponent("\(exe).exe")
-            if fm.fileExists(atPath: singleFile.path) { return singleFile }
             let inFolder = outputDir.appendingPathComponent(pwa.name).appendingPathComponent("\(exe).exe")
             if fm.fileExists(atPath: inFolder.path) { return inFolder }
             return nil

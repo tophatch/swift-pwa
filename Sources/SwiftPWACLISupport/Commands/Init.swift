@@ -516,8 +516,7 @@ enum Templates {
                 content = .remote(devURL)
             } else {
                 // Wherever this app's web/ turns out to be: the bundle
-                // `swift-pwa build` produced, Android's asset host, a
-                // single-file exe's embedded overlay, or — under
+                // `swift-pwa build` produced, Android's asset host, or — under
                 // `swift-pwa dev` / `drive` — your source web/ directory.
                 // Throws listing every path it tried, rather than handing you
                 // a blank window, which is the hardest thing to debug.

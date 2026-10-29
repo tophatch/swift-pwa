@@ -3,9 +3,8 @@ import Foundation
 /// Finds the app's bundled `web/` directory.
 ///
 /// This used to live in the `App.swift` that `swift-pwa init` generates, which
-/// made it the *app's* problem: the Android asset path, the single-file-exe
-/// case and the failure message were all copied into user code and frozen at
-/// scaffold time, so a fix reached only projects created afterwards, an app
+/// made it the *app's* problem: the Android asset path and the failure message
+/// were copied into user code and frozen at scaffold time, so a fix reached only projects created afterwards, an app
 /// whose web directory sits outside its SwiftPM target had to hand-edit it, and
 /// tooling had no way to influence it.
 ///
@@ -131,12 +130,7 @@ public extension WindowContent {
         spaFallback: Bool = false,
         fallbacks: [URL] = []
     ) throws -> WindowContent {
-        // A single-file Windows build serves from an executable overlay, so
-        // there's no directory to find and the backend ignores the path.
-        if EmbeddedWebAssets.current != nil {
-            return .bundled(directory: URL(fileURLWithPath: "."), entry: entry, spaFallback: spaFallback)
-        }
-        return try .bundled(
+        try .bundled(
             directory: WebRoot.resolve(fallbacks: fallbacks),
             entry: entry,
             spaFallback: spaFallback

@@ -12,16 +12,15 @@
   manifest name into the exe's version resource and the runtime reads it back.
 
   It scaffolds a fresh `swift-pwa init` app against this checkout (the examples
-  are not the scaffold), renames it in pwa.json, and asks three launches where
+  are not the scaffold), renames it in pwa.json, and asks two launches where
   their documents and data directories are:
 
     bare         the `swift build` binary, which has no version resource. The
                  control: it must answer the executable name, which proves the
-                 bundled legs measured the resource and not something baked in.
+                 bundled leg measured the resource and not something baked in.
     folder       `swift-pwa build --target windows`.
-    single-file  the same with `--single-file`, which has no pwa.json beside it.
 
-  For the two bundled legs it also reads the exe's ProductName through
+  For the bundled leg it also reads the exe's ProductName through
   PowerShell's own VersionInfo, independently of the runtime's reader, and
   checks the data directory did *not* move — every earlier release scoped it
   (and the WebView2 profile) by executable name, and moving it would strand a
@@ -211,11 +210,8 @@ func reportIdentityIfAsked(_ ctx: any AppContext) {
         Invoke-Native "app build" { swift build @BuildFlags }
         Invoke-Native "folder bundle" { & $cli build --target windows }
         $folderExe = Join-Path $appDir "build\windows\$displayName\$target.exe"
-        # The single-file build replaces the folder, so measure it first.
         Test-Leg "bare" (Join-Path $appDir ".build\debug\$target.exe") $target $false
         Test-Leg "folder" $folderExe $displayName $true
-        Invoke-Native "single-file bundle" { & $cli build --target windows --single-file }
-        Test-Leg "single-file" (Join-Path $appDir "build\windows\$target.exe") $displayName $true
     } finally { Pop-Location }
 } finally {
     # Asking for the folders created them. Remove each only while empty, so a

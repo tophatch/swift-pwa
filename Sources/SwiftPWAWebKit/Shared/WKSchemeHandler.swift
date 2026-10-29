@@ -55,7 +55,7 @@
         }
 
         /// Runs on `queue`.
-        private func serve(_ request: URLRequest, token: UInt64) {
+        private nonisolated func serve(_ request: URLRequest, token: UInt64) {
             guard let url = request.url, let resolved = provider.resolve(url) else {
                 let missing = request.url?.absoluteString ?? "<nil>"
                 fail(token, NSError(
@@ -124,7 +124,7 @@
             }
         }
 
-        private func fail(_ token: UInt64, _ error: any Error) {
+        private nonisolated func fail(_ token: UInt64, _ error: any Error) {
             _ = deliver(token, ending: true) { $0.didFailWithError(error) }
         }
 
@@ -132,7 +132,7 @@
         /// the next chunk isn't read before this one is handed over. Returns
         /// false, without running `body`, once the task is stopped. `ending`
         /// retires the token: `body` finished or failed the task.
-        private func deliver(
+        private nonisolated func deliver(
             _ token: UInt64,
             ending: Bool = false,
             _ body: @MainActor (any WKURLSchemeTask) -> Void

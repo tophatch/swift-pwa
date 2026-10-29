@@ -71,7 +71,9 @@ jobs:
           sudo udevadm control --reload-rules
           sudo udevadm trigger --name-match=kvm
           sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
-          yes | "$sdk/sdkmanager" --licenses > /dev/null
+          # `yes` dies of SIGPIPE once sdkmanager stops reading, which pipefail
+          # would count as the step failing; sdkmanager's own status still does.
+          { yes || true; } | "$sdk/sdkmanager" --licenses > /dev/null
           "$sdk/sdkmanager" "emulator" "platform-tools" "$EMULATOR_IMAGE" > /dev/null
           echo no | "$sdk/avdmanager" create avd -n smoke -k "$EMULATOR_IMAGE" --device pixel_6
           nohup "$ANDROID_HOME/emulator/emulator" -avd smoke -no-window -no-audio -no-boot-anim \

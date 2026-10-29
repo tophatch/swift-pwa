@@ -12,8 +12,6 @@ name: Android bundle smoke
 on:
   workflow_call:
   workflow_dispatch:
-  push: # TEMPORARY: iterate on the branch; remove before merge
-    branches: [ci/android-cross-compile-278]
 
 jobs:
   bundle-smoke-android:

@@ -166,8 +166,13 @@ function Test-Build([string]$Label, [string]$ExeDir) {
         if ($LASTEXITCODE -ne 0) { throw "$Label build failed" }
     } finally { Pop-Location }
 
+    # The app's own output and exit code, kept for a failure: the task's result
+    # alone can't tell a page that reported from a process that never got there.
     $runner = Join-Path $WorkDir "run-$Label.cmd"
-    Write-Utf8NoBom $runner "@echo off`r`ncd /d `"$ExeDir`"`r`n$appName.exe`r`n"
+    $appLog = Join-Path $WorkDir "app-$Label.log"
+    $appCode = Join-Path $WorkDir "app-$Label.code"
+    Write-Utf8NoBom $runner ("@echo off`r`ncd /d `"$ExeDir`"`r`n$appName.exe > `"$appLog`" 2>&1`r`n" + `
+        "echo %ERRORLEVEL% > `"$appCode`"`r`nexit /b %ERRORLEVEL%`r`n")
     $code = Invoke-App $runner
 
     if ($code -eq 0) {
@@ -179,6 +184,9 @@ function Test-Build([string]$Label, [string]$ExeDir) {
         "$($expectations[$which].url) (expected $($expectations[$which].status))"
     } else { "app exited $code before reporting" }
     Write-Host "FAIL  $Label - $detail" -ForegroundColor Red
+    $exeCode = if (Test-Path $appCode) { (Get-Content $appCode -Raw).Trim() } else { "none - it never returned" }
+    Write-Host "  the app's own exit code: $exeCode"
+    if (Test-Path $appLog) { Get-Content $appLog | Select-Object -Last 30 | ForEach-Object { Write-Host "  | $_" } }
     return $false
 }
 

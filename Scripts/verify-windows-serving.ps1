@@ -63,8 +63,10 @@ $expectations = @(
     @{ url = "/packs/nope.png";  status = 404; len = 0 },   # missing under a mount
     @{ url = "/index.html";      status = 200; len = -1 },  # the bundle itself
     # Ranges of note.txt ("hello from a served mount"): one that stops short of
-    # the end, and one past the end, which has no body.
+    # the end, one to the end (WebView2 rewinds a stream, which once sent the
+    # whole file here), and one past the end, which has no body.
     @{ url = "/packs/note.txt"; range = "bytes=6-9";  status = 206; len = 4; text = "from" },
+    @{ url = "/packs/note.txt"; range = "bytes=20-";  status = 206; len = 5; text = "mount" },
     @{ url = "/packs/note.txt"; range = "bytes=100-"; status = 416; len = 0 }
 )
 

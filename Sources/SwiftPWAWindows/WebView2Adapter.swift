@@ -659,12 +659,12 @@
             let path = resolved.fileURL.withUnsafeFileSystemRepresentation { rep -> String in
                 rep.map { String(cString: $0) } ?? resolved.fileURL.path
             }
-            var read = length
             let stream = path.withCString(encodedAs: UTF16.self) {
-                swiftpwa_w2_resource_open_file($0, offset, length, total, &read)
+                swiftpwa_w2_resource_open_file($0, offset, length, total)
             }
             return ResourceBody(
-                status: status, mimeType: resolved.mimeType, stream: stream, offset: offset, length: read, total: total
+                status: status, mimeType: resolved.mimeType, stream: stream, offset: offset, length: length,
+                total: total
             )
         }
     }

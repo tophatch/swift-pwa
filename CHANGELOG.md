@@ -130,6 +130,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Windows, a range to the end of a served file got the whole file**, under
+  a `206` whose `Content-Range` said otherwise, so every seek in a served
+  `<video>` past the start read from byte 0 again. The handler seeked the file
+  stream to the range's start and WebView2 rewound it before reading. A range
+  is now its own stream that starts at 0 and can't be rewound past the range's
+  start, and a range that stops short of the end is read lazily the same way
+  rather than up front. Found by the range rows now in
+  `Scripts\verify-windows-serving.ps1`, which never fetched a range before.
 - **On Windows, a served file still in OneDrive froze the app until it
   downloaded** (#338), the same fault as on macOS and iOS below, in two places.
   Resolving the request stat'd the file through Foundation, which opens it, and

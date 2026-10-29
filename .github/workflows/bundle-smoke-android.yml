@@ -78,7 +78,14 @@ jobs:
           # would count as the step failing; sdkmanager's own status still does.
           { yes || true; } | "$sdk/sdkmanager" --licenses > /dev/null
           "$sdk/sdkmanager" "emulator" "platform-tools" "$EMULATOR_IMAGE" > /dev/null
+          # One place for both tools: on the runner, avdmanager and the emulator
+          # otherwise look for AVDs in different directories.
+          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user"
+          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
           echo no | "$sdk/avdmanager" create avd -n smoke -k "$EMULATOR_IMAGE" --device pixel_6
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -qx smoke \
+            || { echo "::error::the emulator can't see the AVD avdmanager made"; ls -R "$ANDROID_USER_HOME"; exit 1; }
           log="$RUNNER_TEMP/emulator.log"
           nohup "$ANDROID_HOME/emulator/emulator" -avd smoke -no-window -no-audio -no-boot-anim \
             -no-snapshot -gpu swiftshader_indirect > "$log" 2>&1 &
@@ -97,4 +104,5 @@ jobs:
         run: Scripts/bundle-smoke-android.sh --cli "$GITHUB_WORKSPACE/.build/debug/swift-pwa" --work "$RUNNER_TEMP/smoke" -k
       - name: Logs from the device
         if: failure()
-        run: adb logcat -d -t 400 || true
+        # Bounded: with no device attached, adb waits for one indefinitely.
+        run: timeout 30 adb logcat -d -t 400 || true

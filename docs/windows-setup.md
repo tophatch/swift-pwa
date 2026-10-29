@@ -934,12 +934,6 @@ icons.** A dark taskbar shows the `dark` art from an MSIX; the portable
 way for an app to let the person pick its icon, so `app.icon.list` reports
 `supported: false`. See [app-icons.md](app-icons.md).
 
-**A served file that isn't on local disk freezes the app while it downloads**
-(#338). Each `serveDirectory` request is resolved on the UI thread, and the
-size check Foundation does there downloads a OneDrive placeholder, so bridge
-replies, window messages and every other request wait for it. macOS, iOS and
-Android read served files off their UI thread; Windows is next.
-
 **`fs.thumbnail` gives no PDF thumbnail without a reader that installs one,
 and none for a OneDrive placeholder.** It asks the shell for the thumbnail
 Explorer shows (`SIIGBF_THUMBNAILONLY`, never the type's icon). Windows 11 has

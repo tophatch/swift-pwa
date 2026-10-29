@@ -130,6 +130,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Windows, a served file still in OneDrive froze the app until it
+  downloaded** (#338), the same fault as on macOS and iOS below, in two places.
+  Resolving the request stat'd the file through Foundation, which opens it, and
+  opening a OneDrive placeholder downloads it — on the UI thread, where
+  `WebResourceRequested` is raised. Then `SHCreateStreamOnFileEx` opened it
+  there too, and waits for the download just the same. The size check now reads
+  the directory entry (`GetFileAttributesExW`, as `fs.readDir` already does),
+  and the request is resolved and its file opened on a background queue. The
+  request was already deferred, so only the answer goes back to the UI thread.
+  Measured on Windows 11 arm64 with a 6 MB OneDrive placeholder: worst bridge
+  round trip 640 ms → 36 ms, and the local file requested behind it 800 ms →
+  86 ms. `Scripts\verify-served-file-stall.ps1` reruns that; `-Released` is the
+  control.
 - **On macOS and iOS, a served file still in iCloud froze the app until it
   downloaded** (#338). The `pwa://` scheme handler read every file on the main
   thread, and a cloud placeholder (iCloud Drive or any File Provider) has a

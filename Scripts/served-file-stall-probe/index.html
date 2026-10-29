@@ -2,7 +2,8 @@
 <meta charset="utf-8">
 <title>served file stall check</title>
 <body style="font:17px system-ui;padding:24px">
-Served-file stall check (#338). The script reads <code>window.__result</code>.
+Served-file stall check (#338). The script reads <code>window.__result</code>,
+or, given <code>?report=&lt;file&gt;</code>, the file it is written to.
 <script>
 // Asks for the file that has to be fetched first and the local one right
 // behind it, the way a reader prefetches its next page, then times a bridge
@@ -10,7 +11,8 @@ Served-file stall check (#338). The script reads <code>window.__result</code>.
 // worst one is how long that thread was held.
 const bridge = window.__SWIFT_PWA__;
 const start = performance.now();
-const seconds = Number(new URLSearchParams(location.search).get("seconds") || 12);
+const params = new URLSearchParams(location.search);
+const seconds = Number(params.get("seconds") || 12);
 const since = () => Math.round(performance.now() - start);
 const load = (name) => fetch("/served/" + name)
     .then((r) => r.arrayBuffer())
@@ -33,5 +35,10 @@ const deadline = start + seconds * 1000;
     window.__result = JSON.stringify({
         worstBridgeMs: Math.round(worst), rounds, local: await local, remote: await remote,
     });
+    // Windows runs the app in the desktop session, out of the driver's reach.
+    if (params.get("report")) {
+        await bridge.invoke("fs.writeText", { path: params.get("report"), contents: window.__result });
+        await bridge.invoke("app.quit", {});
+    }
 })();
 </script>

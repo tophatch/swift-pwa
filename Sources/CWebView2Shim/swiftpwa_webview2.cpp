@@ -1020,15 +1020,64 @@ extern "C" void swiftpwa_w2_resource_passthrough(
     if (pending.deferral) pending.deferral->Complete();
 }
 
-extern "C" void swiftpwa_w2_resource_respond_file(
+extern "C" void *swiftpwa_w2_resource_open_file(
+    const wchar_t *path,
+    int64_t offset,
+    int64_t length,
+    int64_t total,
+    int64_t *out_length) {
+    if (out_length) *out_length = length;
+    if (!path) return nullptr;
+    ComPtr<IStream> fileStream;
+    HRESULT shr = SHCreateStreamOnFileEx(
+        path, STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
+        FALSE, nullptr, &fileStream);
+    if (FAILED(shr) || !fileStream) return nullptr;
+    if (offset > 0) {
+        LARGE_INTEGER li;
+        li.QuadPart = offset;
+        fileStream->Seek(li, STREAM_SEEK_SET, nullptr);
+    }
+    if (offset + length >= total) {
+        // Range runs to EOF (or full file): hand WebView2 the seeked
+        // stream to read lazily — a multi-GB file never materializes in
+        // memory (the streaming-video case).
+        return fileStream.Detach();
+    }
+    // Bounded sub-range: read exactly `length` bytes so the 206 body
+    // matches Content-Range. Bounded ranges are small.
+    HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(length));
+    if (!h) return nullptr;
+    void *dst = GlobalLock(h);
+    ULONG read = 0;
+    if (dst) {
+        fileStream->Read(dst, static_cast<ULONG>(length), &read);
+        GlobalUnlock(h);
+    }
+    ComPtr<IStream> mem;
+    if (FAILED(CreateStreamOnHGlobal(h, TRUE, &mem))) {
+        GlobalFree(h);
+        return nullptr;
+    }
+    if (out_length) *out_length = static_cast<int64_t>(read); // honor a short read
+    return mem.Detach();
+}
+
+extern "C" void swiftpwa_w2_resource_stream_release(void *stream) {
+    if (stream) static_cast<IStream *>(stream)->Release();
+}
+
+extern "C" void swiftpwa_w2_resource_respond_stream(
     swiftpwa_w2_view *view,
     uint64_t request_token,
     int32_t status,
     const char *mime_type,
-    const wchar_t *path,
+    void *body,
     int64_t offset,
     int64_t length,
     int64_t total) {
+    ComPtr<IStream> stream;
+    stream.Attach(static_cast<IStream *>(body));
     if (!view || !view->raw) return;
     ViewExtension &ext = get_or_create_extension(view->raw);
     PendingResource pending;
@@ -1048,46 +1097,6 @@ extern "C" void swiftpwa_w2_resource_respond_file(
     if (!env) {
         if (pending.deferral) pending.deferral->Complete();
         return;
-    }
-
-    ComPtr<IStream> stream;
-    if (status != 416 && path) {
-        ComPtr<IStream> fileStream;
-        HRESULT shr = SHCreateStreamOnFileEx(
-            path, STGM_READ | STGM_SHARE_DENY_WRITE, FILE_ATTRIBUTE_NORMAL,
-            FALSE, nullptr, &fileStream);
-        if (SUCCEEDED(shr) && fileStream) {
-            if (offset > 0) {
-                LARGE_INTEGER li;
-                li.QuadPart = offset;
-                fileStream->Seek(li, STREAM_SEEK_SET, nullptr);
-            }
-            if (offset + length >= total) {
-                // Range runs to EOF (or full file): hand WebView2 the
-                // seeked stream to read lazily — a multi-GB file never
-                // materializes in memory (the streaming-video case).
-                stream = fileStream;
-            } else {
-                // Bounded sub-range: read exactly `length` bytes so the
-                // 206 body matches Content-Range. Bounded ranges are small.
-                HGLOBAL h = GlobalAlloc(GMEM_MOVEABLE, static_cast<SIZE_T>(length));
-                if (h) {
-                    void *dst = GlobalLock(h);
-                    ULONG read = 0;
-                    if (dst) {
-                        fileStream->Read(dst, static_cast<ULONG>(length), &read);
-                        GlobalUnlock(h);
-                    }
-                    ComPtr<IStream> mem;
-                    if (SUCCEEDED(CreateStreamOnHGlobal(h, TRUE, &mem))) {
-                        stream = mem;
-                        length = static_cast<int64_t>(read); // honor a short read
-                    } else {
-                        GlobalFree(h);
-                    }
-                }
-            }
-        }
     }
 
     std::wstring headers = L"Accept-Ranges: bytes\r\nAccess-Control-Allow-Origin: *";
@@ -1178,7 +1187,9 @@ extern "C" void swiftpwa_w2_view_intercept_resources(swiftpwa_w2_view *, const w
 extern "C" void swiftpwa_w2_resource_respond(swiftpwa_w2_view *, uint64_t, int32_t, const char *, const uint8_t *, int32_t) {}
 extern "C" char *swiftpwa_w2_resource_range_header(swiftpwa_w2_view *, uint64_t) { return NULL; }
 extern "C" void swiftpwa_w2_resource_passthrough(swiftpwa_w2_view *, uint64_t) {}
-extern "C" void swiftpwa_w2_resource_respond_file(swiftpwa_w2_view *, uint64_t, int32_t, const char *, const wchar_t *, int64_t, int64_t, int64_t) {}
+extern "C" void *swiftpwa_w2_resource_open_file(const wchar_t *, int64_t, int64_t, int64_t, int64_t *) { return NULL; }
+extern "C" void swiftpwa_w2_resource_stream_release(void *) {}
+extern "C" void swiftpwa_w2_resource_respond_stream(swiftpwa_w2_view *, uint64_t, int32_t, const char *, void *, int64_t, int64_t, int64_t) {}
 extern "C" void swiftpwa_w2_view_set_navigation_handler(
     swiftpwa_w2_view *, swiftpwa_w2_navigation_cb, void *) {}
 extern "C" int swiftpwa_w2_open_external(const char *) { return 0; }

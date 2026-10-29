@@ -226,15 +226,37 @@
         /// every `serveDirectory` mount alike, since nothing else serves this
         /// origin. Resolved through the shared router and answered range-aware
         /// off disk.
+        ///
+        /// Only reading the request and answering it happen here. Resolving
+        /// and opening the file run on a background queue: a OneDrive
+        /// placeholder's open waits for its download, and on the UI thread
+        /// that froze the app — bridge replies, window messages, every other
+        /// request — for as long as the download took (#338). The request is
+        /// deferred, so WebView2 waits for the answer without holding anything.
         func _onResourceRequested(uri: String, token: UInt64) {
             guard let view, let url = URL(string: uri) else {
                 if let view { swiftpwa_w2_resource_passthrough(view, token) }
                 return
             }
-            // One lookup covers both roles: the router holds the bundle as its
-            // `/` mount and each served directory under its own prefix, longest
-            // prefix first, and applies the SPA-history fallback for the bundle.
-            guard let resolved = assetProvider.resolve(url) else {
+            let rangeHeader: String? = swiftpwa_w2_resource_range_header(view, token).map { raw in
+                defer { free(raw) }
+                return String(cString: raw)
+            }
+            let provider = assetProvider
+            DispatchQueue.global(qos: .userInitiated).async { [self] in
+                let body = ResourceBody.open(url, rangeHeader: rangeHeader, provider: provider)
+                Task { await MainThread.run { self.respond(token, with: body) } }
+            }
+        }
+
+        /// UI thread. A window closed while its request was being read has
+        /// no view to answer, and only the body needs letting go.
+        private func respond(_ token: UInt64, with body: ResourceBody) {
+            guard let view else {
+                swiftpwa_w2_resource_stream_release(body.stream)
+                return
+            }
+            if body.status == 404 {
                 // Nothing on disk under any mount → an honest 404. (Passing the
                 // request back to WebView2 would be a *network* error here,
                 // since nothing else serves this origin.)
@@ -243,30 +265,10 @@
                 }
                 return
             }
-
-            // Parse the Range header (if any) the same way every backend does.
-            var rangeHeader: String?
-            if let raw = swiftpwa_w2_resource_range_header(view, token) {
-                rangeHeader = String(cString: raw)
-                free(raw)
-            }
-            let resolution = ByteRange.resolve(header: rangeHeader, fileSize: resolved.fileSize)
-
-            let path = resolved.fileURL.withUnsafeFileSystemRepresentation { rep -> String in
-                rep.map { String(cString: $0) } ?? resolved.fileURL.path
-            }
-            let total = resolved.fileSize
-            path.withCString(encodedAs: UTF16.self) { pathW in
-                resolved.mimeType.withCString { mime in
-                    switch resolution {
-                    case .full:
-                        swiftpwa_w2_resource_respond_file(view, token, 200, mime, pathW, 0, total, total)
-                    case let .partial(offset, length):
-                        swiftpwa_w2_resource_respond_file(view, token, 206, mime, pathW, offset, length, total)
-                    case .unsatisfiable:
-                        swiftpwa_w2_resource_respond_file(view, token, 416, mime, pathW, 0, 0, total)
-                    }
-                }
+            body.mimeType.withCString { mime in
+                swiftpwa_w2_resource_respond_stream(
+                    view, token, body.status, mime, body.stream, body.offset, body.length, body.total
+                )
             }
         }
 
@@ -621,6 +623,52 @@
     /// Heap-boxed continuation ferried through `swiftpwa_w2_view_execute_script`.
     /// Marked `@unchecked Sendable` because the continuation is itself
     /// sendable and the box is owned by exactly one party at a time.
+    /// A served request's answer, prepared off the UI thread by
+    /// `WebView2Adapter._onResourceRequested`.
+    struct ResourceBody: @unchecked Sendable {
+        /// 200, 206, 416, or 404 when no mount has the file.
+        let status: Int32
+        let mimeType: String
+        /// The `IStream *` from `swiftpwa_w2_resource_open_file`, owned until
+        /// it's answered with or released; nil for an empty body.
+        let stream: UnsafeMutableRawPointer?
+        let offset: Int64
+        let length: Int64
+        let total: Int64
+
+        /// Resolve `url` and open its body. Blocks on I/O.
+        static func open(_ url: URL, rangeHeader: String?, provider: AssetProvider) -> ResourceBody {
+            // One lookup covers both roles: the router holds the bundle as its
+            // `/` mount and each served directory under its own prefix, longest
+            // prefix first, and applies the SPA-history fallback for the bundle.
+            guard let resolved = provider.resolve(url) else {
+                return ResourceBody(status: 404, mimeType: "", stream: nil, offset: 0, length: 0, total: 0)
+            }
+            let total = resolved.fileSize
+            let status: Int32
+            let offset: Int64
+            let length: Int64
+            switch ByteRange.resolve(header: rangeHeader, fileSize: total) {
+            case .full: (status, offset, length) = (200, 0, total)
+            case let .partial(o, l): (status, offset, length) = (206, o, l)
+            case .unsatisfiable:
+                return ResourceBody(
+                    status: 416, mimeType: resolved.mimeType, stream: nil, offset: 0, length: 0, total: total
+                )
+            }
+            let path = resolved.fileURL.withUnsafeFileSystemRepresentation { rep -> String in
+                rep.map { String(cString: $0) } ?? resolved.fileURL.path
+            }
+            var read = length
+            let stream = path.withCString(encodedAs: UTF16.self) {
+                swiftpwa_w2_resource_open_file($0, offset, length, total, &read)
+            }
+            return ResourceBody(
+                status: status, mimeType: resolved.mimeType, stream: stream, offset: offset, length: read, total: total
+            )
+        }
+    }
+
     final class EvalBox: @unchecked Sendable {
         let continuation: CheckedContinuation<String?, any Error>
         init(continuation: CheckedContinuation<String?, any Error>) {

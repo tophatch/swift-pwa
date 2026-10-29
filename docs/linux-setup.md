@@ -600,8 +600,8 @@ See [app-icons.md](app-icons.md).
 request that stops short of the end of the file is read there too; a whole
 file, or a range to its end, is read by WebKit off it. On local disk that's
 instant, but on a network or FUSE mount (sshfs, a GVFS cloud folder) the app
-waits for the open and those reads. macOS, iOS and Android do all of it off
-their UI thread.
+waits for the open and those reads. macOS, iOS, Android and Windows do all of
+it off their UI thread.
 
 **`fs.thumbnail` gives what the desktop's thumbnailers draw.** It reads the
 shared thumbnail cache (`~/.cache/thumbnails`) first, then runs the

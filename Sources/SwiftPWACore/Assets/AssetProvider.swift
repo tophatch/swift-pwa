@@ -191,7 +191,7 @@ public final class AssetProvider: @unchecked Sendable {
             // that names nothing.
             if Self.isContentURL(mount.root) { continue }
             guard let relative = Self.relativePath(of: path, under: mount.prefix) else { continue }
-            let candidate = mount.root.appendingPathComponent(relative).standardizedFileURL
+            let candidate = mount.root.appendingPathComponent(relative, isDirectory: false).standardizedFileURL
             // Per-mount traversal guard: candidate must stay within root.
             let rootPath = mount.root.path
             let rootPrefix = rootPath.hasSuffix("/") ? rootPath : rootPath + "/"
@@ -209,7 +209,7 @@ public final class AssetProvider: @unchecked Sendable {
             // document's own relative URLs one directory too high.
             if isDirectoryPath {
                 let document = relative.isEmpty ? mount.indexDocument : "index.html"
-                let index = candidate.appendingPathComponent(document).standardizedFileURL
+                let index = candidate.appendingPathComponent(document, isDirectory: false).standardizedFileURL
                 if let size = Self.regularFileSize(index) {
                     return Resolved(fileURL: index, mimeType: Self.mimeType(for: index), fileSize: size)
                 }
@@ -220,7 +220,8 @@ public final class AssetProvider: @unchecked Sendable {
             // hard reload / deep-link of `/settings` loads the app. Only the
             // bundle `/` mount ever sets `spaFallback`.
             if mount.spaFallback, Self.looksLikeNavigation(path) {
-                let fallback = mount.root.appendingPathComponent(mount.indexDocument).standardizedFileURL
+                let fallback = mount.root.appendingPathComponent(mount.indexDocument, isDirectory: false)
+                    .standardizedFileURL
                 if let size = Self.regularFileSize(fallback) {
                     return Resolved(
                         fileURL: fallback, mimeType: Self.mimeType(for: fallback), fileSize: size
@@ -263,10 +264,10 @@ public final class AssetProvider: @unchecked Sendable {
 
         // A real file at this exact path is not a fallback case.
         let relative = String(path.drop(while: { $0 == "/" }))
-        let direct = bundle.root.appendingPathComponent(relative).standardizedFileURL
+        let direct = bundle.root.appendingPathComponent(relative, isDirectory: false).standardizedFileURL
         if Self.regularFileSize(direct) != nil { return nil }
 
-        let fallback = bundle.root.appendingPathComponent(bundle.indexDocument).standardizedFileURL
+        let fallback = bundle.root.appendingPathComponent(bundle.indexDocument, isDirectory: false).standardizedFileURL
         guard let size = Self.regularFileSize(fallback) else { return nil }
         return Resolved(fileURL: fallback, mimeType: Self.mimeType(for: fallback), fileSize: size)
     }
@@ -305,12 +306,15 @@ public final class AssetProvider: @unchecked Sendable {
     /// Byte size of a regular file at `url`, or nil if it's missing or a
     /// directory (so a directory request 404s rather than 500-ing in the
     /// handler's `Data(contentsOf:)`).
+    ///
+    /// Through `SystemFs.facts`, which reads the directory entry on Windows:
+    /// asking `FileManager` there opens the file, and opening a OneDrive
+    /// placeholder downloads it — on the UI thread, where requests are
+    /// resolved (#338).
     private static func regularFileSize(_ url: URL) -> Int64? {
-        let fm = FileManager.default
-        var isDir: ObjCBool = false
-        guard fm.fileExists(atPath: url.path, isDirectory: &isDir), !isDir.boolValue else { return nil }
-        let attrs = try? fm.attributesOfItem(atPath: url.path)
-        return (attrs?[.size] as? NSNumber)?.int64Value ?? 0
+        let path = url.withUnsafeFileSystemRepresentation { $0.map { String(cString: $0) } } ?? url.path
+        guard let facts = SystemFs.facts(atPath: path), !facts.isDir else { return nil }
+        return facts.size ?? 0
     }
 
     public static func mimeType(for url: URL) -> String {

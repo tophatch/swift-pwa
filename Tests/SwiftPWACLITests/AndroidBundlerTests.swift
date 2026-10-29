@@ -220,6 +220,21 @@ struct AndroidBundlerUnitTests {
         #expect(AndroidBundler.swiftVersion(fromSDKBundleID: "android-sdk-no-version") == nil)
     }
 
+    @Test("The staged Swift runtime leaves out the SDK's test frameworks and anything that isn't a .so")
+    func shippableRuntimeLibraries() {
+        // The Swift 6.4 Android SDK's runtime directory, abridged: the stdlib,
+        // Foundation, and the four test-framework libraries `swift test` needs.
+        let sdk = [
+            "libswiftCore.so", "libFoundation.so", "lib_FoundationICU.so", "libswift_Concurrency.so",
+            "libTesting.so", "lib_Testing_Foundation.so", "lib_TestingInterop.so", "libXCTest.so",
+            "Swift.swiftmodule", "libswiftCore.a"
+        ]
+        #expect(
+            AndroidBundler.shippableRuntimeLibraries(sdk)
+                == ["libswiftCore.so", "libFoundation.so", "lib_FoundationICU.so", "libswift_Concurrency.so"]
+        )
+    }
+
     @Test("swiftVersion(fromVersionOutput:) reads both spellings `swift --version` prints")
     func ambientSwiftVersionParse() {
         // When the ambient toolchain already matches the Android SDK the

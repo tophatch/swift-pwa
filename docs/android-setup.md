@@ -1181,6 +1181,10 @@ build down to ~76 MB on `Examples/HelloPWA` (arm64-v8a, debug):
 | **always-on strip (default)**                   | 73 MB     | 80 MB   |
 | **strip + `--prune-android-runtime` (default + opt-in)** | 68 MB | **76 MB** |
 
+The table predates leaving out the SDK's test frameworks (below), which
+takes a further ~2.3 MB per ABI off every row without
+`--prune-android-runtime`.
+
 The always-on strip step runs `llvm-strip --strip-unneeded` on every
 staged `.so` (the user's binary plus the bundled Swift runtime libs)
 inline before gradle sees them. The bundler resolves `llvm-strip` from
@@ -1197,11 +1201,14 @@ it never silently reports a 0% saving. The unstripped binary stays in
 `.build/<triple>/release/<Name>` for `swift symbolicate` to consume during
 crash triage.
 
-The `--prune-android-runtime` flag drops 10 unused stdlib `.so`s
-(`_Differentiation`, `_StringProcessing` build artifacts not in the
-chain, `RegexBuilder`, `Distributed`, `FoundationXML`, `Testing`,
-`XCTest`, `Observation`, `_Volatile`, `_SwiftOnoneSupport`) from the
-26-file wholesale set. The marginal saving on top of strip is small
+The SDK's test frameworks (`Testing`, `_Testing_Foundation`,
+`_TestingInterop`, `XCTest`) are never staged: the SDK ships them so
+`swift test` can cross-compile, and no runtime library depends on them.
+
+The `--prune-android-runtime` flag also drops the stdlib `.so`s the app
+doesn't load (`_Differentiation`, `_StringProcessing` build artifacts
+not in the chain, `RegexBuilder`, `Distributed`, `FoundationXML`,
+`Observation`, `_Volatile`, `_SwiftOnoneSupport`) from the wholesale set. The marginal saving on top of strip is small
 (~5 MB) because the dominating size after stripping is the
 Foundation+ICU stack the binary genuinely pulls in:
 

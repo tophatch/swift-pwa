@@ -38,13 +38,12 @@ struct AndroidBundler {
     let crossCompile: Bool
     /// If true, prune the bundled Swift runtime stdlib to only what
     /// the app's `.so` actually requires via a transitive `DT_NEEDED`
-    /// walk (`readelf -d`). Drops the unstripped wholesale set from
-    /// 124 MB to 113 MB on `Examples/HelloPWA` (10 stdlib `.so` files
-    /// the binary doesn't actually pull in — `_Differentiation`,
-    /// `_StringProcessing`, `RegexBuilder`, `Distributed`,
-    /// `FoundationXML`, `Testing`, `XCTest`, `_Volatile`,
-    /// `Observation`, `_SwiftOnoneSupport`). After stripping is also
-    /// applied (which happens unconditionally in this bundler), the
+    /// walk (`readelf -d`), dropping the stdlib `.so` files the binary
+    /// doesn't pull in (`_Differentiation`, `_StringProcessing`,
+    /// `RegexBuilder`, `Distributed`, `FoundationXML`, `_Volatile`,
+    /// `Observation`, `_SwiftOnoneSupport`). The test frameworks are
+    /// never staged either way (`shippableRuntimeLibraries`). After
+    /// stripping is also applied (which happens unconditionally in this bundler), the
     /// effective APK delta of pruning is ~5 MB on top of the ~50 MB
     /// strip already saves. See `stageSwiftRuntime` /
     /// `prunedRuntimeSet` for the implementation.
@@ -947,7 +946,7 @@ struct AndroidBundler {
         let cxxSharedSrc = ndkLibDir?.appendingPathComponent("libc++_shared.so")
 
         let allRuntimeLibs = (try? FileManager.default.contentsOfDirectory(atPath: runtimeDir.path)) ?? []
-        let availableRuntime = Set(allRuntimeLibs.filter { $0.hasSuffix(".so") })
+        let availableRuntime = Self.shippableRuntimeLibraries(allRuntimeLibs)
 
         let toStage: Set<String>
         if pruneRuntime {
@@ -1005,6 +1004,19 @@ struct AndroidBundler {
             print("staged \(copied) runtime .so files into jniLibs/\(abi)/")
         }
     }
+
+    /// The SDK's runtime `.so` files an app can need at run time: all of them
+    /// but the test frameworks. The SDK ships Swift Testing and XCTest beside
+    /// the stdlib so `swift test` can cross-compile, and nothing outside those
+    /// four depends on them, so a wholesale copy put ~2.3 MB of test harness
+    /// per ABI into every APK.
+    static func shippableRuntimeLibraries(_ names: [String]) -> Set<String> {
+        Set(names.filter { $0.hasSuffix(".so") }).subtracting(testFrameworkLibraries)
+    }
+
+    static let testFrameworkLibraries: Set<String> = [
+        "libTesting.so", "lib_Testing_Foundation.so", "lib_TestingInterop.so", "libXCTest.so"
+    ]
 
     /// Where `libc++_shared.so` and friends live, in preference order.
     ///

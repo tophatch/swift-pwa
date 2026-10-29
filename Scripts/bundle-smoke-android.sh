@@ -15,7 +15,8 @@
 # Checks:
 #   apk-<abi>       the APK has the app's .so, the Swift runtime and
 #                   libc++_shared.so for each ABI, and every library any of
-#                   them needs is either in the APK or one Android provides.
+#                   them needs is either in the APK or one Android provides,
+#                   and none of the SDK's test frameworks rode along.
 #   deployed        `swift-pwa deploy` reports the app running (#313).
 #   bridge          `typeof __SWIFT_PWA__` is "object": bridge.js was found and
 #                   injected into a live page.
@@ -113,6 +114,9 @@ for abi in ${ABIS//,/ }; do
     for want in "lib$APP.so" libswiftCore.so libc++_shared.so; do
         [ -f "$dir/$want" ] || missing+=("$want")
     done
+    for unwanted in libTesting.so lib_Testing_Foundation.so lib_TestingInterop.so libXCTest.so; do
+        [ ! -f "$dir/$unwanted" ] || missing+=("(unwanted) $unwanted")
+    done
     unresolved=()
     for so in "$dir"/*.so; do
         [ -f "$so" ] || continue
@@ -122,7 +126,7 @@ for abi in ${ABIS//,/ }; do
     done
     count=$(find "$dir" -name '*.so' 2>/dev/null | wc -l | tr -d ' ')
     if [ ${#missing[@]} -gt 0 ]; then
-        fail "apk-$abi" "missing ${missing[*]} ($count .so)"
+        fail "apk-$abi" "missing or unwanted: ${missing[*]} ($count .so)"
     elif [ ${#unresolved[@]} -gt 0 ]; then
         fail "apk-$abi" "$(printf '%s; ' "${unresolved[@]}")"
     else

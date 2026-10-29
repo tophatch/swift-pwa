@@ -37,9 +37,12 @@ There is no number this project pins, and deliberately so — the hosts that
 build it cannot agree on one. From Xcode 27 a Mac has no choice at all (see the
 Xcode callout below); a Linux or Windows box is free to sit on whatever its
 toolchain manager gave it. Forcing one release across a fleet buys nothing the
-matching doesn't already do, and CI cannot enforce it either way: the `android`
-CI job is scaffold-only on purpose, because a hosted runner can't cross-compile
-this reliably. Device verification happens on real hardware instead.
+matching doesn't already do. The project's own check pins one only for itself:
+`Scripts/bundle-smoke-android.sh` cross-compiles a fresh `init` app with the
+release the `bundle-smoke-android` workflow names, checks the APK carries every
+library its native code needs, deploys it to an emulator and asks the page
+whether the bridge is there. It gates a release rather than every PR, and runs
+the same way against a USB device (`-s <serial>`).
 
 So the rule is per-host, and the CLI does the matching:
 

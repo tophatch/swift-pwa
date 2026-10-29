@@ -1281,8 +1281,9 @@ jobs:
     # APK behind a green check for months. So the job verifies what the runner
     # can do reliably; the native cross-compile is device-verified (Galaxy Tab
     # S10+) and guarded for local/user builds by `--cross-compile-android`'s
-    # hard-fail-on-skipped-ABI (see AndroidBundler). Restore the cross-compile
-    # step if the runner story improves.
+    # hard-fail-on-skipped-ABI (see AndroidBundler). The cross-compile itself is
+    # checked by bundle-smoke-android.yml, on Swift 6.4's SDK, which gates a
+    # release rather than every PR (#278).
     runs-on: ubuntu-24.04
     needs: macos
     steps:
@@ -1333,8 +1334,9 @@ jobs:
         # + `aapt2`/`d8` via Gradle. The real native cross-compile is covered by
         # `--cross-compile-android`'s hard-fail (see AndroidBundler) for local /
         # user builds and is verified on-device (device-verified on a Galaxy Tab
-        # S10+; a cold build also succeeds on the project's Linux box). If the
-        # runner story improves, restore `--cross-compile-android` here.
+        # S10+; a cold build also succeeds on the project's Linux box). The
+        # cross-compile is checked before each release instead, by
+        # bundle-smoke-android.yml.
         # Cross-compile is off by default (no --cross-compile-android), so the
         # bundler emits the scaffold with empty jniLibs/ — exactly the
         # scaffold-only smoke test we want here.

@@ -74,8 +74,10 @@ fi
 echo "== scaffolding $APP against $REPO =="
 rm -rf "$WORK"; mkdir -p "$WORK"
 (cd "$WORK" && "$CLI" init "$APP" >/dev/null)
-perl -pi -e 's|\.package\(url: "https://github\.com/tophatch/swift-pwa", from: "[^"]*"\)|.package(path: "'"$REPO"'")|' \
-    "$WORK/$APP/Package.swift"
+# A path dependency is named after its directory, so the product reference has
+# to follow a checkout that isn't called swift-pwa.
+perl -pi -e 's|\.package\(url: "https://github\.com/tophatch/swift-pwa", from: "[^"]*"\)|.package(path: "'"$REPO"'")|;
+    s|package: "swift-pwa"|package: "'"$(basename "$REPO")"'"|' "$WORK/$APP/Package.swift"
 grep -q 'package(path:' "$WORK/$APP/Package.swift" \
     || { echo "the scaffold's Package.swift no longer matches the rewrite - it would test the released package" >&2; exit 1; }
 
@@ -136,15 +138,28 @@ if [ "$DEVICE" -eq 1 ]; then
         "${ADB[@]}" logcat -d -t 200 "swift-pwa:I" "AndroidRuntime:E" "*:F" || true
     fi
     eval_js() { python3 "$REPO/Scripts/android-cdp-eval.py" ${SERIAL:+-s "$SERIAL"} "$PKG" "$1" 2>&1 || true; }
+    # A WebView in the background has no DevTools socket, and a foldable can
+    # send a freshly launched app home. Bring the *same* process back to the
+    # front — a crashed one has no pid, and fails here rather than being
+    # relaunched into a pass.
+    pidof() { "${ADB[@]}" shell pidof "$PKG" | tr -d '\r' || true; }
+    pid="$(pidof)"
+    out="the app's process is gone after deploy"
     # The page may still be loading when deploy returns.
     for _ in $(seq 1 30); do
+        [ -n "$pid" ] || break
+        now="$(pidof)"
+        [ "$now" = "$pid" ] || { out="the app's process changed (${pid} -> ${now:-none}): it died"; break; }
+        "${ADB[@]}" shell am start -n "$PKG/.MainActivity" >/dev/null 2>&1
         out="$(eval_js 'typeof __SWIFT_PWA__')"
-        [[ "$out" == *object* ]] && break
+        [ "$out" = '"object"' ] && break
         sleep 1
     done
-    if [[ "$out" == *object* ]]; then pass bridge "typeof __SWIFT_PWA__ = object"; else fail bridge "$out"; fi
-    out="$(eval_js "(async()=>JSON.stringify(await __SWIFT_PWA__.invoke('__platform.info')))()")"
-    if [[ "$out" == *android* ]]; then pass invoke "__platform.info answered from Swift"; else fail invoke "$out"; fi
+    if [ "$out" = '"object"' ]; then pass bridge "typeof __SWIFT_PWA__ = object"; else fail bridge "$out"; fi
+    # Compared whole: an error from the helper names the package, which
+    # contains "android" too.
+    out="$(eval_js "(async()=>(await __SWIFT_PWA__.invoke('__platform.info')).os)()")"
+    if [ "$out" = '"android"' ]; then pass invoke "__platform.info answered os=android from Swift"; else fail invoke "$out"; fi
 fi
 
 echo

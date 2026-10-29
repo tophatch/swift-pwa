@@ -22,9 +22,15 @@
     /// the `WKURLSchemeTask` hops to the main thread, one chunk at a time, so a
     /// read never runs more than a chunk ahead of WebKit and memory stays
     /// bounded.
+    ///
+    /// `@MainActor` written out, not left to inference: Swift 6.1 infers it
+    /// from the `WKURLSchemeHandler` conformance and 6.3 doesn't, so only an
+    /// explicit annotation makes both compilers check the same thing. The
+    /// worker side is `nonisolated`.
+    @MainActor
     public final class WKSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
         private let provider: AssetProvider
-        private static let chunkSize = 256 * 1024
+        private nonisolated static let chunkSize = 256 * 1024
         private let queue = DispatchQueue(
             label: "swift-pwa.scheme-handler", qos: .userInitiated, attributes: .concurrent
         )

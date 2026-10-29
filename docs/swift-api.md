@@ -459,6 +459,11 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   before the page ever sees it (measured — the fetch fails outright, with no
   diagnostic anywhere). Seeking works either way, which is what the header is
   for; a client that branches on `206` takes its whole-file path there.
+- A served file's bytes don't have to be on local disk. An iCloud Drive or
+  other cloud placeholder downloads when it is read, and a network volume is
+  slow to read, so the read happens off the UI thread: the app keeps
+  answering and other requests don't wait behind it. Each served request is
+  read on a thread of its own on macOS, iOS and Android.
 - The prefix is fully app-chosen (anything but the bundle root `/`).
 - Content types are derived from the file extension and cover the web-facing
   set — HTML/JS/CSS/JSON/WASM, PNG/JPEG/WebP/GIF/SVG/ICO, HEIC/HEIF/AVIF, the

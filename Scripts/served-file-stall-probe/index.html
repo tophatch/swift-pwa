@@ -1,0 +1,37 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>served file stall check</title>
+<body style="font:17px system-ui;padding:24px">
+Served-file stall check (#338). The script reads <code>window.__result</code>.
+<script>
+// Asks for the file that has to be fetched first and the local one right
+// behind it, the way a reader prefetches its next page, then times a bridge
+// round trip every 50ms. Each round trip needs the app's main thread, so the
+// worst one is how long that thread was held.
+const bridge = window.__SWIFT_PWA__;
+const start = performance.now();
+const seconds = Number(new URLSearchParams(location.search).get("seconds") || 12);
+const since = () => Math.round(performance.now() - start);
+const load = (name) => fetch("/served/" + name)
+    .then((r) => r.arrayBuffer())
+    .then((b) => ({ ms: since(), bytes: b.byteLength }), (e) => ({ ms: since(), error: String(e) }));
+
+const remote = load("remote.bin");
+const local = load("local.bin");
+
+let worst = 0;
+let rounds = 0;
+const deadline = start + seconds * 1000;
+(async () => {
+    while (performance.now() < deadline) {
+        const t = performance.now();
+        await bridge.invoke("__platform.info");
+        worst = Math.max(worst, performance.now() - t);
+        rounds += 1;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+    }
+    window.__result = JSON.stringify({
+        worstBridgeMs: Math.round(worst), rounds, local: await local, remote: await remote,
+    });
+})();
+</script>

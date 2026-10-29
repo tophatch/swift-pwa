@@ -90,7 +90,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   promise, as the macOS and Linux jobs do, so a page that never loads or a
   bridge that never injects fails a PR on Windows too. Over SSH (session 0)
   the same leg fails with `CreateCoreWebView2Controller failed: 0x80070578`,
-  which is the control that it can tell.
+  which is the control that it can tell. The extra build is one more chance
+  for swift-build's planning stall on the hosted runners (see Windows setup),
+  which ends on its own after up to 45 minutes, so the job's limit is now 90
+  minutes: at 60, one run in ten was cancelled on its way to passing.
 - **`bundle-smoke` keeps the evidence when a launch is killed** (#329). The
   catalog dump sometimes dies with status 9 the moment the freshly linked app
   starts, and what killed it is recorded only on the runner. On failure the

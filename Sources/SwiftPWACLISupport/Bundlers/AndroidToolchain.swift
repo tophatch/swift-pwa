@@ -309,6 +309,10 @@ enum AndroidToolchain {
             roots.append("\(xdg)/swiftpm/swift-sdks")
         }
         roots.append("\(home)/.local/share/swiftpm/swift-sdks")
+        // XDG *config* location: where SwiftPM keeps them on Linux when there
+        // is no `~/.swiftpm`, as on a fresh CI runner with no swiftly.
+        let config = env["XDG_CONFIG_HOME"].flatMap { $0.isEmpty ? nil : $0 } ?? "\(home)/.config"
+        roots.append("\(config)/swiftpm/swift-sdks")
         if let appData = env["APPDATA"], !appData.isEmpty {
             roots.append("\(appData)/org.swift.swiftpm/swift-sdks")
         }

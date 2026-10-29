@@ -1,0 +1,110 @@
+name: Android bundle smoke
+
+# Cross-compiles a fresh `swift-pwa init` app for Android through the CLI,
+# deploys it to an emulator and asks the page whether the bridge is there
+# (#278). Scripts/bundle-smoke-android.sh does the work and says what each check
+# catches.
+#
+# Not on the PR gate: a cross-compile of two ABIs plus an emulator boot is too
+# long to make every PR wait for. It gates a release instead — release.yml calls
+# it, and publishes nothing unless it passes — and runs by hand from the Actions
+# tab, which is the way to find out before tagging rather than after.
+on:
+  workflow_call:
+  workflow_dispatch:
+
+jobs:
+  bundle-smoke-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      # The Swift Android SDK only loads under the exact release it was built
+      # with, so these two move together. The SDK's URL isn't derivable from
+      # releases.json: take it, and its checksum, from the "Swift SDK for
+      # Android" link on https://www.swift.org/install/linux/.
+      SWIFT_RELEASE: "6.4.0"
+      SWIFT_ANDROID_SDK_URL: "https://download.swift.org/swift-6.4.0-release/android-sdk/swift-6.4.0-RELEASE/swift-6.4.0-RELEASE_android.artifactbundle.tar.gz"
+      SWIFT_ANDROID_SDK_CHECKSUM: "21fb555122a3d801ad943d48df7ebffdd8824de61c25c180bb792d3edaee0b43"
+      # The emulator runs the x86_64 slice; arm64-v8a is what devices run, so
+      # it's built and checked too, just not launched.
+      EMULATOR_IMAGE: "system-images;android-34;google_apis;x86_64"
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Swift
+        # The tarball directly, for the reasons in ci.yml's next-toolchain-linux
+        # job: setup-swift doesn't have 6.4, and swiftly 404s on x.y.0.
+        run: |
+          set -euo pipefail
+          sudo apt-get update
+          sudo apt-get install -y libcurl4-openssl-dev libncurses-dev libpython3-dev libxml2-dev
+          base="https://download.swift.org/swift-${SWIFT_RELEASE}-release/ubuntu2404"
+          name="swift-${SWIFT_RELEASE}-RELEASE-ubuntu24.04"
+          curl -fsSL "${base}/swift-${SWIFT_RELEASE}-RELEASE/${name}.tar.gz" -o /tmp/swift.tar.gz
+          sudo mkdir -p /opt/swift
+          sudo tar xzf /tmp/swift.tar.gz -C /opt/swift --strip-components=1
+          echo "/opt/swift/usr/bin" >> "$GITHUB_PATH"
+      - name: Install the Swift Android SDK
+        run: |
+          swift --version
+          swift sdk install "$SWIFT_ANDROID_SDK_URL" --checksum "$SWIFT_ANDROID_SDK_CHECKSUM"
+          swift sdk list
+          # Where SwiftPM put it: the bundler has to find the same directory to
+          # stage the Swift runtime into the APK.
+          swift sdk configure --show-configuration swift-6.4.0-RELEASE_android x86_64-unknown-linux-android28 \
+            | grep swiftResourcesPath
+      - name: Use the runner's newest NDK
+        run: |
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+          grep Pkg.Revision "$ANDROID_NDK_LATEST_HOME/source.properties"
+      - name: Set up JDK 17
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+      - name: Build the CLI
+        run: swift build --product swift-pwa
+      - name: Start an emulator
+        # By hand rather than through a third-party action: KVM for the
+        # runner user, the image, and a wait for boot_completed.
+        run: |
+          set -euo pipefail
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' \
+            | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+          sdk="$ANDROID_HOME/cmdline-tools/latest/bin"
+          # adb isn't on the runner's PATH; the smoke script needs it too.
+          export PATH="$ANDROID_HOME/platform-tools:$PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          # `yes` dies of SIGPIPE once sdkmanager stops reading, which pipefail
+          # would count as the step failing; sdkmanager's own status still does.
+          { yes || true; } | "$sdk/sdkmanager" --licenses > /dev/null
+          "$sdk/sdkmanager" "emulator" "platform-tools" "$EMULATOR_IMAGE" > /dev/null
+          # One place for both tools: on the runner, avdmanager and the emulator
+          # otherwise look for AVDs in different directories.
+          export ANDROID_USER_HOME="$RUNNER_TEMP/android-user"
+          export ANDROID_AVD_HOME="$ANDROID_USER_HOME/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          echo no | "$sdk/avdmanager" create avd -n smoke -k "$EMULATOR_IMAGE" --device pixel_6
+          "$ANDROID_HOME/emulator/emulator" -list-avds | grep -qx smoke \
+            || { echo "::error::the emulator can't see the AVD avdmanager made"; ls -R "$ANDROID_USER_HOME"; exit 1; }
+          log="$RUNNER_TEMP/emulator.log"
+          nohup "$ANDROID_HOME/emulator/emulator" -avd smoke -no-window -no-audio -no-boot-anim \
+            -no-snapshot -gpu swiftshader_indirect > "$log" 2>&1 &
+          emu=$!
+          # Bounded, and watching the emulator itself: `adb wait-for-device`
+          # waits forever for one that already exited.
+          booted=0
+          for _ in $(seq 1 120); do
+            kill -0 "$emu" 2>/dev/null || { echo "::error::the emulator exited"; cat "$log"; exit 1; }
+            [ "$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')" = 1 ] && { booted=1; break; }
+            sleep 5
+          done
+          [ "$booted" = 1 ] || { tail -80 "$log"; echo "::error::the emulator never finished booting"; exit 1; }
+          adb shell getprop ro.build.version.release
+      - name: Cross-compile, deploy and drive a fresh app
+        run: Scripts/bundle-smoke-android.sh --cli "$GITHUB_WORKSPACE/.build/debug/swift-pwa" --work "$RUNNER_TEMP/smoke" -k
+      - name: Logs from the device
+        if: failure()
+        # Bounded: with no device attached, adb waits for one indefinitely.
+        run: timeout 30 adb logcat -d -t 400 || true

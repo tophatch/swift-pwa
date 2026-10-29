@@ -295,6 +295,16 @@ struct AndroidToolchainTests {
         #expect(roots.contains("/home/u/.swiftpm/swift-sdks"))
     }
 
+    @Test("the XDG config root is probed, where a Linux host with no ~/.swiftpm keeps its SDKs")
+    func sdkRootsIncludeXDGConfig() {
+        #expect(AndroidToolchain.swiftSDKRoots(env: ["HOME": "/home/u"]).contains("/home/u/.config/swiftpm/swift-sdks"))
+        let custom = AndroidToolchain.swiftSDKRoots(env: ["HOME": "/home/u", "XDG_CONFIG_HOME": "/cfg"])
+        #expect(custom.contains("/cfg/swiftpm/swift-sdks"))
+        let p = Self.probes(dirs: ["/home/u/.config/swiftpm/swift-sdks/swift-6.4.0-RELEASE_android.artifactbundle"])
+        #expect(AndroidToolchain.installedAndroidSDK(env: ["HOME": "/home/u"], probes: p)?.bundle
+            == "swift-6.4.0-RELEASE_android")
+    }
+
     @Test("ranks the exact release toolchain ahead of a patch-versioned one")
     func toolchainRanking() {
         let p = Self.probes(dirs: [

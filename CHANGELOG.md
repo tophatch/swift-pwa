@@ -81,6 +81,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `viewport-fit=cover`; shifting the macOS crop by 30 points, and dropping the
   iOS safe-area inset, each fail them. `PWAWebView.captureSnapshot()` became
   `captureSnapshot(region:)`, with the no-argument form kept as an extension.
+- **A release cross-compiles a fresh app for Android and runs it** (#278).
+  Nothing in CI took the path an adopter's `swift-pwa build --target android
+  --cross-compile-android` takes: the `android` job builds the Gradle scaffold
+  without the Swift cross-compile, because the 6.2 SDK failed on the hosted
+  runner. `Scripts/bundle-smoke-android.sh` scaffolds an app against the
+  checkout, cross-compiles both ABIs with Swift 6.4 and its SDK, checks that each
+  ABI's `.so` files carry everything they link against (an APK missing
+  `libc++_shared.so` shipped this way once), deploys to an emulator, and asks
+  the page for `__SWIFT_PWA__` and a round trip through Swift. A deploy that
+  leaves no running process fails rather than being relaunched into a pass.
+  The `bundle-smoke-android` workflow runs it; `release.yml` publishes nothing
+  unless it passes. It's kept off the PR gate, which is long enough already,
+  and can be run by hand from the Actions tab before tagging.
 - **CI drives a bundled Windows app** (#277). `bundle-smoke-windows` only
   launched its bundles with `SWIFT_PWA_DESCRIBE`, which exits before any
   window, on the assumption that a hosted runner has no desktop for WebView2
@@ -117,6 +130,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **An APK cross-compiled on Linux had no Swift runtime in it** (#278), and
+  said so only in a note. SwiftPM keeps its Swift SDKs in `~/.config/swiftpm`
+  on a Linux host with no `~/.swiftpm` — a fresh machine, or CI without
+  swiftly — and that was the one place the bundler didn't look. The build
+  succeeded, staged nothing but the app's own `.so`, and the app died at
+  `System.loadLibrary`. The bundler now looks there, and a missing SDK bundle
+  is a hard error naming every directory it searched, like a missing
+  `libc++_shared.so` already was. Found by the new release check above, on its
+  first run.
 - **macOS showed WebKit's gray and white before the first paint, never
   `window.background_color`** (#327). `WKWebView` fills its bounds with its
   own background until the page paints, over the window, layer and

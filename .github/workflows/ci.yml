@@ -321,8 +321,13 @@ jobs:
     # can do it, the CLI's own debug build included, so the job can't be
     # required until that's fixed upstream. The script logs each phase's time
     # and samples the build processes once a minute, to say where.
+    #
+    # 90 minutes, not 60: the stall ends on its own, so a run that hits the
+    # limit would have passed. With -Drive the job makes four builds that can
+    # each stall; of 40 runs, three ran out at 60 minutes and three more
+    # finished between 53 and 58.
     runs-on: windows-2022
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v5
       - name: Set up MSVC environment (x64)

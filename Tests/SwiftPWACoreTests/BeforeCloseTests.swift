@@ -7,6 +7,10 @@ import Testing
 /// `willClose`, and a quit never closed a window at all, so nothing an app had
 /// batched reached disk (#281). These cover the two halves that fix it: the
 /// bridge letting a departing document finish, and the Swift handlers' budget.
+///
+/// A time bound here separates "returned on its own" from "rode the deadline",
+/// so it sits halfway to a deadline far beyond the work, never just above the
+/// work: a loaded CI runner has stretched a 200 ms command to 1.4 s.
 @Suite("Before close", .serialized)
 @MainActor
 struct BeforeCloseTests {
@@ -49,7 +53,7 @@ struct BeforeCloseTests {
         try await waitForCondition { bridge.documentEpoch == "doc-a" }
 
         let started = ContinuousClock.now
-        await bridge.letDocumentFinish(until: .now + .seconds(2)) {
+        await bridge.letDocumentFinish(until: .now + .seconds(10)) {
             // What the page's `pagehide` handler posts, then the blank
             // document announcing itself — in the order the engine delivers.
             try? webView.sendInvoke(id: 1, command: "probe.slowWrite", payload: Marker(value: "saved"), epoch: "doc-a")
@@ -57,7 +61,7 @@ struct BeforeCloseTests {
         }
 
         #expect(recorder.values == ["saved"])
-        #expect(ContinuousClock.now - started < .seconds(1), "it should return once the write is done")
+        #expect(ContinuousClock.now - started < .seconds(5), "it should return once the write is done")
     }
 
     @Test("an ordinary navigation still cancels the old document's invokes")
@@ -83,7 +87,7 @@ struct BeforeCloseTests {
         await bridge.letDocumentFinish(until: .now + .milliseconds(150)) {}
         let elapsed = ContinuousClock.now - started
         #expect(elapsed >= .milliseconds(150))
-        #expect(elapsed < .seconds(1))
+        #expect(elapsed < .seconds(5))
     }
 
     @Test("handlers run concurrently, and a hung one doesn't hold the close")
@@ -109,13 +113,13 @@ struct BeforeCloseTests {
 
         #expect(Set(recorder.values) == ["a quit", "b"])
         #expect(elapsed >= .milliseconds(300))
-        #expect(elapsed < .seconds(2))
+        #expect(elapsed < .seconds(5))
     }
 
     @Test("with nothing registered, a close doesn't wait at all")
     func noHandlersNoWait() async {
         let started = ContinuousClock.now
-        await CloseHandlers().run(.quit, until: .now + .seconds(5))
-        #expect(ContinuousClock.now - started < .milliseconds(100))
+        await CloseHandlers().run(.quit, until: .now + .seconds(10))
+        #expect(ContinuousClock.now - started < .seconds(5))
     }
 }

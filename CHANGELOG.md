@@ -130,6 +130,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On macOS and iOS, a served file still in iCloud froze the app until it
+  downloaded** (#338). The `pwa://` scheme handler read every file on the main
+  thread, and a cloud placeholder (iCloud Drive or any File Provider) has a
+  real name and size and no bytes, so reading it *is* downloading it. Bridge
+  replies, `drive` verbs, window resizes and an iPad's rotation all waited, and
+  so did every other request, because they were served one at a time: a
+  reader prefetching its next picture held up the one on screen. Each request
+  is now resolved, opened and read on a concurrent queue, and only delivery
+  hops to the main thread, a chunk at a time so memory stays bounded. A request
+  WebKit stops while its read is pending is never messaged again, which WebKit
+  would raise an exception for. Measured on macOS with a 6 MB file evicted
+  from iCloud Drive: worst bridge round trip 1,363 ms → 50 ms, and the local
+  file requested behind it 1,365 ms → 51 ms. `Scripts/verify-served-file-stall.sh`
+  reruns that; `--released` is the control.
 - **An APK cross-compiled on Linux had no Swift runtime in it** (#278), and
   said so only in a note. SwiftPM keeps its Swift SDKs in `~/.config/swiftpm`
   on a Linux host with no `~/.swiftpm` — a fresh machine, or CI without

@@ -139,8 +139,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   whole file or a range to its end was already read by WebKit off the main
   thread. Measured on GTK3 with a 6 MB file behind a FUSE mount that takes
   1.5 s per lookup and open: worst bridge round trip 4,510 ms → 11 ms, and the
-  local file requested behind it 4,529 ms → 24 ms. `GTKSchemeServingTests`
-  covers it on both GTK backends, with a FIFO as the file that isn't there
+  local file requested behind it 4,529 ms → 24 ms.
+  `Scripts/verify-served-file-stall-linux.sh` reruns that on the box itself;
+  `--released` is the control. Unlike its macOS and Windows twins it downloads
+  fusepy (checksum-pinned, cached outside the repo) to make the slow mount,
+  and needs libfuse 2. `GTKSchemeServingTests` covers the handler on both GTK
+  backends with nothing to install, using a FIFO as the file that isn't there
   yet.
 - **On Linux, a `pwa://` request for a missing file never settled.** The
   handler failed it with no error, which WebKitGTK rejects with a CRITICAL

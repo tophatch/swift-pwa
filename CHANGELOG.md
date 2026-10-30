@@ -130,6 +130,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Linux, a served file on a slow mount froze the app** (#338), the same
+  fault as on Windows, macOS and iOS below. The `pwa://` handler looked the
+  file up, opened it and read a bounded range on the GTK main thread, and on a
+  network or FUSE mount each of those waits on the network. The request is
+  now resolved, opened and read on a background queue, and only the answer
+  goes back to the main thread, which a WebKitGTK scheme request allows. A
+  whole file or a range to its end was already read by WebKit off the main
+  thread. Measured on GTK3 with a 6 MB file behind a FUSE mount that takes
+  1.5 s per lookup and open: worst bridge round trip 4,510 ms → 11 ms, and the
+  local file requested behind it 4,529 ms → 24 ms. `GTKSchemeServingTests`
+  covers it on both GTK backends, with a FIFO as the file that isn't there
+  yet.
+- **On Linux, a `pwa://` request for a missing file never settled.** The
+  handler failed it with no error, which WebKitGTK rejects with a CRITICAL
+  and then leaves the request open, so a `fetch` of it never resolved or
+  rejected. It now fails as a network error, as on Apple. Found by the new
+  tests.
 - **On Windows, a range to the end of a served file got the whole file**, under
   a `206` whose `Content-Range` said otherwise, so every seek in a served
   `<video>` past the start read from byte 0 again. The handler seeked the file

@@ -463,38 +463,26 @@ static inline char *swiftpwa_uri_request_range_header(WebKitURISchemeRequest *re
     return range ? g_strdup(range) : NULL;
 }
 
-/// Finish `request` by streaming `length` bytes of the file at `path`
-/// starting at `offset`, with HTTP `status` (200 or 206) and `mime`. Reads
-/// straight from disk via a seekable `GFileInputStream` — the file is never
-/// fully buffered in memory. Adds `Accept-Ranges: bytes` and, for 206, a
-/// `Content-Range: bytes <offset>-<offset+length-1>/<total>` header.
-/// `webkit_uri_scheme_response_new` takes its own ref on the stream
-/// (transfer-none) so we release ours; `set_http_headers` is transfer-full
-/// so we don't. Returns 1 on success, 0 after finishing with an error.
-static inline int swiftpwa_uri_request_finish_file(
-    WebKitURISchemeRequest *request,
+/// Open the body of a served file: `*length` bytes of the file at `path`
+/// from `offset`, read straight from disk — never buffered whole. Blocks on
+/// I/O: opening a file whose bytes aren't local yet (a network or FUSE mount)
+/// waits for them, so this runs off the main thread, and the request is
+/// finished on it with `swiftpwa_uri_request_finish_stream`. Returns NULL with
+/// `*error` set on failure; the caller owns both.
+static inline GInputStream *swiftpwa_uri_open_file(
     const char *path,
     gint64 offset,
-    gint64 length,
+    gint64 *length,
     gint64 total,
-    int status,
-    const char *mime
+    GError **error
 ) {
     GFile *file = g_file_new_for_path(path);
-    GError *error = NULL;
-    GFileInputStream *fstream = g_file_read(file, NULL, &error);
+    GFileInputStream *fstream = g_file_read(file, NULL, error);
     g_object_unref(file);
-    if (!fstream) {
-        webkit_uri_scheme_request_finish_error(request, error);
-        if (error) g_error_free(error);
-        return 0;
-    }
-    if (offset > 0 &&
-        !g_seekable_seek(G_SEEKABLE(fstream), offset, G_SEEK_SET, NULL, &error)) {
-        webkit_uri_scheme_request_finish_error(request, error);
-        if (error) g_error_free(error);
+    if (!fstream) return NULL;
+    if (offset > 0 && !g_seekable_seek(G_SEEKABLE(fstream), offset, G_SEEK_SET, NULL, error)) {
         g_object_unref(fstream);
-        return 0;
+        return NULL;
     }
 
     // WebKit reads the response stream to EOF (stream_length is only a
@@ -505,25 +493,34 @@ static inline int swiftpwa_uri_request_finish_file(
     // bounded sub-range (ends before EOF) must be capped: read just those
     // bytes (bounded ranges are small) so the 206 body matches
     // Content-Range.
-    GInputStream *body = NULL;
-    if (offset + length >= total) {
-        body = G_INPUT_STREAM(fstream); // ownership flows to `body`
-    } else {
-        gpointer buf = g_malloc((gsize)length);
-        gsize got = 0;
-        gboolean ok = g_input_stream_read_all(
-            G_INPUT_STREAM(fstream), buf, (gsize)length, &got, NULL, &error);
-        g_object_unref(fstream);
-        if (!ok) {
-            g_free(buf);
-            webkit_uri_scheme_request_finish_error(request, error);
-            if (error) g_error_free(error);
-            return 0;
-        }
-        body = g_memory_input_stream_new_from_data(buf, (gssize)got, g_free);
-        length = (gint64)got; // honor a short read in the headers below
+    if (offset + *length >= total) return G_INPUT_STREAM(fstream);
+    gpointer buf = g_malloc((gsize)*length);
+    gsize got = 0;
+    gboolean ok = g_input_stream_read_all(G_INPUT_STREAM(fstream), buf, (gsize)*length, &got, NULL, error);
+    g_object_unref(fstream);
+    if (!ok) {
+        g_free(buf);
+        return NULL;
     }
+    *length = (gint64)got; // honor a short read in the headers
+    return g_memory_input_stream_new_from_data(buf, (gssize)got, g_free);
+}
 
+/// Finish `request` with `body` from `swiftpwa_uri_open_file`, HTTP `status`
+/// (200 or 206) and `mime`. Adds `Accept-Ranges: bytes` and, for 206, a
+/// `Content-Range: bytes <offset>-<offset+length-1>/<total>` header. Consumes
+/// the caller's ref on `body`: `webkit_uri_scheme_response_new` takes its own
+/// (transfer-none); `set_http_headers` is transfer-full so we don't release
+/// the headers.
+static inline void swiftpwa_uri_request_finish_stream(
+    WebKitURISchemeRequest *request,
+    GInputStream *body,
+    gint64 offset,
+    gint64 length,
+    gint64 total,
+    int status,
+    const char *mime
+) {
     WebKitURISchemeResponse *response = webkit_uri_scheme_response_new(body, length);
     webkit_uri_scheme_response_set_status(response, (guint)status, NULL);
     if (mime) webkit_uri_scheme_response_set_content_type(response, mime);
@@ -543,7 +540,16 @@ static inline int swiftpwa_uri_request_finish_file(
     webkit_uri_scheme_request_finish_with_response(request, response);
     g_object_unref(response);
     g_object_unref(body);
-    return 1;
+}
+
+/// Finish `request` as a failed load, which `fetch` sees as a network error
+/// — as on Apple. `webkit_uri_scheme_request_finish_error` rejects a NULL
+/// error with a CRITICAL and leaves the request unfinished, so a miss would
+/// otherwise never settle.
+static inline void swiftpwa_uri_request_finish_not_found(WebKitURISchemeRequest *request) {
+    GError *error = g_error_new_literal(G_IO_ERROR, G_IO_ERROR_NOT_FOUND, "not found");
+    webkit_uri_scheme_request_finish_error(request, error);
+    g_error_free(error);
 }
 
 /// Finish `request` with `416 Range Not Satisfiable` (empty body +

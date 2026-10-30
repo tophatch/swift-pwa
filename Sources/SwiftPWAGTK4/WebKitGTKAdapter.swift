@@ -470,46 +470,111 @@
         let provider: AssetProvider
         init(provider: AssetProvider) { self.provider = provider }
 
-        func handle(request: OpaquePointer) {
-            guard let urlCStr = webkit_uri_scheme_request_get_uri(request) else {
-                webkit_uri_scheme_request_finish_error(request, nil)
-                return
-            }
-            let urlString = String(cString: urlCStr)
-            guard let url = URL(string: urlString), let resolved = provider.resolve(url) else {
-                webkit_uri_scheme_request_finish_error(request, nil)
+        /// Main thread. Only reading the request happens here: resolving the
+        /// file, opening it and reading a bounded range all go to a worker,
+        /// because a file on a network or FUSE mount can take seconds to
+        /// answer, and this thread paints every window (#338). A scheme
+        /// request is asynchronous by design, so it is held and finished back
+        /// on the main thread once its body is ready.
+        func handle(request: SchemeRequest) {
+            guard let urlCStr = webkit_uri_scheme_request_get_uri(request),
+                  let url = URL(string: String(cString: urlCStr))
+            else {
+                swiftpwa_uri_request_finish_not_found(request)
                 return
             }
 
             // Honor HTTP Range so large served media (a content pack's
             // `.webm`) seeks/streams instead of buffering — the shim reads
             // the byte range straight from disk.
-            var rangeHeader: String?
-            if let cstr = swiftpwa_uri_request_range_header(request) {
-                rangeHeader = String(cString: cstr)
-                g_free(cstr)
+            let rangeHeader: String? = swiftpwa_uri_request_range_header(request).map { cstr in
+                defer { g_free(cstr) }
+                return String(cString: cstr)
             }
 
-            let status: Int32
-            let offset: Int64
-            let length: Int64
-            switch ByteRange.resolve(header: rangeHeader, fileSize: resolved.fileSize) {
-            case .full: (status, offset, length) = (200, 0, resolved.fileSize)
-            case let .partial(o, l): (status, offset, length) = (206, o, l)
-            case .unsatisfiable:
-                swiftpwa_uri_request_finish_range_not_satisfiable(request, gint64(resolved.fileSize))
-                return
+            let pending = PendingSchemeRequest(request)
+            let provider = provider
+            DispatchQueue.global(qos: .userInitiated).async {
+                let body = ServedBody.open(url, rangeHeader: rangeHeader, provider: provider)
+                Task { await MainThread.run { pending.finish(with: body) } }
             }
+        }
+    }
 
-            resolved.fileURL.path.withCString { pathC in
-                resolved.mimeType.withCString { mimeC in
-                    _ = swiftpwa_uri_request_finish_file(
-                        request, pathC, gint64(offset), gint64(length), gint64(resolved.fileSize), status, mimeC
+    /// A scheme request waiting on its body, with a reference of its own so
+    /// it outlives a window closed in the meantime.
+    private final class PendingSchemeRequest: @unchecked Sendable {
+        private let request: SchemeRequest
+
+        init(_ request: SchemeRequest) {
+            _ = g_object_ref(UnsafeMutableRawPointer(request))
+            self.request = request
+        }
+
+        deinit { g_object_unref(UnsafeMutableRawPointer(request)) }
+
+        /// Main thread.
+        func finish(with body: ServedBody) {
+            switch body {
+            case .notFound:
+                swiftpwa_uri_request_finish_not_found(request)
+            case let .failed(error):
+                webkit_uri_scheme_request_finish_error(request, error)
+                if let error { g_error_free(error) }
+            case let .unsatisfiable(total):
+                swiftpwa_uri_request_finish_range_not_satisfiable(request, gint64(total))
+            case let .file(stream, status, mimeType, offset, length, total):
+                mimeType.withCString { mime in
+                    swiftpwa_uri_request_finish_stream(
+                        request, stream, gint64(offset), gint64(length), gint64(total), status, mime
                     )
                 }
             }
         }
     }
+
+    /// What a worker found for one scheme request. Owns the stream or error
+    /// it carries until `PendingSchemeRequest.finish(with:)` hands it on.
+    private enum ServedBody: @unchecked Sendable {
+        case notFound
+        case failed(UnsafeMutablePointer<GError>?)
+        case unsatisfiable(total: Int64)
+        case file(
+            stream: UnsafeMutablePointer<GInputStream>,
+            status: Int32,
+            mimeType: String,
+            offset: Int64,
+            length: Int64,
+            total: Int64
+        )
+
+        /// Resolve `url` and open its body. Blocks on I/O.
+        static func open(_ url: URL, rangeHeader: String?, provider: AssetProvider) -> ServedBody {
+            guard let resolved = provider.resolve(url) else { return .notFound }
+            let total = resolved.fileSize
+            let status: Int32
+            let offset: Int64
+            let length: Int64
+            switch ByteRange.resolve(header: rangeHeader, fileSize: total) {
+            case .full: (status, offset, length) = (200, 0, total)
+            case let .partial(o, l): (status, offset, length) = (206, o, l)
+            case .unsatisfiable: return .unsatisfiable(total: total)
+            }
+            var read = gint64(length) // shortened by a short read
+            var error: UnsafeMutablePointer<GError>?
+            let stream = resolved.fileURL.path.withCString { path in
+                swiftpwa_uri_open_file(path, gint64(offset), &read, gint64(total), &error)
+            }
+            guard let stream else { return .failed(error) }
+            return .file(
+                stream: stream, status: status, mimeType: resolved.mimeType, offset: offset, length: Int64(read),
+                total: total
+            )
+        }
+    }
+
+    /// `WebKitURISchemeRequest *` as this WebKitGTK imports it.
+    private typealias SchemeRequest = OpaquePointer
 
     /// Heap box carrying a `CheckedContinuation` across the C boundary
     /// for `swiftpwa_evaluate_javascript`.

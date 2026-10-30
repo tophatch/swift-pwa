@@ -461,11 +461,8 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   for; a client that branches on `206` takes its whole-file path there.
 - A served file's bytes don't have to be on local disk. An iCloud Drive or
   other cloud placeholder downloads when it is read, and a network volume is
-  slow to read, so the read happens off the UI thread: the app keeps
-  answering and other requests don't wait behind it — on macOS, iOS, Android
-  and Windows. On Linux a request is opened on the main thread, which only
-  matters on a network or FUSE mount; see
-  [linux-setup.md](linux-setup.md#known-limitations-on-linux).
+  slow to read, so the read happens off the UI thread on every backend: the
+  app keeps answering and other requests don't wait behind it.
 - The prefix is fully app-chosen (anything but the bundle root `/`).
 - Content types are derived from the file extension and cover the web-facing
   set — HTML/JS/CSS/JSON/WASM, PNG/JPEG/WebP/GIF/SVG/ICO, HEIC/HEIF/AVIF, the

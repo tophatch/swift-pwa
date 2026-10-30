@@ -595,14 +595,6 @@ has no per-app dark variant and no way for an app to switch its icon, so the
 AppImage uses the `light` art and `app.icon.list` reports `supported: false`.
 See [app-icons.md](app-icons.md).
 
-**A served file on a slow mount can hold up the main thread** (#338). A
-`serveDirectory` request is opened on the GTK main thread, and a `Range`
-request that stops short of the end of the file is read there too; a whole
-file, or a range to its end, is read by WebKit off it. On local disk that's
-instant, but on a network or FUSE mount (sshfs, a GVFS cloud folder) the app
-waits for the open and those reads. macOS, iOS and Android do all of it off
-their UI thread.
-
 **`fs.thumbnail` gives what the desktop's thumbnailers draw.** It reads the
 shared thumbnail cache (`~/.cache/thumbnails`) first, then runs the
 `.thumbnailer` entry the desktop installed for the file's type and stores what

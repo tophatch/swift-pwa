@@ -291,20 +291,34 @@ char *swiftpwa_w2_resource_range_header(
     swiftpwa_w2_view *view,
     uint64_t request_token);
 
-// Respond to an intercepted request by streaming a file region directly
-// off disk (range-aware; never buffers a whole large file). `path` is
-// UTF-16. `status` is 200, 206, or 416. For a range that runs to EOF
-// (`offset + length >= total`) the file stream is seeked and handed to
-// WebView2 to read lazily (GB-safe); a bounded sub-range reads exactly
-// `length` bytes into memory. Emits `Accept-Ranges: bytes` and, for 206,
+// Open the body of a file response: bytes `[offset, offset + length)` of
+// `path` (UTF-16), as a stream of their own that WebView2 reads lazily
+// (GB-safe). `total` is the file's size; the whole file is served as the
+// file stream itself. Returns an `IStream *` the caller passes to
+// `swiftpwa_w2_resource_respond_stream` or releases with
+// `swiftpwa_w2_resource_stream_release`, or NULL if the file can't be opened.
+//
+// Blocks on I/O, and opening a cloud placeholder waits for it to download,
+// so call it off the UI thread (#338). Needs no view and no COM apartment.
+void *swiftpwa_w2_resource_open_file(
+    const wchar_t *path,
+    int64_t offset,
+    int64_t length,
+    int64_t total);
+
+void swiftpwa_w2_resource_stream_release(void *stream);
+
+// Respond to an intercepted request with a body from
+// `swiftpwa_w2_resource_open_file` (consumed; may be NULL for an empty body).
+// `status` is 200, 206, or 416. Emits `Accept-Ranges: bytes` and, for 206,
 // `Content-Range: bytes <offset>-<offset+length-1>/<total>` (for 416,
-// `bytes */<total>` with an empty body). `mime_type` is UTF-8.
-void swiftpwa_w2_resource_respond_file(
+// `bytes */<total>`). `mime_type` is UTF-8. UI thread only.
+void swiftpwa_w2_resource_respond_stream(
     swiftpwa_w2_view *view,
     uint64_t request_token,
     int32_t status,
     const char *mime_type,
-    const wchar_t *path,
+    void *stream,
     int64_t offset,
     int64_t length,
     int64_t total);

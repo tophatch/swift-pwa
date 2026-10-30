@@ -130,6 +130,48 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **On Linux, a served file on a slow mount froze the app** (#338), the same
+  fault as on Windows, macOS and iOS below. The `pwa://` handler looked the
+  file up, opened it and read a bounded range on the GTK main thread, and on a
+  network or FUSE mount each of those waits on the network. The request is
+  now resolved, opened and read on a background queue, and only the answer
+  goes back to the main thread, which a WebKitGTK scheme request allows. A
+  whole file or a range to its end was already read by WebKit off the main
+  thread. Measured on GTK3 with a 6 MB file behind a FUSE mount that takes
+  1.5 s per lookup and open: worst bridge round trip 4,510 ms → 11 ms, and the
+  local file requested behind it 4,529 ms → 24 ms.
+  `Scripts/verify-served-file-stall-linux.sh` reruns that on the box itself;
+  `--released` is the control. Unlike its macOS and Windows twins it downloads
+  fusepy (checksum-pinned, cached outside the repo) to make the slow mount,
+  and needs libfuse 2. `GTKSchemeServingTests` covers the handler on both GTK
+  backends with nothing to install, using a FIFO as the file that isn't there
+  yet.
+- **On Linux, a `pwa://` request for a missing file never settled.** The
+  handler failed it with no error, which WebKitGTK rejects with a CRITICAL
+  and then leaves the request open, so a `fetch` of it never resolved or
+  rejected. It now fails as a network error, as on Apple. Found by the new
+  tests.
+- **On Windows, a range to the end of a served file got the whole file**, under
+  a `206` whose `Content-Range` said otherwise, so every seek in a served
+  `<video>` past the start read from byte 0 again. The handler seeked the file
+  stream to the range's start and WebView2 rewound it before reading. A range
+  is now its own stream that starts at 0 and can't be rewound past the range's
+  start, and a range that stops short of the end is read lazily the same way
+  rather than up front. Found by the range rows now in
+  `Scripts\verify-windows-serving.ps1`, which never fetched a range before.
+- **On Windows, a served file still in OneDrive froze the app until it
+  downloaded** (#338), the same fault as on macOS and iOS below, in two places.
+  Resolving the request stat'd the file through Foundation, which opens it, and
+  opening a OneDrive placeholder downloads it — on the UI thread, where
+  `WebResourceRequested` is raised. Then `SHCreateStreamOnFileEx` opened it
+  there too, and waits for the download just the same. The size check now reads
+  the directory entry (`GetFileAttributesExW`, as `fs.readDir` already does),
+  and the request is resolved and its file opened on a background queue. The
+  request was already deferred, so only the answer goes back to the UI thread.
+  Measured on Windows 11 arm64 with a 6 MB OneDrive placeholder: worst bridge
+  round trip 640 ms → 36 ms, and the local file requested behind it 800 ms →
+  86 ms. `Scripts\verify-served-file-stall.ps1` reruns that; `-Released` is the
+  control.
 - **On macOS and iOS, a served file still in iCloud froze the app until it
   downloaded** (#338). The `pwa://` scheme handler read every file on the main
   thread, and a cloud placeholder (iCloud Drive or any File Provider) has a

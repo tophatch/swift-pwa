@@ -61,7 +61,13 @@ $expectations = @(
     @{ url = "/packs/photo.png"; status = 200; len = 68 },  # mount, binary
     @{ url = "/packs/note.txt";  status = 200; len = 25 },  # mount, text
     @{ url = "/packs/nope.png";  status = 404; len = 0 },   # missing under a mount
-    @{ url = "/index.html";      status = 200; len = -1 }   # the bundle itself
+    @{ url = "/index.html";      status = 200; len = -1 },  # the bundle itself
+    # Ranges of note.txt ("hello from a served mount"): one that stops short of
+    # the end, one to the end (WebView2 rewinds a stream, which once sent the
+    # whole file here), and one past the end, which has no body.
+    @{ url = "/packs/note.txt"; range = "bytes=6-9";  status = 206; len = 4; text = "from" },
+    @{ url = "/packs/note.txt"; range = "bytes=20-";  status = 206; len = 5; text = "mount" },
+    @{ url = "/packs/note.txt"; range = "bytes=100-"; status = 416; len = 0 }
 )
 
 $arch = if ($env:PROCESSOR_ARCHITECTURE -eq 'ARM64') { 'arm64' } else { 'x64' }
@@ -101,7 +107,7 @@ function Write-Utf8NoBom([string]$Path, [string]$Text) {
 
 function New-SelfTestPage {
     $checks = ($expectations | ForEach-Object {
-        "{ url: '$($_.url)', status: $($_.status), len: $($_.len) }"
+        "{ url: '$($_.url)', range: '$($_.range)', status: $($_.status), len: $($_.len), text: '$($_.text)' }"
     }) -join ",`n    "
     @"
 <!doctype html>
@@ -116,10 +122,11 @@ function New-SelfTestPage {
     $checks
   ];
   Promise.all(checks.map(function (c) {
-    return fetch(c.url).then(function (r) {
+    return fetch(c.url, c.range ? { headers: { Range: c.range } } : undefined).then(function (r) {
       return r.arrayBuffer().then(function (b) {
         var okLen = (c.len < 0) || (b.byteLength === c.len);
-        return (r.status === c.status && okLen) ? null : (c.url + ' got ' + r.status + '/' + b.byteLength);
+        var okText = !c.text || new TextDecoder().decode(b) === c.text;
+        return (r.status === c.status && okLen && okText) ? null : (c.url + ' ' + c.range + ' got ' + r.status + '/' + b.byteLength);
       });
     }).catch(function (e) { return c.url + ' threw ' + e.name; });
   })).then(function (results) {
@@ -176,12 +183,12 @@ function Test-Build([string]$Label, [string]$ExeDir) {
     $code = Invoke-App $runner
 
     if ($code -eq 0) {
-        Write-Host "PASS  $Label - bundle, mount and 404 all correct" -ForegroundColor Green
+        Write-Host "PASS  $Label - bundle, mount, ranges and 404 all correct" -ForegroundColor Green
         return $true
     }
     $which = $code - 2
     $detail = if ($which -ge 0 -and $which -lt $expectations.Count) {
-        "$($expectations[$which].url) (expected $($expectations[$which].status))"
+        "$($expectations[$which].url) $($expectations[$which].range) (expected $($expectations[$which].status))"
     } else { "app exited $code before reporting" }
     Write-Host "FAIL  $Label - $detail" -ForegroundColor Red
     $exeCode = if (Test-Path $appCode) { (Get-Content $appCode -Raw).Trim() } else { "none - it never returned" }

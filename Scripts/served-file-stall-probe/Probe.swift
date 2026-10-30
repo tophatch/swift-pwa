@@ -7,6 +7,8 @@ import SwiftPWA
 /// whose bytes aren't on disk and one that is.
 @MainActor
 func registerServeProbe(_ ctx: any AppContext) {
+    // `fs.writeText` for the Windows script, which reads a report file.
+    ctx.use(FsPlugin(SystemFs()))
     guard let dir = ProcessInfo.processInfo.environment["SERVE_PROBE_DIR"] else { return }
     ctx.serveDirectory(URL(fileURLWithPath: dir), at: "/served")
 }

@@ -5,7 +5,7 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.12.0] - 2026-10-30
 
 ### Added
 
@@ -265,6 +265,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   it are Swift 6.4's build engine running pkg-config for every system library
   in the graph, Linux-only ones included (the `native` engine doesn't). That
   is upstream behaviour, and ZIPFoundation's zlib target hits it too.
+- **The CritterFacts example didn't compile** after `EmbeddedWebAssets` went
+  with `--single-file` (#279). It builds against this checkout and CI never
+  builds it; its web-root lookup no longer checks for the removed type.
 
 ## [0.11.8] - 2026-10-21
 

@@ -40,9 +40,15 @@ let useGtk4 = ProcessInfo.processInfo.environment["SWIFT_PWA_GTK4"] != nil
 // hashing Package.swift, so changing this env var doesn't invalidate
 // the cache on its own — you need `swift package clean` (or
 // `rm -rf .build`) when toggling between GTK3 and GTK4.
-FileHandle.standardError.write(
-    Data("swift-pwa: Linux backend selection = \(useGtk4 ? "GTK4 + WebKitGTK 6.0" : "GTK3 + WebKitGTK 4.1")\n".utf8)
-)
+//
+// Linux hosts only: SwiftPM shows a dependency's manifest stderr as a
+// warning, so on a Mac or Windows host every adopting app's build opened
+// with a warning about a backend it wasn't building.
+#if os(Linux)
+    FileHandle.standardError.write(
+        Data("swift-pwa: Linux backend selection = \(useGtk4 ? "GTK4 + WebKitGTK 6.0" : "GTK3 + WebKitGTK 4.1")\n".utf8)
+    )
+#endif
 
 // **A shared target's platform condition must be spelled identically at every
 // edge that reaches it.** Not a style preference — a build-correctness rule.

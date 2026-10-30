@@ -257,6 +257,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `drive` ran, and every other target fell through to the host, answering for
   the wrong platform without a word. Those targets are now refused, with
   Android pointed at `Scripts/android-cdp-eval.py`.
+- **A Mac or Windows build opened with `warning: 'swift-pwa': swift-pwa: Linux
+  backend selection = GTK3 + WebKitGTK 4.1`.** The manifest prints which GTK
+  backend it picked, and SwiftPM shows a dependency's manifest output as a
+  warning, so every adopting app saw it whenever the manifest was re-read. It
+  now prints on a Linux host only. The `couldn't find pc file` warnings beside
+  it are Swift 6.4's build engine running pkg-config for every system library
+  in the graph, Linux-only ones included (the `native` engine doesn't). That
+  is upstream behaviour, and ZIPFoundation's zlib target hits it too.
 
 ## [0.11.8] - 2026-10-21
 

@@ -29,8 +29,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   was left at its iPhone default of `false`, so every video left the page to
   play full screen and `playsinline` was ignored. That took an app's own
   controls and layout with it. Measured on the iPhone simulator: `play()` went
-  to `fullscreen` on 0.12.0 and stays `inline` now. iOS's
-  `allowsPictureInPictureMediaPlayback` is now also set explicitly.
+  to `fullscreen` on 0.12.0 and stays `inline` now, as it does on an iPhone 17
+  Pro. iOS's `allowsPictureInPictureMediaPlayback` is now also set explicitly.
+  Picture in picture works on that iPhone from a tap, although the iPhone
+  simulator reports it unsupported.
 - **Element fullscreen works on macOS and iOS.** `WKWebView` ships with it
   off, so `document.fullscreenEnabled` was `undefined`, `requestFullscreen()`
   didn't exist, and `<video controls>` had no fullscreen button. Safari has it
@@ -44,6 +46,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   in immersive mode, and Back leaves it first, as in Chrome. Leaving element
   fullscreen keeps an app that called `window.setFullscreen` immersive.
   Verified with taps on a Galaxy Z Fold8.
+- **Windows: element fullscreen takes the window with it.** WebView2 only
+  filled its own bounds, so a `<video>` "in fullscreen" stayed inside a
+  1024×768 window. The backend now follows WebView2's
+  `ContainsFullScreenElementChanged` and makes the window fullscreen, as
+  Edge does. It keeps the app's own `window.setFullscreen` state when the page
+  leaves. Picture in picture already worked: WebView2 opens its own floating
+  window. Measured on Windows 11 x64.
 
 ## [0.12.0] - 2026-10-30
 

@@ -926,6 +926,17 @@ serving path, `AssetProvider`, or anything about how the bundle origin is
 served. It is checked against the bug it was written for: on the pre-fix code it
 reports `FAIL folder - /packs/photo.png (expected 200)`.
 
+## Video: fullscreen and picture in picture
+
+A page's `<video>` works as it does in Edge. `requestPictureInPicture()`
+opens WebView2's own floating window and playback carries on in it.
+`requestFullscreen()`, or the button in `<video controls>`, takes the
+**window** fullscreen, not just the webview. WebView2 on its own fills only
+its own bounds, so the backend follows `ContainsFullScreenElementChanged`.
+Leaving element fullscreen keeps an app that called `window.setFullscreen`
+fullscreen. `window.isFullscreen` and the fullscreen window events still
+describe only the app's own request. Measured on Windows 11 x64.
+
 ## Known limitations (Windows-specific)
 
 **App icon styles are the MSIX taskbar logo only, and there are no alternate

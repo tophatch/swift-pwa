@@ -230,6 +230,17 @@ void swiftpwa_w2_view_set_navigation_handler(
     void *user
 );
 
+// Told when the page enters (1) or leaves (0) element fullscreen —
+// `requestFullscreen()`, the `<video controls>` button. WebView2 only fills
+// its own bounds; the host decides what happens to the window.
+typedef void (*swiftpwa_w2_fullscreen_cb)(int contains_fullscreen_element, void *user);
+
+void swiftpwa_w2_view_set_fullscreen_element_handler(
+    swiftpwa_w2_view *view,
+    swiftpwa_w2_fullscreen_cb cb,
+    void *user
+);
+
 /// Hand a URI to the shell — the default browser for http(s), whichever app
 /// is registered for a custom scheme. Returns 1 if the shell accepted it.
 int swiftpwa_w2_open_external(const char *utf8_uri);

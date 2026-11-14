@@ -135,6 +135,10 @@ struct ViewExtension {
     swiftpwa_w2_navigation_cb navigation_cb = nullptr;
     void *navigation_user = nullptr;
     bool navigation_subscribed = false;
+
+    swiftpwa_w2_fullscreen_cb fullscreen_cb = nullptr;
+    void *fullscreen_user = nullptr;
+    bool fullscreen_subscribed = false;
 };
 
 // We keep the per-view extension as a side-table keyed by the
@@ -754,6 +758,44 @@ extern "C" void swiftpwa_w2_view_set_navigation_handler(
             })
             .Get(),
         &window_token
+    );
+}
+
+extern "C" void swiftpwa_w2_view_set_fullscreen_element_handler(
+    swiftpwa_w2_view *view,
+    swiftpwa_w2_fullscreen_cb cb,
+    void *user
+) {
+    if (!view || !view->raw) return;
+    {
+        ViewExtension &ext = get_or_create_extension(view->raw);
+        std::lock_guard<std::mutex> lock(ext.mu);
+        ext.fullscreen_cb = cb;
+        ext.fullscreen_user = user;
+        if (ext.fullscreen_subscribed) return;
+        ext.fullscreen_subscribed = true;
+    }
+
+    EventRegistrationToken token{};
+    view->raw->add_ContainsFullScreenElementChanged(
+        Callback<ICoreWebView2ContainsFullScreenElementChangedEventHandler>(
+            [view](ICoreWebView2 *sender, IUnknown *) -> HRESULT {
+                BOOL contains = FALSE;
+                sender->get_ContainsFullScreenElement(&contains);
+
+                ViewExtension &ext = get_or_create_extension(view->raw);
+                swiftpwa_w2_fullscreen_cb cb_local = nullptr;
+                void *user_local = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(ext.mu);
+                    cb_local = ext.fullscreen_cb;
+                    user_local = ext.fullscreen_user;
+                }
+                if (cb_local) cb_local(contains ? 1 : 0, user_local);
+                return S_OK;
+            })
+            .Get(),
+        &token
     );
 }
 

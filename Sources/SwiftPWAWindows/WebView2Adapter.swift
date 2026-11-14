@@ -61,6 +61,21 @@
         var driverView: OpaquePointer? {
             view
         }
+        /// Told when the page enters or leaves element fullscreen, on the UI
+        /// thread. WebView2 fills only its own bounds, so the window has to
+        /// follow for a video to cover the screen as it does in Edge.
+        private nonisolated(unsafe) var onElementFullscreen: ((Bool) -> Void)?
+
+        func observeElementFullscreen(_ handler: @escaping (Bool) -> Void) {
+            onElementFullscreen = handler
+            guard let view else { return }
+            let user = Unmanaged.passUnretained(self).toOpaque()
+            swiftpwa_w2_view_set_fullscreen_element_handler(view, elementFullscreenTrampoline, user)
+        }
+
+        func elementFullscreenChanged(_ on: Bool) {
+            onElementFullscreen?(on)
+        }
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         /// Documents already named in an embedded-frame refusal. Both
@@ -770,6 +785,13 @@
             }
             return 0
         }
+    }
+
+    /// `@convention(c)` callback from `swiftpwa_w2_view_set_fullscreen_element_handler`.
+    let elementFullscreenTrampoline: @convention(c) (Int32, UnsafeMutableRawPointer?) -> Void = { contains, userData in
+        guard let userData else { return }
+        let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
+        adapter.elementFullscreenChanged(contains != 0)
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_set_web_message_handler`.

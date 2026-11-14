@@ -532,15 +532,19 @@ so `document.fullscreenEnabled` is `true`.
 
 Picture in picture is on wherever iOS offers it, with nothing to configure:
 
+- **iPhone:** available. Measured on an iPhone 17 Pro: a tap on a button
+  calling `requestPictureInPicture()` resolved, and the clip moved to
+  picture in picture and kept playing. That needed no audio background
+  mode. The iPhone *simulator* reports picture in picture unsupported and
+  rejects the request with `NotSupportedError`, so don't conclude anything
+  about an iPhone from it.
 - **iPad:** available. On the simulator, `webkitSupportsPresentationMode('picture-in-picture')`
   answers `true` with or without an audio background mode.
-- **iPhone:** the iOS 26.5 iPhone simulator answers `false` and rejects
-  `requestPictureInPicture()` with `NotSupportedError`, even with
-  `allowsPictureInPictureMediaPlayback` set. A physical iPhone hasn't been
-  checked yet, so feature-detect rather than assume either way.
 
 Picture in picture needs a user gesture, so `drive eval` can't start it on
-iOS. The simulator has no synthetic input to supply one.
+iOS: iOS has no synthetic input to supply one, on a device or the simulator.
+A person's tap during a long-running `drive eval` that waits for the page's
+result is how it was measured.
 
 ## Deep links into the app (`url_schemes`)
 

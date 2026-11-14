@@ -5,6 +5,7 @@
 
     /// How a page's `<audio>` and `<video>` play: the way they do in the
     /// platform's browser, on first-party content the browser would trust.
+    @MainActor
     enum WKMediaPlayback {
         static func configure(
             _ cfg: WKWebViewConfiguration,

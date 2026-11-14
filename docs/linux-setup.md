@@ -590,6 +590,13 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**No picture in picture for `<video>`.** WebKitGTK exposes no picture in
+picture API at all on either backend: `document.pictureInPictureEnabled` and
+`video.requestPictureInPicture` are both `undefined`, so feature detection
+finds nothing to offer. Element fullscreen works as it does in a browser
+(`requestFullscreen()`, and the fullscreen button in `<video controls>`).
+Measured on WebKitGTK 4.1 and 6.0, version 2.52.
+
 **One app icon, with no styles and no alternates.** The freedesktop icon theme
 has no per-app dark variant and no way for an app to switch its icon, so the
 AppImage uses the `light` art and `app.icon.list` reports `supported: false`.

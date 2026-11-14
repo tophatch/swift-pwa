@@ -5,6 +5,38 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Picture in picture on macOS, opt-in with `macos.picture_in_picture`**
+  (#348). A page's `<video>` reported picture in picture as unsupported on
+  the Mac: `document.pictureInPictureEnabled` said `true`, but
+  `webkitSupportsPresentationMode('picture-in-picture')` said `false`, and
+  `requestPictureInPicture()` rejected with `NotSupportedError`. macOS's
+  `WKWebView` offers picture in picture only through a private WebKit
+  preference; the public property is iOS-only. Each app therefore opts in
+  rather than every app shipping the private selector. Measured on macOS 27:
+  with the key set, a clicked request opens the system picture in picture
+  window. The key is written into `Info.plist`, so it applies on the next
+  build with no `App.swift` edit. `drive` and `dev` pass it to their
+  unbundled binary through the environment, so a driven run reports what the
+  bundled app does.
+
+### Fixed
+
+- **iOS: a `<video>` plays inline on iPhone** (#347). `allowsInlineMediaPlayback`
+  was left at its iPhone default of `false`, so every video left the page to
+  play full screen and `playsinline` was ignored. That took an app's own
+  controls and layout with it. Measured on the iPhone simulator: `play()` went
+  to `fullscreen` on 0.12.0 and stays `inline` now. iOS's
+  `allowsPictureInPictureMediaPlayback` is now also set explicitly.
+- **Element fullscreen works on macOS and iOS.** `WKWebView` ships with it
+  off, so `document.fullscreenEnabled` was `undefined`, `requestFullscreen()`
+  didn't exist, and `<video controls>` had no fullscreen button. Safari has it
+  on, and so does WebKitGTK, which was measured to already support it on
+  both Linux backends.
+
 ## [0.12.0] - 2026-10-30
 
 ### Added

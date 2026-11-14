@@ -520,6 +520,28 @@ a URL it can't load to the system — while the same click did nothing at
 all on macOS, and an `http` link loaded in place and stranded the app on
 both. Both routes now go through the same declaration.
 
+## Video: inline, fullscreen and picture in picture
+
+A `<video>` plays **inline**, in its place on the page, on iPhone as well
+as iPad. A `WKWebView` on iPhone defaults to the opposite: every video
+leaves the page to play full screen and `playsinline` is ignored, which
+takes the app's own controls and layout with it. swift-pwa turns inline
+playback on. A page that wants full screen asks for it per element with
+`requestFullscreen()` or `webkitEnterFullscreen()`. Element fullscreen is on too,
+so `document.fullscreenEnabled` is `true`.
+
+Picture in picture is on wherever iOS offers it, with nothing to configure:
+
+- **iPad:** available. On the simulator, `webkitSupportsPresentationMode('picture-in-picture')`
+  answers `true` with or without an audio background mode.
+- **iPhone:** the iOS 26.5 iPhone simulator answers `false` and rejects
+  `requestPictureInPicture()` with `NotSupportedError`, even with
+  `allowsPictureInPictureMediaPlayback` set. A physical iPhone hasn't been
+  checked yet, so feature-detect rather than assume either way.
+
+Picture in picture needs a user gesture, so `drive eval` can't start it on
+iOS. The simulator has no synthetic input to supply one.
+
 ## Deep links into the app (`url_schemes`)
 
 The inbound direction. Declaring the top-level `url_schemes` key generates

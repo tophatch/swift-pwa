@@ -320,6 +320,39 @@ applies to the very next close. Storing their choice is your app's job,
 and re-applying it at startup is one `invoke`. See
 [docs/javascript-api.md](javascript-api.md#applastwindowclosed--what-closing-the-last-window-does).
 
+### Video: fullscreen and picture in picture (`macos.picture_in_picture`)
+
+A page's `<video>` gets fullscreen the way it does in Safari:
+`requestFullscreen()`, `document.fullscreenEnabled` and the fullscreen
+button in `<video controls>`. A `WKWebView` ships with element fullscreen
+off; swift-pwa turns it on.
+
+Picture in picture is opt-in:
+
+```json
+"macos": { "picture_in_picture": true }
+```
+
+Without it, `video.requestPictureInPicture()` rejects with
+`NotSupportedError` and `webkitSupportsPresentationMode('picture-in-picture')`
+answers `false`, even though `document.pictureInPictureEnabled` says `true`.
+Feature-detect with `webkitSupportsPresentationMode`, not
+`pictureInPictureEnabled`. With it, the request opens the system's picture
+in picture window as Safari's does. Like any picture in picture request,
+it needs a user gesture.
+
+It is opt-in because macOS's webview offers picture in picture only
+through a **private** WebKit preference: the public
+`allowsPictureInPictureMediaPlayback` is iOS-only. An app that turns it on
+ships that private selector, which matters if it goes to the Mac App Store.
+If a future macOS drops the preference, the app logs a line to stderr and
+the video reports picture in picture as unsupported. It doesn't crash.
+
+The key goes into `Info.plist`, so it takes effect on the next build. You
+don't have to edit `App.swift`. `swift-pwa drive` and `swift-pwa dev` run an
+unbundled binary, so they pass it through the environment instead
+(`SWIFT_PWA_PICTURE_IN_PICTURE=1`, honoured by debug builds only).
+
 ## 5. Codesigning
 
 For a quick local run you don't need an identity. Without `--sign` the

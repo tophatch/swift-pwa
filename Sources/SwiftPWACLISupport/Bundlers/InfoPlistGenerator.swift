@@ -1,4 +1,5 @@
 import Foundation
+import SwiftPWACore
 
 /// Generates `Info.plist` content for macOS / iOS bundles from a `PWAManifest`.
 enum InfoPlistGenerator {
@@ -33,6 +34,9 @@ enum InfoPlistGenerator {
         }
         if iconInAssetCatalog {
             plist["CFBundleIconName"] = AppleIconCatalog.primaryName
+        }
+        if manifest.macos?.pictureInPicture == true {
+            plist[PictureInPicture.infoPlistKey] = true
         }
         applyUsageDescriptions(manifest, into: &plist)
         applyURLSchemes(manifest, into: &plist)

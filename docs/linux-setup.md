@@ -590,6 +590,13 @@ xdg-open "myapp://hello"
 
 ## Known limitations on Linux
 
+**A `<video>` or `<audio>` served from the app's own origin doesn't load.**
+WebKitGTK's media player turns down the `pwa://` scheme before requesting
+anything, so `readyState` stays 0 and `play()` rejects with
+`NotSupportedError`; the same file loads through `fetch` and `<img>`, and
+plays from a `blob:` URL. Measured on WebKitGTK 2.52, both backends. See
+[#349](https://github.com/tophatch/swift-pwa/issues/349).
+
 **No picture in picture for `<video>`.** WebKitGTK exposes no picture in
 picture API at all on either backend: `document.pictureInPictureEnabled` and
 `video.requestPictureInPicture` are both `undefined`, so feature detection

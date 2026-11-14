@@ -985,6 +985,13 @@ enum AndroidTemplates {
                 }
                 fun updateBack() { back.isEnabled = canGoBack || pageWatchers > 0 }
                 onBackPressedDispatcher.addCallback(this, back)
+                // Back leaves element fullscreen before anything else, as in
+                // Chrome. Added after `back`, so it's asked first.
+                val leaveFullscreen = object : OnBackPressedCallback(false) {
+                    override fun handleOnBackPressed() = bridge.exitElementFullscreen()
+                }
+                onBackPressedDispatcher.addCallback(this, leaveFullscreen)
+                bridge.onElementFullscreen = { leaveFullscreen.isEnabled = it }
                 bridge.onHistoryChanged = { canGoBack = it; updateBack() }
                 bridge.onBackWatchers = { count -> pageWatchers = count; unansweredBacks = 0; updateBack() }
 
@@ -1450,6 +1457,8 @@ enum AndroidTemplates {
         import android.os.Handler
         import android.os.Looper
         import android.provider.DocumentsContract
+        import android.view.View
+        import android.view.ViewGroup
         import android.webkit.GeolocationPermissions
         import android.webkit.JavascriptInterface
         import android.webkit.PermissionRequest
@@ -1498,6 +1507,24 @@ enum AndroidTemplates {
             // web.spa_fallback / web.entry (see AndroidTemplates.swiftPWABridgeKt).
             private val spaFallback = \#(spaFallback)
             private val spaEntry = \#(spaEntryLiteral)
+
+            // Element fullscreen (`requestFullscreen()`, the `<video controls>`
+            // button). WebView hands the fullscreen content to the app as a
+            // view to show; with no app to show it, the page reads
+            // `fullscreenEnabled` false and every request fails.
+            private var fullscreenView: View? = null
+            private var fullscreenViewCallback: WebChromeClient.CustomViewCallback? = null
+            // What `window.setFullscreen` asked for, kept apart so leaving
+            // element fullscreen doesn't take the app out of its own.
+            private var appFullscreen = false
+
+            /// Told when the page enters or leaves element fullscreen.
+            var onElementFullscreen: ((Boolean) -> Unit)? = null
+
+            /// Leave element fullscreen, as Back does in Chrome.
+            fun exitElementFullscreen() {
+                fullscreenViewCallback?.onCustomViewHidden()
+            }
 
             init {
                 // bridge.js needs to run *before* any page script —
@@ -1733,6 +1760,31 @@ enum AndroidTemplates {
                             callback.invoke(origin, allowed, false)
                         }
                     }
+
+                    override fun onShowCustomView(view: View, callback: CustomViewCallback) {
+                        if (fullscreenView != null) {
+                            callback.onCustomViewHidden()
+                            return
+                        }
+                        fullscreenView = view
+                        fullscreenViewCallback = callback
+                        view.setBackgroundColor(android.graphics.Color.BLACK)
+                        (activity.window.decorView as ViewGroup).addView(
+                            view,
+                            ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                        )
+                        applyImmersive()
+                        onElementFullscreen?.invoke(true)
+                    }
+
+                    override fun onHideCustomView() {
+                        val view = fullscreenView ?: return
+                        (activity.window.decorView as ViewGroup).removeView(view)
+                        fullscreenView = null
+                        fullscreenViewCallback = null
+                        applyImmersive()
+                        onElementFullscreen?.invoke(false)
+                    }
                 }
             }
 
@@ -1833,26 +1885,31 @@ enum AndroidTemplates {
 
             @Suppress("unused")
             fun setFullscreen(on: Boolean) {
-                // Toggles immersive / edge-to-edge layout. The
-                // `WindowInsetsControllerCompat` flavour is the
-                // forward-compatible replacement for the deprecated
-                // `View.setSystemUiVisibility` flag set; it works on every
-                // supported API (28+) and adapts to the new behaviour on
-                // API 30+ without per-version branching.
                 main.post {
-                    val window = activity.window ?: return@post
-                    WindowCompat.setDecorFitsSystemWindows(window, !on)
-                    val controller = WindowInsetsControllerCompat(window, window.decorView)
-                    if (on) {
-                        controller.hide(WindowInsetsCompat.Type.systemBars())
-                        // Transient bars on swipe: matches the platform
-                        // default for media / game immersive flows and
-                        // keeps system gestures reachable.
-                        controller.systemBarsBehavior =
-                            WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
-                    } else {
-                        controller.show(WindowInsetsCompat.Type.systemBars())
-                    }
+                    appFullscreen = on
+                    applyImmersive()
+                }
+            }
+
+            /// Immersive while the app or the page asks for fullscreen. The
+            /// `WindowInsetsControllerCompat` flavour is the forward-compatible
+            /// replacement for the deprecated `View.setSystemUiVisibility` flag
+            /// set; it works on every supported API (28+) and adapts to the new
+            /// behaviour on API 30+ without per-version branching.
+            private fun applyImmersive() {
+                val on = appFullscreen || fullscreenView != null
+                val window = activity.window ?: return
+                WindowCompat.setDecorFitsSystemWindows(window, !on)
+                val controller = WindowInsetsControllerCompat(window, window.decorView)
+                if (on) {
+                    controller.hide(WindowInsetsCompat.Type.systemBars())
+                    // Transient bars on swipe: matches the platform default
+                    // for media / game immersive flows and keeps system
+                    // gestures reachable.
+                    controller.systemBarsBehavior =
+                        WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+                } else {
+                    controller.show(WindowInsetsCompat.Type.systemBars())
                 }
             }
 

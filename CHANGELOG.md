@@ -36,6 +36,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   didn't exist, and `<video controls>` had no fullscreen button. Safari has it
   on, and so does WebKitGTK, which was measured to already support it on
   both Linux backends.
+- **Android: element fullscreen works.** The generated Activity didn't
+  implement `WebChromeClient.onShowCustomView`, so WebView reported
+  `fullscreenEnabled` false and rejected `requestFullscreen()` with
+  "Fullscreen is not supported". Without a handler, WebView has nowhere to
+  show fullscreen content. The Activity now lays it over the window
+  in immersive mode, and Back leaves it first, as in Chrome. Leaving element
+  fullscreen keeps an app that called `window.setFullscreen` immersive.
+  Verified with taps on a Galaxy Z Fold8.
 
 ## [0.12.0] - 2026-10-30
 

@@ -727,6 +727,20 @@ struct AndroidBundlerUnitTests {
         #expect(kt.contains("BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE"))
     }
 
+    /// Without these overrides Android WebView reports `fullscreenEnabled`
+    /// false and rejects every `requestFullscreen()`. The behaviour itself is
+    /// checked on a device; this pins the wiring a refactor could drop.
+    @Test("element fullscreen is shown by the app, and Back leaves it first")
+    func elementFullscreenWired() {
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        #expect(bridge.contains("override fun onShowCustomView(view: View, callback: CustomViewCallback)"))
+        #expect(bridge.contains("override fun onHideCustomView()"))
+        #expect(bridge.contains("val on = appFullscreen || fullscreenView != null"))
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains("bridge.exitElementFullscreen()"))
+        #expect(activity.contains("bridge.onElementFullscreen = { leaveFullscreen.isEnabled = it }"))
+    }
+
     @Test("SwiftPWABridge declares spawnWindow + MainActivity reads the secondary intent extra")
     func bridgeKtDeclaresSpawnWindow() {
         let bridge = AndroidTemplates.swiftPWABridgeKt()

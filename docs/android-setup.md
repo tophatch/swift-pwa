@@ -966,6 +966,12 @@ primary's. JS sees the same events through `window.events`.
 
 ### Back, and an Activity that goes while the app stays
 
+**Back leaves element fullscreen before anything else**, as in Chrome. A
+page's `requestFullscreen()` and the fullscreen button in `<video controls>`
+work: WebView hands the fullscreen content to the generated Activity, which
+lays it over the window and hides the system bars. Leaving element fullscreen
+keeps the app immersive if `window.setFullscreen` asked for it.
+
 **Back closes what the page has open first.** A close watcher (a
 `CloseWatcher`, a modal `<dialog>`, an auto popover) gets Back before history
 does, as in Chrome on Android. So a page whose screen has a natural "up" and no
@@ -1582,6 +1588,11 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
+- **No picture in picture for `<video>`.** Android WebView has
+  `requestPictureInPicture` but rejects it with `NotSupportedError`, and
+  `document.pictureInPictureEnabled` is `false`. Measured with a tap on a
+  Galaxy Z Fold8 (Android 17). Android's own picture in picture moves a whole
+  Activity, not one element, so there is nothing to map the web API onto.
 - **A themed icon reads only the tinted art's alpha.** Android draws the
   monochrome layer in the palette colour wherever it's opaque, so a tinted
   PNG without a transparent background themes as a solid tile; the build

@@ -955,6 +955,7 @@ struct LaunchedApp {
             route: options.route,
             webRoot: webRoot,
             displayName: pwa.name,
+            pictureInPicture: pwa.macos?.pictureInPicture == true,
             background: options.background,
             runtimeEnvironment: NativeLibrarySearch.hostRuntimeEnvironment(manifest: pwa, projectRoot: cwd)
         )
@@ -1286,6 +1287,7 @@ struct LaunchedApp {
         route: String?,
         webRoot: URL? = nil,
         displayName: String? = nil,
+        pictureInPicture: Bool = false,
         background: Bool = false,
         runtimeEnvironment: [String: String] = [:]
     ) throws -> LaunchedApp {
@@ -1314,6 +1316,11 @@ struct LaunchedApp {
         // folder beside the user's real one (#254).
         if let displayName, !displayName.isEmpty {
             env[AppPlugin.displayNameEnvironmentVariable] = displayName
+        }
+        // The bundled app reads this opt-in from its Info.plist, which a bare
+        // binary doesn't have.
+        if pictureInPicture {
+            env[PictureInPicture.environmentVariable] = "1"
         }
         // Off screen and never activated, so a suite can run while the machine
         // stays usable. The app decides whether it can honour that — the

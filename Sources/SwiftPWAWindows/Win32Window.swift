@@ -42,7 +42,11 @@
         private var continuations: [Foundation.UUID: AsyncStream<WindowEvent>.Continuation] = [:]
         private var lastSize: Size = .zero
         private var lastPosition: Point = .zero
+        /// What `setFullscreen` asked for — the state `isFullscreen` reports.
         private var fullscreen = false
+        /// The page's `requestFullscreen()`, which takes the window with it.
+        private var elementFullscreen = false
+        private var frameIsFullscreen = false
         private var savedPlacement: WINDOWPLACEMENT?
         private var savedStyle: LONG_PTR = 0
         /// The page's departure, started by the first of a close or a quit to
@@ -179,6 +183,10 @@
             // ready. The adapter posts back to MainThread when its
             // async creation chain completes.
             adapter.pumpUntilReady()
+            adapter.observeElementFullscreen { [weak self] on in
+                self?.elementFullscreen = on
+                self?.updateFullscreenFrame()
+            }
             bridge.start()
             adapter.load(config.content)
             adapter.fitTo(client: clientRect())
@@ -485,6 +493,17 @@
 
         public func setFullscreen(_ on: Bool) {
             if on == fullscreen { return }
+            fullscreen = on
+            updateFullscreenFrame()
+            emit(on ? .didEnterFullscreen : .didExitFullscreen)
+        }
+
+        /// Fullscreen while the app or the page asks for it, so a video
+        /// leaving fullscreen doesn't take the app out of its own.
+        private func updateFullscreenFrame() {
+            let on = fullscreen || elementFullscreen
+            if on == frameIsFullscreen { return }
+            frameIsFullscreen = on
             if on {
                 // Standard "fake fullscreen" recipe: stash the current
                 // placement + style, drop chrome, resize to monitor.
@@ -509,8 +528,6 @@
                     info.rcMonitor.bottom - info.rcMonitor.top,
                     UINT(SWP_NOOWNERZORDER | SWP_FRAMECHANGED)
                 )
-                fullscreen = true
-                emit(.didEnterFullscreen)
             } else {
                 _ = SetWindowLongPtrW(hwnd, GWL_STYLE, savedStyle)
                 if var placement = savedPlacement {
@@ -521,8 +538,6 @@
                     UINT(SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER
                         | SWP_NOOWNERZORDER | SWP_FRAMECHANGED)
                 )
-                fullscreen = false
-                emit(.didExitFullscreen)
             }
         }
         public func isFullscreen() -> Bool { fullscreen }

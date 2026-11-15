@@ -88,6 +88,9 @@ struct Dev: AsyncParsableCommand {
         // the app after the SwiftPM target — and move `app.documentsDir` with
         // it. The manifest is the name the bundled app will carry (#254).
         env[AppPlugin.displayNameEnvironmentVariable] = devManifest.name
+        if devManifest.macos?.pictureInPicture == true {
+            env[PictureInPicture.environmentVariable] = "1"
+        }
         // …and so the app can *load* them once it's running.
         for (key, value) in try NativeLibrarySearch.hostRuntimeEnvironment(
             manifest: devManifest, projectRoot: cwd

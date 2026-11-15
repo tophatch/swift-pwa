@@ -259,6 +259,12 @@ public struct PWAManifest: Codable, Sendable, Equatable {
         /// outlives its windows: Linux and Windows exit when the last one
         /// closes. See `LastWindowClosedPolicy`.
         public var lastWindowClosed: String?
+        /// Let a page's `<video>` play picture in picture (JSON key
+        /// `picture_in_picture`). Off by default because macOS's webview only
+        /// offers it through private WebKit API, which an app should choose to
+        /// ship; iOS has it on without asking. Written into `Info.plist`, so
+        /// unlike `last_window_closed` it takes effect on the next build.
+        public var pictureInPicture: Bool?
         /// Arbitrary keys merged verbatim into the generated `Info.plist`,
         /// after swift-pwa's own keys (so they override on collision). The
         /// escape hatch for anything the schema doesn't model — App

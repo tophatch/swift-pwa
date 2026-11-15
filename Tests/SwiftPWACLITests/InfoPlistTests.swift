@@ -117,6 +117,30 @@ struct InfoPlistTests {
         #expect(overridden["UIDeviceFamily"] as? [Int] == [1])
     }
 
+    @Test("macos.picture_in_picture reaches the macOS plist, and only when set")
+    func macPictureInPicture() throws {
+        let json = """
+        {"id":"com.example.x","name":"X","version":"1.0.0",
+         "web":{"directory":"web","entry":"index.html"},
+         "window":{"title":"X","width":1024,"height":768,"resizable":true,"fullscreen":false},
+         "macos":{"picture_in_picture":true}}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let m = try decoder.decode(PWAManifest.self, from: Data(json.utf8))
+        func parsed(_ plist: InfoPlist) throws -> [String: Any] {
+            try #require(PropertyListSerialization.propertyList(
+                from: plist.encode(), options: [], format: nil
+            ) as? [String: Any])
+        }
+        let key = "SwiftPWAPictureInPicture"
+        #expect(try parsed(InfoPlistGenerator.macOS(manifest: m, executableName: m.binaryName))[key] as? Bool == true)
+        let unset = InfoPlistGenerator.macOS(manifest: manifest, executableName: manifest.binaryName)
+        #expect(try parsed(unset)[key] == nil)
+        // iOS offers picture in picture through public API, on by default.
+        #expect(try parsed(InfoPlistGenerator.iOS(manifest: m, executableName: m.binaryName))[key] == nil)
+    }
+
     @Test("info_plist passthrough round-trips (incl. nested) through pwa.json")
     func infoPlistRoundTrips() throws {
         let json = """

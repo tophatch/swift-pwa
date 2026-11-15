@@ -5,6 +5,55 @@ All notable changes to swift-pwa will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Picture in picture on macOS, opt-in with `macos.picture_in_picture`**
+  (#348). A page's `<video>` reported picture in picture as unsupported on
+  the Mac: `document.pictureInPictureEnabled` said `true`, but
+  `webkitSupportsPresentationMode('picture-in-picture')` said `false`, and
+  `requestPictureInPicture()` rejected with `NotSupportedError`. macOS's
+  `WKWebView` offers picture in picture only through a private WebKit
+  preference; the public property is iOS-only. Each app therefore opts in
+  rather than every app shipping the private selector. Measured on macOS 27:
+  with the key set, a clicked request opens the system picture in picture
+  window. The key is written into `Info.plist`, so it applies on the next
+  build with no `App.swift` edit. `drive` and `dev` pass it to their
+  unbundled binary through the environment, so a driven run reports what the
+  bundled app does.
+
+### Fixed
+
+- **iOS: a `<video>` plays inline on iPhone** (#347). `allowsInlineMediaPlayback`
+  was left at its iPhone default of `false`, so every video left the page to
+  play full screen and `playsinline` was ignored. That took an app's own
+  controls and layout with it. Measured on the iPhone simulator: `play()` went
+  to `fullscreen` on 0.12.0 and stays `inline` now, as it does on an iPhone 17
+  Pro. iOS's `allowsPictureInPictureMediaPlayback` is now also set explicitly.
+  Picture in picture works on that iPhone from a tap, although the iPhone
+  simulator reports it unsupported.
+- **Element fullscreen works on macOS and iOS.** `WKWebView` ships with it
+  off, so `document.fullscreenEnabled` was `undefined`, `requestFullscreen()`
+  didn't exist, and `<video controls>` had no fullscreen button. Safari has it
+  on, and so does WebKitGTK, which was measured to already support it on
+  both Linux backends.
+- **Android: element fullscreen works.** The generated Activity didn't
+  implement `WebChromeClient.onShowCustomView`, so WebView reported
+  `fullscreenEnabled` false and rejected `requestFullscreen()` with
+  "Fullscreen is not supported". Without a handler, WebView has nowhere to
+  show fullscreen content. The Activity now lays it over the window
+  in immersive mode, and Back leaves it first, as in Chrome. Leaving element
+  fullscreen keeps an app that called `window.setFullscreen` immersive.
+  Verified with taps on a Galaxy Z Fold8.
+- **Windows: element fullscreen takes the window with it.** WebView2 only
+  filled its own bounds, so a `<video>` "in fullscreen" stayed inside a
+  1024×768 window. The backend now follows WebView2's
+  `ContainsFullScreenElementChanged` and makes the window fullscreen, as
+  Edge does. It keeps the app's own `window.setFullscreen` state when the page
+  leaves. Picture in picture already worked: WebView2 opens its own floating
+  window. Measured on Windows 11 x64.
+
 ## [0.12.0] - 2026-10-30
 
 ### Added

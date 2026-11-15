@@ -320,6 +320,14 @@ applies to the very next close. Storing their choice is your app's job,
 and re-applying it at startup is one `invoke`. See
 [docs/javascript-api.md](javascript-api.md#applastwindowclosed--what-closing-the-last-window-does).
 
+### Text selection: the page's items in the context menu
+
+`selection.setActions` puts the page's items first in the right-click menu on
+a text selection, with a separator before WebKit's own. WebKit marks a
+selection's menu by its *Copy* item (`WKMenuItemIdentifierCopy`); a link's or
+an image's menu has a different one, and is left alone. A mouse selection's
+`began` / `ended` come from the page's pointer events. Measured on macOS 27.
+
 ### Video: fullscreen and picture in picture (`macos.picture_in_picture`)
 
 A page's `<video>` gets fullscreen the way it does in Safari:

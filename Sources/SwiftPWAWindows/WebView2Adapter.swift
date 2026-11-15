@@ -76,6 +76,38 @@
         func elementFullscreenChanged(_ on: Bool) {
             onElementFullscreen?(on)
         }
+
+        /// `selection.*` — see ``WebViewSelection``. Set once at the end of
+        /// `init`, because its closure needs `self`.
+        public private(set) nonisolated(unsafe) var selection: WebViewSelection?
+
+        /// WebView2 builds the context menu in its own process and asks for
+        /// additions on `ContextMenuRequested`, which the shim answers from the
+        /// list it was last given — so each change is handed over here.
+        private func applySelectionActions(_ actions: [SelectionAction]) async throws {
+            try await MainThread.run { [self] in
+                guard let view else {
+                    throw BridgeError(code: BridgeError.handler, message: "the webview isn't ready yet")
+                }
+                let ids = actions.map { strdup($0.id) }
+                let titles = actions.map { strdup($0.title) }
+                defer {
+                    ids.forEach { free($0) }
+                    titles.forEach { free($0) }
+                }
+                let idPointers = ids.map { UnsafePointer($0) }
+                let titlePointers = titles.map { UnsafePointer($0) }
+                let user = Unmanaged.passUnretained(self).toOpaque()
+                idPointers.withUnsafeBufferPointer { idBuffer in
+                    titlePointers.withUnsafeBufferPointer { titleBuffer in
+                        swiftpwa_w2_view_set_selection_actions(
+                            view, idBuffer.baseAddress, titleBuffer.baseAddress,
+                            Int32(actions.count), selectionActionTrampoline, user
+                        )
+                    }
+                }
+            }
+        }
         private nonisolated(unsafe) var ready = false
         private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         /// Documents already named in an embedded-frame refusal. Both
@@ -130,6 +162,9 @@
             // Async controller creation kicks off here; the caller
             // will pump messages via `pumpUntilReady` until the
             // callback flips `ready`.
+            selection = WebViewSelection { [weak self] actions in
+                try await self?.applySelectionActions(actions)
+            }
             let user = Unmanaged.passRetained(self).toOpaque()
             guard WebData.isEphemeral else {
                 swiftpwa_w2_create_controller(
@@ -788,6 +823,13 @@
     }
 
     /// `@convention(c)` callback from `swiftpwa_w2_view_set_fullscreen_element_handler`.
+    let selectionActionTrampoline: @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void = {
+        idPointer, userData in
+        guard let idPointer, let userData else { return }
+        let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()
+        adapter.selection?.actionChosen(String(cString: idPointer))
+    }
+
     let elementFullscreenTrampoline: @convention(c) (Int32, UnsafeMutableRawPointer?) -> Void = { contains, userData in
         guard let userData else { return }
         let adapter = Unmanaged<WebView2Adapter>.fromOpaque(userData).takeUnretainedValue()

@@ -758,4 +758,65 @@ static inline int swiftpwa_open_uri_external(const char *uri) {
     return ok ? 1 : 0;
 }
 
+// --- Page items in the text-selection context menu (`selection.setActions`) --
+
+typedef void (*swiftpwa_selection_action_cb)(const char *id, gpointer user);
+
+typedef struct {
+    char *id;
+    swiftpwa_selection_action_cb cb;
+    gpointer user;
+} SwiftPWASelectionChoice;
+
+static inline void swiftpwa_selection_choice_free(gpointer data, GClosure *closure) {
+    (void)closure;
+    SwiftPWASelectionChoice *choice = (SwiftPWASelectionChoice *)data;
+    g_free(choice->id);
+    g_free(choice);
+}
+
+static inline void swiftpwa_selection_choice_activate(GSimpleAction *action, GVariant *parameter, gpointer data) {
+    (void)action;
+    (void)parameter;
+    SwiftPWASelectionChoice *choice = (SwiftPWASelectionChoice *)data;
+    choice->cb(choice->id, choice->user);
+}
+
+/// Put the page's `count` items, then a separator, ahead of WebKit's own —
+/// only when `hit_test_result` says the menu is for a text selection. Each
+/// item's GAction has its own name: WebKit gathers the menu's actions into
+/// one action group by name, so a shared name would make every item fire the
+/// first one. Returns 1 if anything was added.
+static inline int swiftpwa_context_menu_add_selection_actions(
+    gpointer menu,
+    gpointer hit_test_result,
+    const char *const *ids,
+    const char *const *titles,
+    int count,
+    swiftpwa_selection_action_cb cb,
+    gpointer user
+) {
+    if (count <= 0 || !webkit_hit_test_result_context_is_selection(WEBKIT_HIT_TEST_RESULT(hit_test_result))) {
+        return 0;
+    }
+    for (int i = 0; i < count; i++) {
+        SwiftPWASelectionChoice *choice = g_new0(SwiftPWASelectionChoice, 1);
+        choice->id = g_strdup(ids[i]);
+        choice->cb = cb;
+        choice->user = user;
+        char name[48];
+        g_snprintf(name, sizeof name, "swiftpwa-selection-%d", i);
+        GSimpleAction *action = g_simple_action_new(name, NULL);
+        g_signal_connect_data(
+            action, "activate", G_CALLBACK(swiftpwa_selection_choice_activate), choice,
+            swiftpwa_selection_choice_free, (GConnectFlags)0
+        );
+        WebKitContextMenuItem *item = webkit_context_menu_item_new_from_gaction(G_ACTION(action), titles[i], NULL);
+        g_object_unref(action);
+        webkit_context_menu_insert(WEBKIT_CONTEXT_MENU(menu), item, i);
+    }
+    webkit_context_menu_insert(WEBKIT_CONTEXT_MENU(menu), webkit_context_menu_item_new_separator(), count);
+    return 1;
+}
+
 #endif

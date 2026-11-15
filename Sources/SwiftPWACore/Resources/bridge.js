@@ -255,6 +255,47 @@
         enumerable: false,
     });
 
+    // --- Selection gestures made with a mouse ------------------------------
+    //
+    // `selection.subscribe` reports when a text-selection gesture begins and
+    // ends. A finger the platform takes for selection is invisible to the page
+    // — no touchend, no pointerup — so the touch backends report that from
+    // native code. A mouse press stays visible to the page, so it is reported
+    // from here, into the same per-window native stream: a page gets one
+    // source whatever the input, and no platform branch.
+    if (IS_TOP) {
+        let pressed = false;
+        let began = false;
+        const report = (phase) => {
+            invoke("__selection.pointerGesture", { phase }).catch((e) => {
+                console.warn("swift-pwa: couldn't report a selection gesture:", e);
+            });
+        };
+        document.addEventListener("pointerdown", (event) => {
+            if (event.pointerType !== "mouse" || event.button !== 0) return;
+            pressed = true;
+            began = false;
+        }, { capture: true, passive: true });
+        // Began when the press first makes a selection — a click that only
+        // places the caret, or clears a selection, isn't a selection gesture.
+        document.addEventListener("selectionchange", () => {
+            if (!pressed || began) return;
+            const selection = document.getSelection();
+            if (!selection || selection.isCollapsed) return;
+            began = true;
+            report("began");
+        });
+        const release = (event) => {
+            if (event.pointerType !== "mouse") return;
+            pressed = false;
+            if (!began) return;
+            began = false;
+            report("ended");
+        };
+        document.addEventListener("pointerup", release, { capture: true, passive: true });
+        document.addEventListener("pointercancel", release, { capture: true, passive: true });
+    }
+
     // --- navigator.audioSession polyfill ---------------------------------
     //
     // The W3C Audio Session API decides what this app's audio *means* against

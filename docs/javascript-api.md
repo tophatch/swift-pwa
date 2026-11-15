@@ -801,6 +801,71 @@ location and notifications keep asking through their own web APIs — this is fo
 story, including what each platform answers and what to do when a store won't
 approve the permission: [permissions.md](permissions.md).
 
+### `selection.*` — your items in the system selection menu, and when a selection gesture ends
+
+When text is selected with a finger, iOS draws its edit menu beside the
+selection and Android its floating toolbar. A page can't add to either, and
+it can't tell when the finger lets go: once the platform takes a touch for
+selection the page gets no `touchend`, no `pointerup`. These two commands fill
+both gaps.
+
+```js
+// Your items, first in the platform's own selection menu. An empty list
+// puts the menu back as the platform builds it.
+await __SWIFT_PWA__.invoke('selection.setActions', { actions: [
+    { id: 'highlight', title: 'Highlight' },
+    { id: 'note',      title: 'Note' },
+] });
+
+const unsub = __SWIFT_PWA__.subscribe('selection.subscribe', null, (event) => {
+    if (event.type === 'action') {
+        // The selection is still in place: read it from the DOM as usual.
+        const range = getSelection().getRangeAt(0);
+        apply(event.id, range);
+    } else if (event.type === 'gesture') {
+        // 'began' when a finger the platform took for selection goes down,
+        // 'ended' when it lifts (or the platform ends the gesture itself).
+        selectionHeld = event.phase === 'began';
+    }
+});
+```
+
+Both are per window: the items show in the calling window's menu, and the
+events are that window's. Ids must be unique and ids and titles non-empty;
+anything else is refused with `E_DECODE` rather than shown as a blank item.
+
+Where the items show, per platform:
+
+| Platform              | Menu                                | Notes                                                            |
+| --------------------- | ----------------------------------- | ---------------------------------------------------------------- |
+| iOS / iPadOS          | the edit menu beside the selection  |                                                                  |
+| Android               | the floating selection toolbar      | A change made while a toolbar is open applies from the next one. |
+| macOS                 | the right-click menu on a selection | Not on a link's or an image's menu.                              |
+| Windows               | the right-click menu on a selection |                                                                  |
+| Linux (GTK3 and GTK4) | the right-click menu on a selection |                                                                  |
+
+`selection.subscribe`'s `gesture` events come from the place each platform can
+see the finger: the native view on iOS and Android, where the page can't, and
+the page's own `pointerdown` / `pointerup` for a mouse, so a page needs no
+platform branch. On a desktop, `began` arrives when a mouse press first makes a
+selection (a click that only places the caret isn't a selection gesture) and
+`ended` on its release. On iOS and Android:
+
+- **A long press reports `began` when the platform takes it**, a moment before
+  the selection appears, so a long press away from text gives a `began` /
+  `ended` pair with nothing selected. Read the selection, don't infer it.
+- **A handle drag reports `began` when the handle is picked up and `ended` as
+  the finger lifts.** On iOS the page's own `touchend` for that finger arrives
+  only with the next touch, so `ended` is the only timely signal.
+- **On Android, a handle drag ends when no part of the selection is left in
+  view, or when script changes the selection** — Chromium's rule, not swift-pwa's (measured
+  on WebView 157, Android 17). A page that turns under a held handle therefore
+  gets `ended` at the turn, and the reader has to pick the handle up again. A
+  turn that leaves even a few pixels of the selection on screen keeps the drag
+  going. Once Chromium drops the handle, Android cancels the finger's touch
+  stream, so neither the page nor swift-pwa sees that finger again until it
+  lifts and comes back down.
+
 ### `events.*` — server-initiated push
 
 A runtime-owned event bus for events the client *didn't* explicitly request —

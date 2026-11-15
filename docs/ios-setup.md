@@ -546,6 +546,25 @@ iOS: iOS has no synthetic input to supply one, on a device or the simulator.
 A person's tap during a long-running `drive eval` that waits for the page's
 result is how it was measured.
 
+## Text selection: the page's items and the selection gesture
+
+`selection.setActions` puts the page's items in the edit menu that appears
+beside a selection, ahead of the system's Copy, Look Up and the rest.
+Choosing one leaves the selection in place for the page to read.
+
+`selection.subscribe` reports when a selection gesture begins and ends, which
+the page can't see for itself: once WebKit takes a finger for a selection
+handle, the page gets its `touchstart` and nothing after, and that touch's
+`touchend` arrives only with the next touch. A gesture recognizer on the web
+view watches every finger without taking part, so `ended` arrives as the
+finger lifts. Whether a touch is a selection gesture comes from two signals:
+WebKit hides the edit menu when a handle is picked up, and a finger held still
+for half a second is a long press. A long press reports `began` before the
+selection appears, including one away from text, so read the selection rather
+than inferring it. A scroll also hides the menu, but the scroll view is
+already dragging by then, so a scroll reports nothing. Measured on an
+iPhone 17 Pro.
+
 ## Deep links into the app (`url_schemes`)
 
 The inbound direction. Declaring the top-level `url_schemes` key generates

@@ -1588,6 +1588,20 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
 
 ## 8. Known limitations
 
+- **Selection gestures from a handle need Android 10 (API 29) or later.**
+  Chromium draws each selection handle as its own popup window, which the
+  WebView never sees, so swift-pwa finds the handles through
+  `WindowInspector`, added in API 29. On Android 9 `selection.subscribe`
+  reports long presses but not handle drags. The page's items in the
+  selection toolbar (`selection.setActions`) work on every supported version;
+  a change made while a toolbar is open applies from the next one, because
+  rebuilding Chromium's open toolbar duplicates its own items.
+- **Chromium ends a handle drag when none of the selection is left in view**,
+  or when script changes the selection. A page that turns while a handle is
+  held gets `ended` at the turn, and Android cancels the rest of that finger's
+  touches, so nothing can carry the drag on. A turn that leaves part of the
+  selection on screen keeps the drag. Measured on a Galaxy Z Fold8 (Android 17,
+  WebView 157). See [javascript-api.md](javascript-api.md#selection--your-items-in-the-system-selection-menu-and-when-a-selection-gesture-ends).
 - **No picture in picture for `<video>`.** Android WebView has
   `requestPictureInPicture` but rejects it with `NotSupportedError`, and
   `document.pictureInPictureEnabled` is `false`. Measured with a tap on a

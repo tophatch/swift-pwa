@@ -241,6 +241,21 @@ void swiftpwa_w2_view_set_fullscreen_element_handler(
     void *user
 );
 
+// The page's own items for the context menu on a text selection
+// (`selection.setActions`): `count` entries, UTF-8, in the order the menu
+// shows them, ahead of WebView2's own. `count` 0 removes them. The strings are
+// copied. Choosing an item calls `cb` with that item's id, on the UI thread.
+typedef void (*swiftpwa_w2_selection_action_cb)(const char *id, void *user);
+
+void swiftpwa_w2_view_set_selection_actions(
+    swiftpwa_w2_view *view,
+    const char *const *ids,
+    const char *const *titles,
+    int count,
+    swiftpwa_w2_selection_action_cb cb,
+    void *user
+);
+
 /// Hand a URI to the shell — the default browser for http(s), whichever app
 /// is registered for a custom scheme. Returns 1 if the shell accepted it.
 int swiftpwa_w2_open_external(const char *utf8_uri);

@@ -33,6 +33,7 @@
             // clipboard.* JS commands work without the user having to
             // do it manually.
             use(WindowPlugin())
+            use(SelectionPlugin())
             use(PlatformInfoPlugin())
             use(SystemPlugin(urlOpener: AppleURLOpener()))
             use(AppPlugin())

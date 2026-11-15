@@ -44,6 +44,9 @@
         /// Guards work deferred onto the GTK main thread against the widget
         /// being destroyed first. See ``ViewLifetime``.
         let lifetime = ViewLifetime()
+        /// `selection.*` — see ``WebViewSelection``. The menu hook reads it
+        /// when WebKit builds the menu (`WebKitGTKAdapter+Selection.swift`).
+        public let selection: WebViewSelection? = WebViewSelection()
         /// Whether the app driver can synthesize input in this session.
         ///
         /// Resolved once, here, because ``inputCapabilities`` is synchronous
@@ -129,6 +132,7 @@
             }
 
             connectMessageHandler(ucm: ucm)
+            connectSelectionMenu()
         }
 
         /// Set the web view's base background colour. Called from

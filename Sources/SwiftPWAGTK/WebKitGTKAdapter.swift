@@ -37,6 +37,9 @@
         /// Guards work deferred onto the GTK main thread against the widget
         /// being destroyed first. See ``ViewLifetime``.
         let lifetime = ViewLifetime()
+        /// `selection.*` — see ``WebViewSelection``. The menu hook reads it
+        /// when WebKit builds the menu (`WebKitGTKAdapter+Selection.swift`).
+        public let selection: WebViewSelection? = WebViewSelection()
 
         private var webView: UnsafeMutablePointer<WebKitWebView> {
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
@@ -113,6 +116,7 @@
             // Connect `script-message-received` so JS calls to
             // `mh.postMessage(json)` make it back into Swift.
             connectMessageHandler(ucm: ucm)
+            connectSelectionMenu()
         }
 
         /// Set the web view's base background colour. Called from

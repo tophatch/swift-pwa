@@ -937,6 +937,16 @@ Leaving element fullscreen keeps an app that called `window.setFullscreen`
 fullscreen. `window.isFullscreen` and the fullscreen window events still
 describe only the app's own request. Measured on Windows 11 x64.
 
+## Text selection: the page's items in the context menu
+
+`selection.setActions` puts the page's items first in WebView2's right-click
+menu on a text selection, with a separator before WebView2's own; a link's or
+an image's menu is left alone. WebView2 builds that menu in its own process,
+so the backend hands it the list and answers `ContextMenuRequested`. A mouse
+selection's `began` / `ended` come from the page's pointer events. Measured on
+Windows 11 x64. A touch screen's selection handles weren't measured, so
+`selection.subscribe` may not report a handle drag made with a finger.
+
 ## Known limitations (Windows-specific)
 
 **App icon styles are the MSIX taskbar logo only, and there are no alternate

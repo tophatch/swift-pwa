@@ -90,7 +90,13 @@
         private let memoryProvider = AndroidMemoryProvider()
 
         private init() {
+            AndroidHostEventRouter.subscribe(channel: AndroidWebViewAdapter.selectionChannel) { data in
+                AndroidWebViewAdapter.routeSelectionEvent(
+                    data, to: AndroidAppContext.shared.activeWindow?.adapter.selection
+                )
+            }
             use(WindowPlugin())
+            use(SelectionPlugin())
             // `appMemoryLimitBytes` on Android is the large-heap class, read
             // over JNI and cached by the provider. The closure degrades to `nil`
             // on RPC failure so `__platform.info` never breaks on a memory read.

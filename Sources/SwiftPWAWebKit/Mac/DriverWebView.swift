@@ -29,7 +29,7 @@
     /// the narrower risk of the two — a click-through difference is visible the
     /// moment anyone tries it by hand, whereas silently changing every app's
     /// window behaviour would not be.
-    final class DriverWebView: WKWebView {
+    final class DriverWebView: SelectionWebView {
         override func acceptsFirstMouse(for _: NSEvent?) -> Bool {
             true
         }

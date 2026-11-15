@@ -154,6 +154,7 @@ public final class HeadlessAppContext: AppContext {
 
     public init() {
         use(WindowPlugin())
+        use(SelectionPlugin())
         use(PlatformInfoPlugin())
         use(SystemPlugin())
         use(AppPlugin())

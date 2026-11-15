@@ -152,6 +152,15 @@
 
         // MARK: - WKUIDelegate
 
+        #if os(iOS)
+            /// The edit menu hides when a selection handle is picked up and
+            /// comes back when it's let go — the one native sign that a handle
+            /// drag has started. See ``SelectionWebView``.
+            func webView(_ webView: WKWebView, willDismissEditMenuWithAnimator _: any UIEditMenuInteractionAnimating) {
+                (webView as? SelectionWebView)?.editMenuWillDismiss()
+            }
+        #endif
+
         /// `target="_blank"` and `window.open`. There is no second webview to
         /// give the page, so an off-origin one goes to the system browser —
         /// which is what a new-window link means to a user — and `window.open`

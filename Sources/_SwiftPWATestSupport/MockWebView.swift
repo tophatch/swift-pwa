@@ -136,6 +136,19 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         stubbedInputCapabilities
     }
 
+    /// What `selection` returns; set to `nil` to stand in for a backend that
+    /// can't reach its selection menu.
+    public var stubbedSelection: WebViewSelection? {
+        get { lock.withLock { _stubbedSelection } }
+        set { lock.withLock { _stubbedSelection = newValue } }
+    }
+
+    private var _stubbedSelection: WebViewSelection? = WebViewSelection()
+
+    public var selection: WebViewSelection? {
+        stubbedSelection
+    }
+
     public var supportsSnapshot: Bool {
         lock.withLock { _stubbedSnapshot != nil }
     }

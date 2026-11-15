@@ -9,6 +9,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`selection.*`: a page's own items in the system text-selection menu, and
+  when a selection gesture begins and ends** (#352, #353). A reading app
+  puts *Highlight* and *Note* beside the words they act on. A webview app
+  couldn't: the iOS edit menu and Android's floating toolbar take no items
+  from a page, so the app's own bar had to sit somewhere else, with two menus
+  on screen for every selection. `selection.setActions` puts the page's items
+  first in the platform's own menu on all five platforms (the right-click menu
+  on a selection on the desktop). `selection.subscribe` reports the choice
+  while the selection is still in place, so the page reads the range from the
+  DOM as it already does. On a Windows touch screen the items are under *…* in
+  WebView2's own small menu, which takes no additions. A page also couldn't
+  tell a finger still on a
+  selection handle from one that had lifted: once the platform takes a touch
+  for selection, the page gets no `touchend` or `pointerup`, only
+  `selectionchange`, which goes quiet when the finger stops. `selection.subscribe`
+  reports the gesture's `began` and `ended` from the native view on iOS and
+  Android, and from the page's own pointer events where it can see the press,
+  so one stream covers every input. Android's selection handles are separate
+  popup windows that the WebView never sees, so they are observed directly.
+  On Windows a handle drag is hidden from the page entirely, so the backend
+  reads the touch screen's raw input, which starts and stops with the finger:
+  a selection change with no visible press while a finger is down is a handle
+  drag. On Android,
+  Chromium also ends a handle drag once none of the selection is left in view,
+  for example when a page turns under a held handle (measured on WebView 157:
+  movement that leaves part of the selection on screen keeps the drag). Android
+  then cancels the finger's touch stream, so neither the page nor the app can
+  continue that drag. The page gets `ended` at that moment instead. Measured on
+  an iPhone 17 Pro, a Galaxy Z Fold8, macOS 27, Windows 11 x64 and arm64 (a
+  Surface, by finger), and WebKitGTK 2.52 on GTK3 and GTK4 — including touch,
+  through a virtual touch screen on Ubuntu 25.10. WebKitGTK has no touch
+  selection handles; it turns a finger into mouse events, which are reported
+  like a mouse's. Per-platform
+  detail is in [docs/javascript-api.md](docs/javascript-api.md#selection--your-items-in-the-system-selection-menu-and-when-a-selection-gesture-ends).
+
 - **Picture in picture on macOS, opt-in with `macos.picture_in_picture`**
   (#348). A page's `<video>` reported picture in picture as unsupported on
   the Mac: `document.pictureInPictureEnabled` said `true`, but

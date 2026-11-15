@@ -588,6 +588,22 @@ xdg-mime default myapp.desktop x-scheme-handler/myapp
 xdg-open "myapp://hello"
 ```
 
+## Text selection: the page's items in the context menu
+
+`selection.setActions` puts the page's items first in WebKitGTK's
+right-click menu on a text selection, with a separator before WebKit's own,
+on both backends: the `context-menu` signal's hit-test result says whether
+the menu is for a selection. A mouse selection's `began` / `ended` come from
+the page's pointer events. Measured on WebKitGTK 2.52, GTK3 and GTK4.
+
+On a touch screen WebKitGTK has no selection handles: it turns a finger into
+mouse events. A double-tap selects a word, a long press followed by a drag
+selects a range, and a long press on its own opens the context menu at the
+lift — with the page's items when it lands on a selection. Because the page
+sees these as mouse presses, `selection.subscribe` reports them as it reports
+a mouse. Measured on Ubuntu 25.10 (GNOME on Wayland) with a virtual touch
+screen, WebKitGTK 2.52.3, both backends.
+
 ## Known limitations on Linux
 
 **A `<video>` or `<audio>` served from the app's own origin doesn't load.**

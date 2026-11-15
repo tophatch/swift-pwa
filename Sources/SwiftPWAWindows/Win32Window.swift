@@ -187,6 +187,9 @@
                 self?.elementFullscreen = on
                 self?.updateFullscreenFrame()
             }
+            // A finger on the touch screen, for selection-handle drags the
+            // page can't see (`selection.subscribe`).
+            RawTouchScreen.shared.start()
             bridge.start()
             adapter.load(config.content)
             adapter.fitTo(client: clientRect())

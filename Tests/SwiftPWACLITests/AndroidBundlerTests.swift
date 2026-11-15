@@ -741,6 +741,29 @@ struct AndroidBundlerUnitTests {
         #expect(activity.contains("bridge.onElementFullscreen = { leaveFullscreen.isEnabled = it }"))
     }
 
+    @Test("selection.*: the WebView subclass is used, adds the page's items and reports gestures (#352, #353)")
+    func selectionWired() {
+        let bridge = AndroidTemplates.swiftPWABridgeKt()
+        #expect(bridge.contains("class SwiftPWAWebView(context: Context) : WebView(context)"))
+        // The page's items ride on Chromium's own toolbar via its callback.
+        #expect(bridge.contains("override fun startActionMode(callback: ActionMode.Callback?, type: Int): ActionMode?"))
+        #expect(bridge.contains("menu.add(SELECTION_GROUP, index, 0, title)"))
+        // Handles are popup windows the WebView never sees; the class name
+        // is what finds them, so a rename here is a silent loss of gestures.
+        #expect(bridge.contains("\"org.chromium.android_webview.PopupTouchHandleDrawable\""))
+        #expect(bridge.contains("WindowInspector.getGlobalWindowViews()"))
+        #expect(bridge.contains("setOnLongClickListener"))
+        // Swift's `AndroidWebViewAdapter.selectionChannel` and the Kotlin
+        // dispatch name must match the strings Kotlin uses.
+        #expect(bridge.contains("event.put(\"channel\", \"selection.event\")"))
+        #expect(bridge.contains("fun setSelectionActions(json: JSONObject)"))
+        let plugins = AndroidTemplates.swiftPWASystemPluginsKt(enableGeminiNano: false)
+        #expect(plugins.contains("\"selection.setActions\" -> { bridge.setSelectionActions(json); done(null, null) }"))
+        let activity = AndroidTemplates.mainActivityKt(packageId: "com.example.hi", soBaseName: "Hi")
+        #expect(activity.contains("webView = SwiftPWAWebView(this)"))
+        #expect(activity.contains("import dev.swiftpwa.runtime.SwiftPWAWebView"))
+    }
+
     @Test("SwiftPWABridge declares spawnWindow + MainActivity reads the secondary intent extra")
     func bridgeKtDeclaresSpawnWindow() {
         let bridge = AndroidTemplates.swiftPWABridgeKt()
@@ -823,7 +846,7 @@ struct AndroidBundlerUnitTests {
         // Before the runtime can read its environment, and before a WebView
         // exists, which is when WebView stops taking a data directory suffix.
         let load = try #require(activity.range(of: "System.loadLibrary(\"Hi\")"))
-        let webView = try #require(activity.range(of: "webView = WebView(this)"))
+        let webView = try #require(activity.range(of: "webView = SwiftPWAWebView(this)"))
         #expect(gate.upperBound < load.lowerBound && load.upperBound < webView.lowerBound)
         #expect(activity.contains("android.system.Os.setenv(key, value, true)"))
         #expect(activity.contains("it.startsWith(\"SWIFT_PWA_\")"))

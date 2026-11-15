@@ -805,6 +805,7 @@ enum AndroidTemplates {
         import androidx.appcompat.app.AppCompatActivity
         import androidx.webkit.WebViewAssetLoader
         import dev.swiftpwa.runtime.SwiftPWABridge
+        import dev.swiftpwa.runtime.SwiftPWAWebView
         import java.io.File
         import kotlin.concurrent.thread
         import org.json.JSONArray
@@ -918,7 +919,7 @@ enum AndroidTemplates {
                     return
                 }
 
-                webView = WebView(this)\(backgroundColorLine)
+                webView = SwiftPWAWebView(this)\(backgroundColorLine)
                 setContentView(webView)
 
                 if ((applicationInfo.flags and android.content.pm.ApplicationInfo.FLAG_DEBUGGABLE) != 0) {
@@ -1453,10 +1454,15 @@ enum AndroidTemplates {
         package dev.swiftpwa.runtime
 
         import android.app.Activity
+        import android.content.Context
         import android.net.Uri
         import android.os.Handler
         import android.os.Looper
         import android.provider.DocumentsContract
+        import android.view.ActionMode
+        import android.view.Menu
+        import android.view.MenuItem
+        import android.view.MotionEvent
         import android.view.View
         import android.view.ViewGroup
         import android.webkit.GeolocationPermissions
@@ -1479,6 +1485,149 @@ enum AndroidTemplates {
         import androidx.webkit.WebViewCompat
         import androidx.webkit.WebViewFeature
 
+        /// The app's WebView: a plain one plus the page's part in the
+        /// text-selection UI (`selection.*`, #352 / #353).
+        ///
+        /// **Menu items.** Chromium builds its floating selection toolbar
+        /// through `startActionMode`; wrapping the callback it passes is the
+        /// public way to add items to that toolbar, and the page's items go
+        /// first, in Chromium's own toolbar rather than a second one beside
+        /// it.
+        ///
+        /// **Gestures.** A finger Chromium takes for selection is invisible to
+        /// the page — no `touchend`, no `pointerup` — so it is reported from
+        /// here, from the two places that finger can be:
+        ///
+        /// - **A long press** lands on the WebView itself. `performLongClick`
+        ///   fires when Chromium takes the press (before it makes the
+        ///   selection) and the press's own `ACTION_UP` ends it.
+        /// - **A selection handle** is not in the WebView at all: Chromium
+        ///   draws each handle as its own popup window, so the WebView never
+        ///   sees a handle drag. The handle views are found through the public
+        ///   `WindowInspector` (API 29+) and observed with a touch listener that
+        ///   returns `false`, which leaves Chromium's own handling untouched.
+        ///   They are matched by class name — Chromium keeps it unobfuscated —
+        ///   and a WebView that renamed it would lose the handle half of the
+        ///   gestures, not the menu.
+        class SwiftPWAWebView(context: Context) : WebView(context) {
+            /// Set by `SwiftPWABridge`; receives `{type: "action", id}` and
+            /// `{type: "gesture", phase}` for the Swift side.
+            var onSelectionEvent: ((JSONObject) -> Unit)? = null
+
+            private var selectionActions: List<Pair<String, String>> = emptyList()
+            private var fingerDown = false
+            private var longPressGesture = false
+
+            init {
+                setOnLongClickListener {
+                    if (fingerDown && !longPressGesture) {
+                        longPressGesture = true
+                        gesture("began")
+                    }
+                    false
+                }
+            }
+
+            /// Applies from the next toolbar. Not `invalidate()` on one already
+            /// showing: Chromium's own items are added again on each prepare,
+            /// so the toolbar ends up with two of each (measured, WebView 157).
+            fun setSelectionActions(actions: List<Pair<String, String>>) {
+                selectionActions = actions
+            }
+
+            private fun gesture(phase: String) {
+                onSelectionEvent?.invoke(JSONObject().put("type", "gesture").put("phase", phase))
+            }
+
+            private fun addSelectionItems(menu: Menu) {
+                menu.removeGroup(SELECTION_GROUP)
+                selectionActions.forEachIndexed { index, (_, title) ->
+                    menu.add(SELECTION_GROUP, index, 0, title)
+                }
+            }
+
+            override fun startActionMode(callback: ActionMode.Callback?, type: Int): ActionMode? {
+                if (callback == null) return super.startActionMode(callback, type)
+                observeSelectionHandles()
+                val wrapped = object : ActionMode.Callback2() {
+                    override fun onCreateActionMode(mode: ActionMode, menu: Menu): Boolean {
+                        val created = callback.onCreateActionMode(mode, menu)
+                        addSelectionItems(menu)
+                        return created
+                    }
+
+                    override fun onPrepareActionMode(mode: ActionMode, menu: Menu): Boolean {
+                        callback.onPrepareActionMode(mode, menu)
+                        addSelectionItems(menu)
+                        return true
+                    }
+
+                    override fun onActionItemClicked(mode: ActionMode, item: MenuItem): Boolean {
+                        if (item.groupId != SELECTION_GROUP) return callback.onActionItemClicked(mode, item)
+                        val action = selectionActions.getOrNull(item.itemId) ?: return true
+                        onSelectionEvent?.invoke(JSONObject().put("type", "action").put("id", action.first))
+                        return true
+                    }
+
+                    override fun onDestroyActionMode(mode: ActionMode) {
+                        callback.onDestroyActionMode(mode)
+                    }
+
+                    override fun onGetContentRect(mode: ActionMode, view: View, outRect: android.graphics.Rect) {
+                        if (callback is ActionMode.Callback2) {
+                            callback.onGetContentRect(mode, view, outRect)
+                        } else {
+                            super.onGetContentRect(mode, view, outRect)
+                        }
+                    }
+                }
+                return super.startActionMode(wrapped, type)
+            }
+
+            /// Chromium creates the handles with the first selection and keeps
+            /// them, and a selection always starts the toolbar, so checking
+            /// here reaches every handle before it can be dragged. A tag marks
+            /// the ones already observed.
+            private fun observeSelectionHandles() {
+                if (android.os.Build.VERSION.SDK_INT < 29) return
+                for (root in android.view.inspector.WindowInspector.getGlobalWindowViews()) {
+                    if (root === rootView || root !is ViewGroup || root.childCount != 1) continue
+                    val handle = root.getChildAt(0)
+                    if (handle.javaClass.name != SELECTION_HANDLE_CLASS) continue
+                    if (handle.getTag(R_TAG_OBSERVED) != null) continue
+                    handle.setTag(R_TAG_OBSERVED, true)
+                    handle.setOnTouchListener { _, event ->
+                        when (event.actionMasked) {
+                            MotionEvent.ACTION_DOWN -> gesture("began")
+                            MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> gesture("ended")
+                        }
+                        false
+                    }
+                }
+            }
+
+            override fun dispatchTouchEvent(event: MotionEvent): Boolean {
+                when (event.actionMasked) {
+                    MotionEvent.ACTION_DOWN -> fingerDown = true
+                    MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                        fingerDown = false
+                        if (longPressGesture) {
+                            longPressGesture = false
+                            gesture("ended")
+                        }
+                    }
+                }
+                return super.dispatchTouchEvent(event)
+            }
+
+            private companion object {
+                const val SELECTION_GROUP = 0x5e1ec7
+                const val SELECTION_HANDLE_CLASS = "org.chromium.android_webview.PopupTouchHandleDrawable"
+                /// A view tag key must be a resource-style id (top byte set).
+                const val R_TAG_OBSERVED = 0x7f5e1ec7
+            }
+        }
+
         /// Bridge object owned by `MainActivity`. Provides the JS<->Swift
         /// channel via `addJavascriptInterface` plus the outbound calls
         /// the Swift side makes to drive the WebView (loadUrl, evaluateJs,
@@ -1495,6 +1644,27 @@ enum AndroidTemplates {
         ) {
             private val main = Handler(Looper.getMainLooper())
             private val systemPlugins: SwiftPWASystemPlugins = SwiftPWASystemPlugins(activity, this)
+
+            init {
+                (webView as? SwiftPWAWebView)?.onSelectionEvent = { event ->
+                    try {
+                        nativeHostEvent(event.put("channel", "selection.event").toString())
+                    } catch (t: Throwable) {
+                        android.util.Log.e("swift-pwa", "failed to push a selection event: ${t.message}")
+                    }
+                }
+            }
+
+            /// `selection.setActions` from Swift: the page's items for the
+            /// selection toolbar, applied on the UI thread that builds it.
+            fun setSelectionActions(json: JSONObject) {
+                val list = json.getJSONArray("actions")
+                val actions = (0 until list.length()).map { index ->
+                    val action = list.getJSONObject(index)
+                    action.getString("id") to action.getString("title")
+                }
+                main.post { (webView as? SwiftPWAWebView)?.setSelectionActions(actions) }
+            }
             // `window.snapshot`'s PNG encode, off the UI thread: a WebView
             // draws no frames while that thread is busy, and the encode is
             // most of the call (#325).
@@ -2899,6 +3069,7 @@ enum AndroidTemplates {
                     null
                 )
                 "window.snapshot" -> windowSnapshot(json, done)
+                "selection.setActions" -> { bridge.setSelectionActions(json); done(null, null) }
                 "system.memory" -> systemMemory(done)
                 "system.openURL" -> systemOpenURL(json, done)
                 "app.icon.state" -> appIconState(done)

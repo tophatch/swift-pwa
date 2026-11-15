@@ -13,6 +13,11 @@
     /// writes to is intrinsically thread-safe.
     public final class WKWebViewAdapter: NSObject, PWAWebView, WKScriptMessageHandler, @unchecked Sendable {
         public nonisolated let webView: WKWebView
+        #if os(iOS)
+            public nonisolated let selection: WebViewSelection? = WebViewSelection(tracksTouchNatively: true)
+        #else
+            public nonisolated let selection: WebViewSelection? = WebViewSelection()
+        #endif
         private nonisolated(unsafe) var assetProvider: AssetProvider?
         private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         /// Eager `let` rather than a lazy var — Swift 6.0 (Xcode 16.4)
@@ -64,10 +69,12 @@
             )
             cfg.userContentController.addUserScript(userScript)
             #if os(macOS) && SWIFT_PWA_DRIVER
-                webView = DriverWebView(frame: .zero, configuration: cfg)
+                let view: SelectionWebView = DriverWebView(frame: .zero, configuration: cfg)
             #else
-                webView = WKWebView(frame: .zero, configuration: cfg)
+                let view = SelectionWebView(frame: .zero, configuration: cfg)
             #endif
+            view.selection = selection
+            webView = view
             super.init()
             continuation = captured
             cfg.userContentController.add(self, name: BridgeScript.messageHandlerName)

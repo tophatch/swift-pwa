@@ -67,6 +67,7 @@
 
         public init() {
             use(WindowPlugin())
+            use(SelectionPlugin())
             use(PlatformInfoPlugin())
             use(SystemPlugin(urlOpener: AppleURLOpener()))
             use(AppPlugin())

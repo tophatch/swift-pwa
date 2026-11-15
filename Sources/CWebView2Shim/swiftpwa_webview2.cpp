@@ -139,6 +139,12 @@ struct ViewExtension {
     swiftpwa_w2_fullscreen_cb fullscreen_cb = nullptr;
     void *fullscreen_user = nullptr;
     bool fullscreen_subscribed = false;
+
+    // (id, title) for the selection context menu, in menu order.
+    std::vector<std::pair<std::string, std::wstring>> selection_actions;
+    swiftpwa_w2_selection_action_cb selection_cb = nullptr;
+    void *selection_user = nullptr;
+    bool context_menu_subscribed = false;
 };
 
 // We keep the per-view extension as a side-table keyed by the
@@ -792,6 +798,104 @@ extern "C" void swiftpwa_w2_view_set_fullscreen_element_handler(
                     user_local = ext.fullscreen_user;
                 }
                 if (cb_local) cb_local(contains ? 1 : 0, user_local);
+                return S_OK;
+            })
+            .Get(),
+        &token
+    );
+}
+
+extern "C" void swiftpwa_w2_view_set_selection_actions(
+    swiftpwa_w2_view *view,
+    const char *const *ids,
+    const char *const *titles,
+    int count,
+    swiftpwa_w2_selection_action_cb cb,
+    void *user
+) {
+    if (!view || !view->raw) return;
+    {
+        ViewExtension &ext = get_or_create_extension(view->raw);
+        std::lock_guard<std::mutex> lock(ext.mu);
+        ext.selection_actions.clear();
+        for (int i = 0; i < count; ++i) {
+            ext.selection_actions.emplace_back(ids[i], utf8_to_wide(titles[i]));
+        }
+        ext.selection_cb = cb;
+        ext.selection_user = user;
+        if (ext.context_menu_subscribed) return;
+        ext.context_menu_subscribed = true;
+    }
+
+    // ContextMenuRequested is ICoreWebView2_11 and CreateContextMenuItem is
+    // ICoreWebView2Environment9 — both in every runtime this project targets,
+    // but a runtime without them would otherwise drop the items silently.
+    ComPtr<ICoreWebView2_11> view11;
+    if (FAILED(view->raw->QueryInterface(IID_PPV_ARGS(&view11)))) {
+        fprintf(stderr, "swift-pwa: this WebView2 runtime has no ContextMenuRequested; "
+                        "selection.setActions items won't show\n");
+        return;
+    }
+    EventRegistrationToken token{};
+    view11->add_ContextMenuRequested(
+        Callback<ICoreWebView2ContextMenuRequestedEventHandler>(
+            [view](ICoreWebView2 *, ICoreWebView2ContextMenuRequestedEventArgs *args) -> HRESULT {
+                ComPtr<ICoreWebView2ContextMenuTarget> target;
+                if (FAILED(args->get_ContextMenuTarget(&target))) return S_OK;
+                BOOL has_selection = FALSE;
+                target->get_HasSelection(&has_selection);
+                if (!has_selection) return S_OK;
+
+                ViewExtension &ext = get_or_create_extension(view->raw);
+                std::vector<std::pair<std::string, std::wstring>> actions;
+                ComPtr<ICoreWebView2Environment> env;
+                {
+                    std::lock_guard<std::mutex> lock(ext.mu);
+                    actions = ext.selection_actions;
+                    env = ext.env;
+                }
+                if (actions.empty()) return S_OK;
+                ComPtr<ICoreWebView2Environment9> env9;
+                if (!env || FAILED(env.As(&env9))) {
+                    fprintf(stderr, "swift-pwa: this WebView2 runtime can't create context menu items\n");
+                    return S_OK;
+                }
+                ComPtr<ICoreWebView2ContextMenuItemCollection> items;
+                if (FAILED(args->get_MenuItems(&items))) return S_OK;
+
+                UINT32 index = 0;
+                for (const auto &action : actions) {
+                    ComPtr<ICoreWebView2ContextMenuItem> item;
+                    if (FAILED(env9->CreateContextMenuItem(
+                            action.second.c_str(), nullptr, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_COMMAND, &item))) {
+                        continue;
+                    }
+                    std::string id = action.first;
+                    EventRegistrationToken selected{};
+                    item->add_CustomItemSelected(
+                        Callback<ICoreWebView2CustomItemSelectedEventHandler>(
+                            [view, id](ICoreWebView2ContextMenuItem *, IUnknown *) -> HRESULT {
+                                ViewExtension &ext = get_or_create_extension(view->raw);
+                                swiftpwa_w2_selection_action_cb cb_local = nullptr;
+                                void *user_local = nullptr;
+                                {
+                                    std::lock_guard<std::mutex> lock(ext.mu);
+                                    cb_local = ext.selection_cb;
+                                    user_local = ext.selection_user;
+                                }
+                                if (cb_local) cb_local(id.c_str(), user_local);
+                                return S_OK;
+                            })
+                            .Get(),
+                        &selected
+                    );
+                    items->InsertValueAtIndex(index++, item.Get());
+                }
+                ComPtr<ICoreWebView2ContextMenuItem> separator;
+                if (SUCCEEDED(env9->CreateContextMenuItem(
+                        L"", nullptr, COREWEBVIEW2_CONTEXT_MENU_ITEM_KIND_SEPARATOR, &separator))) {
+                    items->InsertValueAtIndex(index, separator.Get());
+                }
                 return S_OK;
             })
             .Get(),

@@ -84,6 +84,12 @@ public protocol PWAWebView: AnyObject, Sendable {
     /// stylus test that silently ran as a mouse click would pass while proving
     /// nothing.
     var inputCapabilities: InputCapabilities { get }
+
+    /// This webview's text-selection menu and gestures — see
+    /// ``WebViewSelection``. `nil` where the backend can't reach the
+    /// platform's selection UI, which `selection.*` reports as
+    /// `E_UNIMPLEMENTED` rather than quietly showing no items.
+    var selection: WebViewSelection? { get }
 }
 
 public extension PWAWebView {
@@ -114,5 +120,9 @@ public extension PWAWebView {
 
     var inputCapabilities: InputCapabilities {
         .none
+    }
+
+    var selection: WebViewSelection? {
+        nil
     }
 }

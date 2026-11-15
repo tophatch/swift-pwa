@@ -152,7 +152,9 @@ if [[ -f "\$PREFIX/install/lib/libxml2.so.2" ]]; then
 fi
 mkdir -p "\$PREFIX/src"
 cd "\$PREFIX/src"
-curl -sLO "https://download.gnome.org/sources/libxml2/${XML_VERSION%.*}/libxml2-$XML_VERSION.tar.xz"
+# A desktop install can have wget and no curl (Ubuntu 25.10's does).
+XML_URL="https://download.gnome.org/sources/libxml2/${XML_VERSION%.*}/libxml2-$XML_VERSION.tar.xz"
+if command -v curl >/dev/null; then curl -sLO "\$XML_URL"; else wget -q "\$XML_URL"; fi
 tar xf "libxml2-$XML_VERSION.tar.xz"
 cd "libxml2-$XML_VERSION"
 # --without-icu is the point: the archived distro builds pull in an ICU major

@@ -29,6 +29,7 @@
 
         private init() {
             use(WindowPlugin())
+            use(SelectionPlugin())
             use(PlatformInfoPlugin())
             use(SystemPlugin(urlOpener: GTKURLOpener()))
             use(AppPlugin())

@@ -28,10 +28,48 @@
         private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         private let stream: AsyncStream<InboundMessage>
 
+        /// The page's selection-toolbar items live in Kotlin, which builds the
+        /// toolbar, so each change is sent there. Events come back on the
+        /// `selection.event` host channel, which `AndroidAppContext` routes to
+        /// the active window — the same window a page's own frames are
+        /// attributed to.
+        public let selection: WebViewSelection? = WebViewSelection(
+            tracksTouchNatively: true,
+            actionsChanged: { actions in
+                _ = try await AndroidRPC.call(
+                    "selection.setActions",
+                    SelectionSetActionsArgs(actions: actions),
+                    as: NoResult.self
+                )
+            }
+        )
+
         public init() {
             var captured: AsyncStream<InboundMessage>.Continuation?
             stream = AsyncStream { captured = $0 }
             continuation = captured
+        }
+
+        static let selectionChannel = "selection.event"
+
+        private struct SelectionHostEvent: Decodable {
+            let type: String
+            let id: String?
+            let phase: SelectionGesturePhase?
+        }
+
+        static func routeSelectionEvent(_ data: Data, to selection: WebViewSelection?) {
+            guard let selection else { return }
+            do {
+                let event = try JSONDecoder().decode(SelectionHostEvent.self, from: data)
+                switch (event.type, event.id, event.phase) {
+                case let ("action", id?, _): selection.actionChosen(id)
+                case let ("gesture", _, phase?): selection.gesture(phase)
+                default: swiftPWALog("swift-pwa: unexpected selection event \(String(decoding: data, as: UTF8.self))")
+                }
+            } catch {
+                swiftPWALog("swift-pwa: couldn't decode a selection event: \(error)")
+            }
         }
 
         // MARK: - PWAWebView

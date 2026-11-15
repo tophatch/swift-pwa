@@ -38,7 +38,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   then cancels the finger's touch stream, so neither the page nor the app can
   continue that drag. The page gets `ended` at that moment instead. Measured on
   an iPhone 17 Pro, a Galaxy Z Fold8, macOS 27, Windows 11 x64 and arm64 (a
-  Surface, by finger), and WebKitGTK 2.52 on GTK3 and GTK4. Per-platform
+  Surface, by finger), and WebKitGTK 2.52 on GTK3 and GTK4 — including touch,
+  through a virtual touch screen on Ubuntu 25.10. WebKitGTK has no touch
+  selection handles; it turns a finger into mouse events, which are reported
+  like a mouse's. Per-platform
   detail is in [docs/javascript-api.md](docs/javascript-api.md#selection--your-items-in-the-system-selection-menu-and-when-a-selection-gesture-ends).
 
 - **Picture in picture on macOS, opt-in with `macos.picture_in_picture`**

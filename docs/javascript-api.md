@@ -851,7 +851,9 @@ mouse, a pen, and a desktop long press; and on Windows, the touch screen's raw
 input for a selection-handle drag, which WebView2 hides from the page. Where
 the page sees the press, `began` arrives when it first makes a selection (a
 click that only places the caret isn't a selection gesture) and `ended` on its
-release. On iOS and Android:
+release. WebKitGTK turns a finger into mouse events (a double-tap or a long
+press then drag selects), so on Linux a touch selection reports like a
+mouse's. On iOS and Android:
 
 - **A long press reports `began` when the platform takes it**, a moment before
   the selection appears, so a long press away from text gives a `began` /

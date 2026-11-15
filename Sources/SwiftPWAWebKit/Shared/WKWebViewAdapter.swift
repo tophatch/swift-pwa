@@ -13,7 +13,11 @@
     /// writes to is intrinsically thread-safe.
     public final class WKWebViewAdapter: NSObject, PWAWebView, WKScriptMessageHandler, @unchecked Sendable {
         public nonisolated let webView: WKWebView
-        public nonisolated let selection: WebViewSelection? = WebViewSelection()
+        #if os(iOS)
+            public nonisolated let selection: WebViewSelection? = WebViewSelection(tracksTouchNatively: true)
+        #else
+            public nonisolated let selection: WebViewSelection? = WebViewSelection()
+        #endif
         private nonisolated(unsafe) var assetProvider: AssetProvider?
         private nonisolated(unsafe) var continuation: AsyncStream<InboundMessage>.Continuation?
         /// Eager `let` rather than a lazy var — Swift 6.0 (Xcode 16.4)

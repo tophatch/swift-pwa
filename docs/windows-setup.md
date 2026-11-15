@@ -942,10 +942,26 @@ describe only the app's own request. Measured on Windows 11 x64.
 `selection.setActions` puts the page's items first in WebView2's right-click
 menu on a text selection, with a separator before WebView2's own; a link's or
 an image's menu is left alone. WebView2 builds that menu in its own process,
-so the backend hands it the list and answers `ContextMenuRequested`. A mouse
-selection's `began` / `ended` come from the page's pointer events. Measured on
-Windows 11 x64. A touch screen's selection handles weren't measured, so
-`selection.subscribe` may not report a handle drag made with a finger.
+so the backend hands it the list and answers `ContextMenuRequested`.
+
+On a touch screen a long press opens WebView2's own small menu (*Copy* and
+*…*) rather than the context menu, and WebView2 has no API to add to it. The
+page's items are one tap further, under *…*.
+
+`selection.subscribe`'s gestures come from the page's own pointer events for
+a mouse, a pen, and a long press with a finger, which the page sees from
+`pointerdown` to `pointerup`. A **selection-handle drag** is hidden from the
+page completely: Chromium takes the finger before the page does, so the page
+gets only `selectionchange`, and WebView2's input window belongs to another
+process. The backend therefore reads the touch screen's raw input
+(`RIDEV_INPUTSINK` on a hidden window of the app's own): a digitizer sends
+reports while a finger is down and stops when it lifts. A selection change
+with no press the page can see, while a finger is down, is a handle drag;
+`ended` follows about 60 ms after the last report. Only the reports' arrival is
+used, never their contents, and only while the app is in front. Measured with a
+finger on a Surface (Snapdragon X, Windows 11): a handle drag reported `began`
+120 ms in and `ended` 64 ms after the lift; taps and scrolls reported nothing.
+Menus measured on Windows 11 x64 and arm64.
 
 ## Known limitations (Windows-specific)
 

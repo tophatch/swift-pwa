@@ -13,9 +13,9 @@ import Foundation
 public struct SelectionPlugin: Plugin {
     public static let pluginName = "selection"
 
-    /// The command `bridge.js` reports a mouse selection gesture on. A mouse
-    /// press is visible to the page as `pointerdown` / `pointerup`, so the
-    /// page side sees it first; routing it through the webview's
+    /// The command `bridge.js` reports a selection gesture on when the page can
+    /// see the press itself (`pointerdown` / `pointerup`) — a mouse anywhere, a
+    /// finger or pen on the desktop engines. Routing it through the webview's
     /// ``WebViewSelection`` keeps one stream for the page whatever the input.
     public static let pointerGestureCommand = "__selection.pointerGesture"
 
@@ -35,7 +35,7 @@ public struct SelectionPlugin: Plugin {
             Self.pointerGestureCommand,
             typed: { (args: SelectionPointerGestureArgs, ctx) async throws -> EmptyResult in
                 let selection = try await Self.selection(ctx: ctx, app: app)
-                selection.gesture(args.phase)
+                selection.pageGesture(args.phase, pointerType: args.pointerType ?? "mouse")
                 return EmptyResult()
             }
         )
@@ -89,5 +89,10 @@ public struct SelectionSetActionsArgs: Sendable, Codable {
 
 public struct SelectionPointerGestureArgs: Sendable, Codable {
     public var phase: SelectionGesturePhase
-    public init(phase: SelectionGesturePhase) { self.phase = phase }
+    /// The DOM `pointerType` of the press.
+    public var pointerType: String?
+    public init(phase: SelectionGesturePhase, pointerType: String? = nil) {
+        self.phase = phase
+        self.pointerType = pointerType
+    }
 }

@@ -255,42 +255,60 @@
         enumerable: false,
     });
 
-    // --- Selection gestures made with a mouse ------------------------------
+    // --- Selection gestures the page can see --------------------------------
     //
     // `selection.subscribe` reports when a text-selection gesture begins and
-    // ends. A finger the platform takes for selection is invisible to the page
-    // — no touchend, no pointerup — so the touch backends report that from
-    // native code. A mouse press stays visible to the page, so it is reported
-    // from here, into the same per-window native stream: a page gets one
-    // source whatever the input, and no platform branch.
+    // ends. Where the platform hides the finger from the page — iOS and
+    // Android take a touch for selection and send no touchend — the backend
+    // reports it from native code and ignores these reports for touch. A
+    // mouse press, and a touch or pen press on the desktop engines, stays
+    // visible as pointerdown / pointerup, so it is reported from here, into
+    // the same per-window native stream: a page gets one source whatever the
+    // input, and no platform branch.
     if (IS_TOP) {
-        let pressed = false;
+        let pressed = null;   // pointerType of the press in progress
         let began = false;
-        const report = (phase) => {
-            invoke("__selection.pointerGesture", { phase }).catch((e) => {
+        // A selection that changes with no press the page can see: on
+        // WebView2 a selection handle takes the finger before the page does.
+        // The backend decides whether a finger is really down; reported at
+        // most every 250 ms, since a drag changes the selection on every move.
+        let unseenAt = 0;
+        const report = (phase, pointerType) => {
+            invoke("__selection.pointerGesture", { phase, pointerType }).catch((e) => {
                 console.warn("swift-pwa: couldn't report a selection gesture:", e);
             });
         };
         document.addEventListener("pointerdown", (event) => {
-            if (event.pointerType !== "mouse" || event.button !== 0) return;
-            pressed = true;
+            if (!event.isPrimary || (event.pointerType === "mouse" && event.button !== 0)) return;
+            pressed = event.pointerType;
             began = false;
         }, { capture: true, passive: true });
-        // Began when the press first makes a selection — a click that only
-        // places the caret, or clears a selection, isn't a selection gesture.
+        // Began when the press first makes a selection — a tap or click that
+        // only places the caret, or clears a selection, isn't a selection
+        // gesture.
         document.addEventListener("selectionchange", () => {
-            if (!pressed || began) return;
+            if (!pressed) {
+                const selection = document.getSelection();
+                const now = performance.now();
+                if (selection && !selection.isCollapsed && now - unseenAt > 250) {
+                    unseenAt = now;
+                    report("began", "none");
+                }
+                return;
+            }
+            if (began) return;
             const selection = document.getSelection();
             if (!selection || selection.isCollapsed) return;
             began = true;
-            report("began");
+            report("began", pressed);
         });
         const release = (event) => {
-            if (event.pointerType !== "mouse") return;
-            pressed = false;
+            if (!event.isPrimary || event.pointerType !== pressed) return;
+            const pointerType = pressed;
+            pressed = null;
             if (!began) return;
             began = false;
-            report("ended");
+            report("ended", pointerType);
         };
         document.addEventListener("pointerup", release, { capture: true, passive: true });
         document.addEventListener("pointercancel", release, { capture: true, passive: true });

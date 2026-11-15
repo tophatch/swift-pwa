@@ -33,13 +33,16 @@
         /// `selection.event` host channel, which `AndroidAppContext` routes to
         /// the active window — the same window a page's own frames are
         /// attributed to.
-        public let selection: WebViewSelection? = WebViewSelection { actions in
-            _ = try await AndroidRPC.call(
-                "selection.setActions",
-                SelectionSetActionsArgs(actions: actions),
-                as: NoResult.self
-            )
-        }
+        public let selection: WebViewSelection? = WebViewSelection(
+            tracksTouchNatively: true,
+            actionsChanged: { actions in
+                _ = try await AndroidRPC.call(
+                    "selection.setActions",
+                    SelectionSetActionsArgs(actions: actions),
+                    as: NoResult.self
+                )
+            }
+        )
 
         public init() {
             var captured: AsyncStream<InboundMessage>.Continuation?

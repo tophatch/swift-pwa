@@ -841,15 +841,17 @@ Where the items show, per platform:
 | iOS / iPadOS          | the edit menu beside the selection  |                                                                  |
 | Android               | the floating selection toolbar      | A change made while a toolbar is open applies from the next one. |
 | macOS                 | the right-click menu on a selection | Not on a link's or an image's menu.                              |
-| Windows               | the right-click menu on a selection |                                                                  |
+| Windows               | the right-click menu on a selection | With a finger, under *…* in WebView2's own small menu.           |
 | Linux (GTK3 and GTK4) | the right-click menu on a selection |                                                                  |
 
-`selection.subscribe`'s `gesture` events come from the place each platform can
-see the finger: the native view on iOS and Android, where the page can't, and
-the page's own `pointerdown` / `pointerup` for a mouse, so a page needs no
-platform branch. On a desktop, `began` arrives when a mouse press first makes a
-selection (a click that only places the caret isn't a selection gesture) and
-`ended` on its release. On iOS and Android:
+`selection.subscribe`'s `gesture` events come from wherever each platform can
+see the finger, so a page needs no platform branch: the native view on iOS and
+Android, where the page can't; the page's own `pointerdown` / `pointerup` for a
+mouse, a pen, and a desktop long press; and on Windows, the touch screen's raw
+input for a selection-handle drag, which WebView2 hides from the page. Where
+the page sees the press, `began` arrives when it first makes a selection (a
+click that only places the caret isn't a selection gesture) and `ended` on its
+release. On iOS and Android:
 
 - **A long press reports `began` when the platform takes it**, a moment before
   the selection appears, so a long press away from text gives a `began` /

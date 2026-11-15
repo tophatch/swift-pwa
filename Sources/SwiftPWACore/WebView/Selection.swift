@@ -66,11 +66,30 @@ public final class WebViewSelection: @unchecked Sendable {
     private var subscribers: [UUID: AsyncStream<SelectionEvent>.Continuation] = [:]
     private let actionsChanged: (@Sendable ([SelectionAction]) async throws -> Void)?
 
+    /// Whether this backend reports touch gestures from native code — iOS and
+    /// Android, where the platform hides the finger from the page. The page's
+    /// own reports for touch and pen are then ignored, so two sources can't
+    /// interleave; a mouse is always the page's to report.
+    public let tracksTouchNatively: Bool
+
+    private let selectionWithoutPress: (@Sendable (WebViewSelection) -> Void)?
+
     /// - Parameter actionsChanged: Called by ``setActions(_:)`` for a backend
     ///   whose menu is built somewhere Swift can't read from at the time —
     ///   Android's, in Kotlin. A failure there fails the page's call. Backends
     ///   that read ``actions`` when the menu is built pass nothing.
-    public init(actionsChanged: (@Sendable ([SelectionAction]) async throws -> Void)? = nil) {
+    /// - Parameter selectionWithoutPress: Called when the page's selection
+    ///   changes while the page sees no press of its own — the sign of a
+    ///   finger the engine took before the page could (a selection handle on
+    ///   WebView2). A backend that can tell whether a finger is down decides
+    ///   from there whether that is a gesture; the others pass nothing.
+    public init(
+        tracksTouchNatively: Bool = false,
+        selectionWithoutPress: (@Sendable (WebViewSelection) -> Void)? = nil,
+        actionsChanged: (@Sendable ([SelectionAction]) async throws -> Void)? = nil
+    ) {
+        self.tracksTouchNatively = tracksTouchNatively
+        self.selectionWithoutPress = selectionWithoutPress
         self.actionsChanged = actionsChanged
     }
 
@@ -123,6 +142,22 @@ public final class WebViewSelection: @unchecked Sendable {
     var subscriberCount: Int {
         lock.withLock { subscribers.count }
     }
+
+    /// A gesture the page saw through its own pointer events (`bridge.js`).
+    /// `pointerType` is the DOM's — `mouse`, `pen` or `touch` — or `none`
+    /// for a selection that changed with no press the page could see.
+    public func pageGesture(_ phase: SelectionGesturePhase, pointerType: String) {
+        if pointerType == Self.noVisiblePress {
+            if phase == .began { selectionWithoutPress?(self) }
+            return
+        }
+        if tracksTouchNatively, pointerType != "mouse" { return }
+        gesture(phase)
+    }
+
+    /// The `pointerType` `bridge.js` sends for a selection change with no
+    /// press of the page's own.
+    public static let noVisiblePress = "none"
 
     /// The user chose the page action `id`.
     public func actionChosen(_ id: String) {

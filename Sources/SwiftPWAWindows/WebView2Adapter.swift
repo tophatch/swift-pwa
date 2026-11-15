@@ -162,9 +162,14 @@
             // Async controller creation kicks off here; the caller
             // will pump messages via `pumpUntilReady` until the
             // callback flips `ready`.
-            selection = WebViewSelection { [weak self] actions in
-                try await self?.applySelectionActions(actions)
-            }
+            selection = WebViewSelection(
+                selectionWithoutPress: { selection in
+                    Task { await MainThread.run { RawTouchScreen.shared.selectionChangedWithoutPress(selection) } }
+                },
+                actionsChanged: { [weak self] actions in
+                    try await self?.applySelectionActions(actions)
+                }
+            )
             let user = Unmanaged.passRetained(self).toOpaque()
             guard WebData.isEphemeral else {
                 swiftpwa_w2_create_controller(

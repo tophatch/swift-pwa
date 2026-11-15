@@ -68,7 +68,7 @@ struct SelectionTests {
     @Test("a backend that has to be told about a change can fail the page's call")
     func actionsChangedFailurePropagates() async throws {
         struct Refused: Error {}
-        let selection = WebViewSelection { _ in throw Refused() }
+        let selection = WebViewSelection(actionsChanged: { _ in throw Refused() })
         await #expect(throws: Refused.self) {
             try await selection.setActions([SelectionAction(id: "a", title: "A")])
         }
@@ -117,6 +117,48 @@ struct SelectionTests {
         }
     }
 
+    @Test("where the backend tracks touch itself, the page's touch reports are ignored; a mouse's aren't")
+    func pageTouchIgnoredWhereNative() async {
+        let native = WebViewSelection(tracksTouchNatively: true)
+        let events = native.events()
+        native.pageGesture(.began, pointerType: "touch")
+        native.pageGesture(.began, pointerType: "pen")
+        native.actionChosen("marker")
+        native.pageGesture(.began, pointerType: "mouse")
+        var received: [SelectionEvent] = []
+        for await event in events {
+            received.append(event)
+            if received.count == 2 { break }
+        }
+        // Neither touch-type report produced an event: the marker comes first.
+        #expect(received == [.action(id: "marker"), .gesture(.began)])
+        let desktop = WebViewSelection()
+        let desktopEvents = desktop.events()
+        desktop.pageGesture(.began, pointerType: "touch")
+        for await event in desktopEvents {
+            #expect(event == .gesture(.began))
+            break
+        }
+    }
+
+    @Test("a selection change with no visible press goes to the backend to decide, and only a began")
+    func selectionWithoutPress() async {
+        let calls = Counter()
+        let selection = WebViewSelection(selectionWithoutPress: { _ in calls.increment() })
+        selection.pageGesture(.began, pointerType: WebViewSelection.noVisiblePress)
+        selection.pageGesture(.ended, pointerType: WebViewSelection.noVisiblePress)
+        #expect(calls.value == 1)
+        // Without a handler — every backend but Windows — it changes nothing.
+        let plain = WebViewSelection()
+        let events = plain.events()
+        plain.pageGesture(.began, pointerType: WebViewSelection.noVisiblePress)
+        plain.actionChosen("marker")
+        for await event in events {
+            #expect(event == .action(id: "marker"))
+            break
+        }
+    }
+
     @Test("an agent (no window) is refused rather than given some window's selection")
     func agentRefused() async throws {
         let (app, _) = try makeApp()
@@ -139,4 +181,13 @@ struct SelectionTests {
         let bridge = try BridgeScript.source()
         #expect(bridge.contains("\"\(SelectionPlugin.pointerGestureCommand)\""))
     }
+}
+
+private final class Counter: @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    var value: Int {
+        lock.withLock { count }
+    }
+    func increment() { lock.withLock { count += 1 } }
 }

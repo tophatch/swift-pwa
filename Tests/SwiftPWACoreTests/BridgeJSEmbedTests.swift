@@ -30,4 +30,22 @@ struct BridgeJSEmbedTests {
         let onDisk = try String(contentsOf: canonical, encoding: .utf8)
         #expect(try BridgeScript.source() == onDisk)
     }
+
+    /// The GTK backends fill in where media goes (#349); a marker that went
+    /// missing would leave every Linux `<video>` broken without an error.
+    @Test("the media route replaces its one marker and nothing else")
+    func mediaRoute() throws {
+        let plain = try BridgeScript.source()
+        #expect(plain.components(separatedBy: BridgeScript.mediaRouteMarker).count == 2)
+        #expect(BridgeScript.source(mediaRoute: nil) == plain)
+
+        let route = BridgeScript.MediaRoute(base: "http://127.0.0.1:4242/ab\"c/", origin: "pwa://localhost")
+        let routed = BridgeScript.source(mediaRoute: route)
+        #expect(!routed.contains(BridgeScript.mediaRouteMarker))
+        #expect(routed
+            .contains(#"const MEDIA_ROUTE = {"base":"http://127.0.0.1:4242/ab\"c/","origin":"pwa://localhost"};"#))
+        #expect(routed.count - plain.count == #"{"base":"http://127.0.0.1:4242/ab\"c/","origin":"pwa://localhost"}"#
+            .count
+            - BridgeScript.mediaRouteMarker.count)
+    }
 }

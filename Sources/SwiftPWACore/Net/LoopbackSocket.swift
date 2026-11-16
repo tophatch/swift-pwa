@@ -29,10 +29,12 @@ import Foundation
     /// function maps to BSD sockets on Darwin/Glibc and to Winsock on Windows;
     /// nothing else in the dev server or the app driver carries a platform `#if`.
     ///
-    /// Two consumers, in opposite directions: `swift-pwa dev`'s live-reload
-    /// server (the CLI listens, the app connects) and the app driver (the app
-    /// listens, the CLI connects). Both want loopback TCP rather than a Unix
-    /// socket, which keeps AF_UNIX-on-Windows out of the picture entirely.
+    /// Its consumers: `swift-pwa dev`'s live-reload server (the CLI listens,
+    /// the app connects), the app driver and agent surface (the app listens,
+    /// the CLI connects), and on Linux the media server WebKitGTK's player
+    /// reads from (``LoopbackMediaServer``). All want loopback TCP rather than
+    /// a Unix socket, which keeps AF_UNIX-on-Windows out of the picture
+    /// entirely.
     package enum LoopbackSocket {
         #if canImport(WinSDK)
             package static let invalid = INVALID_SOCKET
@@ -60,11 +62,34 @@ import Foundation
             // WinSDK all import it as an Int32 already. 0 = default protocol
             // for the family, i.e. TCP.
             #if canImport(Glibc)
-                return socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
+                let s = socket(AF_INET, Int32(SOCK_STREAM.rawValue), 0)
             #else
-                return socket(AF_INET, SOCK_STREAM, 0)
+                let s = socket(AF_INET, SOCK_STREAM, 0)
+            #endif
+            suppressSigPipe(s)
+            return s
+        }
+
+        /// A write to a peer that has gone away raises `SIGPIPE` on POSIX, and
+        /// its default action ends the process. A media player drops its
+        /// connection mid-body every time it seeks, and a driver client can
+        /// vanish mid-reply, so neither may take the app down: a dead peer
+        /// must read as a failed `send`. Darwin takes a per-socket option;
+        /// Linux and Android take a per-call flag instead (``sendFlags``).
+        /// Windows has no `SIGPIPE`.
+        private static func suppressSigPipe(_ s: SocketHandle) {
+            #if canImport(Darwin)
+                guard isValid(s) else { return }
+                var yes: Int32 = 1
+                setsockopt(s, SOL_SOCKET, SO_NOSIGPIPE, &yes, socklen_t(MemoryLayout<Int32>.size))
             #endif
         }
+
+        #if canImport(Glibc) || canImport(Android)
+            private static let sendFlags = Int32(MSG_NOSIGNAL)
+        #else
+            private static let sendFlags: Int32 = 0
+        #endif
 
         package static func setReuseAddr(_ s: SocketHandle) {
             var yes: Int32 = 1
@@ -141,7 +166,9 @@ import Foundation
         }
 
         package static func acceptOne(_ s: SocketHandle) -> SocketHandle {
-            accept(s, nil, nil)
+            let client = accept(s, nil, nil)
+            suppressSigPipe(client)
+            return client
         }
 
         /// Poll one socket for readability. Returns `> 0` when readable, `0` on
@@ -185,7 +212,7 @@ import Foundation
                     #if canImport(WinSDK)
                         let n = Int(send(s, ptr.bindMemory(to: CChar.self, capacity: remaining), Int32(remaining), 0))
                     #else
-                        let n = send(s, ptr, remaining, 0)
+                        let n = send(s, ptr, remaining, sendFlags)
                     #endif
                     if n <= 0 { return false }
                     sent += n

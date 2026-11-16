@@ -19,4 +19,43 @@ public enum BridgeScript {
     public static func source() throws -> String {
         BridgeJSData.source
     }
+
+    /// Where `bridge.js` sends this origin's media (#349): `base` is a
+    /// ``LoopbackMediaServer``'s URL, `origin` the app's own (`pwa://localhost`).
+    package struct MediaRoute: Equatable {
+        package let base: String
+        package let origin: String
+
+        package init(base: String, origin: String) {
+            self.base = base
+            self.origin = origin
+        }
+    }
+
+    package static let mediaRouteMarker = "/*__SWIFT_PWA_MEDIA_ROUTE__*/null"
+
+    /// The runtime with media routed to a loopback server — the GTK backends,
+    /// whose media player can't read the app's scheme. A closure constant
+    /// rather than a page global, so the token never sits on `window`.
+    package static func source(mediaRoute: MediaRoute?) -> String {
+        guard let mediaRoute else { return BridgeJSData.source }
+        return BridgeJSData.source.replacingOccurrences(
+            of: mediaRouteMarker,
+            with: "{\"base\":\(jsString(mediaRoute.base)),\"origin\":\(jsString(mediaRoute.origin))}"
+        )
+    }
+
+    private static func jsString(_ value: String) -> String {
+        var out = "\""
+        for scalar in value.unicodeScalars {
+            switch scalar {
+            case "\"": out += "\\\""
+            case "\\": out += "\\\\"
+            case _ where scalar.value < 0x20 || scalar == "\u{2028}" || scalar == "\u{2029}":
+                out += String(format: "\\u%04x", scalar.value)
+            default: out.unicodeScalars.append(scalar)
+            }
+        }
+        return out + "\""
+    }
 }

@@ -45,13 +45,18 @@
             UnsafeMutableRawPointer(viewWidget).assumingMemoryBound(to: WebKitWebView.self)
         }
 
-        init(parent: UnsafeMutablePointer<GtkWidget>, content: WindowContent, sharedProvider: AssetProvider) throws {
+        init(
+            parent: UnsafeMutablePointer<GtkWidget>,
+            content: WindowContent,
+            sharedProvider: AssetProvider,
+            mediaRoute: BridgeScript.MediaRoute? = nil
+        ) throws {
             // Create the user content manager and inject bridge.js as a user script.
             guard let ucm = webkit_user_content_manager_new() else {
                 throw BridgeError(code: BridgeError.handler, message: "webkit_user_content_manager_new failed")
             }
             userContent = ucm
-            let bridgeSource = try BridgeScript.source()
+            let bridgeSource = BridgeScript.source(mediaRoute: mediaRoute)
             bridgeSource.withCString { src in
                 // Top frame only. Injected into every frame, `bridge.js` let a
                 // cross-origin `<iframe>` of embedded content reach every command

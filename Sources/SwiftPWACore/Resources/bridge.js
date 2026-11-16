@@ -661,6 +661,119 @@
         });
     }
 
+    // --- Media from the app's own origin, on WebKitGTK (#349) ---------------
+    //
+    // WebKitGTK plays <video> and <audio> through GStreamer, whose WebKit
+    // source accepts http, https and blob only — so a clip the app serves from
+    // its own scheme fails with MEDIA_ERR_SRC_NOT_SUPPORTED, while fetch and
+    // <img> of the same URL work. The GTK backends therefore serve the same
+    // files on a loopback port (LoopbackMediaServer), and fill in
+    // MEDIA_ROUTE below; every other backend leaves it null and none of this
+    // runs.
+    //
+    // A media URL on the app's origin is pointed at that server however the
+    // page sets it: the src property of a media or <source> element,
+    // setAttribute, markup the parser or innerHTML inserts, and new Audio(url).
+    // Reads map back — src, currentSrc and getAttribute("src") report the
+    // app's own URL — so the page sees what it would see on any other
+    // platform. Only the top frame is routed; bridge.js isn't injected into
+    // subframes.
+    const MEDIA_ROUTE = /*__SWIFT_PWA_MEDIA_ROUTE__*/null;
+    if (IS_TOP && MEDIA_ROUTE && location.origin === MEDIA_ROUTE.origin) {
+        const appRoot = MEDIA_ROUTE.origin + "/";
+        const serverRoot = MEDIA_ROUTE.base;
+        const toServer = (value) => {
+            let absolute;
+            try { absolute = new URL(value, document.baseURI).href; } catch (e) { return value; }
+            return absolute.startsWith(appRoot) ? serverRoot + absolute.slice(appRoot.length) : value;
+        };
+        const toPage = (value) =>
+            typeof value === "string" && value.startsWith(serverRoot)
+                ? appRoot + value.slice(serverRoot.length) : value;
+        const isMedia = (el) => el instanceof HTMLMediaElement || el instanceof HTMLSourceElement;
+        const nativeSetAttribute = Element.prototype.setAttribute;
+        const nativeGetAttribute = Element.prototype.getAttribute;
+        // element -> [what the page wrote, what the element was given], so
+        // getAttribute("src") hands back a relative URL as the page wrote it.
+        const written = new WeakMap();
+        const route = (el, pageValue) => {
+            const routed = toServer(pageValue);
+            if (routed === pageValue) written.delete(el); else written.set(el, [pageValue, routed]);
+            return routed;
+        };
+
+        for (const proto of [HTMLMediaElement.prototype, HTMLSourceElement.prototype]) {
+            const src = Object.getOwnPropertyDescriptor(proto, "src");
+            Object.defineProperty(proto, "src", {
+                configurable: true,
+                enumerable: src.enumerable,
+                get() { return toPage(src.get.call(this)); },
+                set(value) { src.set.call(this, route(this, String(value))); },
+            });
+        }
+        const currentSrc = Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype, "currentSrc");
+        Object.defineProperty(HTMLMediaElement.prototype, "currentSrc", {
+            configurable: true,
+            enumerable: currentSrc.enumerable,
+            get() { return toPage(currentSrc.get.call(this)); },
+        });
+        Element.prototype.setAttribute = function setAttribute(name, value) {
+            if (isMedia(this) && String(name).toLowerCase() === "src") {
+                return nativeSetAttribute.call(this, name, route(this, String(value)));
+            }
+            return nativeSetAttribute.call(this, name, value);
+        };
+        Element.prototype.getAttribute = function getAttribute(name) {
+            const value = nativeGetAttribute.call(this, name);
+            if (value !== null && isMedia(this) && String(name).toLowerCase() === "src") {
+                const pair = written.get(this);
+                if (pair && pair[1] === value) return pair[0];
+                return toPage(value);
+            }
+            return value;
+        };
+
+        // Markup sets the attribute without any of the above. The media load
+        // algorithm waits for a stable state before it looks at src, and this
+        // observer's microtask runs first, so the element never tries the
+        // app's scheme.
+        const routeAttribute = (el) => {
+            const value = nativeGetAttribute.call(el, "src");
+            if (value === null) return;
+            const routed = toServer(value);
+            if (routed === value) return;
+            written.set(el, [value, routed]);
+            nativeSetAttribute.call(el, "src", routed);
+        };
+        const routeTree = (node) => {
+            if (node.nodeType !== 1) return;
+            if (isMedia(node)) routeAttribute(node);
+            for (const el of node.querySelectorAll("video, audio, source")) routeAttribute(el);
+        };
+        new MutationObserver((records) => {
+            for (const record of records) {
+                if (record.type === "attributes") {
+                    if (isMedia(record.target)) routeAttribute(record.target);
+                } else {
+                    for (const node of record.addedNodes) routeTree(node);
+                }
+            }
+        }).observe(document, { childList: true, subtree: true, attributes: true, attributeFilter: ["src"] });
+
+        // new Audio(url) sets the attribute natively, on an element that is in
+        // no document for the observer to see.
+        const NativeAudio = globalThis.Audio;
+        if (typeof NativeAudio === "function") {
+            const Audio = function Audio(src) {
+                const audio = new NativeAudio();
+                if (src !== undefined) audio.src = src;
+                return audio;
+            };
+            Audio.prototype = NativeAudio.prototype;
+            globalThis.Audio = Audio;
+        }
+    }
+
     // Tell the runtime this document owns the window now. First frame on the
     // channel, and it runs before the page's own scripts, so the previous
     // document's subscriptions are cancelled before this one opens any.

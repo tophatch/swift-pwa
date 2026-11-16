@@ -84,13 +84,28 @@ swift build --product swift-pwa 2>&1 | Out-Null
 Pop-Location
 if (-not (Test-Path $cli)) { Write-Error "couldn't build swift-pwa.exe"; exit 1 }
 
-if (-not (Test-Path $AppDir)) {
+# `Remove-Item -Recurse` can't delete a Swift 6.4 `.build`: its macro-expansion
+# file names run past MAX_PATH, so it fails part-way and leaves the folder. A
+# leftover probe folder then looked like an app to reuse, `init` was skipped,
+# and the next run wrote an empty Package.swift. `rd` on a `\\?\` path takes
+# the long names.
+function Remove-Tree([string]$path) {
+    if (Test-Path $path) { cmd /c rd /s /q "\\?\$path" 2>&1 | Out-Null }
+}
+
+if ($cleanupApp) { Remove-Tree $AppDir }
+if (-not (Test-Path (Join-Path $AppDir "Package.swift"))) {
+    Remove-Tree $AppDir
     Write-Output "== scaffolding a probe app in $AppDir =="
     $parent = Split-Path -Parent $AppDir
     New-Item -ItemType Directory -Force -Path $parent | Out-Null
     Push-Location $parent
     & $cli init (Split-Path -Leaf $AppDir) | Out-Null
     Pop-Location
+    if (-not (Test-Path (Join-Path $AppDir "Package.swift"))) {
+        Write-Error "swift-pwa init made no app in $AppDir"
+        exit 1
+    }
 }
 
 # `swift-pwa init` pins the app to the last *released* package, so an app
@@ -168,7 +183,7 @@ function Stop-Probe {
     Get-Process -Name (Split-Path -Leaf $binary).Replace(".exe", "") -ErrorAction SilentlyContinue |
         Stop-Process -Force -ErrorAction SilentlyContinue
     if ($sessionId -eq 0) { schtasks /delete /tn $taskName /f 2>&1 | Out-Null }
-    if ($cleanupApp) { Remove-Item $AppDir -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($cleanupApp) { Remove-Tree $AppDir }
 }
 
 if (-not $port -or -not $token) {

@@ -45,7 +45,7 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         lock.withLock { _receivedInput }
     }
 
-    /// PNG bytes ``captureSnapshot(region:)`` returns, or `nil` for a backend that
+    /// PNG bytes ``captureSnapshot(region:scale:)`` returns, or `nil` for a backend that
     /// can't snapshot — which is also the default, matching a real backend
     /// that leaves the protocol's throwing implementation in place. Setting
     /// this is what makes ``supportsSnapshot`` true.
@@ -153,16 +153,25 @@ public final class MockWebView: PWAWebView, @unchecked Sendable {
         lock.withLock { _stubbedSnapshot != nil }
     }
 
-    /// The regions ``captureSnapshot(region:)`` was asked for, in order;
-    /// `nil` for a whole-webview snapshot.
+    /// The regions ``captureSnapshot(region:scale:)`` was asked for, in
+    /// order; `nil` for a whole-webview snapshot.
     public var snapshotRegions: [SnapshotRegion?] {
         lock.withLock { _snapshotRegions }
     }
 
-    private var _snapshotRegions: [SnapshotRegion?] = []
+    /// The scales it was asked for, in the same order.
+    public var snapshotScales: [Double] {
+        lock.withLock { _snapshotScales }
+    }
 
-    public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
-        lock.withLock { _snapshotRegions.append(region) }
+    private var _snapshotRegions: [SnapshotRegion?] = []
+    private var _snapshotScales: [Double] = []
+
+    public func captureSnapshot(region: SnapshotRegion?, scale: Double) async throws -> Data {
+        lock.withLock {
+            _snapshotRegions.append(region)
+            _snapshotScales.append(scale)
+        }
         guard let png = lock.withLock({ _stubbedSnapshot }) else {
             throw BridgeError(
                 code: BridgeError.unimplemented,

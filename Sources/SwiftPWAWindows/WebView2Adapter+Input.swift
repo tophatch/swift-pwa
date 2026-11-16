@@ -193,7 +193,7 @@
 
         /// One CDP call, awaited so a failure surfaces instead of vanishing.
         /// Returns the method's result object as JSON. Shared with
-        /// `captureSnapshot(region:)`, whose regions go through
+        /// `captureSnapshot(region:scale:)`, whose regions go through
         /// `Page.captureScreenshot`.
         @discardableResult
         func callDevTools(_ method: String, _ parameters: [String: JSONValue]) async throws -> String? {

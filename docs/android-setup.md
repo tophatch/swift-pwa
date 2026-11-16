@@ -1670,7 +1670,11 @@ WebView shows its own dialog when the `WebChromeClient` doesn't override
   a gesture *begins* rather than when the page flips. The rect is placed as a
   share of the viewport rather than CSS pixels times the density, because a
   page whose content overflows is zoomed out to fit, and then a CSS pixel is
-  no longer `devicePixelRatio` device pixels. Measured by
+  no longer `devicePixelRatio` device pixels. When the part you need is the
+  whole window, pass `scale` instead: `PixelCopy` lands in a smaller bitmap,
+  so the encode only pays for the pixels it keeps. On a Pixel 3a a page of
+  body text took 597–657 ms at full size, 218–278 ms at `scale: 0.5`, and
+  127–131 ms at `1 / devicePixelRatio`. Measured by
   `Scripts/verify-android-window-snapshot.sh`.
 
 - **Camera, microphone and location need a declaration in two places.**

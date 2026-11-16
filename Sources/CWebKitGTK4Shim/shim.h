@@ -131,12 +131,40 @@ typedef struct {
     /// right, bottom. `has_region` 0 keeps the whole picture.
     int has_region;
     double share[4];
+    /// Shrink factor in (0, 1]; 1 keeps the pixels as they are.
+    double scale;
 } swiftpwa_snapshot_box;
 
 /// A share of `size` pixels, as a whole pixel inside it.
 static inline int swiftpwa_snapshot_edge(double share, int size) {
     int px = (int)(share * size + 0.5);
     return px < 0 ? 0 : (px > size ? size : px);
+}
+
+/// `src` shrunk to `scale` of its pixel size (at least 1x1) on a new 32-bit
+/// image (#344). Its device scale is set aside while it's painted, so the
+/// factor applies to the surface's own pixels, as the crop's shares do.
+/// `CAIRO_FILTER_GOOD` averages the pixels each output pixel covers, where
+/// nearest-neighbour would alias text into noise.
+static inline cairo_surface_t *swiftpwa_snapshot_scaled(cairo_surface_t *src, double scale) {
+    int w = cairo_image_surface_get_width(src), h = cairo_image_surface_get_height(src);
+    int dw = (int)(w * scale + 0.5), dh = (int)(h * scale + 0.5);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    cairo_surface_t *dst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, dw, dh);
+    double sx = 1, sy = 1;
+    cairo_surface_get_device_scale(src, &sx, &sy);
+    cairo_surface_set_device_scale(src, 1, 1);
+    cairo_t *cr = cairo_create(dst);
+    cairo_scale(cr, (double)dw / w, (double)dh / h);
+    cairo_set_source_surface(cr, src, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    cairo_surface_set_device_scale(src, sx, sy);
+    cairo_surface_flush(dst);
+    return dst;
 }
 
 /// GAsyncReadyCallback trampoline for `swiftpwa_webview_snapshot_png`.
@@ -151,6 +179,7 @@ static inline void swiftpwa_snapshot_finish(
     char *path = box->path;
     int has_region = box->has_region;
     double share[4] = { box->share[0], box->share[1], box->share[2], box->share[3] };
+    double scale = box->scale;
     g_free(box);
 
     GError *error = NULL;
@@ -198,6 +227,19 @@ static inline void swiftpwa_snapshot_finish(
                 }
             }
         }
+        // Scaled after the crop and before the write, so both make the
+        // encode smaller.
+        if (picture && scale < 1) {
+            if (cairo_surface_get_type(picture) != CAIRO_SURFACE_TYPE_IMAGE) {
+                err_msg = g_strdup("snapshot surface isn't an image; can't scale it");
+                if (picture != surface) cairo_surface_destroy(picture);
+                picture = NULL;
+            } else {
+                cairo_surface_t *scaled = swiftpwa_snapshot_scaled(picture, scale);
+                if (picture != surface) cairo_surface_destroy(picture);
+                picture = scaled;
+            }
+        }
         if (picture) {
             cairo_status_t status = cairo_surface_write_to_png(picture, path);
             if (status == CAIRO_STATUS_SUCCESS) {
@@ -227,6 +269,7 @@ static inline void swiftpwa_webview_snapshot_png(
     const char *path,
     int has_region,
     double left, double top, double right, double bottom,
+    double scale,
     swiftpwa_snapshot_callback cb,
     void *user_data
 ) {
@@ -240,6 +283,7 @@ static inline void swiftpwa_webview_snapshot_png(
     box->share[1] = top;
     box->share[2] = right;
     box->share[3] = bottom;
+    box->scale = scale;
     webkit_web_view_get_snapshot(
         web_view,
         WEBKIT_SNAPSHOT_REGION_VISIBLE,

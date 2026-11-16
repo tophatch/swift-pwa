@@ -1073,7 +1073,8 @@ struct AndroidBundlerUnitTests {
         let bridge = AndroidTemplates.swiftPWABridgeKt()
         // Drawing the view, not capturing the screen: the app's own pixels,
         // available while the window is occluded and with no permission.
-        #expect(bridge.contains("fun snapshotPngBase64(region: android.graphics.RectF?, done: (String?) -> Unit)"))
+        #expect(bridge
+            .contains("fun snapshotPngBase64(region: android.graphics.RectF?, scale: Double, done: (String?) -> Unit)"))
         // PixelCopy reads the composited surface; `View.draw` alone misses
         // every GPU layer, which on a Fold7 turned a full-screen canvas of
         // noise into one flat colour while the DOM around it came through.

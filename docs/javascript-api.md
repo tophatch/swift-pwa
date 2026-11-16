@@ -289,7 +289,16 @@ const shot = await __SWIFT_PWA__.invoke('window.snapshot', {
 });
 ```
 
-Five things worth knowing:
+Pass `scale` for a smaller picture: a factor in (0, 1] on its width and
+height, so `1 / devicePixelRatio` gives CSS pixels. It's the way to a cheaper
+picture when the part you need is the whole window, as a page turn on a phone
+is. It combines with `rect`:
+
+```js
+const shot = await __SWIFT_PWA__.invoke('window.snapshot', { scale: 1 / devicePixelRatio });
+```
+
+Six things worth knowing:
 
 - **`width` / `height` are device pixels.** On a Retina or high-DPI display
   they are `devicePixelRatio` times the window's CSS size. Size the canvas in
@@ -304,6 +313,12 @@ Five things worth knowing:
   viewport, or with no area, fails with `E_DECODE`. It lands where the page
   meant at any zoom (Android zooms a page out when its content overflows) and,
   on iOS, whether or not the page is `viewport-fit=cover`.
+- **`scale` shrinks the picture before the encode as well**, so half the
+  width and height costs roughly a quarter. The picture is
+  `width * devicePixelRatio * scale` wide, at least one pixel. A smaller
+  picture drawn at the same CSS size is softer, which a picture that is about
+  to move rarely shows. A `scale` above 1, at or below 0, or not a number
+  fails with `E_DECODE`.
 - **Ask `window.canSnapshot` first** rather than catching `E_UNIMPLEMENTED` per
   call. It answers without rendering anything, so an app can offer the feature
   or fall back once at startup.

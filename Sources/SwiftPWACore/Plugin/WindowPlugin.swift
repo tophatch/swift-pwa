@@ -112,7 +112,9 @@ public struct WindowPlugin: Plugin {
         // `rect` asks for one region, in CSS pixels relative to the viewport.
         // On Windows and Android a whole window took 240-400 ms, nearly all of
         // it encoding three to four megapixels, so a smaller picture is what
-        // makes the call fast enough to animate there.
+        // makes the call fast enough to animate there. `scale` is the other
+        // way to a smaller picture, for when the region is the whole window —
+        // a page turn on a phone, where the page *is* the window (#344).
         registry.register("window.snapshot", typed: { (args: SnapshotArgs, ctx) async throws -> WindowSnapshot in
             // Out of the UI thread before encoding: `PWAWebView` is
             // deliberately not main-actor isolated (each backend hops
@@ -125,11 +127,12 @@ public struct WindowPlugin: Plugin {
                     message: "this backend can't snapshot its webview contents — check window.canSnapshot"
                 )
             }
+            let scale = try args.validatedScale()
             var region: SnapshotRegion?
             if let rect = args.rect {
                 region = try await SnapshotRegion.clip(rect, toViewportOf: webView)
             }
-            let png = try await webView.captureSnapshot(region: region)
+            let png = try await webView.captureSnapshot(region: region, scale: scale)
             guard let size = PNGDimensions.read(png) else {
                 throw BridgeError(
                     code: BridgeError.handler,
@@ -200,10 +203,28 @@ public struct SnapshotArgs: Sendable, Codable {
     /// One region of the viewport, in CSS pixels — the coordinates
     /// `getBoundingClientRect()` returns. `nil` pictures the whole webview.
     public var rect: Rect?
+    /// A factor in `(0, 1]` on the picture's width and height, applied
+    /// before the encode (#344). `nil` is `1`, device pixels;
+    /// `1 / devicePixelRatio` is CSS pixels.
+    public var scale: Double?
 
-    public init(id: String? = nil, rect: Rect? = nil) {
+    public init(id: String? = nil, rect: Rect? = nil, scale: Double? = nil) {
         self.id = id
         self.rect = rect
+        self.scale = scale
+    }
+
+    /// `scale`, checked: upsampling would cost more and show nothing new, so
+    /// anything above 1 is refused rather than quietly clamped.
+    func validatedScale() throws -> Double {
+        guard let scale else { return 1 }
+        guard scale.isFinite, scale > 0, scale <= 1 else {
+            throw BridgeError(
+                code: BridgeError.decode,
+                message: "scale must be a number greater than 0 and at most 1 (got \(scale))"
+            )
+        }
+        return scale
     }
 }
 

@@ -2498,7 +2498,12 @@ enum AndroidTemplates {
             /// no longer `devicePixelRatio` device pixels: on a Galaxy Z Fold7
             /// a probe page went from 750 to 1966 CSS pixels wide that way, and
             /// a density-scaled quarter of it was the whole window.
-            fun snapshotPngBase64(region: android.graphics.RectF?, done: (String?) -> Unit) {
+            ///
+            /// `scale` (0 to 1) shrinks the bitmap the copy lands in, and
+            /// `PixelCopy` scales its source rect to fit whatever it's given,
+            /// so the smaller picture costs the GPU a resample and the encode
+            /// only what it keeps (#344).
+            fun snapshotPngBase64(region: android.graphics.RectF?, scale: Double, done: (String?) -> Unit) {
                 val width = webView.width
                 val height = webView.height
                 if (width <= 0 || height <= 0) { done(null); return }
@@ -2510,12 +2515,17 @@ enum AndroidTemplates {
                     )
                     if (!crop.intersect(0, 0, width, height)) { done(null); return }
                 }
+                val outWidth = maxOf(1, Math.round(crop.width() * scale).toInt())
+                val outHeight = maxOf(1, Math.round(crop.height() * scale).toInt())
                 val bitmap = android.graphics.Bitmap.createBitmap(
-                    crop.width(), crop.height(), android.graphics.Bitmap.Config.ARGB_8888
+                    outWidth, outHeight, android.graphics.Bitmap.Config.ARGB_8888
                 )
                 val finish = { copied: Boolean ->
                     if (!copied) {
                         val canvas = android.graphics.Canvas(bitmap)
+                        canvas.scale(
+                            outWidth.toFloat() / crop.width(), outHeight.toFloat() / crop.height()
+                        )
                         canvas.translate(-crop.left.toFloat(), -crop.top.toFloat())
                         webView.draw(canvas)
                     }
@@ -5152,7 +5162,10 @@ enum AndroidTemplates {
                     ((y + rect.getDouble("height")) / vh).toFloat()
                 )
             }
-            bridge.snapshotPngBase64(region) { encoded ->
+            // Validated in Core, so anything outside (0, 1] here is a bug
+            // upstream rather than the page's mistake.
+            val scale = json.optDouble("scale", 1.0)
+            bridge.snapshotPngBase64(region, scale) { encoded ->
                 if (encoded == null) {
                     done(null, "swift-pwa: the webview has no size yet, nothing to snapshot")
                 } else {

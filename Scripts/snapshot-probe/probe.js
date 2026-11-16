@@ -91,23 +91,25 @@
   }
   // `rect` (#255). The checks read *where* the picture came from, not just its
   // size: a crop taken from the wrong place decodes and measures perfectly.
-  const shoot = async (rect) => {
+  const shootWith = async (args) => {
     const t0 = performance.now();
-    const shot = await __SWIFT_PWA__.invoke('window.snapshot', { rect });
+    const shot = await __SWIFT_PWA__.invoke('window.snapshot', args);
     const blob = await (await fetch('data:image/png;base64,' + shot.pngBase64)).blob();
     const bitmap = await createImageBitmap(blob);
     return { shot, bitmap, ms: Math.round(performance.now() - t0) };
   };
+  const shoot = (rect) => shootWith({ rect });
   // 80 CSS px square on the mark's bottom-right corner: only the top-left
   // quadrant is the mark, so a crop 20 px or more off in any direction turns
   // a quadrant the wrong colour.
-  const quadrants = async () => {
+  const quadrants = async (scale = 1) => {
     await window.__showVariant('flat');
     const cx = Math.floor(innerWidth / 2), cy = Math.floor(innerHeight / 2);
-    const m = await shoot({ x: cx - 40, y: cy - 40, width: 80, height: 80 });
+    const m = await shootWith({ rect: { x: cx - 40, y: cy - 40, width: 80, height: 80 }, scale });
     const q = {
       width: m.shot.width, height: m.shot.height,
-      expectedWidth: Math.round(80 * devicePixelRatio), expectedHeight: Math.round(80 * devicePixelRatio),
+      expectedWidth: Math.round(80 * devicePixelRatio * scale),
+      expectedHeight: Math.round(80 * devicePixelRatio * scale),
       tl: sample(m.bitmap, 0.25, 0.25), tr: sample(m.bitmap, 0.75, 0.25),
       bl: sample(m.bitmap, 0.25, 0.75), br: sample(m.bitmap, 0.75, 0.75)
     };
@@ -134,6 +136,49 @@
       wholeMs: whole.ms, wholeKib: Math.round(whole.shot.bytes / 1024),
       quarterMs: quarter.ms, quarterKib: Math.round(quarter.shot.bytes / 1024)
     };
+  }
+
+  // `scale` (#344): a smaller picture of the same page. The checks read the
+  // pixels, so a backend that shrank the canvas but not the content (or
+  // returned the full picture) fails; the timing is what it was asked for.
+  await window.__showVariant('flat');
+  const half = await shootWith({ scale: 0.5 });
+  out.scale = {
+    width: half.shot.width, height: half.shot.height,
+    expectedWidth: Math.round(out.width * 0.5), expectedHeight: Math.round(out.height * 0.5),
+    inside: sample(half.bitmap, 0.25, 0.25), outside: sample(half.bitmap, 0.75, 0.75)
+  };
+  half.bitmap.close();
+  const css = await shootWith({ scale: 1 / devicePixelRatio });
+  out.scaleCss = {
+    width: css.shot.width, height: css.shot.height,
+    expectedWidth: Math.round(out.width / devicePixelRatio),
+    expectedHeight: Math.round(out.height / devicePixelRatio),
+    inside: sample(css.bitmap, 0.25, 0.25), outside: sample(css.bitmap, 0.75, 0.75)
+  };
+  css.bitmap.close();
+  out.scaleRect = await quadrants(0.5);
+  out.scaleRefused = [];
+  for (const scale of [0, 1.5]) {
+    try {
+      await __SWIFT_PWA__.invoke('window.snapshot', { scale });
+      out.scaleRefused.push(scale + ': accepted');
+    } catch (e) {
+      out.scaleRefused.push(scale + ': ' + e.code);
+    }
+  }
+  out.scaleTiming = {};
+  for (const name of ['text', 'noise']) {
+    await window.__showVariant(name);
+    const row = {};
+    for (const [label, scale] of [['whole', 1], ['half', 0.5], ['css', 1 / devicePixelRatio]]) {
+      const m = await shootWith({ scale });
+      m.bitmap.close();
+      row[label + 'Ms'] = m.ms;
+      row[label + 'Kib'] = Math.round(m.shot.bytes / 1024);
+      row[label + 'Size'] = m.shot.width + 'x' + m.shot.height;
+    }
+    out.scaleTiming[name] = row;
   }
 
   // Scrolled: the rect is in viewport coordinates wherever the document is.

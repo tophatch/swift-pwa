@@ -158,6 +158,51 @@ struct WindowPluginTests {
         #expect(webView.snapshotRegions.isEmpty)
     }
 
+    // MARK: - window.snapshot scale (#344)
+
+    @Test("scale reaches the backend as given, with or without a rect, and defaults to 1")
+    func snapshotScale() async throws {
+        let (app, win) = await makeApp()
+        let webView = try #require(win.webView as? MockWebView)
+        webView.stubbedSnapshot = pngHeader(width: 4, height: 4)
+        webView.evaluationResults = ["[800,600]"]
+
+        _ = await dispatch("window.snapshot", on: app, from: win)
+        _ = await dispatch("window.snapshot", on: app, from: win, payload: #"{"scale":0.5}"#)
+        _ = await dispatch(
+            "window.snapshot", on: app, from: win,
+            payload: #"{"rect":{"x":0,"y":0,"width":100,"height":50},"scale":0.25}"#
+        )
+        _ = await dispatch("window.snapshot", on: app, from: win, payload: #"{"scale":1}"#)
+        #expect(webView.snapshotScales == [1, 0.5, 0.25, 1])
+        #expect(webView.snapshotRegions[0] == nil && webView.snapshotRegions[1] == nil)
+        #expect(webView.snapshotRegions[2]?.rect == Rect(x: 0, y: 0, width: 100, height: 50))
+    }
+
+    /// Above 1 would cost more to show nothing new; at or below 0 there is no
+    /// picture. Refused before the backend is asked, and before the viewport
+    /// is read for a rect.
+    @Test("a scale outside (0, 1] fails as a bad argument")
+    func snapshotScaleRefused() async throws {
+        let (app, win) = await makeApp()
+        let webView = try #require(win.webView as? MockWebView)
+        webView.stubbedSnapshot = pngHeader(width: 4, height: 4)
+
+        for payload in [
+            #"{"scale":0}"#,
+            #"{"scale":-0.5}"#,
+            #"{"scale":1.5}"#,
+            #"{"scale":2,"rect":{"x":0,"y":0,"width":10,"height":10}}"#
+        ] {
+            let result = await dispatch("window.snapshot", on: app, from: win, payload: payload)
+            guard case let .failure(err) = result else { Issue.record("expected failure for \(payload)"); continue }
+            #expect(err.code == BridgeError.decode)
+            #expect(err.message.contains("scale"))
+        }
+        #expect(webView.snapshotScales.isEmpty)
+        #expect(webView.evaluatedScripts.isEmpty)
+    }
+
     /// A backend with no snapshot has to say so as a clean error, not as a
     /// broken image — an app is meant to ask `window.canSnapshot` first and
     /// offer the feature or not.

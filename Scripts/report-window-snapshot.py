@@ -131,6 +131,33 @@ def main():
         region("rect on a scrolled page", scrolled)
         region("rect without viewport-fit=cover", value["rectNoCover"])
 
+    # `scale` (#344). Within 2 px: each backend rounds its own full size.
+    def shrunk(label, q):
+        check(label + ": its size",
+              abs(q["width"] - q["expectedWidth"]) <= 2 and abs(q["height"] - q["expectedHeight"]) <= 2,
+              "got=%dx%d expected~%dx%d" % (q["width"], q["height"], q["expectedWidth"], q["expectedHeight"]))
+        check(label + ": still the page, mark and all",
+              dominant(q["inside"], "r") and dominant(q["outside"], "b"),
+              "inside=%s outside=%s" % (q["inside"], q["outside"]))
+        # The same colours as the full-size picture, not merely the right hue:
+        # WebView2's scaled capture once dropped the display's profile and
+        # read #eb2f21 for the full picture's #fe0000 — a duller page under
+        # the live one, which "dominant red" passed.
+        def near(a, b):
+            return all(abs(int(a[i:i + 2], 16) - int(b[i:i + 2], 16)) <= 6 for i in (1, 3, 5))
+        check(label + ": the full picture's colours",
+              near(q["inside"], value["inside"]) and near(q["outside"], value["outside"]),
+              "inside=%s outside=%s against %s %s at full size"
+              % (q["inside"], q["outside"], value["inside"], value["outside"]))
+
+    if "scale" in value:
+        shrunk("scale 0.5", value["scale"])
+        shrunk("scale 1/devicePixelRatio", value["scaleCss"])
+        region("scale 0.5 with a rect", value["scaleRect"])
+        refused = value["scaleRefused"]
+        check("scale 0 and 1.5 are refused as bad arguments",
+              refused == ["0: E_DECODE", "1.5: E_DECODE"], ", ".join(refused))
+
     print()
     print("      round trip, page to page: snapshot, encode, bridge, decode, at %dx%d:" % (w, h))
     print("      " + "content".ljust(12) + "total".rjust(8) + "bridge".rjust(9) + "PNG".rjust(11))
@@ -155,6 +182,14 @@ def main():
             print("      " + label.ljust(12)
                   + ("%d ms / %d KiB" % (t["wholeMs"], t["wholeKib"])).rjust(18)
                   + ("%d ms / %d KiB" % (t["quarterMs"], t["quarterKib"])).rjust(18))
+    if "scaleTiming" in value:
+        print()
+        print("      the whole window at three scales:")
+        print("      " + "content".ljust(12) + "1".rjust(26) + "0.5".rjust(26) + "1/dpr".rjust(26))
+        for name, label in (("text", "body text"), ("noise", "noise")):
+            t = value["scaleTiming"][name]
+            cells = ["%s %d ms %d KiB" % (t[k + "Size"], t[k + "Ms"], t[k + "Kib"]) for k in ("whole", "half", "css")]
+            print("      " + label.ljust(12) + "".join(c.rjust(26) for c in cells))
     print()
     sys.exit(failed)
 

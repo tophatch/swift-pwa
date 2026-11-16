@@ -190,9 +190,10 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     return n;
   }
 
-  function snapshot(rect) {
+  function snapshot(rect) { return snapshotWith(rect ? { rect: rect } : {}); }
+  function snapshotWith(args) {
     var t0 = performance.now();
-    return __SWIFT_PWA__.invoke('window.snapshot', rect ? { rect: rect } : {}).then(function (shot) {
+    return __SWIFT_PWA__.invoke('window.snapshot', args).then(function (shot) {
       var bridgeMs = performance.now() - t0;
       return fetch('data:image/png;base64,' + shot.pngBase64)
         .then(function (r) { return r.blob(); })
@@ -332,6 +333,67 @@ cat > "$APP_DIR/web/index.html" <<'HTML'
     m.bitmap.close();
     return report('edge width=' + m.shot.width + ' expected=' + Math.round(30 * devicePixelRatio));
   }).then(function () {
+    // `scale` (#344), on the flat page: the size, and still the page.
+    function scaled(label, scale) {
+      return snapshotWith({ scale: scale }).then(function (m) {
+        var w = m.bitmap.width, h = m.bitmap.height;
+        var ctx = draw(m.bitmap, w, h);
+        m.bitmap.close();
+        return report(label + ' size=' + m.shot.width + 'x' + m.shot.height +
+                      ' expected=' + Math.round(innerWidth * devicePixelRatio * scale) +
+                      'x' + Math.round(innerHeight * devicePixelRatio * scale) +
+                      ' inside=' + hexAt(ctx, Math.floor(w * 0.25), Math.floor(h * 0.25)) +
+                      ' outside=' + hexAt(ctx, Math.floor(w * 0.75), Math.floor(h * 0.75)));
+      });
+    }
+    return scaled('scalehalf', 0.5).then(function () { return scaled('scalecss', 1 / devicePixelRatio); });
+  }).then(function () {
+    var cx = Math.floor(innerWidth / 2), cy = Math.floor(innerHeight / 2);
+    return snapshotWith({ rect: { x: cx - 40, y: cy - 40, width: 80, height: 80 }, scale: 0.5 });
+  }).then(function (m) {
+    var w = m.bitmap.width, h = m.bitmap.height;
+    var ctx = draw(m.bitmap, w, h);
+    var q = function (fx, fy) { return hexAt(ctx, Math.floor(w * fx), Math.floor(h * fy)); };
+    m.bitmap.close();
+    return report('scalerect size=' + m.shot.width + 'x' + m.shot.height +
+                  ' expected=' + Math.round(40 * devicePixelRatio) + 'x' + Math.round(40 * devicePixelRatio) +
+                  ' tl=' + q(0.25, 0.25) + ' tr=' + q(0.75, 0.25) +
+                  ' bl=' + q(0.25, 0.75) + ' br=' + q(0.75, 0.75));
+  }).then(function () {
+    var codes = [];
+    var tries = [0, 1.5].map(function (scale) {
+      return function () {
+        return __SWIFT_PWA__.invoke('window.snapshot', { scale: scale }).then(
+          function () { codes.push(scale + ':accepted'); },
+          function (e) { codes.push(scale + ':' + e.code); });
+      };
+    });
+    return tries[0]().then(tries[1]).then(function () { return report('scalerefused ' + codes.join(',')); });
+  }).then(function () {
+    // What it saves on body text, the case it was asked for: three runs at
+    // each scale, since one Android round trip is too noisy to quote.
+    document.getElementById('text').style.display = 'block';
+    return new Promise(function (r) { setTimeout(r, 300); });
+  }).then(function () {
+    var rows = [['whole', 1], ['half', 0.5], ['css', 1 / devicePixelRatio]];
+    var chain = Promise.resolve();
+    rows.forEach(function (row) {
+      var times = [];
+      var size = '', kib = 0;
+      for (var k = 0; k < 3; k++) {
+        chain = chain.then(function () { return snapshotWith({ scale: row[1] }); }).then(function (m) {
+          m.bitmap.close();
+          times.push(m.ms);
+          size = m.shot.width + 'x' + m.shot.height;
+          kib = Math.round(m.shot.bytes / 1024);
+        });
+      }
+      chain = chain.then(function () {
+        return report('scaletime ' + row[0] + ' size=' + size + ' kib=' + kib + ' ms=' + times.join(','));
+      });
+    });
+    return chain;
+  }).then(function () {
     document.body.textContent = 'done';
     return report('finished');
   }, function (e) {
@@ -457,6 +519,31 @@ for name in ("text", "noise"):
     qw, qh = (int(g) for g in m.groups()) if m else (0, 0)
     check("rect: a quarter of the window is a quarter (%s)" % name,
           abs(qw - w / 2) <= 3 and abs(qh - h / 2) <= 3, "got=%dx%d window=%dx%d" % (qw, qh, w, h))
+# `scale` (#344): the size, the picture still the page, and with a rect.
+for name, label in (("scalehalf", "scale 0.5"), ("scalecss", "scale 1/devicePixelRatio")):
+    m = re.search(r"SNAPPROBE %s size=(\d+)x(\d+) expected=(\d+)x(\d+) inside=(\S+) outside=(\S+)" % name, log)
+    if not m:
+        check(label + ": reported", False, "(no %s line)" % name)
+        continue
+    sw, sh, sew, seh = (int(g) for g in m.groups()[:4])
+    check(label + ": its size", abs(sw - sew) <= 2 and abs(sh - seh) <= 2,
+          "got=%dx%d expected~%dx%d" % (sw, sh, sew, seh))
+    check(label + ": still the page, mark and all", m.group(5) == "#ff0000" and m.group(6) == "#0000ff",
+          "inside=%s outside=%s" % (m.group(5), m.group(6)))
+m = re.search(r"SNAPPROBE scalerect size=(\d+)x(\d+) expected=(\d+)x(\d+) tl=(\S+) tr=(\S+) bl=(\S+) br=(\S+)", log)
+if m:
+    rw, rh, rew, reh = (int(g) for g in m.groups()[:4])
+    tl, tr, bl, br = m.groups()[4:]
+    check("scale 0.5 with a rect: its size", abs(rw - rew) <= 2 and abs(rh - reh) <= 2,
+          "got=%dx%d expected~%dx%d" % (rw, rh, rew, reh))
+    check("scale 0.5 with a rect: the mark only top-left",
+          tl == "#ff0000" and tr == br == bl == "#0000ff", "tl=%s tr=%s bl=%s br=%s" % (tl, tr, bl, br))
+else:
+    check("scale 0.5 with a rect: reported", False, "(no scalerect line)")
+m = re.search(r"SNAPPROBE scalerefused (\S+)", log)
+check("scale 0 and 1.5 are refused as bad arguments",
+      bool(m) and m.group(1) == "0:E_DECODE,1.5:E_DECODE", m.group(1) if m else "(no line)")
+
 edge, edge_expected = field("edge", "width"), field("edge", "expected")
 check("rect off the edge is clipped to the viewport",
       edge is not None and abs(edge - edge_expected) <= 2, "width=%s expected~%s" % (edge, edge_expected))
@@ -478,6 +565,13 @@ for name, label in (("text", "body text"), ("noise", "noise")):
         continue
     print("      " + label.ljust(12) + ("%d ms / %d KiB" % (field(name, "ms"), field(name, "kib"))).rjust(18)
           + ("%d ms / %d KiB" % (q_ms, q_kib)).rjust(18))
+print()
+print("      body text, the whole window at three scales (three runs each):")
+for name, label in (("whole", "1"), ("half", "0.5"), ("css", "1/dpr")):
+    m = re.search(r"SNAPPROBE scaletime %s size=(\S+) kib=(\d+) ms=(\S+)" % name, log)
+    if m:
+        print("      " + label.ljust(8) + m.group(1).rjust(11) + ("%s KiB" % m.group(2)).rjust(10)
+              + ("  %s ms" % m.group(3)))
 print()
 sys.exit(failed)
 PY

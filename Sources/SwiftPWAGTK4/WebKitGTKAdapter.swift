@@ -327,7 +327,7 @@
         ///
         /// The C shim writes the PNG to a temp file (see the shim for why);
         /// we read and delete it here.
-        public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
+        public func captureSnapshot(region: SnapshotRegion?, scale: Double) async throws -> Data {
             // The visible region *is* the viewport, so the region's share of
             // the page's viewport is its share of the snapshot's pixels —
             // whatever the scale factor and zoom.
@@ -362,6 +362,7 @@
                                 webView, cstr, share == nil ? 0 : 1,
                                 share?.x ?? 0, share?.y ?? 0,
                                 (share?.x ?? 0) + (share?.width ?? 1), (share?.y ?? 0) + (share?.height ?? 1),
+                                scale,
                                 snapshotCallback, boxPtr
                             )
                         }

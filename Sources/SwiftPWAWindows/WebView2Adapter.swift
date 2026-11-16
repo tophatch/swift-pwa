@@ -482,16 +482,26 @@
         /// `CapturePreview` takes no region, and decoding, cropping and
         /// re-encoding its PNG would make a region dearer than the whole
         /// window (#255).
-        public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
-            guard let region else { return try await capturePreview() }
-            return try await captureScreenshot(clip: region.rect)
+        public func captureSnapshot(region: SnapshotRegion?, scale: Double) async throws -> Data {
+            if let region { return try await captureScreenshot(clip: region.rect, scale: scale) }
+            if scale >= 1 { return try await capturePreview() }
+            // `CapturePreview` takes no size, so a smaller whole window is a
+            // DevTools capture of the whole viewport (#344).
+            let reply = try await evaluateJavaScript("[innerWidth, innerHeight]")
+            guard let data = reply?.data(using: .utf8),
+                  let size = try? JSONDecoder().decode([Double].self, from: data), size.count == 2
+            else {
+                throw BridgeError(code: BridgeError.handler, message: "couldn't read the viewport's size")
+            }
+            return try await captureScreenshot(clip: Rect(x: 0, y: 0, width: size[0], height: size[1]), scale: scale)
         }
 
         /// `clip` is in CSS pixels relative to the viewport. CDP's clip is in
         /// the *document's* CSS pixels, so the viewport's scroll position is
-        /// added first; its output is in device pixels, like the whole-window
-        /// path's.
-        private func captureScreenshot(clip: Rect) async throws -> Data {
+        /// added first; its output is in device pixels times `scale`, like the
+        /// whole-window path's at `1`. DevTools renders at that size, so a
+        /// smaller picture is cheaper to make as well as to encode.
+        private func captureScreenshot(clip: Rect, scale: Double) async throws -> Data {
             let metrics = try await callDevTools("Page.getLayoutMetrics", [:])
             guard let data = metrics?.data(using: .utf8),
                   let layout = try? JSONDecoder().decode(LayoutMetrics.self, from: data)
@@ -499,15 +509,33 @@
                 throw BridgeError(code: BridgeError.handler, message: "couldn't read the page's layout metrics")
             }
             let origin = layout.cssVisualViewport ?? layout.layoutViewport
+            let x = origin.pageX + clip.x, y = origin.pageY + clip.y
+            let png = try await devToolsScreenshot(x: x, y: y, width: clip.width, height: clip.height, scale: scale)
+            guard scale < 1, PNGColorProfile.profileChunk(in: png) == nil else { return png }
+            // At any scale but 1 DevTools leaves the display's colour profile
+            // off while keeping the pixels in the display's space, so on a
+            // wide-gamut monitor the page's #ff0000 read back as #eb2f21
+            // (#344). The profile doesn't depend on the scale: take it from a
+            // one-pixel capture at 1, which costs next to nothing to encode.
+            // An sRGB display gives none either way, and the picture is right.
+            let pixel = try await devToolsScreenshot(x: x, y: y, width: 1, height: 1, scale: 1)
+            guard let profile = PNGColorProfile.profileChunk(in: pixel) else { return png }
+            return PNGColorProfile.inserting(profile, into: png)
+        }
+
+        /// One `Page.captureScreenshot`, in the document's CSS pixels.
+        private func devToolsScreenshot(
+            x: Double, y: Double, width: Double, height: Double, scale: Double
+        ) async throws -> Data {
             let reply = try await callDevTools("Page.captureScreenshot", [
                 "format": .string("png"),
                 "captureBeyondViewport": .bool(false),
                 "clip": .object([
-                    "x": .number(origin.pageX + clip.x),
-                    "y": .number(origin.pageY + clip.y),
-                    "width": .number(clip.width),
-                    "height": .number(clip.height),
-                    "scale": .number(1)
+                    "x": .number(x),
+                    "y": .number(y),
+                    "width": .number(width),
+                    "height": .number(height),
+                    "scale": .number(scale)
                 ])
             ])
             guard let replyData = reply?.data(using: .utf8),

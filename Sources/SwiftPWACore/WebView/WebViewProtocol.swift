@@ -57,13 +57,19 @@ public protocol PWAWebView: AnyObject, Sendable {
     /// *before* encoding: the encode is most of what a snapshot costs, so a
     /// crop after it would make a region dearer than the whole window.
     ///
+    /// `scale` shrinks the picture's width and height by that factor, in
+    /// `(0, 1]`, from the full-resolution picture of the region: `1` is
+    /// device pixels, `1 / devicePixelRatio` is CSS pixels. Like the crop it
+    /// happens before the encode, which is what makes it cheaper (#344). The
+    /// result is at least 1×1.
+    ///
     /// Used by the app driver's `screenshot` verb and by `window.snapshot`.
     /// Backends that can't snapshot leave the default in place, which throws
     /// `E_UNIMPLEMENTED`; check ``supportsSnapshot`` first to get a clean
     /// "unsupported here" rather than a failed call.
-    func captureSnapshot(region: SnapshotRegion?) async throws -> Data
+    func captureSnapshot(region: SnapshotRegion?, scale: Double) async throws -> Data
 
-    /// Whether ``captureSnapshot(region:)`` is implemented on this backend.
+    /// Whether ``captureSnapshot(region:scale:)`` is implemented on this backend.
     ///
     /// A separate flag rather than a `try?` probe because the driver's
     /// `capabilities` verb has to answer *before* anyone asks for pixels,
@@ -95,16 +101,16 @@ public protocol PWAWebView: AnyObject, Sendable {
 public extension PWAWebView {
     func openDevTools() {} // default: no-op
 
-    func captureSnapshot(region _: SnapshotRegion?) async throws -> Data {
+    func captureSnapshot(region _: SnapshotRegion?, scale _: Double) async throws -> Data {
         throw BridgeError(
             code: BridgeError.unimplemented,
             message: "this backend can't snapshot its webview contents"
         )
     }
 
-    /// The whole webview.
+    /// The whole webview, at full resolution.
     func captureSnapshot() async throws -> Data {
-        try await captureSnapshot(region: nil)
+        try await captureSnapshot(region: nil, scale: 1)
     }
 
     var supportsSnapshot: Bool {

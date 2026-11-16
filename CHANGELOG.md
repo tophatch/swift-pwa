@@ -57,6 +57,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   build with no `App.swift` edit. `drive` and `dev` pass it to their
   unbundled binary through the environment, so a driven run reports what the
   bundled app does.
+- **`window.snapshot({ scale })`: a smaller picture, made smaller before the
+  encode** (#344). `rect` made a snapshot cheaper by picturing less of the
+  window, which can't help when the picture needed is the whole window. On a
+  phone that is the common case: a page turn pictures the page being left,
+  and the page is the window. The encode is most of what a snapshot costs, and
+  it scales with the pixels. `scale` is a factor in (0, 1] on the width and
+  height; `1 / devicePixelRatio` gives CSS pixels. Every backend shrinks the
+  picture before it is encoded: WebKit renders at the smaller width, GTK
+  resamples the surface, DevTools captures at the scale on Windows, and
+  Android's `PixelCopy` lands in a smaller bitmap. Body text, whole window,
+  three runs each:
+
+  | | full size | `scale: 0.5` | `1 / devicePixelRatio` |
+  | --- | --- | --- | --- |
+  | Pixel 3a (Android 12) | 597–657 ms | 218–278 ms | 127–131 ms |
+  | Galaxy Z Fold8 | 203–234 ms | 99–106 ms | 68–71 ms |
+
+  Windows 11 went from 226 to 110–119 ms at `0.5`, and macOS from 67 to
+  19 ms. On Windows a DevTools capture at any scale but 1 leaves the
+  display's colour profile off pixels that are still in the display's space.
+  On a wide-gamut monitor the page's `#ff0000` came back as `#eb2f21`, a
+  visibly duller picture over the live page. The backend copies the profile
+  from a one-pixel capture at scale 1, which costs ~25 ms. It now reads
+  `#fe0000`, as the full-size picture does.
+
+  The same report found the Pixel 3a's whole-window snapshot ~1.7× slower in
+  0.12 than in 0.11.8, and guessed that moving the encode off the UI thread
+  (#325) put it on a slower core. Measured on that phone, it didn't: the
+  encode costs the same on the UI thread, on the encoder thread, and on that
+  thread at raised priority (551–588 ms over 18 runs). CPU time is within
+  ~15 ms of wall time in each, and all three run on the same slow cores. Nor
+  did the slowdown reproduce: on a page of body text, 0.11.8 took a median
+  564 ms and this build 585 ms (18 runs each, 543–649 ms between them). The
+  report measured an EPUB reader's pages, so its content may cost differently;
+  that cause is still open.
 
 ### Fixed
 

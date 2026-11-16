@@ -1005,8 +1005,15 @@ Linux's: a page of body text at 2022×1466 measured **239 ms** against ~60 ms
 there, nearly all of it inside the call. A `rect` costs much less (a quarter
 of the window: 131 ms against 209–578 ms on an arm64 laptop) and goes through
 DevTools' `Page.captureScreenshot` with a clip rather than `CapturePreview`,
-which takes no region; its colour handling on a wide-gamut display hasn't been
-measured. `Scripts\verify-window-snapshot.ps1` measures all of it (it needs
+which takes no region. So does any `scale` below 1, whole window included,
+because `CapturePreview` takes no size either. At scale 1 that capture embeds
+the display's profile as `CapturePreview` does. At any other scale DevTools
+writes the same display-space pixels with no profile, and on a wide-gamut
+monitor a page's `#ff0000` read back as `#eb2f21` (#344). The backend copies
+the profile from a one-pixel capture at scale 1 onto the scaled picture, for
+about 25 ms, and the colours then match the full-size picture's. Measured on a
+wide-gamut x64 laptop; a body-text window went from 226 ms to 110–119 ms at
+`scale: 0.5`. `Scripts\verify-window-snapshot.ps1` measures all of it (it needs
 `-PackagesDir` pointing at the WebView2 / WIL NuGet packages, since the probe
 app builds `CWebView2Shim` like any Windows app). On a machine with no Python
 it keeps the probe's reply and says where, for

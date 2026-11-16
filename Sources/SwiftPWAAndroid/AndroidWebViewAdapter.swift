@@ -153,8 +153,8 @@
             true
         }
 
-        public func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
-            let args = SnapshotArgs(rect: region?.rect, viewport: region?.viewport)
+        public func captureSnapshot(region: SnapshotRegion?, scale: Double) async throws -> Data {
+            let args = SnapshotArgs(rect: region?.rect, viewport: region?.viewport, scale: scale)
             let result: SnapshotResult = try await AndroidRPC.call("window.snapshot", args)
             guard let png = Data(base64Encoded: result.pngBase64) else {
                 throw BridgeError(
@@ -168,6 +168,7 @@
         private struct SnapshotArgs: Encodable {
             let rect: Rect?
             let viewport: Size?
+            let scale: Double
         }
 
         private struct SnapshotResult: Decodable {

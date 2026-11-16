@@ -263,18 +263,26 @@
         /// driver can screenshot an app that is backgrounded, occluded or on
         /// another Space — and without the Screen Recording TCC grant that
         /// `CGWindowListCreateImage` / `screencapture` demand.
-        public nonisolated func captureSnapshot(region: SnapshotRegion?) async throws -> Data {
-            try await snapshotOnMain(region: region)
+        public nonisolated func captureSnapshot(region: SnapshotRegion?, scale: Double) async throws -> Data {
+            try await snapshotOnMain(region: region, scale: scale)
         }
 
-        @MainActor private func snapshotOnMain(region: SnapshotRegion?) async throws -> Data {
+        @MainActor private func snapshotOnMain(region: SnapshotRegion?, scale: Double) async throws -> Data {
             let config = WKSnapshotConfiguration()
             // Flush pending layout/paint first, so a snapshot taken right
             // after an `eval` that mutated the DOM shows the mutation.
             config.afterScreenUpdates = true
+            var pictured = webView.bounds
             if let region {
                 // WebKit renders only this rect, in the view's points.
-                config.rect = viewRect(for: region)
+                pictured = viewRect(for: region)
+                config.rect = pictured
+            }
+            if scale < 1 {
+                // WebKit renders the image this many points wide, at the
+                // screen's backing scale, so the bitmap is already small when
+                // it reaches the encode.
+                config.snapshotWidth = NSNumber(value: Double(max(pictured.width * scale, 1)))
             }
             let image = try await webView.takeSnapshot(configuration: config)
             guard let png = Self.encodePNG(image) else {

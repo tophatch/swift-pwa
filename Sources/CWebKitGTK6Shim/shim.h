@@ -142,12 +142,40 @@ typedef struct {
     /// right, bottom. `has_region` 0 keeps the whole picture.
     int has_region;
     double share[4];
+    /// Shrink factor in (0, 1]; 1 keeps the pixels as they are.
+    double scale;
 } swiftpwa_snapshot_box;
 
 /// A share of `size` pixels, as a whole pixel inside it.
 static inline int swiftpwa_snapshot_edge(double share, int size) {
     int px = (int)(share * size + 0.5);
     return px < 0 ? 0 : (px > size ? size : px);
+}
+
+/// `src` shrunk to `scale` of its pixel size (at least 1x1) on a new 32-bit
+/// image (#344). Its device scale is set aside while it's painted, so the
+/// factor applies to the surface's own pixels, as the crop's shares do.
+/// `CAIRO_FILTER_GOOD` averages the pixels each output pixel covers, where
+/// nearest-neighbour would alias text into noise.
+static inline cairo_surface_t *swiftpwa_snapshot_scaled(cairo_surface_t *src, double scale) {
+    int w = cairo_image_surface_get_width(src), h = cairo_image_surface_get_height(src);
+    int dw = (int)(w * scale + 0.5), dh = (int)(h * scale + 0.5);
+    if (dw < 1) dw = 1;
+    if (dh < 1) dh = 1;
+    cairo_surface_t *dst = cairo_image_surface_create(CAIRO_FORMAT_ARGB32, dw, dh);
+    double sx = 1, sy = 1;
+    cairo_surface_get_device_scale(src, &sx, &sy);
+    cairo_surface_set_device_scale(src, 1, 1);
+    cairo_t *cr = cairo_create(dst);
+    cairo_scale(cr, (double)dw / w, (double)dh / h);
+    cairo_set_source_surface(cr, src, 0, 0);
+    cairo_pattern_set_filter(cairo_get_source(cr), CAIRO_FILTER_GOOD);
+    cairo_set_operator(cr, CAIRO_OPERATOR_SOURCE);
+    cairo_paint(cr);
+    cairo_destroy(cr);
+    cairo_surface_set_device_scale(src, sx, sy);
+    cairo_surface_flush(dst);
+    return dst;
 }
 
 /// GAsyncReadyCallback trampoline for `swiftpwa_webview_snapshot_png`.
@@ -166,6 +194,7 @@ static inline void swiftpwa_snapshot_finish(
     char *path = box->path;
     int has_region = box->has_region;
     double share[4] = { box->share[0], box->share[1], box->share[2], box->share[3] };
+    double scale = box->scale;
     g_free(box);
 
     GError *error = NULL;
@@ -183,7 +212,40 @@ static inline void swiftpwa_snapshot_finish(
         // cost (#255): the texture is downloaded once and the region wrapped
         // as a memory texture over the same bytes, with the full row stride.
         GdkTexture *picture = texture;
-        if (has_region) {
+        if (scale < 1) {
+            // Scaled through cairo, which has a resampling filter GDK
+            // doesn't expose: GDK_MEMORY_DEFAULT is cairo's native ARGB32
+            // layout, so the download is wrapped rather than converted. The
+            // crop, if any, is the part of it the surface starts at.
+            int w = gdk_texture_get_width(texture);
+            int h = gdk_texture_get_height(texture);
+            int x0 = 0, y0 = 0, x1 = w, y1 = h;
+            if (has_region) {
+                x0 = swiftpwa_snapshot_edge(share[0], w); y0 = swiftpwa_snapshot_edge(share[1], h);
+                x1 = swiftpwa_snapshot_edge(share[2], w); y1 = swiftpwa_snapshot_edge(share[3], h);
+            }
+            picture = NULL;
+            if (x1 <= x0 || y1 <= y0) {
+                err_msg = g_strdup("the region is empty at this size");
+            } else {
+                int stride = cairo_format_stride_for_width(CAIRO_FORMAT_ARGB32, w);
+                guchar *pixels = g_malloc((gsize)stride * h);
+                gdk_texture_download(texture, pixels, (gsize)stride);
+                cairo_surface_t *source = cairo_image_surface_create_for_data(
+                    pixels + (gsize)y0 * stride + (gsize)x0 * 4, CAIRO_FORMAT_ARGB32, x1 - x0, y1 - y0, stride
+                );
+                cairo_surface_t *scaled = swiftpwa_snapshot_scaled(source, scale);
+                cairo_surface_destroy(source);
+                g_free(pixels);
+                cairo_status_t status = cairo_surface_write_to_png(scaled, path);
+                cairo_surface_destroy(scaled);
+                if (status == CAIRO_STATUS_SUCCESS) {
+                    ok = 1;
+                } else {
+                    err_msg = g_strdup(cairo_status_to_string(status));
+                }
+            }
+        } else if (has_region) {
             int w = gdk_texture_get_width(texture);
             int h = gdk_texture_get_height(texture);
             int x0 = swiftpwa_snapshot_edge(share[0], w), y0 = swiftpwa_snapshot_edge(share[1], h);
@@ -225,6 +287,7 @@ static inline void swiftpwa_webview_snapshot_png(
     const char *path,
     int has_region,
     double left, double top, double right, double bottom,
+    double scale,
     swiftpwa_snapshot_callback cb,
     void *user_data
 ) {
@@ -238,6 +301,7 @@ static inline void swiftpwa_webview_snapshot_png(
     box->share[1] = top;
     box->share[2] = right;
     box->share[3] = bottom;
+    box->scale = scale;
     webkit_web_view_get_snapshot(
         web_view,
         WEBKIT_SNAPSHOT_REGION_VISIBLE,

@@ -430,3 +430,7 @@ if ($results | Where-Object { $_ -like "FAIL*portable*" }) {
         Select-Object -First 40 | ForEach-Object { Write-Host "  | $_" }
 }
 if ($results | Where-Object { $_ -like "FAIL*" }) { exit 1 }
+# Explicitly, because GitHub's pwsh wrapper ends with `exit $LASTEXITCODE`: a
+# clean run otherwise reports the exit code of its last native command, which
+# is the throw check's deliberately failing `drive eval`.
+exit 0

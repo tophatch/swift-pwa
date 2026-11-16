@@ -95,6 +95,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **CI: a Windows build whose planner stalls is killed and retried, instead of
+  running out the job's time.** On GitHub's Windows runners `swift build` can
+  sit on `[Pre-planning 1 / N]` for tens of minutes
+  (swiftlang/swift-build#1883). A recent run lost 63 minutes to it building
+  the CLI, then stalled again building the app and was cancelled at 90.
+  Stacks posted on that issue show the planner's clang tool-discovery
+  processes blocked writing to a pipe the planner stopped reading. This
+  project's process samples saw the same from outside: three `clang`
+  processes at zero CPU for the whole stall. `Scripts/windows-build-watchdog.ps1`
+  wraps a build and acts on exactly that: a `clang` under it with no CPU for
+  three minutes means a stall. It prints their command lines, kills the
+  stalled build and runs it once more. Every Windows build in `ci.yml` and
+  `release.yml` goes through it. Tested on Windows 11 arm64:
+  - **A real stall:** a `clang -E -dM` writing into a pipe nobody reads was
+    caught and killed, retried, and given up on once retries ran out.
+  - **A healthy build:** a clean 755-step build of the CLI ran under a
+    one-minute threshold without being touched.
+  - **Exit codes:** a command that fails on its own keeps its own.
+
 - **Android: `navigator.onLine` follows the network** (#345). The generated
   manifest declared `INTERNET` but not `ACCESS_NETWORK_STATE`, and without it
   the WebView never tracks connectivity: `navigator.onLine` stayed `true` and

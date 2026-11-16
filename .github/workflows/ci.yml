@@ -357,17 +357,20 @@ jobs:
     # rate can be measured before it's allowed to block a merge. It has no
     # paths filter, and must not get one once it is required — a required check
     # that never runs leaves a PR waiting forever. What keeps it advisory: about
-    # half of runs take 23-60 minutes instead of ~12, every one of them with
-    # swift-build at four cores on "[Pre-planning 1 / N]" for up to 45 minutes
-    # and then compiling normally (swiftlang/swift-build#1883). Any build here
-    # can do it, the CLI's own debug build included, so the job can't be
-    # required until that's fixed upstream. The script logs each phase's time
-    # and samples the build processes once a minute, to say where.
+    # half of runs took 23-60 minutes instead of ~12, every one of them with
+    # swift-build at four cores on "[Pre-planning 1 / N]", compiling nothing
+    # (swiftlang/swift-build#1883). One stall lasted 63 minutes, and a run that
+    # stalled twice was cancelled at the limit. Any build here can do it, the
+    # CLI's own debug build included. Every Windows build in CI now goes through
+    # Scripts/windows-build-watchdog.ps1, which kills a stalled build and runs
+    # it again, so a stall costs a few minutes; whether that makes the job
+    # reliable enough to require is what its next runs are for. The script logs
+    # each phase's time and samples the build processes once a minute.
     #
-    # 90 minutes, not 60: the stall ends on its own, so a run that hits the
-    # limit would have passed. With -Drive the job makes four builds that can
-    # each stall; of 40 runs, three ran out at 60 minutes and three more
-    # finished between 53 and 58.
+    # 90 minutes, not 60: from before the watchdog, when a stall had to end on
+    # its own. With -Drive the job makes four builds that can each stall; of 40
+    # runs, three ran out at 60 minutes and three more finished between 53 and
+    # 58.
     runs-on: windows-2022
     timeout-minutes: 90
     steps:
@@ -830,7 +833,7 @@ jobs:
                     ForEach-Object { '-Xcc', "-I$_" }
           $flags += '-Xlinker', "/LIBPATH:$pwd\packages\Microsoft.Web.WebView2\build\native\x64"
           Set-Location Examples\HelloPWA
-          swift build -c release @flags
+          & "$env:GITHUB_WORKSPACE/Scripts/windows-build-watchdog.ps1" -- swift build -c release @flags
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
       - name: What reached the product link
         if: always()
@@ -1066,7 +1069,7 @@ jobs:
         run: |
           $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
           $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
-          swift build --build-tests @flags
+          & "$env:GITHUB_WORKSPACE/Scripts/windows-build-watchdog.ps1" -- swift build --build-tests @flags
 
   linux-gtk3:
     runs-on: ubuntu-24.04
@@ -1236,7 +1239,7 @@ jobs:
         run: |
           $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
           $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
-          swift build -c release @flags
+          & "$env:GITHUB_WORKSPACE/Scripts/windows-build-watchdog.ps1" -- swift build -c release @flags
       - name: Smoke-test the built CLI (it must actually run)
         # This job compiles and link-checks but never used to *run* anything,
         # and that blind spot shipped two bugs in the Windows CLI — a crash on
@@ -1283,7 +1286,7 @@ jobs:
         run: |
           $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
           $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
-          swift build --build-tests @flags
+          & "$env:GITHUB_WORKSPACE/Scripts/windows-build-watchdog.ps1" -- swift build --build-tests @flags
       - name: Test (SwiftPWAWindowsTestRunner)
         # Why an executable instead of `swift test`: SwiftPM's
         # swift-testing discovery build plugin emits 0-byte stubs for
@@ -1308,7 +1311,7 @@ jobs:
         run: |
           $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
           $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
-          swift run @flags SwiftPWAWindowsTestRunner
+          & "$env:GITHUB_WORKSPACE/Scripts/windows-build-watchdog.ps1" -- swift run @flags SwiftPWAWindowsTestRunner
 
   android:
     # Android Gradle-scaffold smoke test on Examples/HelloPWA: generate the

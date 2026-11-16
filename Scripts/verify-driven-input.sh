@@ -20,7 +20,7 @@
 #   --app-dir <dir>  where to build the probe app. Default: a temp dir.
 #   --keep           don't delete the probe app afterwards (for iterating).
 #   --only <name>    run one check: control | editing | undo | preventdefault |
-#                    focus | drag | wheel
+#                    focus | drag | wheel | throw
 #   --background     launch with SWIFT_PWA_DRIVE_BACKGROUND=1 — the parked,
 #                    never-activated window an e2e suite runs in (#208). Input
 #                    has to reach it too, and wheel once didn't (#264).
@@ -444,6 +444,21 @@ print('; '.join(problems))
         fi
     else
         skip "wheel" "this backend can't synthesize wheel events"
+    fi
+fi
+
+# --- 8. A script that throws -----------------------------------------------
+# Not input, but only a driven run reaches it: the engines disagree about a
+# page exception (WebKit fails the evaluation, WebView2 answers `null`), so
+# what `drive eval` reports is only known by driving each one (#351).
+if wanted throw; then
+    if OUT="$("$CLI" drive eval "JSON.stringify({x: notDefinedAnywhere})" \
+        --attach "$PORT" --token "$TOKEN" 2>&1)"; then
+        fail "eval: a script that throws is an error naming the exception" "it succeeded: $OUT"
+    elif grep -q "E_EVAL_THREW.*notDefinedAnywhere" <<<"$OUT"; then
+        pass "eval: a script that throws is an error naming the exception"
+    else
+        fail "eval: a script that throws is an error naming the exception" "$OUT"
     fi
 fi
 

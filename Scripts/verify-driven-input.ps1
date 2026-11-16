@@ -360,6 +360,21 @@ if ($hasWheel) {
     Skip "wheel" "this backend reports no wheel input"
 }
 
+# --- 8. A script that throws -----------------------------------------------
+# Not input, but only a driven run reaches it: WebView2 completes a script that
+# throws as if it returned null, which `drive eval` once took for a pending
+# promise and reported as "the page navigated" (#351).
+$out = (& $cli drive eval "JSON.stringify({x: notDefinedAnywhere})" --attach $port --token $token 2>&1 | ForEach-Object {
+    if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.TargetObject)" } else { "$_" }
+}) -join " "
+if ($LASTEXITCODE -eq 0) {
+    Fail "eval: a script that throws is an error naming the exception" "it succeeded: $out"
+} elseif ($out -match "E_EVAL_THREW.*notDefinedAnywhere") {
+    Pass "eval: a script that throws is an error naming the exception"
+} else {
+    Fail "eval: a script that throws is an error naming the exception" $out
+}
+
 Write-Output ""
 Write-Output "Result: $script:Passed passed, $script:Failed failed, $script:Skipped skipped"
 Stop-Probe

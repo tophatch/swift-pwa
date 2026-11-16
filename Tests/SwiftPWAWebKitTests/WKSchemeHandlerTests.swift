@@ -166,3 +166,114 @@
         }
     }
 #endif
+
+#if canImport(WebKit) && (os(macOS) || os(iOS))
+    /// How a served file is handed to WebKit (#346). WebKit decodes an image
+    /// as its bytes arrive and paints what it has decoded, so a large PNG
+    /// delivered in parts is drawn with only its top rows for a moment — and
+    /// on macOS that partial frame was seen to stay. A whole file under the
+    /// limit goes over in one piece; a bigger one, or a range, still streams.
+    @Suite("pwa:// scheme handler — how a file is delivered")
+    @MainActor
+    struct WKSchemeDeliveryTests {
+        @Test("a whole file under the limit reaches WebKit in one didReceive")
+        func smallFileInOnePiece() async throws {
+            let size = 1_400_000 // a large PNG: six 256 KB chunks
+            let task = try await serve(size: size)
+            #expect(task.dataCalls.count == 1)
+            #expect(task.status == 200)
+            #expect(task.body == bytes(size))
+        }
+
+        @Test("a file over the limit still streams in chunks")
+        func largeFileStreams() async throws {
+            let size = Int(WKSchemeHandler.wholeDeliveryLimit) + 1
+            let task = try await serve(size: size)
+            #expect(task.dataCalls.count > 1)
+            #expect(task.dataCalls.allSatisfy { $0 <= 256 * 1024 })
+            #expect(task.body == bytes(size))
+        }
+
+        @Test("a range request streams, whatever the file's size")
+        func rangeStreams() async throws {
+            let size = 1_400_000
+            let task = try await serve(size: size, range: "bytes=0-")
+            #expect(task.status == 206)
+            #expect(task.dataCalls.count > 1)
+            #expect(task.body == bytes(size))
+        }
+
+        private func bytes(_ count: Int) -> Data {
+            Data((0 ..< count).map { UInt8(truncatingIfNeeded: $0 &* 31) })
+        }
+
+        private func serve(size: Int, range: String? = nil) async throws -> RecordingTask {
+            let root = URL(fileURLWithPath: NSTemporaryDirectory())
+                .appendingPathComponent("swift-pwa-delivery-\(UUID().uuidString)")
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            defer { try? FileManager.default.removeItem(at: root) }
+            try bytes(size).write(to: root.appendingPathComponent("file.bin"))
+            let provider = AssetProvider()
+            provider.setBundleRoot(root)
+            let handler = WKSchemeHandler(provider: provider)
+            var request = URLRequest(url: URL(string: "pwa://localhost/file.bin")!)
+            if let range { request.setValue(range, forHTTPHeaderField: "Range") }
+            let task = RecordingTask(request: request)
+            handler.webView(WKWebView(), start: task)
+            let deadline = ContinuousClock.now + .seconds(20)
+            while !task.finished, ContinuousClock.now < deadline {
+                try await Task.sleep(for: .milliseconds(10))
+            }
+            #expect(task.finished, "the handler never finished the task")
+            return task
+        }
+    }
+
+    /// Not main-actor isolated: the handler only ever messages it on the main
+    /// thread, but a WebKit protocol conformance can't say so on every
+    /// toolchain CI runs, so the lock makes it safe from anywhere.
+    private final class RecordingTask: NSObject, WKURLSchemeTask, @unchecked Sendable {
+        let request: URLRequest
+        private let lock = NSLock()
+        private var _status: Int?
+        private var _dataCalls: [Int] = []
+        private var _body = Data()
+        private var _finished = false
+
+        var status: Int? {
+            lock.withLock { _status }
+        }
+        var dataCalls: [Int] {
+            lock.withLock { _dataCalls }
+        }
+        var body: Data {
+            lock.withLock { _body }
+        }
+        var finished: Bool {
+            lock.withLock { _finished }
+        }
+
+        init(request: URLRequest) {
+            self.request = request
+        }
+
+        func didReceive(_ response: URLResponse) {
+            lock.withLock { _status = (response as? HTTPURLResponse)?.statusCode }
+        }
+
+        func didReceive(_ data: Data) {
+            lock.withLock {
+                _dataCalls.append(data.count)
+                _body.append(data)
+            }
+        }
+
+        func didFinish() {
+            lock.withLock { _finished = true }
+        }
+
+        func didFailWithError(_: any Error) {
+            lock.withLock { _finished = true }
+        }
+    }
+#endif

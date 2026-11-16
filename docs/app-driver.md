@@ -636,7 +636,7 @@ working directory:
 | Tool | |
 | --- | --- |
 | `app_screenshot` | PNG of the webview — `maxWidth` downscales it, which matters because a full-resolution Retina capture is megabytes of base64 in the agent's context |
-| `app_eval` | run JS in the page, get JSON back |
+| `app_eval` | run JS in the page, get JSON back — awaited and reported like `drive eval` |
 | `app_click` / `app_type` / `app_press_key` / `app_scroll` | trusted input, where the backend supports it |
 | `app_windows` / `app_capabilities` | geometry, and what this backend can actually do |
 
@@ -763,6 +763,11 @@ verbatim, where it fails to serialize. `drive` waits client-side by polling the
 same `eval` verb (as `--wait` does), so it needs no app-binary change and
 behaves identically everywhere.
 
+- **A throw is an error, not a value** — `E_EVAL_THREW` carrying the
+  exception's name and message (`ReferenceError: …`). Caught in the page
+  rather than left to the engine, because the engines disagree: WebKit fails
+  the evaluation, while WebView2 completes it with `null`, the same answer as
+  a script whose value really is `null`.
 - **A rejection is an error, not a value** — `E_EVAL_REJECTED` carrying the
   rejection's message.
 - **`--timeout` bounds the wait.** A promise that never settles fails at the
@@ -777,7 +782,8 @@ app, and the result is still the completion value (`window.a = 1; window.b = 2`
 
 > **Pages that forbid `eval`.** If the page's CSP has no `unsafe-eval`, the
 > promise-awaiting path can't run and `drive` falls back to evaluating the
-> script directly — the old behaviour, promises included. Detection runs a
+> script directly — the old behaviour, promises included, and on Windows a
+> throw there still reads as `null`. Detection runs a
 > harmless constant through `eval` *before* your script, so a blocked page never
 > executes it twice.
 

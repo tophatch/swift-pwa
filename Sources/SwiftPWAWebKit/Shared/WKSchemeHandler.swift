@@ -19,8 +19,9 @@
     /// volume is no better. Read on the main thread, that froze the app — bridge
     /// replies, `drive` verbs, an iPad rotation — for as long as the download
     /// took, and every other request queued behind it (#338). Only delivery to
-    /// the `WKURLSchemeTask` hops to the main thread, one chunk at a time, so a
-    /// read never runs more than a chunk ahead of WebKit and memory stays
+    /// the `WKURLSchemeTask` hops to the main thread: a whole file under
+    /// ``wholeDeliveryLimit`` in one hop, anything else one chunk at a time,
+    /// so a read never runs more than a chunk ahead of WebKit and memory stays
     /// bounded.
     ///
     /// `@MainActor` written out, not left to inference: Swift 6.1 infers it
@@ -31,6 +32,14 @@
     public final class WKSchemeHandler: NSObject, WKURLSchemeHandler, @unchecked Sendable {
         private let provider: AssetProvider
         private nonisolated static let chunkSize = 256 * 1024
+        /// A whole file up to this size reaches WebKit in one `didReceive`.
+        /// WebKit decodes an image as its bytes arrive and paints what it has,
+        /// so a large PNG delivered in chunks is drawn with only its top rows
+        /// for a moment — and that partial frame was seen to stick until the
+        /// element changed size (#346). Big enough for any image, small enough
+        /// that holding one in memory doesn't matter. Larger files and `Range`
+        /// requests (video) still stream in chunks.
+        nonisolated static let wholeDeliveryLimit: Int64 = 8 * 1024 * 1024
         private let queue = DispatchQueue(
             label: "swift-pwa.scheme-handler", qos: .userInitiated, attributes: .concurrent
         )
@@ -113,6 +122,15 @@
                     url: url, statusCode: status, httpVersion: "HTTP/1.1", headerFields: headers
                 ) else {
                     fail(token, NSError(domain: "swift-pwa", code: 500, userInfo: nil))
+                    return
+                }
+                if status == 200, length <= Self.wholeDeliveryLimit {
+                    let body = try handle.read(upToCount: Int(length)) ?? Data()
+                    _ = deliver(token, ending: true) { task in
+                        task.didReceive(response)
+                        task.didReceive(body)
+                        task.didFinish()
+                    }
                     return
                 }
                 guard deliver(token, { $0.didReceive(response) }) else { return }

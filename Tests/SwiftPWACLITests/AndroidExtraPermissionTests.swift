@@ -89,6 +89,17 @@ struct AndroidExtraPermissionTests {
         #expect(!bare.contains("android.permissions in pwa.json"))
     }
 
+    /// #345: without it the WebView never follows connectivity, and
+    /// `navigator.onLine` is `true` whatever the network is doing — silently,
+    /// since every other platform's engine tracks the network on its own.
+    @Test("every app declares ACCESS_NETWORK_STATE, so navigator.onLine follows the network")
+    func declaresNetworkState() {
+        let xml = AndroidTemplates.androidManifestXml(
+            packageId: "com.example.app", label: "App", hasIcon: false
+        )
+        #expect(xml.contains(#"<uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>"#))
+    }
+
     /// The built-in list is duplicated by hand from the template's literal
     /// block, so it can drift — and drift here is invisible: a doubled
     /// `<uses-permission>` is legal, merges silently, and nobody notices.

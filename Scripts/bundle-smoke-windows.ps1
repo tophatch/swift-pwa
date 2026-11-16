@@ -362,14 +362,19 @@ function Test-Drive([string]$Label, [string]$Exe) {
             @{ Script = "typeof __SWIFT_PWA__"; Expect = "object" },
             # The delay makes at least one poll come back pending, so awaiting
             # is exercised rather than a promise that has already settled.
-            @{ Script = "new Promise(r => setTimeout(() => r('awaited'), 250))"; Expect = "awaited" }
+            @{ Script = "new Promise(r => setTimeout(() => r('awaited'), 250))"; Expect = "awaited" },
+            # WebView2 completes a throwing script as if it returned null, so
+            # this is the backend #351 was found on: the exception, not
+            # "the page navigated".
+            @{ Script = "JSON.stringify({x: notDefinedAnywhere})"; Expect = "E_EVAL_THREW.*notDefinedAnywhere"; Fails = $true }
         )
         foreach ($check in $checks) {
             $answer = (& $cli drive eval --attach $port --token $token $check.Script 2>&1 | ForEach-Object {
                 if ($_ -is [System.Management.Automation.ErrorRecord]) { "$($_.TargetObject)" } else { "$_" }
             } | Out-String).Trim()
             Write-Host "  drive eval $($check.Script) -> $answer"
-            if ($LASTEXITCODE -ne 0 -or $answer -notmatch $check.Expect) {
+            $failed = $LASTEXITCODE -ne 0
+            if ($failed -ne [bool]$check.Fails -or $answer -notmatch $check.Expect) {
                 $verdict = "FAIL  $Label - drive eval $($check.Script) answered '$answer'"
                 return $verdict
             }

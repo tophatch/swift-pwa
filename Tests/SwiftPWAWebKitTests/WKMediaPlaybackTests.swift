@@ -62,7 +62,7 @@
         #endif
 
         /// A served directory holding a page with one `<video>` and its clip.
-        private struct ClipSite {
+        struct ClipSite {
             let root: URL
 
             init() throws {
@@ -79,11 +79,24 @@
 
             /// `pictureInPicture` stands in for the app's opt-in, which the
             /// adapter reads from a bundle the test process doesn't have.
+            ///
+            /// `mediaRoute` injects the runtime the GTK backends inject (#349)
+            /// ahead of the adapter's own copy, which then stands down.
             @MainActor
-            func load(pictureInPicture: Bool = false) throws -> WKWebViewAdapter {
-                let provider = AssetProvider()
+            func load(
+                pictureInPicture: Bool = false,
+                provider: AssetProvider = AssetProvider(),
+                mediaRoute: BridgeScript.MediaRoute? = nil
+            ) throws -> WKWebViewAdapter {
                 provider.setBundleRoot(root)
                 let configuration = WKWebViewConfiguration()
+                if let mediaRoute {
+                    configuration.userContentController.addUserScript(WKUserScript(
+                        source: BridgeScript.source(mediaRoute: mediaRoute),
+                        injectionTime: .atDocumentStart,
+                        forMainFrameOnly: true
+                    ))
+                }
                 WKWebViewAdapter.registerScheme("pwa", on: configuration, assetProvider: provider)
                 if pictureInPicture { WKMediaPlayback.configure(configuration, pictureInPicture: true) }
                 let adapter = try WKWebViewAdapter(configuration: configuration)

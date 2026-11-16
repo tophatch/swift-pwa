@@ -157,6 +157,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Edge does. It keeps the app's own `window.setFullscreen` state when the page
   leaves. Picture in picture already worked: WebView2 opens its own floating
   window. Measured on Windows 11 x64.
+- **Linux: a `<video>` or `<audio>` the app serves plays** (#349). On both GTK
+  backends a clip served from `pwa://` never loaded: `readyState` stayed 0 and
+  `video.error` was `MEDIA_ERR_SRC_NOT_SUPPORTED`. A bundled clip failed, and
+  so did the documented content-pack flow. WebKitGTK plays media through
+  GStreamer, and the WebKit source element it hands GStreamer reads `http`,
+  `https` and `blob` only. WebKit's own `WEBKIT_GST_ALLOWED_URI_PROTOCOLS`
+  gets the URL past WebKit, and GStreamer then has no element for the scheme.
+  So the GTK backends now also serve the app's files on `127.0.0.1`, and
+  `bridge.js` points media URLs on the app's origin at that server. The page
+  changes nothing, and still reads its own URLs back from `src`,
+  `currentSrc` and `getAttribute`. The server answers what `pwa://` answers,
+  including `serveDirectory` mounts and `Range`, behind a per-launch token,
+  with CORS for the app's origin only. Measured on WebKitGTK 2.52 under GTK3
+  and GTK4, built and as a relocated AppImage: every way a page sets a source,
+  a seek near the end, and a `crossorigin` frame read back from a canvas. The
+  same checks fail on the previous tree. Loopback sockets also stopped
+  raising `SIGPIPE`, which on Linux and macOS ended the app when a client
+  hung up mid-reply, as a media player does on every seek.
 
 ## [0.12.0] - 2026-10-30
 

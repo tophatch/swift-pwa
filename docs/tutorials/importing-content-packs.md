@@ -127,8 +127,6 @@ const { entries, uncompressedBytes } =
 
 That's it. The `<video src="/packs/my-pack/clip.webm">` (or `<img>`) loads from the extracted files, and the shell answers range requests so seeking is instant.
 
-> ⚠️ **Linux:** a served `<video>` doesn't load yet on either GTK backend — WebKitGTK's media player refuses the app's custom scheme, though `<img>` and `fetch` work ([#349](https://github.com/tophatch/swift-pwa/issues/349)).
-
 ---
 
 ## You get the safety guards for free

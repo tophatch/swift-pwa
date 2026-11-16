@@ -234,12 +234,17 @@ jobs:
           # Same floor as the GTK jobs — see the note there.
           swift-version: "6.2"
       - name: Install GTK3 + WebKitGTK 4.1 + libayatana-appindicator3
+        # The GStreamer plugins are for the served-media step: WebKitGTK plays
+        # media through GStreamer, and without a demuxer and decoder for the
+        # probe's clips that step can only SKIP them.
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             libgtk-3-dev \
             libwebkit2gtk-4.1-dev \
             libayatana-appindicator3-dev \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-libav \
             xvfb
       - name: Install linuxdeploy + the appimage plugin
         # The same two URLs docs/linux-setup.md tells adopters to use. Both are
@@ -265,6 +270,9 @@ jobs:
           # commit under test. (GNU sed — no empty argument after -i.)
           sed -i -e 's|\.package(url: "https://github.com/tophatch/swift-pwa", from: "[^"]*")|.package(path: "'"$GITHUB_WORKSPACE"'")|' Package.swift
           grep -n 'package(path' Package.swift
+          # The served-media probe as the page (#349). The checks before it
+          # don't depend on what the page is.
+          cp "$GITHUB_WORKSPACE"/Scripts/media-probe/* web/
       - name: Bundle a debug AppImage (debug so the driver is compiled in)
         working-directory: /tmp/bundle-smoke/app
         run: "$GITHUB_WORKSPACE/.build/debug/swift-pwa build --target linux --configuration debug"
@@ -306,6 +314,24 @@ jobs:
           fi
           echo "$OUT"
           echo "$OUT" | grep -q "E_EVAL_THREW.*notDefinedAnywhere"
+          pkill -x BundleSmoke || true
+      - name: Served <video> and <audio> play in the relocated AppImage
+        # WebKitGTK's media player can't read the app's own scheme (#349), so
+        # the GTK backends serve media from a loopback port and bridge.js
+        # routes it there. Its own launch rather than more lines in the step
+        # above, so a failure here names itself. The script's blob: control
+        # SKIPs a format the runner can't decode instead of failing it.
+        run: |
+          set -euo pipefail
+          cd /tmp
+          APPIMAGE_EXTRACT_AND_RUN=1 SWIFT_PWA_DRIVE=0 \
+            xvfb-run -a /tmp/Relocated.AppImage > /tmp/media-app.log 2>&1 &
+          for _ in $(seq 1 60); do grep -q "driver listening" /tmp/media-app.log && break; sleep 1; done
+          PORT=$(sed -n 's/.*port=\([0-9]*\).*/\1/p' /tmp/media-app.log | head -1)
+          TOKEN=$(sed -n 's/.*token=\([0-9a-f]*\).*/\1/p' /tmp/media-app.log | head -1)
+          test -n "$PORT" || (cat /tmp/media-app.log && exit 1)
+          "$GITHUB_WORKSPACE/Scripts/verify-served-media.sh" --attach "$PORT" --token "$TOKEN" \
+            --cli "$GITHUB_WORKSPACE/.build/debug/swift-pwa"
           pkill -x BundleSmoke || true
 
   bundle-smoke-windows:

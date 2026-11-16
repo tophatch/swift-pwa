@@ -604,14 +604,55 @@ sees these as mouse presses, `selection.subscribe` reports them as it reports
 a mouse. Measured on Ubuntu 25.10 (GNOME on Wayland) with a virtual touch
 screen, WebKitGTK 2.52.3, both backends.
 
+## Media the app serves (`<video>`, `<audio>`)
+
+A `<video>` or `<audio>` pointed at a file the app serves plays and seeks as
+it does on the other platforms, whether the file is in `web/` or under a
+`ctx.serveDirectory` mount. Nothing in the page changes for it.
+
+It takes a detour that only Linux needs. WebKitGTK plays media through
+GStreamer, and the WebKit source element it hands GStreamer accepts `http`,
+`https` and `blob` only. A scheme registered with
+`webkit_web_context_register_uri_scheme` serves `fetch` and `<img>` but never
+reaches a media element: WebKit refuses `pwa://` with
+`MEDIA_ERR_SRC_NOT_SUPPORTED` before asking for a byte, and an embedder can't
+change that list
+([#349](https://github.com/tophatch/swift-pwa/issues/349)). So each app also
+serves its files over plain HTTP on `127.0.0.1`. `bridge.js` points every media
+URL on the app's origin at that server: the `src` property, `setAttribute`,
+markup, `<source>` children and `new Audio(url)`. Reading `src`, `currentSrc`
+or `getAttribute("src")` still gives the app's own URL.
+
+What the server answers is what `pwa://` answers: the same files, the same
+mounts (including ones added after launch) and the same `Range` handling, so a
+long clip seeks without reading the whole file. Each request needs a random
+per-launch token in its path and `127.0.0.1` as its `Host`. It answers only
+`GET` and `HEAD`, and its CORS headers name the app's own origin and no other,
+so a frame from a `crossorigin` video stays readable to the app's canvas.
+
+Measured on WebKitGTK 2.52.3 (GTK3) and 2.52.6 (GTK4), from a build and from a
+relocated AppImage, with VP8 + Opus WebM and H.264 + AAC MP4.
+`Scripts/verify-served-media.sh` runs the checks against whichever backend the
+box has, and the `bundle-smoke-linux` CI job runs them against an AppImage.
+
 ## Known limitations on Linux
 
-**A `<video>` or `<audio>` served from the app's own origin doesn't load.**
-WebKitGTK's media player turns down the `pwa://` scheme before requesting
-anything, so `readyState` stays 0 and `play()` rejects with
-`NotSupportedError`; the same file loads through `fetch` and `<img>`, and
-plays from a `blob:` URL. Measured on WebKitGTK 2.52, both backends. See
-[#349](https://github.com/tophatch/swift-pwa/issues/349).
+**Media in a subframe isn't routed.** `bridge.js` runs in the top frame only,
+so a `<video>` inside a same-origin `<iframe>` that points at a served file
+still fails as described above. Put the player in the top document, or give
+the frame a `blob:` URL.
+
+**Serialized markup shows the loopback URL.** `outerHTML`, `innerHTML` and
+`element.attributes` report the `src` the element was actually given,
+`http://127.0.0.1:<port>/<token>/…`. The `src`, `currentSrc` and
+`getAttribute("src")` reads report the app's own URL.
+
+**Which formats play is up to the system's GStreamer plugins.** Without a
+decoder for a format, a clip fails with the same `MEDIA_ERR_SRC_NOT_SUPPORTED`
+as a serving fault. WebM (VP8/VP9, Opus) needs `gstreamer1.0-plugins-good`;
+H.264 and AAC need `gstreamer1.0-libav` or another H.264 decoder. To tell a
+missing codec from a serving problem, play the same bytes through a `blob:`
+URL. If that fails too, the codec is missing.
 
 **No picture in picture for `<video>`.** WebKitGTK exposes no picture in
 picture API at all on either backend: `document.pictureInPictureEnabled` and

@@ -24,6 +24,11 @@
         /// see ``LastWindowClosedPolicy``.
         public var lastWindowClosed: LastWindowClosedPolicy = .reopen
         public private(set) var windows: [WindowID: any Window] = [:]
+        /// Serves this app's files to WebKitGTK's media player, which can't read
+        /// `pwa://` (#349, see ``LoopbackMediaServer``). Started by the first
+        /// window that shows bundled content and kept for the app's life.
+        private var mediaServer: LoopbackMediaServer?
+        private var mediaServerFailed = false
         public var pendingExitCode: Int32?
         private var installedPlugins: Set<String> = []
 
@@ -31,6 +36,29 @@
         /// dropped `gtk_main()` / `gtk_main_quit()`, so we manage the
         /// loop ourselves and keep a handle so `quit()` can stop it.
         private var mainLoop: OpaquePointer?
+
+        /// Where this window's `bridge.js` sends media on the app's origin, or
+        /// nil when the window shows remote content (which has no such media)
+        /// or the server couldn't start.
+        func mediaRoute(for content: WindowContent) -> BridgeScript.MediaRoute? {
+            guard case .bundled = content else { return nil }
+            if mediaServer == nil, !mediaServerFailed {
+                do {
+                    mediaServer = try LoopbackMediaServer.start(provider: assetProvider)
+                } catch {
+                    // A real boundary — a socket. The app still runs; only its
+                    // served <video> and <audio> won't load, so say which.
+                    mediaServerFailed = true
+                    RuntimeDiagnostics.emit(
+                        "swift-pwa: couldn't start the loopback media server (\(error)); "
+                            + "<video> and <audio> served from the app won't load in this run."
+                    )
+                }
+            }
+            return mediaServer.map {
+                BridgeScript.MediaRoute(base: $0.baseURL, origin: "\(assetProvider.scheme)://\(assetProvider.host)")
+            }
+        }
 
         private init() {
             use(WindowPlugin())

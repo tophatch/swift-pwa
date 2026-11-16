@@ -453,10 +453,10 @@ videoEl.src = `/packs/${packId}/clip.webm`;   // streamed with HTTP range reques
   window exists is immediately fetchable — no per-pack call needed; the
   app mounts the **container** once.
 - Range is honored on all backends, so a large `<video>` seeks/streams off disk
-  instead of buffering — except on **Linux, where a `<video>` or `<audio>`
-  pointed at a served file doesn't load at all** (WebKitGTK's media player
-  refuses the custom scheme; `fetch` and `<img>` are fine) — see
-  [#349](https://github.com/tophatch/swift-pwa/issues/349). Four of them answer `206 Partial Content`; **Android
+  instead of buffering. On Linux a media element reaches the same files
+  through a loopback server, because WebKitGTK's media player can't read the
+  app's scheme (see [linux-setup.md](linux-setup.md#media-the-app-serves-video-audio)).
+  Four of them answer `206 Partial Content`; **Android
   serves from the requested offset to the end of the file, under a `200`**,
   because its WebView rejects a `206` returned from an intercepted response
   before the page ever sees it (measured — the fetch fails outright, with no

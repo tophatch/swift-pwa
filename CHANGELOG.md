@@ -84,11 +84,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   top rows for a moment. An app showing many of them as CSS backgrounds saw
   that partial frame stay until the element changed size. A whole file up to
   8 MB now reaches WebKit in one piece. Larger files and `Range` requests still
-  stream, so video seeking and memory use don't change. In a repro of 60 such
-  images as backgrounds on macOS 27, with the parts slowed down, every tile
-  showed only its top rows while it loaded. The frame that stays was not
-  reproduced on demand, so the fix rests on removing the partial frame rather
-  than on catching one that sticks.
+  stream, so video seeking and memory use don't change. Measured on macOS 27
+  with 60 such images as backgrounds and the parts slowed to 40 ms each, in
+  window captures taken only while nothing covered the window: at 0.3 s the
+  chunked path showed 1,459 tiles with only their top rows across 25 rounds,
+  and whole delivery showed none in 25. A tile now stays blank until it can be
+  drawn whole. At local-disk speed both paths had every tile whole by the
+  second capture (about 0.7 s), so no slowdown was measurable. The frame that
+  stays was not reproduced in either run, so the fix rests on removing the
+  partial frame rather than on catching one that sticks.
 
 - **iOS: a `<video>` plays inline on iPhone** (#347). `allowsInlineMediaPlayback`
   was left at its iPhone default of `false`, so every video left the page to

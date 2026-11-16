@@ -1123,6 +1123,13 @@ permission strings (`POST_NOTIFICATIONS`, `USE_BIOMETRIC`,
 ship a particular plugin can drop the corresponding line in a
 manual post-bundler edit.
 
+It also declares `INTERNET` and `ACCESS_NETWORK_STATE`. The second is
+what lets the WebView follow connectivity at all: without it
+`navigator.onLine` stays `true` and the `online` / `offline` events never
+fire, whatever the network is doing, while every other platform's engine
+tracks the network on its own. It's a normal, install-time permission, so
+nothing is shown to the user.
+
 ### 6.1.2. Observing the updater install result
 
 The cross-platform `updater.installAndRelaunch` invoke commits a

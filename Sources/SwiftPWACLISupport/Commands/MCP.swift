@@ -481,8 +481,9 @@ enum MCPTools {
         name: "app_eval",
         title: "Evaluate JavaScript",
         description: """
-        Run JavaScript in the app's page and return the JSON value it evaluates to. This is the \
-        app's own JS context, so its globals and its bridge are reachable.
+        Run JavaScript in the app's page and return the JSON value it evaluates to. A promise is \
+        awaited and its settled value returned; a throw or a rejection is an error carrying its message. \
+        This is the app's own JS context, so its globals and its bridge are reachable.
         """,
         inputSchema: object(
             properties: ["js": schema("string", "The expression to evaluate, e.g. document.title.")],
@@ -492,11 +493,7 @@ enum MCPTools {
             guard let js = arguments["js"]?.stringValue else {
                 throw DriveError.remote(code: "E_ARGS", message: "app_eval needs `js`")
             }
-            var payload: [String: BridgeJSON] = ["js": .string(js)]
-            if let window = options.window {
-                payload["window"] = .string(window)
-            }
-            return try [text(client.invoke("eval", payload).prettyPrinted)]
+            return try [text(client.evaluate(js, timeout: options.timeout, window: options.window).prettyPrinted)]
         }
     )
 

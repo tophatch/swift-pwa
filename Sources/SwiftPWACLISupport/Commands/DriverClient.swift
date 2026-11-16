@@ -92,6 +92,22 @@ typealias BridgeJSON = SwiftPWACore.JSONValue
             )
         }
 
+        /// Evaluate `script` the way `drive eval` and the MCP `app_eval` tool
+        /// both do: a promise is awaited (bounded by `timeout`), a throw is an
+        /// error, and a page whose CSP forbids `eval` gets the script run
+        /// directly instead.
+        func evaluate(_ script: String, timeout: TimeInterval, window: String?) throws -> BridgeJSON {
+            if let settled = try evalAwaitingPromise(script, timeout: timeout, window: window) {
+                return settled
+            }
+            // The page's CSP forbids `eval`, so the script hasn't run yet.
+            // Evaluate it directly — no promise support, and on WebView2 a
+            // throw there reads as `null`.
+            var payload: [String: BridgeJSON] = ["js": .string(script)]
+            if let window { payload["window"] = .string(window) }
+            return try invoke("eval", payload)
+        }
+
         /// Evaluate `script`, and if it produced a thenable, wait for it to
         /// settle and return the settled value.
         ///
@@ -119,32 +135,18 @@ typealias BridgeJSON = SwiftPWACore.JSONValue
             window: String?
         ) throws -> BridgeJSON? {
             let key = "__swiftPWADriveAwait\(UUID().uuidString.replacingOccurrences(of: "-", with: ""))"
-            let start = """
-            (function () {
-                var k = \(Self.jsStringLiteral(key));
-                try { (0, eval)("0"); } catch (probe) { return { cspBlocked: true }; }
-                var v = (0, eval)(\(Self.jsStringLiteral(script)));
-                if (!v || typeof v.then !== "function") {
-                    return { settled: true, value: v === undefined ? null : v };
-                }
-                window[k] = { state: "pending" };
-                v.then(
-                    function (r) { window[k] = { state: "done", value: r === undefined ? null : r }; },
-                    function (e) {
-                        window[k] = { state: "failed", message: String(e && e.message ? e.message : e) };
-                    }
-                );
-                return { settled: false };
-            })()
-            """
-
-            var payload: [String: BridgeJSON] = ["js": .string(start)]
+            var payload: [String: BridgeJSON] = ["js": .string(Self.awaitingScript(script, key: key))]
             if let window { payload["window"] = .string(window) }
-            let first = try invoke("eval", payload)
-            // nil means "this page forbids eval" — the caller runs the script
-            // the old way. Nothing of it has executed yet.
-            if case .bool(true) = first["cspBlocked"] { return nil }
-            if case .bool(true) = first["settled"] { return first["value"] ?? .null }
+            switch try Self.startOutcome(of: invoke("eval", payload)) {
+            case .cspBlocked:
+                // The caller runs the script the old way. Nothing of it has
+                // executed yet.
+                return nil
+            case let .settled(value):
+                return value
+            case .pending:
+                break
+            }
 
             // Drain the global as we read it, so a page driven repeatedly
             // doesn't accumulate one leaked key per awaited call.
@@ -189,6 +191,62 @@ typealias BridgeJSON = SwiftPWACore.JSONValue
                 expression: script,
                 seconds: timeout,
                 lastError: "the script returned a promise that never settled"
+            )
+        }
+
+        /// The wrapper `evalAwaitingPromise` evaluates first: it runs `script`
+        /// and answers with one of its own objects, which ``startOutcome(of:)``
+        /// reads.
+        ///
+        /// A throw is caught here rather than left to the engine, because the
+        /// engines disagree about it: WebKit fails the evaluation with the
+        /// exception's message, while WebView2 completes it successfully with
+        /// `null` — the same answer as a script whose value is `null`.
+        static func awaitingScript(_ script: String, key: String) -> String {
+            """
+            (function () {
+                var k = \(jsStringLiteral(key));
+                try { (0, eval)("0"); } catch (probe) { return { cspBlocked: true }; }
+                var v;
+                try { v = (0, eval)(\(jsStringLiteral(script))); } catch (e) {
+                    var name = e && e.name ? String(e.name) : "Error";
+                    return { threw: e && e.message !== undefined ? name + ": " + e.message : String(e) };
+                }
+                if (!v || typeof v.then !== "function") {
+                    return { settled: true, value: v === undefined ? null : v };
+                }
+                window[k] = { state: "pending" };
+                v.then(
+                    function (r) { window[k] = { state: "done", value: r === undefined ? null : r }; },
+                    function (e) {
+                        window[k] = { state: "failed", message: String(e && e.message ? e.message : e) };
+                    }
+                );
+                return { settled: false };
+            })()
+            """
+        }
+
+        enum StartOutcome: Equatable {
+            case cspBlocked
+            case settled(BridgeJSON)
+            case pending
+        }
+
+        /// What the wrapper's first answer means. Anything that isn't one of
+        /// the wrapper's own objects means the wrapper never returned, so it is
+        /// reported rather than taken for a pending promise — polling for one
+        /// would end in `E_EVAL_LOST`, blaming a navigation that never happened.
+        static func startOutcome(of reply: BridgeJSON) throws -> StartOutcome {
+            if case .bool(true) = reply["cspBlocked"] { return .cspBlocked }
+            if let message = reply["threw"]?.stringValue {
+                throw DriveError.remote(code: "E_EVAL_THREW", message: message)
+            }
+            if case .bool(true) = reply["settled"] { return .settled(reply["value"] ?? .null) }
+            if case .bool(false) = reply["settled"] { return .pending }
+            throw DriveError.remote(
+                code: "E_EVAL_THREW",
+                message: "the script didn't finish, and the page reported no exception (got \(reply.prettyPrinted))"
             )
         }
 

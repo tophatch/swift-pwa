@@ -60,6 +60,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **Android: `navigator.onLine` follows the network** (#345). The generated
+  manifest declared `INTERNET` but not `ACCESS_NETWORK_STATE`, and without it
+  the WebView never tracks connectivity: `navigator.onLine` stayed `true` and
+  `online` / `offline` never fired, in every app, whatever the network was
+  doing. It failed silently, and a page that looked right on Apple, where
+  WebKit tracks the network itself, told an offline reader it was online. It is
+  a normal, install-time permission, so declaring it shows the user nothing and
+  an app no longer has to know to add it through `android.permissions`.
+- **`drive eval` and the MCP `app_eval` tool report a script that throws**
+  (#351). On Windows a throw came back as `E_EVAL_LOST: the page navigated…`,
+  sending whoever was driving the app after a navigation that never happened.
+  WebView2 completes a script that throws as if it returned `null`, which the
+  promise-awaiting wrapper took for a pending promise and then lost. The
+  wrapper now catches the exception itself, so every backend reports
+  `E_EVAL_THREW` with its name and message — on macOS too, in place of
+  WebKit's raw error dump. `app_eval` evaluated scripts directly and so
+  returned `null` for a throw on Windows; it now goes through the same path as
+  `drive eval`, which also means it awaits a promise.
+- **macOS and iOS: a large image is handed to WebKit whole** (#346). The
+  `pwa://` handler delivered every file in 256 KB parts, and WebKit decodes and
+  paints an image as its bytes arrive, so a large PNG was drawn with only its
+  top rows for a moment. An app showing many of them as CSS backgrounds saw
+  that partial frame stay until the element changed size. A whole file up to
+  8 MB now reaches WebKit in one piece. Larger files and `Range` requests still
+  stream, so video seeking and memory use don't change. Measured on macOS 27
+  with 60 such images as backgrounds and the parts slowed to 40 ms each, in
+  window captures taken only while nothing covered the window: at 0.3 s the
+  chunked path showed 1,459 tiles with only their top rows across 25 rounds,
+  and whole delivery showed none in 25. A tile now stays blank until it can be
+  drawn whole. At local-disk speed both paths had every tile whole by the
+  second capture (about 0.7 s), so no slowdown was measurable. The frame that
+  stays was not reproduced in either run, so the fix rests on removing the
+  partial frame rather than on catching one that sticks.
+
 - **iOS: a `<video>` plays inline on iPhone** (#347). `allowsInlineMediaPlayback`
   was left at its iPhone default of `false`, so every video left the page to
   play full screen and `playsinline` was ignored. That took an app's own

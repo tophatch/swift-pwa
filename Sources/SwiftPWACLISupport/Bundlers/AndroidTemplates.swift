@@ -318,6 +318,11 @@ enum AndroidTemplates {
                  want to lock the network down can drop this and the
                  WebView will still resolve assets via the asset loader. -->
             <uses-permission android:name="android.permission.INTERNET"/>
+            <!-- ACCESS_NETWORK_STATE: without it the WebView never follows
+                 connectivity, so `navigator.onLine` stays true and the
+                 `online` / `offline` events never fire. A normal,
+                 install-time permission: nothing is shown to the user. -->
+            <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE"/>
             <!-- POST_NOTIFICATIONS: runtime permission on API 33+ for the
                  SystemNotifications plugin. Older API levels ignore the
                  declaration. The plugin's `requestAuthorization` triggers
@@ -474,6 +479,7 @@ enum AndroidTemplates {
     /// can't drift apart silently.
     static let builtInPermissionNames: Set<String> = [
         "android.permission.INTERNET",
+        "android.permission.ACCESS_NETWORK_STATE",
         "android.permission.POST_NOTIFICATIONS",
         "android.permission.USE_BIOMETRIC",
         "android.permission.USE_FINGERPRINT",

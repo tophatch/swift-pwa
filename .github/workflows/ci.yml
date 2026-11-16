@@ -163,6 +163,14 @@ jobs:
             "new Promise(r => setTimeout(() => r('awaited'), 250))")
           echo "$OUT"
           echo "$OUT" | grep -q awaited
+          # A script that throws is an error naming the exception (#351), not a
+          # value and not "the page navigated".
+          if OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            "JSON.stringify({x: notDefinedAnywhere})" 2>&1); then
+            echo "a throwing script succeeded: $OUT"; exit 1
+          fi
+          echo "$OUT"
+          echo "$OUT" | grep -q "E_EVAL_THREW.*notDefinedAnywhere"
           # macOS has no alternate icons, and says so rather than offering one.
           OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
             '__SWIFT_PWA__.invoke("app.icon.list").then(r => "supported=" + r.supported)')
@@ -290,6 +298,14 @@ jobs:
             "new Promise(r => setTimeout(() => r('awaited'), 250))")
           echo "$OUT"
           echo "$OUT" | grep -q awaited
+          # A script that throws is an error naming the exception (#351), not a
+          # value and not "the page navigated".
+          if OUT=$("$GITHUB_WORKSPACE/.build/debug/swift-pwa" drive eval --attach "$PORT" --token "$TOKEN" \
+            "JSON.stringify({x: notDefinedAnywhere})" 2>&1); then
+            echo "a throwing script succeeded: $OUT"; exit 1
+          fi
+          echo "$OUT"
+          echo "$OUT" | grep -q "E_EVAL_THREW.*notDefinedAnywhere"
           pkill -x BundleSmoke || true
 
   bundle-smoke-windows:

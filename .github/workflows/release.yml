@@ -177,7 +177,7 @@ jobs:
         run: |
           $flags  = $env:SWIFT_PWA_CI_INCLUDES -split ';' | ForEach-Object { '-Xcc', "-I$_" }
           $flags += $env:SWIFT_PWA_CI_LIBPATHS -split ';' | ForEach-Object { '-Xlinker', "/LIBPATH:$_" }
-          swift build -c release --product swift-pwa @flags
+          & "$env:GITHUB_WORKSPACE/Scripts/windows-build-watchdog.ps1" -- swift build -c release --product swift-pwa @flags
       - name: Stage binary
         # The bare .exe stays published beside the zip for older generated CI
         # workflows and install instructions that name it. It only runs where a

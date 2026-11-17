@@ -1040,11 +1040,28 @@ no exe, still builds.
 
 **On GitHub's hosted Windows runners, any `swift build` can stall for tens of
 minutes.** Swift 6.4.0's build planner sits at four cores on
-`[Pre-planning 1 / N]`, compiling nothing, in about half of our CI runs — up
-to 45 minutes, for the app's build and for a plain debug build alike — where a
-Windows 11 machine takes about 4 s for the same step. It's swift-build's
-(swiftlang/swift-build#1883), and not reproducible off the runners. Budget a
-release workflow's Windows job for an hour rather than fifteen minutes.
+`[Pre-planning 1 / N]`, compiling nothing, in about half of our CI runs, for
+the app's build and for a plain debug build alike. One stall lasted 63
+minutes, where a Windows 11 machine takes about 4 s for the same step. It's
+swift-build's (swiftlang/swift-build#1883), and not reproducible off the
+runners. Stacks taken during the stall show the planner's clang
+tool-discovery processes (`clang -v -E -dM ... -c NUL`) blocked writing to a
+pipe the planner has stopped reading; from outside, that is three `clang`
+processes at zero CPU while the build spins.
+
+`Scripts/windows-build-watchdog.ps1` runs a build command and watches for
+exactly that: a `clang` under it that has used no CPU for three minutes. It
+prints the stuck processes' command lines, kills the stalled build, and runs
+the command again once. Every Windows build in this repo's CI goes through it.
+A clean `swift build --product swift-pwa` of 755 steps ran under it at a
+one-minute threshold without being touched. To use it in your own workflow:
+
+```powershell
+& ./Scripts/windows-build-watchdog.ps1 -- swift build -c release @flags
+```
+
+Options go before the `--`: `-StallMinutes` (default 3) and `-Retries`
+(default 1). A command that fails on its own keeps its exit code.
 
 **A window moved to a negative coordinate used to kill the app.** `WM_MOVE`
 packs its coordinates as *signed* 16-bit words, and the handler read them

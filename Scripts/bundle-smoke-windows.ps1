@@ -215,11 +215,16 @@ Remove-Tree $WorkDir
 New-Item -ItemType Directory -Path $WorkDir | Out-Null
 
 Write-Host "== building the CLI ==" -ForegroundColor Cyan
+# Every build goes through the watchdog, which kills and retries a build whose
+# planner has stalled (swiftlang/swift-build#1883) rather than letting it run
+# out the job's time. See Scripts/windows-build-watchdog.ps1.
+$watchdog = Join-Path $PSScriptRoot "windows-build-watchdog.ps1"
+
 # The product only: a package-level build also builds the test targets'
 # resource bundles, and swiftbuild's Touch task on one of those is racy on
 # Windows (see the next-toolchain-windows job).
 Push-Location $Repo
-try { Invoke-Native "CLI build" { swift build --product swift-pwa @BuildFlags } } finally { Pop-Location }
+try { Invoke-Native "CLI build" { & $watchdog -- swift build --product swift-pwa @BuildFlags } } finally { Pop-Location }
 $cli = Join-Path $Repo ".build\debug\swift-pwa.exe"
 if (-not (Test-Path $cli)) {
     $binPath = (swift build --package-path $Repo --show-bin-path 2>$null | Select-Object -Last 1)
@@ -254,12 +259,12 @@ Push-Location $appDir
 try {
     Write-Host "== swift-pwa build --target windows ($Configuration) ==" -ForegroundColor Cyan
     Invoke-Native "folder bundle" {
-        & $cli build --target windows --configuration $Configuration --output "out\folder"
+        & $watchdog -- $cli build --target windows --configuration $Configuration --output "out\folder"
     }
     if ($Drive) {
         Write-Host "== swift-pwa build --target windows (debug, to drive) ==" -ForegroundColor Cyan
         Invoke-Native "driven bundle" {
-            & $cli build --target windows --configuration debug --output "out\driven"
+            & $watchdog -- $cli build --target windows --configuration debug --output "out\driven"
         }
     }
 } finally {
